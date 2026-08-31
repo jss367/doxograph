@@ -1,0 +1,530 @@
+'use strict';
+
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
+          kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
+const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false,
+            group: true, editing: null, selected: 0 };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let detail = response.statusText;
+    try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
+    throw new Error(detail);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+async function refresh() {
+  S = await api('/api/state');
+  render();
+}
+
+// --- filtering ------------------------------------------------------------
+
+function haystack(row) {
+  return [row.text, row.evidence, row.quote, row.paper_title,
+          (row.paper_authors || []).join(' '), (row.tags || []).join(' ')]
+    .join(' ').toLowerCase();
+}
+
+function visibleClaims() {
+  const needle = V.q.trim().toLowerCase();
+  return S.claims.filter((row) =>
+    (!V.paper || row.paper === V.paper)
+    && (!V.tag || (row.tags || []).includes(V.tag))
+    && (!V.kind || row.kind === V.kind)
+    && (!V.unreviewed || !row.reviewed)
+    && (!needle || haystack(row).includes(needle)));
+}
+
+// --- rendering ------------------------------------------------------------
+
+function render() {
+  renderStats();
+  renderPapers();
+  renderTags();
+  if (!V.editing) renderContent();
+  renderJobs();
+}
+
+function renderStats() {
+  const unreviewed = S.claims.filter((c) => !c.reviewed).length;
+  const proposed = S.papers.reduce((n, p) => n + (p.n_proposed_tags || 0), 0);
+  const bits = [
+    `${S.papers.length} papers`,
+    `${S.claims.length} claims`,
+    `${Object.keys(S.tag_counts).length} topics`,
+  ];
+  if (unreviewed) bits.push(`${unreviewed} unreviewed`);
+  if (proposed) bits.push(`${proposed} proposed topics`);
+  if (!S.has_key) bits.push('no API key found');
+  $('stats').textContent = bits.join(' · ');
+}
+
+function renderPapers() {
+  const all = `<li class="${V.paper === null ? 'active' : ''}" data-paper="">
+    <span class="pt">All papers</span>
+    <span class="pm">${S.claims.length} claims</span></li>`;
+  $('papers').innerHTML = all + S.papers.map((p) => `
+    <li class="${V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
+      <span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
+      <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
+        ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}</span>
+    </li>`).join('');
+}
+
+function renderTags() {
+  const entries = Object.entries(S.tag_counts);
+  const declared = new Set(S.tags.map((t) => t.name));
+  $('tags').innerHTML = (entries.length ? '' : '<li class="hint">No topics yet.</li>')
+    + entries.map(([name, count]) => `
+      <li class="${V.tag === name ? 'active' : ''}" data-tag="${esc(name)}"
+          title="${esc((S.tags.find((t) => t.name === name) || {}).description || '')}">
+        <span>${esc(name)}${declared.has(name) ? '' : ' *'}</span>
+        <span class="n">${count}</span>
+      </li>`).join('');
+}
+
+function paperHeader(key) {
+  const p = S.papers.find((x) => x.key === key);
+  if (!p) return '';
+  const url = (p.source || {}).url;
+  const title = url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(p.title || key)}</a>`
+                    : esc(p.title || key);
+  return `<div class="paperhead">
+    <h2>${title}</h2>
+    <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')}
+      ${p.year ? '· ' + esc(p.year) : ''} ${p.venue ? '· ' + esc(p.venue) : ''}
+      · <code>${esc(key)}</code>
+      ${p.has_pdf ? `· <a href="/pdf/${esc(key)}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
+    ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
+    ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
+    <div class="row">
+      <button data-act="reextract" data-paper="${esc(key)}">Re-read paper</button>
+      <button data-act="retag-one" data-paper="${esc(key)}">Retag claims</button>
+      <button data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
+      <button data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
+    </div>
+    ${proposedPanel(key)}
+  </div>`;
+}
+
+function proposedPanel(key) {
+  const paper = S.papers.find((x) => x.key === key);
+  if (!paper || !paper.n_proposed_tags) return '';
+  const full = window.__paperCache && window.__paperCache[key];
+  const proposed = full ? full.proposed_tags : null;
+  if (!proposed) {
+    loadProposed(key);
+    return `<div class="proposed">Loading proposed topics…</div>`;
+  }
+  if (!proposed.length) return '';
+  return `<div class="proposed">
+    <div><strong>Proposed topics</strong> — accept the ones worth keeping in the vocabulary.</div>
+    ${proposed.map((t) => `<div class="row">
+      <span class="pn">${esc(t.name)}</span>
+      <span class="hint" style="flex:1">${esc(t.description)}</span>
+      <button data-act="accept-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Accept</button>
+      <button data-act="reject-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Discard</button>
+    </div>`).join('')}
+  </div>`;
+}
+
+async function loadProposed(key) {
+  window.__paperCache = window.__paperCache || {};
+  if (window.__paperCache[key] === 'loading') return;
+  window.__paperCache[key] = 'loading';
+  try {
+    window.__paperCache[key] = await api(`/api/papers/${encodeURIComponent(key)}`);
+    if (!V.editing) renderContent();
+  } catch (e) { window.__paperCache[key] = null; }
+}
+
+function claimCard(row, index) {
+  if (V.editing === row.id) return editForm(row);
+  const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
+    + ` ${row.paper_year || ''}`;
+  const tags = (row.tags || []).map((t) => `<span class="tag" data-tag="${esc(t)}">#${esc(t)}</span>`).join(' ');
+  const links = (row.ledger_links || []).map((l) => {
+    const own = S.ledger.find((c) => c.id === l.claim);
+    return `<div class="link"><span class="rel">${esc(l.relation)}</span>
+      ${esc(own ? own.text : l.claim)}${l.note ? ' — ' + esc(l.note) : ''}</div>`;
+  }).join('');
+  return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'} ${index === V.selected ? 'sel' : ''}"
+       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-index="${index}">
+    <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
+    <div class="cmeta">
+      ${tags}
+      <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
+      ${row.locator ? '· ' + esc(row.locator) : ''}
+      <span class="cact">
+        <button data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
+          ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
+        <button data-act="edit" data-claim="${esc(row.id)}">edit</button>
+        <button data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
+      </span>
+    </div>
+    ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
+    ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
+    ${links}
+  </div>`;
+}
+
+function editForm(row) {
+  const options = (values, current) => values.map((v) =>
+    `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  const linkRow = (link, i) => `<div class="linkrow" data-link="${i}">
+      <select name="link-claim">
+        <option value="">(no link)</option>
+        ${S.ledger.map((c) => `<option value="${esc(c.id)}" ${c.id === link.claim ? 'selected' : ''}>
+          ${esc(c.id)} — ${esc((c.text || '').slice(0, 70))}</option>`).join('')}
+      </select>
+      <select name="link-relation">${options(S.relations, link.relation)}</select>
+      <input name="link-note" value="${esc(link.note || '')}" placeholder="how it bears on my claim">
+      <button data-act="drop-link" data-index="${i}">×</button>
+    </div>`;
+  const links = (row.ledger_links || []).concat([{ claim: '', relation: S.relations[0], note: '' }]);
+  return `<div class="claim edit-wrap" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
+    <form class="edit" data-form="${esc(row.id)}">
+      <div><label>Claim</label><textarea name="text" rows="3">${esc(row.text)}</textarea></div>
+      <div class="pair">
+        <div><label>Kind</label><select name="kind">${options(S.kinds, row.kind)}</select></div>
+        <div><label>Strength</label><select name="strength">${options(S.strengths, row.strength)}</select></div>
+        <div><label>Locator</label><input name="locator" value="${esc(row.locator || '')}" size="12"></div>
+        <div><label>Topics (space separated)</label>
+          <input name="tags" value="${esc((row.tags || []).join(' '))}" list="taglist" size="34"></div>
+      </div>
+      <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
+      <div><label>Quote (verbatim from the paper)</label>
+        <textarea name="quote" rows="2">${esc(row.quote || '')}</textarea></div>
+      <div><label>Bearing on my own claims</label>
+        <div class="links">${links.map(linkRow).join('')}</div></div>
+      <div class="row right">
+        <label class="hint"><input type="checkbox" name="reviewed" ${row.reviewed ? 'checked' : ''}> reviewed</label>
+        <button type="button" data-act="cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+    <datalist id="taglist">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
+  </div>`;
+}
+
+function renderContent() {
+  const rows = visibleClaims();
+  if (V.selected >= rows.length) V.selected = Math.max(0, rows.length - 1);
+  let html = V.paper ? paperHeader(V.paper) : '';
+
+  if (!rows.length) {
+    html += S.papers.length
+      ? '<p class="empty">No claims match these filters.</p>'
+      : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
+    $('content').innerHTML = html;
+    return;
+  }
+
+  if (V.group && !V.paper) {
+    const byTag = new Map();
+    const untagged = [];
+    rows.forEach((row) => {
+      if (!(row.tags || []).length) { untagged.push(row); return; }
+      row.tags.forEach((tag) => {
+        if (!byTag.has(tag)) byTag.set(tag, []);
+        byTag.get(tag).push(row);
+      });
+    });
+    const ordered = [...byTag.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+    let index = 0;
+    for (const [tag, group] of ordered) {
+      const description = (S.tags.find((t) => t.name === tag) || {}).description || '';
+      html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span></h3>`
+        + (description ? `<p class="gd">${esc(description)}</p>` : '')
+        + group.map((row) => claimCard(row, index++)).join('') + '</div>';
+    }
+    if (untagged.length) {
+      html += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
+        + untagged.map((row) => claimCard(row, index++)).join('') + '</div>';
+    }
+  } else {
+    html += rows.map((row, i) => claimCard(row, i)).join('');
+  }
+  $('content').innerHTML = html;
+}
+
+function renderJobs() {
+  const active = (S.jobs || []).filter((j) => j.state !== 'done' || j.detail);
+  $('jobs').innerHTML = active.slice(0, 6).map((j) => `
+    <div class="job ${j.state === 'error' ? 'error' : ''}">
+      <span class="lbl">${esc(j.label)}</span>
+      <span class="st">${esc(j.state)}${j.detail ? ': ' + esc(j.detail) : ''}</span>
+    </div>`).join('');
+}
+
+// --- actions --------------------------------------------------------------
+
+async function patchClaim(paper, claim, patch) {
+  await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  await refresh();
+}
+
+function readForm(form) {
+  const value = (name) => (form.querySelector(`[name="${name}"]`) || {}).value || '';
+  const links = [...form.querySelectorAll('.linkrow')].map((rowEl) => ({
+    claim: rowEl.querySelector('[name="link-claim"]').value,
+    relation: rowEl.querySelector('[name="link-relation"]').value,
+    note: rowEl.querySelector('[name="link-note"]').value.trim(),
+  })).filter((l) => l.claim);
+  return {
+    text: value('text').trim(),
+    kind: value('kind'),
+    strength: value('strength'),
+    locator: value('locator').trim(),
+    evidence: value('evidence').trim(),
+    quote: value('quote').trim(),
+    tags: value('tags').split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean),
+    ledger_links: links,
+    reviewed: form.querySelector('[name="reviewed"]').checked,
+  };
+}
+
+$('content').addEventListener('submit', async (event) => {
+  const form = event.target.closest('form[data-form]');
+  if (!form) return;
+  event.preventDefault();
+  const wrap = form.closest('[data-claim]');
+  V.editing = null;
+  await patchClaim(wrap.dataset.paper, wrap.dataset.claim, readForm(form));
+});
+
+$('content').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-act]');
+  if (button) {
+    const act = button.dataset.act;
+    const paper = button.dataset.paper;
+    const claim = button.dataset.claim;
+    if (act === 'edit') { V.editing = claim; renderContent(); return; }
+    if (act === 'cancel') { V.editing = null; renderContent(); return; }
+    if (act === 'drop-link') {
+      button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
+      button.closest('.linkrow').style.display = 'none';
+      return;
+    }
+    if (act === 'review') {
+      const row = S.claims.find((c) => c.id === claim);
+      await patchClaim(paper, claim, { reviewed: !row.reviewed });
+      return;
+    }
+    if (act === 'del') {
+      if (!confirm('Delete this claim?')) return;
+      await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
+                { method: 'DELETE' });
+      await refresh();
+      return;
+    }
+    if (act === 'open-paper') { V.paper = paper; V.tag = null; V.selected = 0; render(); return; }
+    if (act === 'reextract') {
+      await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
+      await refresh();
+      return;
+    }
+    if (act === 'retag-one') {
+      await api('/api/retag', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [paper] }),
+      });
+      await refresh();
+      return;
+    }
+    if (act === 'add-claim') {
+      const created = await api(`/api/papers/${encodeURIComponent(paper)}/claims`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      await refresh();
+      V.editing = created.id;
+      renderContent();
+      return;
+    }
+    if (act === 'del-paper') {
+      const p = S.papers.find((x) => x.key === paper);
+      if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
+      await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
+      V.paper = null;
+      await refresh();
+      return;
+    }
+    if (act === 'accept-tag' || act === 'reject-tag') {
+      await api(`/api/papers/${encodeURIComponent(paper)}/accept-tags`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names: [button.dataset.tag] }),
+      });
+      if (act === 'reject-tag') { /* removing it from the pending list is enough */ }
+      delete (window.__paperCache || {})[paper];
+      await refresh();
+      return;
+    }
+  }
+  const tagEl = event.target.closest('[data-tag]');
+  if (tagEl && !tagEl.dataset.act) {
+    V.tag = V.tag === tagEl.dataset.tag ? null : tagEl.dataset.tag;
+    V.selected = 0;
+    render();
+    return;
+  }
+  const card = event.target.closest('[data-index]');
+  if (card) { V.selected = Number(card.dataset.index); renderContent(); }
+});
+
+$('papers').addEventListener('click', (event) => {
+  const li = event.target.closest('[data-paper]');
+  if (!li) return;
+  V.paper = li.dataset.paper || null;
+  V.selected = 0;
+  V.editing = null;
+  render();
+});
+
+$('tags').addEventListener('click', (event) => {
+  const li = event.target.closest('[data-tag]');
+  if (!li) return;
+  V.tag = V.tag === li.dataset.tag ? null : li.dataset.tag;
+  V.selected = 0;
+  render();
+});
+
+$('btn-add').addEventListener('click', async () => {
+  const text = $('refs').value.trim();
+  if (!text) return;
+  const result = await api('/api/ingest', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, extract: $('auto-extract').checked }),
+  });
+  $('refs').value = (result.unknown || []).join('\n');
+  if (result.unknown && result.unknown.length) {
+    alert(`Could not read ${result.unknown.length} reference(s); they are still in the box.`);
+  }
+  await refresh();
+});
+
+$('btn-tag').addEventListener('click', async () => {
+  const name = $('new-tag').value.trim();
+  if (!name) return;
+  await api('/api/tags', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description: '' }),
+  });
+  $('new-tag').value = '';
+  await refresh();
+});
+
+$('btn-retag').addEventListener('click', async () => {
+  if (!confirm('Reassign topics on every paper against the current vocabulary?')) return;
+  await api('/api/retag', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
+  await refresh();
+});
+
+$('btn-export').addEventListener('click', async () => {
+  const result = await api('/api/export', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Doxograph' }),
+  });
+  alert(`Written to ${result.path}`);
+});
+
+$('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
+
+$('q').addEventListener('input', (e) => { V.q = e.target.value; V.selected = 0; renderContent(); });
+$('kind').addEventListener('change', (e) => { V.kind = e.target.value; renderContent(); });
+$('only-unreviewed').addEventListener('change', (e) => { V.unreviewed = e.target.checked; renderContent(); });
+$('group-by-tag').addEventListener('change', (e) => { V.group = e.target.checked; renderContent(); });
+
+// --- keyboard -------------------------------------------------------------
+
+document.addEventListener('keydown', async (event) => {
+  const tag = (event.target.tagName || '').toLowerCase();
+  if (['input', 'textarea', 'select'].includes(tag)) {
+    if (event.key === 'Escape') { V.editing = null; renderContent(); }
+    return;
+  }
+  const rows = visibleClaims();
+  if (event.key === 'j' || event.key === 'ArrowDown') {
+    V.selected = Math.min(V.selected + 1, rows.length - 1); renderContent(); scrollToSelected();
+  } else if (event.key === 'k' || event.key === 'ArrowUp') {
+    V.selected = Math.max(V.selected - 1, 0); renderContent(); scrollToSelected();
+  } else if (event.key === 'e') {
+    const row = rows[V.selected];
+    if (row) { V.editing = row.id; renderContent(); }
+  } else if (event.key === 'r') {
+    const row = rows[V.selected];
+    if (row) await patchClaim(row.paper, row.id, { reviewed: !row.reviewed });
+  } else if (event.key === 'Escape') {
+    V.editing = null; renderContent();
+  }
+});
+
+function scrollToSelected() {
+  const el = document.querySelector('.claim.sel');
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+// --- drag and drop --------------------------------------------------------
+
+['dragenter', 'dragover'].forEach((type) => document.addEventListener(type, (event) => {
+  event.preventDefault();
+  document.body.classList.add('dragging');
+}));
+['dragleave', 'drop'].forEach((type) => document.addEventListener(type, (event) => {
+  if (type === 'dragleave' && event.relatedTarget) return;
+  document.body.classList.remove('dragging');
+}));
+
+document.addEventListener('drop', async (event) => {
+  event.preventDefault();
+  const files = [...(event.dataTransfer.files || [])].filter((f) => f.type === 'application/pdf'
+    || f.name.toLowerCase().endsWith('.pdf'));
+  const text = event.dataTransfer.getData('text/plain');
+  if (files.length) {
+    const body = new FormData();
+    files.forEach((file) => body.append('files', file, file.name));
+    await api(`/api/upload?extract_now=${$('auto-extract').checked}`, { method: 'POST', body });
+  } else if (text && text.trim()) {
+    await api('/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, extract: $('auto-extract').checked }),
+    });
+  }
+  await refresh();
+});
+
+// --- boot -----------------------------------------------------------------
+
+async function boot() {
+  await refresh();
+  $('kind').innerHTML = '<option value="">every kind</option>'
+    + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  setInterval(async () => {
+    if (document.hidden) return;
+    const busy = (S.jobs || []).some((j) => ['queued', 'fetching', 'reading'].includes(j.state));
+    if (!busy && V.editing) return;
+    try {
+      const next = await api('/api/state');
+      S = next;
+      renderStats();
+      renderJobs();
+      if (!V.editing) { renderPapers(); renderTags(); renderContent(); }
+    } catch (e) { /* the server may be restarting; try again next tick */ }
+  }, 2500);
+}
+
+boot().catch((error) => {
+  document.getElementById('content').innerHTML =
+    `<p class="warn">Could not reach the server: ${esc(error.message)}</p>`;
+});

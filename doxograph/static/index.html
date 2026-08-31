@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doxograph</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <h1>Doxograph</h1>
+  <span class="stats" id="stats"></span>
+  <span class="actions">
+    <button id="btn-retag" title="Reassign tags on every paper against the current vocabulary">Retag all</button>
+    <button id="btn-bib">BibTeX</button>
+    <button id="btn-export" class="primary">Export HTML</button>
+  </span>
+</header>
+
+<div id="layout">
+  <aside id="side">
+    <div class="drop" id="drop">Drop PDFs anywhere on this page</div>
+    <textarea id="refs" placeholder="Paste arXiv IDs, arXiv or DOI links, or PDF URLs — one per line"></textarea>
+    <div class="row">
+      <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
+      <button id="btn-add" class="primary" style="margin-left:auto">Add</button>
+    </div>
+
+    <div class="sec">
+      <h2>Papers</h2>
+      <ul class="plist" id="papers"></ul>
+    </div>
+
+    <div class="sec">
+      <h2>Topics</h2>
+      <ul class="taglist" id="tags"></ul>
+      <div class="row">
+        <input id="new-tag" placeholder="new topic" style="flex:1">
+        <button id="btn-tag">Add</button>
+      </div>
+    </div>
+  </aside>
+
+  <section id="main">
+    <div class="filters">
+      <input type="search" id="q" placeholder="Filter claims, quotes, papers">
+      <select id="kind"><option value="">every kind</option></select>
+      <label><input type="checkbox" id="only-unreviewed"> unreviewed only</label>
+      <label><input type="checkbox" id="group-by-tag" checked> group by topic</label>
+    </div>
+    <div id="content"></div>
+  </section>
+</div>
+
+<div class="jobs" id="jobs"></div>
+<script src="/app.js"></script>
+</body>
+</html>
