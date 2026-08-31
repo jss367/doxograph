@@ -481,6 +481,13 @@ $('content').addEventListener('click', async (event) => {
       if (!confirm('Delete this claim?')) return;
       await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
                 { method: 'DELETE' });
+      // In grouped mode the same claim can be an editor in one topic group and
+      // a plain card with a Delete button in another. Leaving `V.editing` set
+      // would keep the deleted claim's form on screen, because `render()` skips
+      // the content while an editor is open, and every Save would 404.
+      delete V.drafts[claim];
+      if (V.editing === claim) { V.editing = null; V.error = null; }
+      if (V.selectedId === claim) V.selectedId = null;
       await refresh();
       return;
     }

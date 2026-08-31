@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +22,23 @@ _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
 _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 _job_counter = 0
+
+
+def _finish(job: dict, key: str) -> None:
+    """Close a job, saying so when the paper arrived without its PDF.
+
+    A paper with no PDF cannot be read, and marking the job plainly done hides
+    that: for a new paper the job leaves the strip entirely because its detail is
+    empty. The CLI already counts this as a failure; the web UI now says it too.
+    """
+    if key and not store.pdf_path(key).exists():
+        try:
+            note = store.load_paper(key).get("notes") or "no PDF available"
+        except (KeyError, json.JSONDecodeError):
+            note = "the paper was removed"
+        _set(job, state="error", detail=f"no PDF stored ({note}). Add it again to retry.")
+        return
+    _set(job, state="done")
 
 
 def _new_job(label: str) -> dict:
@@ -59,7 +77,7 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
         if do_extract and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
-        _set(job, state="done")
+        _finish(job, key)
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -75,7 +93,7 @@ def _run_upload(job: dict, data: bytes, filename: str, do_extract: bool) -> None
         if do_extract and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
-        _set(job, state="done")
+        _finish(job, key)
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()

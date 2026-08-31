@@ -1868,3 +1868,63 @@ def test_a_failed_retry_is_still_tolerated(monkeypatch):
     key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
     assert (key, created) == ("doe2026study", False)
     assert store.load_paper("doe2026study")["notes"] == "PDF download failed: 503"
+
+
+# --- round 20: the web job must say a paper cannot be read -----------------
+
+def run_ingest_job(ref, monkeypatch, do_extract=False):
+    """Drive the server's ingest worker synchronously and return its job."""
+    job = {"id": 1, "label": "t", "state": "queued", "detail": "", "key": None}
+    monkeypatch.setattr(server, "_prune_jobs", lambda: None)
+    server._run_ingest(job, ref, do_extract)
+    return job
+
+
+def test_a_web_ingest_with_no_pdf_is_reported_as_a_failure(monkeypatch):
+    """`done` with an empty detail drops the job from the strip entirely."""
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "Journal", "doi": "10.1145/3442188.3445922",
+        "source": {"kind": "doi", "id": "10.1145/3442188.3445922", "url": "", "pdf_url": ""},
+    }
+    monkeypatch.setattr(ingest, "fetch_crossref", lambda doi, client: dict(meta))
+    job = run_ingest_job(ingest.Ref("doi", "10.1145/3442188.3445922", ""), monkeypatch)
+
+    assert job["state"] == "error", job
+    assert "no PDF stored" in job["detail"]
+    assert "Add it again to retry" in job["detail"]
+
+
+def test_a_web_ingest_that_lands_its_pdf_is_done(monkeypatch):
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: dict(meta))
+
+    def lands(url, key, client):
+        store.pdf_path(key).write_bytes(b"%PDF-1.4\n")
+        return True
+
+    monkeypatch.setattr(ingest, "download_pdf", lands)
+    job = run_ingest_job(ingest.Ref("arxiv", "2602.06941", ""), monkeypatch)
+    assert job["state"] == "done", job
+    assert job["detail"] == ""
+
+
+def test_a_failed_download_is_reported_with_its_note(monkeypatch):
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: dict(meta))
+
+    def fails(url, client):
+        raise httpx.ConnectError("503 from the host")
+
+    monkeypatch.setattr(ingest, "fetch_pdf", fails)
+    job = run_ingest_job(ingest.Ref("arxiv", "2602.06941", ""), monkeypatch)
+    assert job["state"] == "error", job
+    assert "503 from the host" in job["detail"]
