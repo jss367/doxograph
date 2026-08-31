@@ -52,7 +52,11 @@ def _report_missing_pdf(key: str) -> int:
     """A paper with no PDF is a partial result; say so and count it."""
     if store.pdf_path(key).exists():
         return 0
-    note = store.load_paper(key).get("notes") or "no PDF available"
+    try:
+        note = store.load_paper(key).get("notes") or "no PDF available"
+    except KeyError:
+        print(f"  {key}: removed while it was being added.", file=sys.stderr)
+        return 1
     print(f"  {key}: no PDF stored ({note}). Re-run add to retry the download.", file=sys.stderr)
     return 1
 

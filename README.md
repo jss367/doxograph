@@ -73,7 +73,9 @@ reviewed, `Escape` cancels. Clicking a topic filters to it.
 
 "Add claim by hand" opens an editor that exists only in the browser; the claim
 is created when you save it, so cancelling, filtering it away, or switching
-papers leaves nothing behind. A proposed topic is added to the vocabulary only
+papers leaves nothing behind. If you open another claim's editor while writing
+one, the draft is held and a line at the top of the list offers to resume or
+discard it. Leaving the paper abandons it, since the draft belongs to that paper. A proposed topic is added to the vocabulary only
 by Accept; Discard just clears the proposal.
 
 ## The corpus on disk

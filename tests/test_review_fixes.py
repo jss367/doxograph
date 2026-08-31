@@ -970,15 +970,23 @@ def test_uploading_to_a_removed_paper_leaves_no_orphan_pdf(monkeypatch):
 
     real_publish = ingest.publish_pdf
 
+    removed = []
+
     def publish_after_removal(key, staging):
         # Stand in for Remove landing between the reservation and the copy.
+        removed.append(key)
         store.delete_paper(key)
         return real_publish(key, staging)
 
     monkeypatch.setattr(ingest, "publish_pdf", publish_after_removal)
-    key, _ = ingest.ingest_pdf_bytes(b"%PDF-1.4\n" + bytes(64), "paper.pdf")
 
-    assert not store.pdf_path(key).exists(), "an orphan PDF was left for a removed paper"
+    # Reporting success here would mark the job done for a paper that no longer
+    # exists, so the ingest now fails loudly instead.
+    with pytest.raises(ingest.PaperRemoved):
+        ingest.ingest_pdf_bytes(b"%PDF-1.4\n" + bytes(64), "paper.pdf")
+
+    assert removed, "the test did not exercise the removal path"
+    assert not store.pdf_path(removed[0]).exists(), "an orphan PDF was left for a removed paper"
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
     assert list(config.pdfs_dir().glob(".download-*")) == []
 
@@ -1704,3 +1712,48 @@ def test_key_exhaustion_still_reports_clearly(monkeypatch):
         store.save_paper(store.new_paper("doe2026study" + suffix))
     with pytest.raises(RuntimeError, match="cannot find an unused key"):
         store.reserve_key("doe2026study")
+
+
+# --- round 17 findings ----------------------------------------------------
+
+def test_a_download_for_a_removed_paper_fails_the_ingest(monkeypatch):
+    """`download_pdf` returning False must not be reported as success."""
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
+    monkeypatch.setattr(ingest, "download_pdf", lambda url, key, client: False)
+
+    with pytest.raises(ingest.PaperRemoved):
+        ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+
+
+def test_add_reports_a_paper_removed_mid_ingest_without_crashing(monkeypatch, capsys):
+    """`_report_missing_pdf` used to raise KeyError on the deleted JSON."""
+    def land_then_vanish(ref, client=None):
+        return "doe2026study", True      # nothing was ever written
+
+    monkeypatch.setattr(ingest, "ingest_ref", land_then_vanish)
+    args = __main__.build_parser().parse_args(["add", "--no-extract", "2602.06941"])
+    assert args.func(args) == 1
+    assert "removed while it was being added" in capsys.readouterr().err
+
+
+def test_recovery_only_clears_the_note_when_the_pdf_actually_lands(monkeypatch):
+    store.save_paper(store.new_paper(
+        "doe2026study", title="A Study", notes="PDF download failed: 503",
+        source={"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    ))
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
+    monkeypatch.setattr(ingest, "download_pdf", lambda url, key, client: False)
+
+    key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    assert (key, created) == ("doe2026study", False)
+    assert store.load_paper("doe2026study")["notes"] == "PDF download failed: 503"

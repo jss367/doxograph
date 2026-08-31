@@ -273,6 +273,16 @@ function renderContent() {
   if (V.newClaim && V.editing === NEW_CLAIM_ID) {
     shown.add(NEW_CLAIM_ID);
     html += editForm(V.newClaim);
+  } else if (V.newClaim && (V.newClaim.text || '').trim()) {
+    // Held but not open — opening another claim's editor moved `V.editing`.
+    // Without this the draft is unreachable: Add claim would overwrite it and
+    // cancelling the other editor would drop it, losing the text silently.
+    html += `<div class="proposed">
+      <span>Unsaved new claim: <em>${esc(V.newClaim.text.slice(0, 80))}${V.newClaim.text.length > 80 ? '…' : ''}</em></span>
+      <span style="margin-left:auto"></span>
+      <button type="button" data-act="resume-new">Resume</button>
+      <button type="button" data-act="discard-new">Discard</button>
+    </div>`;
   }
 
   if (!rows.length) {
@@ -470,9 +480,22 @@ $('content').addEventListener('click', async (event) => {
       await refresh();
       return;
     }
+    if (act === 'resume-new') {
+      captureOpenEditor();
+      V.editing = NEW_CLAIM_ID;
+      renderContent();
+      return;
+    }
+    if (act === 'discard-new') {
+      V.newClaim = null;
+      if (V.editing === NEW_CLAIM_ID) V.editing = null;
+      renderContent();
+      return;
+    }
     if (act === 'add-claim') {
       captureOpenEditor();
-      V.newClaim = blankClaim(paper);
+      // Resume a held draft rather than overwriting what was typed into it.
+      if (!V.newClaim || !(V.newClaim.text || '').trim()) V.newClaim = blankClaim(paper);
       V.editing = NEW_CLAIM_ID;
       renderContent();
       return;

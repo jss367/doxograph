@@ -19,6 +19,15 @@ import httpx
 
 from . import config, store
 
+class PaperRemoved(RuntimeError):
+    """The paper was deleted while it was being ingested.
+
+    Publication returns False in that case. Reporting success anyway would mark
+    a job done for a paper that no longer exists, and the CLI would then crash
+    trying to read its notes.
+    """
+
+
 USER_AGENT = "doxograph/0.1 (+https://github.com/jss367/doxograph)"
 TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 
@@ -418,13 +427,13 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             pdf_url = (meta.get("source") or {}).get("pdf_url")
             if pdf_url and not store.pdf_path(existing).exists():
                 try:
-                    download_pdf(pdf_url, existing, client)
-                    with store.paper_lock(existing):
-                        paper = store.load_paper(existing)
-                        paper["notes"] = ""
-                        store.save_paper(paper)
+                    if download_pdf(pdf_url, existing, client):
+                        with store.paper_lock(existing):
+                            paper = store.load_paper(existing)
+                            paper["notes"] = ""
+                            store.save_paper(paper)
                 except (httpx.HTTPError, ValueError, KeyError):
-                    pass
+                    pass   # recovery is best effort; the paper is already here
             return existing, False
 
         with store.claim_lock():
@@ -440,12 +449,16 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
         notes = ""
         if pdf_url:
             try:
-                download_pdf(pdf_url, key, client)
+                if not download_pdf(pdf_url, key, client):
+                    raise PaperRemoved(f"{key} was removed while its PDF was being fetched")
             except (httpx.HTTPError, ValueError) as exc:
                 notes = f"PDF download failed: {exc}"
         if notes:
             with store.paper_lock(key):
-                paper = store.load_paper(key)
+                try:
+                    paper = store.load_paper(key)
+                except KeyError:
+                    raise PaperRemoved(f"{key} was removed while it was being added") from None
                 paper["notes"] = notes
                 store.save_paper(paper)
         return key, True
@@ -489,8 +502,8 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
             # Publish through the same locked, atomic helper the downloads use,
             # so a concurrent Remove cannot be followed by an orphan PDF and a
             # half-copied file is never visible as the paper's PDF.
-            if attach:
-                publish_pdf(key, staging)
+            if attach and not publish_pdf(key, staging):
+                raise PaperRemoved(f"{key} was removed while its PDF was being added")
             return key, created
     finally:
         staging.unlink(missing_ok=True)
