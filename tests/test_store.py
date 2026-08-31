@@ -12,9 +12,17 @@ def test_citekey_handles_comma_names_and_missing_year():
     assert store.citekey("A Study", ["Doe, Jane"], None) == "doendstudy"
 
 
-def test_unique_key_suffixes_on_collision():
+def test_reserve_key_suffixes_on_collision():
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    assert store.unique_key("doe2026study") == "doe2026studya"
+    assert store.reserve_key("doe2026study") == "doe2026studya"
+
+
+def test_reserve_key_claims_the_key_immediately():
+    """The reservation is the check, so a second caller cannot take the same key."""
+    first = store.reserve_key("doe2026study")
+    second = store.reserve_key("doe2026study")
+    assert (first, second) == ("doe2026study", "doe2026studya")
+    assert store.load_paper(first)["key"] == first
 
 
 def test_claim_lifecycle_and_status():

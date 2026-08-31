@@ -92,6 +92,10 @@ export/              generated HTML
 One file per paper, so every change to a claim is a readable diff. If you want
 version history for the corpus, `git init` inside the data directory.
 
+Writes are serialized per paper and keys are claimed atomically, so the upload
+pool and the review UI can touch the corpus at the same time without one
+overwriting the other.
+
 ### tags.yaml
 
 ```yaml

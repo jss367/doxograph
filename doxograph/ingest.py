@@ -10,6 +10,8 @@ import re
 import os
 import shutil
 import tempfile
+import threading
+import html as html_module
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,7 +187,9 @@ def _meta_content(html: str, *names: str) -> str | None:
         ):
             match = re.search(pattern, html, re.I)
             if match:
-                return match.group(1).strip()
+                # Attribute values are HTML-escaped, so a query separator arrives
+                # as &amp; and would otherwise be requested literally.
+                return html_module.unescape(match.group(1)).strip()
     return None
 
 
@@ -314,6 +318,12 @@ def download_pdf(url: str, dest: Path, client: httpx.Client) -> None:
     tmp.replace(dest)
 
 
+# "Is this paper already here, and if not what key does it get" has to be one
+# step: the upload and ingest pools run several papers at once, and two of them
+# can be the same paper or produce the same coarse key.
+_claim_lock = threading.Lock()
+
+
 def _client() -> httpx.Client:
     return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
 
@@ -367,11 +377,11 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
         else:
             raise ValueError(f"cannot ingest a {ref.kind} reference")
 
-        existing = find_existing(meta)
-        if existing:
-            return existing, False
-
-        key = store.unique_key(store.citekey(meta["title"], meta["authors"], meta["year"]))
+        with _claim_lock:
+            existing = find_existing(meta)
+            if existing:
+                return existing, False
+            key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]))
         pdf_url = (meta.get("source") or {}).get("pdf_url")
         if pdf_url:
             try:
@@ -405,12 +415,13 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
     try:
         with _client() as client:
             meta = guess_from_pdf(staging, client)
-            existing = find_existing(meta)
-            if existing and (meta.get("source") or {}).get("kind") != "file":
-                if not store.pdf_path(existing).exists():
-                    shutil.copyfile(staging, store.pdf_path(existing))
-                return existing, False
-            key = store.unique_key(store.citekey(meta["title"], meta["authors"], meta["year"]))
+            with _claim_lock:
+                existing = find_existing(meta)
+                if existing and (meta.get("source") or {}).get("kind") != "file":
+                    if not store.pdf_path(existing).exists():
+                        shutil.copyfile(staging, store.pdf_path(existing))
+                    return existing, False
+                key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]))
             shutil.copyfile(staging, store.pdf_path(key))
             store.save_paper(store.new_paper(key, **meta))
             return key, True

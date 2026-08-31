@@ -8,9 +8,13 @@ ledger claim) are computed at read time rather than stored.
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import json
 import os
 import re
+import tempfile
+import threading
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +30,29 @@ STOPWORDS = {
     "the", "their", "there", "this", "to", "via", "we", "what", "when", "why",
     "with", "you", "your",
 }
+
+
+# One lock per paper, so a read-modify-write on a paper file is atomic against
+# the request handlers and the upload pool that run concurrently in this process.
+_locks: dict[str, threading.RLock] = {}
+_locks_guard = threading.Lock()
+
+
+@contextlib.contextmanager
+def paper_lock(key: str):
+    with _locks_guard:
+        lock = _locks.setdefault(key, threading.RLock())
+    with lock:
+        yield
+
+
+def _locked(func):
+    """Run a paper mutator while holding that paper's lock (first arg is the key)."""
+    @functools.wraps(func)
+    def wrapper(key: str, *args, **kwargs):
+        with paper_lock(key):
+            return func(key, *args, **kwargs)
+    return wrapper
 
 
 def now() -> str:
@@ -54,13 +81,24 @@ def citekey(title: str, authors: list[str], year: int | str | None) -> str:
     return f"{surname or 'anon'}{year or 'nd'}{word}"
 
 
-def unique_key(base: str) -> str:
-    if not paper_path(base).exists():
-        return base
-    for suffix in "abcdefghijklmnopqrstuvwxyz":
-        candidate = f"{base}{suffix}"
-        if not paper_path(candidate).exists():
-            return candidate
+def reserve_key(base: str) -> str:
+    """Claim an unused key by creating its file atomically.
+
+    Checking `exists()` and writing later is not enough: several papers are
+    ingested concurrently, two of them can produce the same coarse key, and both
+    would see it unused. `O_EXCL` makes the claim itself the check, so the loser
+    moves on to the next candidate.
+    """
+    config.papers_dir().mkdir(parents=True, exist_ok=True)
+    for candidate in [base] + [f"{base}{s}" for s in "abcdefghijklmnopqrstuvwxyz"]:
+        try:
+            handle = os.open(paper_path(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            json.dump(new_paper(candidate), fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        return candidate
     raise RuntimeError(f"cannot find an unused key for {base!r}")
 
 
@@ -73,11 +111,20 @@ def pdf_path(key: str) -> Path:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    """Write atomically so an interrupted save cannot truncate a paper file."""
+    """Write atomically so an interrupted or concurrent save cannot truncate a file.
+
+    The temporary name is unique per write; a fixed `.tmp` sibling would be
+    shared by two concurrent writers of the same paper.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    handle, staged = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n")
+        os.replace(staged, path)
+    except BaseException:
+        Path(staged).unlink(missing_ok=True)
+        raise
 
 
 def load_paper(key: str) -> dict:
@@ -168,6 +215,7 @@ CLAIM_FIELDS = {
 }
 
 
+@_locked
 def update_claim(key: str, claim_id: str, patch: dict) -> dict:
     paper = load_paper(key)
     for claim in paper.get("claims", []):
@@ -182,6 +230,7 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
     raise KeyError(claim_id)
 
 
+@_locked
 def add_claim(key: str, patch: dict) -> dict:
     paper = load_paper(key)
     claim = new_claim(paper, **{k: v for k, v in patch.items() if k in CLAIM_FIELDS})
@@ -195,6 +244,7 @@ def add_claim(key: str, patch: dict) -> dict:
     return claim
 
 
+@_locked
 def delete_claim(key: str, claim_id: str) -> None:
     paper = load_paper(key)
     before = len(paper.get("claims", []))
@@ -266,26 +316,36 @@ def rename_tag(old: str, new: str) -> None:
     if new not in {t["name"] for t in tags}:
         tags.append({"name": new, "description": next((t.get("description", "") for t in load_tags() if t["name"] == old), "")})
     save_tags(tags)
-    for paper in all_papers():
-        touched = False
-        for claim in paper.get("claims", []):
-            if old in claim.get("tags", []):
-                claim["tags"] = sorted({new if t == old else t for t in claim["tags"]})
-                touched = True
-        if touched:
-            save_paper(paper)
+    for key in paper_keys():
+        with paper_lock(key):
+            try:
+                paper = load_paper(key)
+            except (KeyError, json.JSONDecodeError):
+                continue
+            touched = False
+            for claim in paper.get("claims", []):
+                if old in claim.get("tags", []):
+                    claim["tags"] = sorted({new if t == old else t for t in claim["tags"]})
+                    touched = True
+            if touched:
+                save_paper(paper)
 
 
 def delete_tag(name: str) -> None:
     save_tags([t for t in load_tags() if t["name"] != name])
-    for paper in all_papers():
-        touched = False
-        for claim in paper.get("claims", []):
-            if name in claim.get("tags", []):
-                claim["tags"] = [t for t in claim["tags"] if t != name]
-                touched = True
-        if touched:
-            save_paper(paper)
+    for key in paper_keys():
+        with paper_lock(key):
+            try:
+                paper = load_paper(key)
+            except (KeyError, json.JSONDecodeError):
+                continue
+            touched = False
+            for claim in paper.get("claims", []):
+                if name in claim.get("tags", []):
+                    claim["tags"] = [t for t in claim["tags"] if t != name]
+                    touched = True
+            if touched:
+                save_paper(paper)
 
 
 # --- your own claims ------------------------------------------------------

@@ -11,9 +11,9 @@
   <h1>Doxograph</h1>
   <span class="stats" id="stats"></span>
   <span class="actions">
-    <button id="btn-retag" title="Reassign tags on every paper against the current vocabulary">Retag all</button>
-    <button id="btn-bib">BibTeX</button>
-    <button id="btn-export" class="primary">Export HTML</button>
+    <button type="button" id="btn-retag" title="Reassign tags on every paper against the current vocabulary">Retag all</button>
+    <button type="button" id="btn-bib">BibTeX</button>
+    <button type="button" id="btn-export" class="primary">Export HTML</button>
   </span>
 </header>
 
@@ -23,7 +23,7 @@
     <textarea id="refs" placeholder="Paste arXiv IDs, arXiv or DOI links, or PDF URLs — one per line"></textarea>
     <div class="row">
       <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
-      <button id="btn-add" class="primary" style="margin-left:auto">Add</button>
+      <button type="button" id="btn-add" class="primary" style="margin-left:auto">Add</button>
     </div>
 
     <div class="sec">
@@ -36,7 +36,7 @@
       <ul class="taglist" id="tags"></ul>
       <div class="row">
         <input id="new-tag" placeholder="new topic" style="flex:1">
-        <button id="btn-tag">Add</button>
+        <button type="button" id="btn-tag">Add</button>
       </div>
     </div>
   </aside>

@@ -211,14 +211,15 @@ PAPER_FIELDS = {"title", "authors", "year", "venue", "doi", "summary", "relevanc
 
 @app.patch("/api/papers/{key}")
 def patch_paper(key: str, patch: dict = Body(...)) -> dict:
-    try:
-        paper = store.load_paper(key)
-    except KeyError:
-        raise HTTPException(404, f"no paper {key}")
-    for field, value in patch.items():
-        if field in PAPER_FIELDS:
-            paper[field] = value
-    store.save_paper(paper)
+    with store.paper_lock(key):
+        try:
+            paper = store.load_paper(key)
+        except KeyError:
+            raise HTTPException(404, f"no paper {key}")
+        for field, value in patch.items():
+            if field in PAPER_FIELDS:
+                paper[field] = value
+        store.save_paper(paper)
     return paper
 
 
@@ -279,17 +280,18 @@ def resolve_proposed_tags(key: str, body: ProposedTagsBody) -> dict:
     Discarding only clears the proposal — a discarded name must not end up in
     the vocabulary, which is the whole point of proposals being separate.
     """
-    try:
-        paper = store.load_paper(key)
-    except KeyError:
-        raise HTTPException(404, f"no paper {key}")
-    proposed = {t["name"]: t.get("description", "") for t in paper.get("proposed_tags", [])}
-    accepted = [name for name in body.accept if name in proposed]
-    for name in accepted:
-        store.add_tag(name, proposed[name])
-    resolved = set(accepted) | {name for name in body.discard if name in proposed}
-    paper["proposed_tags"] = [t for t in paper.get("proposed_tags", []) if t["name"] not in resolved]
-    store.save_paper(paper)
+    with store.paper_lock(key):
+        try:
+            paper = store.load_paper(key)
+        except KeyError:
+            raise HTTPException(404, f"no paper {key}")
+        proposed = {t["name"]: t.get("description", "") for t in paper.get("proposed_tags", [])}
+        accepted = [name for name in body.accept if name in proposed]
+        for name in accepted:
+            store.add_tag(name, proposed[name])
+        resolved = set(accepted) | {name for name in body.discard if name in proposed}
+        paper["proposed_tags"] = [t for t in paper.get("proposed_tags", []) if t["name"] not in resolved]
+        store.save_paper(paper)
     return {
         "accepted": accepted,
         "discarded": sorted(resolved - set(accepted)),

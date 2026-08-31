@@ -119,10 +119,10 @@ function paperHeader(key) {
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
     <div class="row">
-      <button data-act="reextract" data-paper="${esc(key)}">Re-read paper</button>
-      <button data-act="retag-one" data-paper="${esc(key)}">Retag claims</button>
-      <button data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
-      <button data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
+      <button type="button" data-act="reextract" data-paper="${esc(key)}">Re-read paper</button>
+      <button type="button" data-act="retag-one" data-paper="${esc(key)}">Retag claims</button>
+      <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
+      <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
     ${proposedPanel(key)}
   </div>`;
@@ -147,8 +147,8 @@ function proposedPanel(key) {
     ${proposed.map((t) => `<div class="row">
       <span class="pn">${esc(t.name)}</span>
       <span class="hint" style="flex:1">${esc(t.description)}</span>
-      <button data-act="accept-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Accept</button>
-      <button data-act="reject-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Discard</button>
+      <button type="button" data-act="accept-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Accept</button>
+      <button type="button" data-act="reject-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Discard</button>
     </div>`).join('')}
   </div>`;
 }
@@ -183,10 +183,10 @@ function claimCard(row) {
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
       <span class="cact">
-        <button data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
+        <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
-        <button data-act="edit" data-claim="${esc(row.id)}">edit</button>
-        <button data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
+        <button type="button" data-act="edit" data-claim="${esc(row.id)}">edit</button>
+        <button type="button" data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
@@ -206,7 +206,7 @@ function editForm(row) {
       </select>
       <select name="link-relation">${options(S.relations, link.relation)}</select>
       <input name="link-note" value="${esc(link.note || '')}" placeholder="how it bears on my claim">
-      <button data-act="drop-link">×</button>
+      <button type="button" data-act="drop-link">×</button>
     </div>`;
   const links = (row.ledger_links || []).concat([{ claim: '', relation: S.relations[0], note: '' }]);
   return `<div class="claim edit-wrap" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">

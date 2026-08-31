@@ -253,6 +253,11 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
 
 
 def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True) -> dict:
+    with store.paper_lock(key):
+        return _merge_extraction(key, payload, response, keep_reviewed)
+
+
+def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True) -> dict:
     paper = store.load_paper(key)
     kept = [c for c in paper.get("claims", []) if keep_reviewed and c.get("reviewed")]
     known = set(store.tag_names())
@@ -356,10 +361,13 @@ def retag_paper(key: str) -> dict:
     # Reload before saving: the model call takes long enough that a claim may
     # have been edited or reviewed meanwhile, and saving the object loaded
     # before the wait would discard those corrections. Apply only the tags.
-    paper = store.load_paper(key)
-    for claim in paper.get("claims", []):
-        assignment = by_id.get(claim["id"])
-        if assignment:
-            claim["tags"] = sorted({store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known})
-    store.save_paper(paper)
+    with store.paper_lock(key):
+        paper = store.load_paper(key)
+        for claim in paper.get("claims", []):
+            assignment = by_id.get(claim["id"])
+            if assignment:
+                claim["tags"] = sorted(
+                    {store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known}
+                )
+        store.save_paper(paper)
     return paper

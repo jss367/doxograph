@@ -428,3 +428,141 @@ def test_extract_returns_nonzero_when_a_paper_fails(monkeypatch, capsys):
     args = __main__.build_parser().parse_args(["extract", "doe2026study"])
     assert args.func(args) == 1
     assert "no PDF" in capsys.readouterr().err
+
+
+# --- round 4 findings -----------------------------------------------------
+
+def test_concurrent_uploads_that_share_a_citekey_get_separate_papers(monkeypatch):
+    """Two different papers can produce the same coarse key at the same moment."""
+    import threading
+    import time
+
+    barrier = threading.Barrier(2)
+
+    def fake_guess(path, client):
+        marker = path.read_bytes().split(b"marker:")[1].split(b"\n")[0].decode()
+        # Both workers reach the key decision together, which is what made
+        # exists()-then-write unsafe.
+        barrier.wait(timeout=5)
+        time.sleep(0.05)
+        return {
+            # Same surname, year and first title word => same coarse citekey.
+            "title": f"A Study of {marker}", "authors": ["Jane Doe"], "year": 2026,
+            "abstract": "", "venue": "", "doi": "",
+            "source": {"kind": "file", "id": f"{marker}.pdf", "url": "", "pdf_url": ""},
+        }
+
+    monkeypatch.setattr(ingest, "guess_from_pdf", fake_guess)
+    results, errors = {}, []
+
+    def upload(marker):
+        try:
+            data = b"%PDF-1.4\nmarker:" + marker.encode() + b"\n" + bytes(64)
+            key, _ = ingest.ingest_pdf_bytes(data, f"{marker}.pdf")
+            results[marker] = key
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=upload, args=(m,)) for m in ("alpha", "beta")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, errors
+    assert len(set(results.values())) == 2, f"both uploads took the same key: {results}"
+    for marker, key in results.items():
+        assert marker.encode() in store.pdf_path(key).read_bytes()
+        assert store.load_paper(key)["title"] == f"A Study of {marker}"
+
+
+def test_overlapping_claim_updates_do_not_revert_each_other():
+    """Two claims on one paper, reviewed at once: neither flag may be lost."""
+    import threading
+
+    store.save_paper(store.new_paper("doe2026study"))
+    first = store.add_claim("doe2026study", {"text": "One.", "reviewed": False})
+    second = store.add_claim("doe2026study", {"text": "Two.", "reviewed": False})
+
+    start = threading.Barrier(2)
+    errors = []
+
+    def mark(claim_id):
+        try:
+            start.wait(timeout=5)
+            store.update_claim("doe2026study", claim_id, {"reviewed": True})
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=mark, args=(c,)) for c in (first["id"], second["id"])]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, errors
+    claims = {c["id"]: c for c in store.load_paper("doe2026study")["claims"]}
+    assert claims[first["id"]]["reviewed"] is True
+    assert claims[second["id"]]["reviewed"] is True
+
+
+def test_many_overlapping_writes_all_survive():
+    """Every claim added concurrently must be present, and the file stay valid."""
+    import threading
+
+    store.save_paper(store.new_paper("doe2026study"))
+    start = threading.Barrier(8)
+    errors = []
+
+    def add(n):
+        try:
+            start.wait(timeout=5)
+            store.add_claim("doe2026study", {"text": f"Claim {n}."})
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=add, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, errors
+    claims = store.load_paper("doe2026study")["claims"]
+    assert len(claims) == 8
+    assert {c["text"] for c in claims} == {f"Claim {n}." for n in range(8)}
+    assert len({c["id"] for c in claims}) == 8   # ids stayed unique under contention
+
+
+def test_concurrent_writes_leave_no_temporary_files():
+    import threading
+
+    store.save_paper(store.new_paper("doe2026study"))
+    threads = [threading.Thread(target=store.add_claim,
+                                args=("doe2026study", {"text": f"C{n}."})) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert list(config.papers_dir().glob("*.tmp")) == []
+    assert list(config.papers_dir().glob(".*")) == []
+
+
+@pytest.mark.parametrize("advertised,expected", [
+    ("/a.pdf?token=x&amp;download=1", "https://journal.example.org/a.pdf?token=x&download=1"),
+    ("https://cdn.example.net/a.pdf?x=1&amp;y=2", "https://cdn.example.net/a.pdf?x=1&y=2"),
+    # Entities are decoded here; percent-encoding is httpx's job at request time.
+    ("/caf&eacute;.pdf", "https://journal.example.org/café.pdf"),
+])
+def test_html_entities_in_metadata_are_decoded(advertised, expected):
+    html = f'<head><meta name="citation_pdf_url" content="{advertised}"></head>'
+    client = FakePageClient("https://journal.example.org/issue/landing", html)
+    ref = ingest.resolve_page("https://journal.example.org/issue/landing", client)
+    assert ref.value == expected
+
+
+def test_entities_are_decoded_in_a_doi_too():
+    html = '<head><meta name="citation_doi" content="10.1145/3442188.3445922&nbsp;"></head>'
+    client = FakePageClient("https://journal.example.org/a", html)
+    ref = ingest.resolve_page("https://journal.example.org/a", client)
+    assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
