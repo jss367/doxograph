@@ -272,6 +272,18 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
 
 # --- PDF text, for files with no metadata anywhere -----------------------
 
+# arXiv prints the ID it assigned down the left margin of the first page, and
+# that stamp always carries a version and either a primary class or the posting
+# date: `arXiv:2504.01234v1 [cs.CL] 3 Apr 2025`, `arXiv:hep-th/9901001v1 4 Jan
+# 1999`. A bare `arXiv:2301.09876` anywhere else on the page is a citation of
+# somebody else's work, and taking it as identity files the upload under the
+# paper it cites.
+ARXIV_STAMP = re.compile(
+    rf"arXiv:({ARXIV_NEW}|{ARXIV_OLD})v\d+\s*(?:\[[^\]\n]+\]|\d{{1,2}}\s+\w+\s+\d{{4}})",
+    re.I,
+)
+
+
 def pdf_first_page_text(path: Path, pages: int = 2) -> str:
     try:
         from pypdf import PdfReader
@@ -287,12 +299,19 @@ def pdf_first_page_text(path: Path, pages: int = 2) -> str:
 def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = None) -> dict:
     """Try arXiv ID, then DOI, then fall back to the filename as a title.
 
+    Both identifiers have to come from the file's own front matter rather than
+    from anything it cites, because a wrong match here does not merely mislabel
+    the upload — it files the PDF under the cited paper's record, or merges it
+    into that record if it is already in the corpus.
+
     `display_name` is the name the file arrived under. The path itself is a
     randomized staging file, so using its stem would put an `mkstemp` suffix in
     the title and citekey and give the same PDF different metadata every upload.
     """
-    text = pdf_first_page_text(path)
-    match = re.search(rf"arXiv:({ARXIV_NEW}|{ARXIV_OLD})", text, re.I)
+    # One page only. Page two is where the references start, and a reference
+    # list is full of other papers' DOIs.
+    text = pdf_first_page_text(path, pages=1)
+    match = ARXIV_STAMP.search(text)
     if match:
         try:
             return fetch_arxiv(match.group(1), client)

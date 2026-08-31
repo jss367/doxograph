@@ -471,6 +471,10 @@ $('content').addEventListener('submit', async (event) => {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
     delete V.drafts[wrap.dataset.claim];
   } catch (error) {
+    // The list stayed interactive during the request, so the open editor may
+    // now belong to a different claim, holding text that exists only in the
+    // DOM. Read it before reopening this one redraws it away.
+    captureOpenEditor();
     // Keep what was typed so the save can be retried; the server row is stale.
     V.drafts[wrap.dataset.claim] = { ...V.drafts[wrap.dataset.claim], ...patch };
     V.error = `Could not save the claim: ${error.message}`;

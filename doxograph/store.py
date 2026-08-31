@@ -327,6 +327,13 @@ def write_json(path: Path, payload: Any) -> None:
     write_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n")
 
 
+# What a scan over `paper_keys()` tolerates. The keys are a snapshot of the
+# directory, so a paper can be deleted between the listing and the read: the
+# file is gone (`KeyError`), half-written or unreadable (`OSError`), or replaced
+# under us (`JSONDecodeError`). None of that should fail a listing or an export.
+VANISHED = (KeyError, OSError, json.JSONDecodeError)
+
+
 def load_paper(key: str) -> dict:
     path = paper_path(key)
     if not path.exists():
@@ -348,7 +355,7 @@ def all_papers() -> list[dict]:
     for key in paper_keys():
         try:
             papers.append(load_paper(key))
-        except (OSError, json.JSONDecodeError):
+        except VANISHED:
             continue
     papers.sort(key=lambda p: (p.get("added") or ""), reverse=True)
     return papers
@@ -584,7 +591,7 @@ def _retag_all(old: str, new: str | None) -> None:
         with paper_lock(key):
             try:
                 paper = load_paper(key)
-            except (KeyError, json.JSONDecodeError):
+            except VANISHED:
                 continue
             touched = False
             for claim in paper.get("claims", []):
@@ -654,7 +661,7 @@ def needs_extraction(key: str) -> bool:
     """
     try:
         paper = load_paper(key)
-    except (KeyError, json.JSONDecodeError):
+    except VANISHED:
         return False
     return pdf_path(key).exists() and not paper.get("claims")
 

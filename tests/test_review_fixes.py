@@ -2055,3 +2055,82 @@ def test_a_tag_added_just_before_the_call_is_still_recognised():
         "doe2026study", extraction_payload(["alpha", "late-arrival"]), prompt_tags=prompt_tags)
     assert paper["claims"][0]["tags"] == ["alpha"]
     assert [t["name"] for t in paper["proposed_tags"]] == []
+
+
+# --- round 24 findings ----------------------------------------------------
+
+JOURNAL_PAGE_ONE = """
+Cortical dynamics under distribution shift
+Journal of Made-Up Results 12(3), 2026.  https://doi.org/10.1234/journal.2026.99
+
+Abstract. We revisit the setting of Smith et al. (arXiv:2301.09876) and show
+that their result does not hold under shift.
+"""
+
+ARXIV_PAGE_ONE = """
+arXiv:2504.01234v2 [cs.CL] 3 Apr 2026
+
+Endogenous steering resistance
+We build on Smith et al. (arXiv:2301.09876).
+"""
+
+
+def identity_probe(monkeypatch, page_one: str, page_two: str = ""):
+    """Record which lookup `guess_from_pdf` reaches for, and with what id."""
+    calls = {}
+
+    def pages(path, pages=2):
+        return page_one if pages == 1 else page_one + page_two
+
+    monkeypatch.setattr(ingest, "pdf_first_page_text", pages)
+
+    def record(kind, title):
+        def lookup(ident, client):
+            calls[kind] = ident
+            return {"title": title, "authors": [], "year": None, "abstract": "", "venue": "",
+                    "doi": ident if kind == "doi" else "",
+                    "source": {"kind": kind, "id": ident, "url": "", "pdf_url": ""}}
+        return lookup
+
+    monkeypatch.setattr(ingest, "fetch_arxiv", record("arxiv", "arxiv paper"))
+    monkeypatch.setattr(ingest, "fetch_crossref", record("doi", "journal paper"))
+    return calls
+
+
+def test_a_cited_arxiv_id_does_not_become_the_uploads_identity(monkeypatch, tmp_path):
+    """A journal PDF citing a preprint must be filed under its own DOI."""
+    calls = identity_probe(monkeypatch, JOURNAL_PAGE_ONE)
+    meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
+
+    assert "arxiv" not in calls, f"filed under the paper it cites: {calls}"
+    assert calls["doi"] == "10.1234/journal.2026.99"
+    assert meta["title"] == "journal paper"
+
+
+def test_the_arxiv_stamp_is_still_read_as_identity(monkeypatch, tmp_path):
+    """The margin stamp is the file's own id, even alongside a cited one."""
+    calls = identity_probe(monkeypatch, ARXIV_PAGE_ONE)
+    ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
+    assert calls["arxiv"] == "2504.01234"
+
+
+def test_identity_does_not_come_from_the_reference_list(monkeypatch, tmp_path):
+    """Page two is where other papers' DOIs live; only page one is identity."""
+    references = "\n[1] Smith. https://doi.org/10.9999/cited.2020.1\n"
+    calls = identity_probe(monkeypatch, "Untitled draft\n", references)
+    meta = ingest.guess_from_pdf(tmp_path / "my-draft.pdf", None, "my-draft.pdf")
+
+    assert calls == {}, f"identified from the bibliography: {calls}"
+    assert meta["title"] == "my draft"
+
+
+def test_a_paper_deleted_mid_listing_does_not_fail_the_listing(monkeypatch):
+    """`paper_keys` is a snapshot; a key can be gone by the time it is read."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    real_keys = store.paper_keys
+
+    monkeypatch.setattr(store, "paper_keys", lambda: real_keys() + ["gone2026missing"])
+    assert [p["key"] for p in store.all_papers()] == ["doe2026study"]
+
+    with TestClient(server.app) as client:
+        assert client.get("/api/state").status_code == 200
