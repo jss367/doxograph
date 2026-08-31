@@ -230,6 +230,10 @@ Extract its claims."""
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
     """Run extraction and merge the result into the stored paper."""
     paper = store.load_paper(key)
+    # The vocabulary the model is about to be shown. Recorded so the merge can
+    # tell a name the model invented from one that was deleted or renamed while
+    # the call was in flight.
+    prompt_tags = set(store.tag_names())
     api = client()
     response = api.messages.create(
         model=config.MODEL,
@@ -249,15 +253,18 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         detail = getattr(response.stop_details, "explanation", "") or ""
         raise RuntimeError(f"extraction refused for {key}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
-    return merge_extraction(key, payload, response, keep_reviewed=keep_reviewed)
+    return merge_extraction(key, payload, response, keep_reviewed=keep_reviewed,
+                            prompt_tags=prompt_tags)
 
 
-def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True) -> dict:
+def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,
+                     prompt_tags: set[str] | None = None) -> dict:
     with store.paper_lock(key):
-        return _merge_extraction(key, payload, response, keep_reviewed)
+        return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags)
 
 
-def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True) -> dict:
+def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,
+                      prompt_tags: set[str] | None = None) -> dict:
     paper = store.load_paper(key)
     # Derive the id high-water mark from every claim, before the reviewed-only
     # filter below hides some of them. Deriving it from the kept subset would let
@@ -267,6 +274,16 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
     kept = [c for c in paper.get("claims", []) if keep_reviewed and c.get("reviewed")]
     known = set(store.tag_names())
 
+    # Names that were in the vocabulary when the prompt was built and are not in
+    # it now were renamed or deleted while the call ran. Writing them onto the
+    # fresh claims would undo that mutation, so they are dropped — unless the
+    # model listed the name in `proposed_tags`, which means it is putting the
+    # name forward rather than echoing the vocabulary back.
+    explicitly_proposed = {
+        store.slugify(t.get("name", "")) for t in payload.get("proposed_tags", []) if t.get("name")
+    }
+    retired_during_call = (prompt_tags or set()) - known - explicitly_proposed
+
     fresh = []
     working = dict(paper, claims=kept)
     for raw in payload.get("claims", []):
@@ -275,7 +292,9 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
             text=(raw.get("text") or "").strip(),
             kind=raw.get("kind") or "finding",
             strength=raw.get("strength") or "supporting",
-            tags=sorted({store.slugify(t) for t in raw.get("tags", []) if t}),
+            tags=sorted(
+                {store.slugify(t) for t in raw.get("tags", []) if t} - retired_during_call
+            ),
             evidence=(raw.get("evidence") or "").strip(),
             quote=(raw.get("quote") or "").strip(),
             locator=(raw.get("locator") or "").strip(),

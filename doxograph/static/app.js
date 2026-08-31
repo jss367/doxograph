@@ -474,7 +474,16 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'review') {
       const row = S.claims.find((c) => c.id === claim);
-      await patchClaim(paper, claim, { reviewed: !row.reviewed });
+      const reviewed = !row.reviewed;
+      // In grouped mode this button also appears on duplicate cards of a claim
+      // whose editor is open elsewhere. `render()` leaves that editor alone, so
+      // its checkbox would keep the old value and saving would undo the toggle.
+      if (V.editing === claim) captureOpenEditor();
+      await patchClaim(paper, claim, { reviewed });
+      if (V.editing === claim) {
+        V.drafts[claim] = { ...V.drafts[claim], reviewed };
+        renderContent();
+      }
       return;
     }
     if (act === 'del') {

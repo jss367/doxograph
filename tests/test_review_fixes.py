@@ -1928,3 +1928,76 @@ def test_a_failed_download_is_reported_with_its_note(monkeypatch):
     job = run_ingest_job(ingest.Ref("arxiv", "2602.06941", ""), monkeypatch)
     assert job["state"] == "error", job
     assert "503 from the host" in job["detail"]
+
+
+# --- round 21: a tag deleted during the call must not come back ------------
+
+def extraction_payload(tags, proposed=()):
+    return {
+        "summary": "", "relevance": "",
+        "proposed_tags": [{"name": n, "description": ""} for n in proposed],
+        "claims": [{"text": "A finding.", "kind": "finding", "strength": "aside",
+                    "tags": list(tags), "evidence": "", "quote": "", "locator": "",
+                    "ledger_links": []}],
+    }
+
+
+def test_a_tag_deleted_during_the_call_is_not_written_back():
+    store.add_tag("alpha")
+    store.add_tag("doomed")
+    store.save_paper(store.new_paper("doe2026study"))
+    prompt_tags = set(store.tag_names())          # what the model was shown
+
+    store.delete_tag("doomed")                    # the user deletes it mid-call
+
+    paper = extract.merge_extraction(
+        "doe2026study", extraction_payload(["alpha", "doomed"]), prompt_tags=prompt_tags)
+    assert paper["claims"][0]["tags"] == ["alpha"], "a deleted tag came back"
+    assert [t["name"] for t in paper["proposed_tags"]] == []
+
+
+def test_a_tag_renamed_during_the_call_does_not_reappear():
+    store.add_tag("old")
+    store.save_paper(store.new_paper("doe2026study"))
+    prompt_tags = set(store.tag_names())
+
+    store.rename_tag("old", "new")
+
+    paper = extract.merge_extraction(
+        "doe2026study", extraction_payload(["old"]), prompt_tags=prompt_tags)
+    assert paper["claims"][0]["tags"] == []
+    assert "old" not in store.tag_names()
+
+
+def test_a_genuinely_new_tag_is_still_proposed():
+    """Only names the vocabulary just lost are dropped, not invented ones."""
+    store.add_tag("alpha")
+    store.save_paper(store.new_paper("doe2026study"))
+    prompt_tags = set(store.tag_names())
+
+    paper = extract.merge_extraction(
+        "doe2026study", extraction_payload(["alpha", "invented"], proposed=["invented"]),
+        prompt_tags=prompt_tags)
+    assert paper["claims"][0]["tags"] == ["alpha", "invented"]
+    assert [t["name"] for t in paper["proposed_tags"]] == ["invented"]
+
+
+def test_a_deleted_tag_re_proposed_by_the_model_is_allowed():
+    """If the model puts the name forward as new, that is a proposal, not an echo."""
+    store.add_tag("doomed")
+    store.save_paper(store.new_paper("doe2026study"))
+    prompt_tags = set(store.tag_names())
+    store.delete_tag("doomed")
+
+    paper = extract.merge_extraction(
+        "doe2026study", extraction_payload(["doomed"], proposed=["doomed"]),
+        prompt_tags=prompt_tags)
+    assert paper["claims"][0]["tags"] == ["doomed"]
+    assert [t["name"] for t in paper["proposed_tags"]] == ["doomed"]
+
+
+def test_without_a_snapshot_nothing_is_dropped():
+    """Callers that do not pass `prompt_tags` keep the previous behavior."""
+    store.save_paper(store.new_paper("doe2026study"))
+    paper = extract.merge_extraction("doe2026study", extraction_payload(["whatever"]))
+    assert paper["claims"][0]["tags"] == ["whatever"]
