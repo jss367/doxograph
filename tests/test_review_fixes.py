@@ -1741,7 +1741,8 @@ def test_add_reports_a_paper_removed_mid_ingest_without_crashing(monkeypatch, ca
     assert "removed while it was being added" in capsys.readouterr().err
 
 
-def test_recovery_only_clears_the_note_when_the_pdf_actually_lands(monkeypatch):
+def recovery_corpus(monkeypatch):
+    """An existing paper with no PDF and a recorded download failure."""
     store.save_paper(store.new_paper(
         "doe2026study", title="A Study", notes="PDF download failed: 503",
         source={"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
@@ -1752,8 +1753,89 @@ def test_recovery_only_clears_the_note_when_the_pdf_actually_lands(monkeypatch):
         "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
     }
     monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
-    monkeypatch.setattr(ingest, "download_pdf", lambda url, key, client: False)
 
+
+def test_recovery_keeps_the_note_when_the_retry_fails(monkeypatch):
+    """A failed download raises; the note must survive so the paper explains itself."""
+    recovery_corpus(monkeypatch)
+
+    def still_down(url, key, client):
+        raise httpx.ConnectError("still down")
+
+    monkeypatch.setattr(ingest, "download_pdf", still_down)
     key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
     assert (key, created) == ("doe2026study", False)
     assert store.load_paper("doe2026study")["notes"] == "PDF download failed: 503"
+
+
+def test_recovery_reports_a_paper_removed_mid_retry(monkeypatch):
+    """False means the paper went away, which is different from a failed download."""
+    recovery_corpus(monkeypatch)
+    monkeypatch.setattr(ingest, "download_pdf", lambda url, key, client: False)
+    with pytest.raises(ingest.PaperRemoved):
+        ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+
+
+def test_recovery_clears_the_note_when_the_retry_lands(monkeypatch):
+    recovery_corpus(monkeypatch)
+
+    def lands(url, key, client):
+        store.pdf_path(key).write_bytes(b"%PDF-1.4\n")
+        return True
+
+    monkeypatch.setattr(ingest, "download_pdf", lands)
+    ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    assert store.load_paper("doe2026study")["notes"] == ""
+
+
+# --- round 18: the legacy claim sequence -----------------------------------
+
+def legacy_paper(reviewed_ids=(), unreviewed_ids=()):
+    """A paper written before `claim_seq` existed."""
+    paper = store.new_paper("doe2026study", title="A Study")
+    del paper["claim_seq"]
+    paper["claims"] = [
+        {"id": cid, "text": f"Claim {cid}.", "kind": "finding", "strength": "aside",
+         "tags": [], "evidence": "", "quote": "", "locator": "", "ledger_links": [],
+         "reviewed": cid in reviewed_ids}
+        for cid in list(reviewed_ids) + list(unreviewed_ids)
+    ]
+    store.save_paper(paper)
+    return paper
+
+
+def test_ensure_claim_seq_reads_every_claim():
+    paper = legacy_paper(reviewed_ids=("doe2026study-c2",),
+                         unreviewed_ids=("doe2026study-c9",))
+    assert store.ensure_claim_seq(paper) == 9
+    assert paper["claim_seq"] == 9
+
+
+def test_re_extraction_does_not_reissue_an_unreviewed_legacy_id():
+    """The highest id belonged to a claim the reviewed-only filter discards."""
+    legacy_paper(reviewed_ids=("doe2026study-c2",),
+                 unreviewed_ids=("doe2026study-c9",))
+    payload = {
+        "summary": "", "relevance": "", "proposed_tags": [],
+        "claims": [{"text": "Fresh.", "kind": "finding", "strength": "aside", "tags": [],
+                    "evidence": "", "quote": "", "locator": "", "ledger_links": []}],
+    }
+    paper = extract.merge_extraction("doe2026study", payload)
+    fresh = [c for c in paper["claims"] if c["text"] == "Fresh."]
+    assert len(fresh) == 1
+    assert fresh[0]["id"] == "doe2026study-c10", (
+        f"reissued a discarded claim's id: {fresh[0]['id']}")
+
+
+def test_re_extraction_on_a_wholly_unreviewed_legacy_paper():
+    """The real corpus shape: no claim_seq and nothing reviewed yet."""
+    legacy_paper(unreviewed_ids=tuple(f"doe2026study-c{n}" for n in range(1, 17)))
+    payload = {
+        "summary": "", "relevance": "", "proposed_tags": [],
+        "claims": [{"text": f"Fresh {n}.", "kind": "finding", "strength": "aside", "tags": [],
+                    "evidence": "", "quote": "", "locator": "", "ledger_links": []}
+                   for n in range(3)],
+    }
+    paper = extract.merge_extraction("doe2026study", payload)
+    ids = [c["id"] for c in paper["claims"]]
+    assert ids == ["doe2026study-c17", "doe2026study-c18", "doe2026study-c19"], ids

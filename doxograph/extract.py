@@ -259,6 +259,11 @@ def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool
 
 def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True) -> dict:
     paper = store.load_paper(key)
+    # Derive the id high-water mark from every claim, before the reviewed-only
+    # filter below hides some of them. Deriving it from the kept subset would let
+    # a discarded claim's id be issued to a new one, and an in-flight retag reply
+    # or PATCH for the discarded claim is matched by id alone.
+    store.ensure_claim_seq(paper)
     kept = [c for c in paper.get("claims", []) if keep_reviewed and c.get("reviewed")]
     known = set(store.tag_names())
 

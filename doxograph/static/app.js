@@ -337,8 +337,10 @@ function renderJobs() {
 
 function cancelEdit() {
   if (V.editing) delete V.drafts[V.editing];   // discard only this claim's draft
+  // Only the new-claim editor's own Cancel drops the held new claim. Cancelling
+  // an existing claim while one is held must leave it reachable via Resume.
+  if (V.editing === NEW_CLAIM_ID) V.newClaim = null;
   V.editing = null;
-  V.newClaim = null;   // nothing was persisted, so there is nothing to clean up
   V.error = null;
   renderContent();
 }
@@ -487,6 +489,9 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'discard-new') {
+      // An existing claim's editor may be open alongside the banner; keep what
+      // is typed in it rather than redrawing from the older snapshot.
+      captureOpenEditor();
       V.newClaim = null;
       if (V.editing === NEW_CLAIM_ID) V.editing = null;
       renderContent();

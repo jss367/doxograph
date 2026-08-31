@@ -427,13 +427,15 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             pdf_url = (meta.get("source") or {}).get("pdf_url")
             if pdf_url and not store.pdf_path(existing).exists():
                 try:
-                    if download_pdf(pdf_url, existing, client):
-                        with store.paper_lock(existing):
-                            paper = store.load_paper(existing)
-                            paper["notes"] = ""
-                            store.save_paper(paper)
+                    if not download_pdf(pdf_url, existing, client):
+                        raise PaperRemoved(
+                            f"{existing} was removed while its PDF was being recovered")
+                    with store.paper_lock(existing):
+                        paper = store.load_paper(existing)
+                        paper["notes"] = ""
+                        store.save_paper(paper)
                 except (httpx.HTTPError, ValueError, KeyError):
-                    pass   # recovery is best effort; the paper is already here
+                    pass   # a failed retry is fine; the paper is already here
             return existing, False
 
         with store.claim_lock():

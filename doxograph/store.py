@@ -389,14 +389,13 @@ def new_paper(key: str, **fields) -> dict:
     return paper
 
 
-def next_claim_id(paper: dict) -> str:
-    """Allocate a claim id that has never been used on this paper.
+def ensure_claim_seq(paper: dict) -> int:
+    """Set and return the paper's claim high-water mark.
 
-    Counting the current claims recycles the id of a deleted one, and ids travel
-    in flight: a retag response or a PATCH issued before the deletion is matched
-    by id alone and would land on the unrelated replacement. The high-water mark
-    is stored on the paper, and derived from existing ids for corpora written
-    before it existed.
+    Corpora written before `claim_seq` existed derive it from the ids they
+    already hold. Call this on the *whole* paper before filtering its claims:
+    deriving it from a subset lets an id belonging to a filtered-out claim be
+    issued again, and ids travel in flight.
     """
     seq = paper.get("claim_seq")
     if seq is None:
@@ -406,7 +405,18 @@ def next_claim_id(paper: dict) -> str:
             if match:
                 used.append(int(match.group(1)))
         seq = max(used, default=0)
-    seq += 1
+        paper["claim_seq"] = seq
+    return seq
+
+
+def next_claim_id(paper: dict) -> str:
+    """Allocate a claim id that has never been used on this paper.
+
+    Counting the current claims recycles the id of a deleted one, and ids travel
+    in flight: a retag response or a PATCH issued before the deletion is matched
+    by id alone and would land on the unrelated replacement.
+    """
+    seq = ensure_claim_seq(paper) + 1
     paper["claim_seq"] = seq
     return f"{paper['key']}-c{seq}"
 
