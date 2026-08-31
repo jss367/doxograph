@@ -185,7 +185,8 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
 def add_claim(key: str, patch: dict) -> dict:
     paper = load_paper(key)
     claim = new_claim(paper, **{k: v for k, v in patch.items() if k in CLAIM_FIELDS})
-    claim["reviewed"] = True  # a hand-written claim needs no review
+    # A hand-written claim needs no review, but a blank draft is not a claim yet.
+    claim["reviewed"] = bool(claim["text"].strip())
     paper.setdefault("claims", []).append(claim)
     refresh_status(paper)
     save_paper(paper)

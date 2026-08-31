@@ -123,8 +123,9 @@ class RenameBody(BaseModel):
     name: str
 
 
-class AcceptBody(BaseModel):
-    names: list[str] = []
+class ProposedTagsBody(BaseModel):
+    accept: list[str] = []
+    discard: list[str] = []
 
 
 class RetagBody(BaseModel):
@@ -271,19 +272,29 @@ def remove_claim(key: str, claim_id: str) -> dict:
     return {"deleted": claim_id}
 
 
-@app.post("/api/papers/{key}/accept-tags")
-def accept_tags(key: str, body: AcceptBody) -> dict:
+@app.post("/api/papers/{key}/proposed-tags")
+def resolve_proposed_tags(key: str, body: ProposedTagsBody) -> dict:
+    """Accept proposed topics into the vocabulary, or discard them.
+
+    Discarding only clears the proposal — a discarded name must not end up in
+    the vocabulary, which is the whole point of proposals being separate.
+    """
     try:
         paper = store.load_paper(key)
     except KeyError:
         raise HTTPException(404, f"no paper {key}")
     proposed = {t["name"]: t.get("description", "") for t in paper.get("proposed_tags", [])}
-    accepted = [name for name in body.names if name in proposed]
+    accepted = [name for name in body.accept if name in proposed]
     for name in accepted:
         store.add_tag(name, proposed[name])
-    paper["proposed_tags"] = [t for t in paper.get("proposed_tags", []) if t["name"] not in set(body.names)]
+    resolved = set(accepted) | {name for name in body.discard if name in proposed}
+    paper["proposed_tags"] = [t for t in paper.get("proposed_tags", []) if t["name"] not in resolved]
     store.save_paper(paper)
-    return {"accepted": accepted, "tags": store.load_tags()}
+    return {
+        "accepted": accepted,
+        "discarded": sorted(resolved - set(accepted)),
+        "tags": store.load_tags(),
+    }
 
 
 @app.post("/api/tags")

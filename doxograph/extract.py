@@ -352,7 +352,12 @@ def retag_paper(key: str) -> dict:
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
     known = set(store.tag_names())
     by_id = {a["id"]: a for a in payload.get("assignments", [])}
-    for claim in claims:
+
+    # Reload before saving: the model call takes long enough that a claim may
+    # have been edited or reviewed meanwhile, and saving the object loaded
+    # before the wait would discard those corrections. Apply only the tags.
+    paper = store.load_paper(key)
+    for claim in paper.get("claims", []):
         assignment = by_id.get(claim["id"])
         if assignment:
             claim["tags"] = sorted({store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known})

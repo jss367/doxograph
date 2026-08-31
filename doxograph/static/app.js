@@ -2,8 +2,12 @@
 
 let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
+// selectedId is a claim id rather than a render position: in grouped mode a
+// claim with several topics is drawn once per topic, so positions do not map
+// onto claims one-to-one. draft holds a just-created blank claim so cancelling
+// its editor can remove it again.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false,
-            group: true, editing: null, selected: 0 };
+            group: true, editing: null, selectedId: null, draft: null };
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -145,7 +149,7 @@ async function loadProposed(key) {
   } catch (e) { window.__paperCache[key] = null; }
 }
 
-function claimCard(row, index) {
+function claimCard(row) {
   if (V.editing === row.id) return editForm(row);
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
@@ -155,8 +159,8 @@ function claimCard(row, index) {
     return `<div class="link"><span class="rel">${esc(l.relation)}</span>
       ${esc(own ? own.text : l.claim)}${l.note ? ' — ' + esc(l.note) : ''}</div>`;
   }).join('');
-  return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'} ${index === V.selected ? 'sel' : ''}"
-       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-index="${index}">
+  return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'} ${row.id === V.selectedId ? 'sel' : ''}"
+       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
@@ -186,7 +190,7 @@ function editForm(row) {
       </select>
       <select name="link-relation">${options(S.relations, link.relation)}</select>
       <input name="link-note" value="${esc(link.note || '')}" placeholder="how it bears on my claim">
-      <button data-act="drop-link" data-index="${i}">×</button>
+      <button data-act="drop-link">×</button>
     </div>`;
   const links = (row.ledger_links || []).concat([{ claim: '', relation: S.relations[0], note: '' }]);
   return `<div class="claim edit-wrap" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
@@ -215,8 +219,10 @@ function editForm(row) {
 }
 
 function renderContent() {
+  const main = $('main');
+  const scrollTop = main ? main.scrollTop : 0;
   const rows = visibleClaims();
-  if (V.selected >= rows.length) V.selected = Math.max(0, rows.length - 1);
+  if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
 
   if (!rows.length) {
@@ -224,6 +230,7 @@ function renderContent() {
       ? '<p class="empty">No claims match these filters.</p>'
       : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
     $('content').innerHTML = html;
+    if (main) main.scrollTop = scrollTop;
     return;
   }
 
@@ -238,21 +245,21 @@ function renderContent() {
       });
     });
     const ordered = [...byTag.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
-    let index = 0;
     for (const [tag, group] of ordered) {
       const description = (S.tags.find((t) => t.name === tag) || {}).description || '';
       html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span></h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
-        + group.map((row) => claimCard(row, index++)).join('') + '</div>';
+        + group.map(claimCard).join('') + '</div>';
     }
     if (untagged.length) {
       html += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
-        + untagged.map((row) => claimCard(row, index++)).join('') + '</div>';
+        + untagged.map(claimCard).join('') + '</div>';
     }
   } else {
-    html += rows.map((row, i) => claimCard(row, i)).join('');
+    html += rows.map(claimCard).join('');
   }
   $('content').innerHTML = html;
+  if (main) main.scrollTop = scrollTop;
 }
 
 function renderJobs() {
@@ -265,6 +272,25 @@ function renderJobs() {
 }
 
 // --- actions --------------------------------------------------------------
+
+async function discardDraft() {
+  if (!V.draft) return;
+  const draft = S.claims.find((c) => c.id === V.draft.id);
+  // Only remove it if it is still blank; anything typed and saved is a real claim.
+  if (!draft || !(draft.text || '').trim()) {
+    try {
+      await api(`/api/papers/${encodeURIComponent(V.draft.paper)}/claims/${encodeURIComponent(V.draft.id)}`,
+                { method: 'DELETE' });
+    } catch (e) { /* already gone */ }
+  }
+  V.draft = null;
+}
+
+async function cancelEdit() {
+  const wasDraft = V.draft && V.draft.id === V.editing;
+  V.editing = null;
+  if (wasDraft) { await discardDraft(); await refresh(); } else { renderContent(); }
+}
 
 async function patchClaim(paper, claim, patch) {
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
@@ -301,6 +327,7 @@ $('content').addEventListener('submit', async (event) => {
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
   V.editing = null;
+  if (V.draft && V.draft.id === wrap.dataset.claim) V.draft = null;  // saved, so it is a real claim now
   await patchClaim(wrap.dataset.paper, wrap.dataset.claim, readForm(form));
 });
 
@@ -311,7 +338,7 @@ $('content').addEventListener('click', async (event) => {
     const paper = button.dataset.paper;
     const claim = button.dataset.claim;
     if (act === 'edit') { V.editing = claim; renderContent(); return; }
-    if (act === 'cancel') { V.editing = null; renderContent(); return; }
+    if (act === 'cancel') { await cancelEdit(); return; }
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
       button.closest('.linkrow').style.display = 'none';
@@ -329,7 +356,7 @@ $('content').addEventListener('click', async (event) => {
       await refresh();
       return;
     }
-    if (act === 'open-paper') { V.paper = paper; V.tag = null; V.selected = 0; render(); return; }
+    if (act === 'open-paper') { V.paper = paper; V.tag = null; V.selectedId = null; render(); return; }
     if (act === 'reextract') {
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
       await refresh();
@@ -346,6 +373,7 @@ $('content').addEventListener('click', async (event) => {
     if (act === 'add-claim') {
       const created = await api(`/api/papers/${encodeURIComponent(paper)}/claims`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      V.draft = { id: created.id, paper };
       await refresh();
       V.editing = created.id;
       renderContent();
@@ -360,11 +388,11 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'accept-tag' || act === 'reject-tag') {
-      await api(`/api/papers/${encodeURIComponent(paper)}/accept-tags`, {
+      const field = act === 'accept-tag' ? 'accept' : 'discard';
+      await api(`/api/papers/${encodeURIComponent(paper)}/proposed-tags`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ names: [button.dataset.tag] }),
+        body: JSON.stringify({ [field]: [button.dataset.tag] }),
       });
-      if (act === 'reject-tag') { /* removing it from the pending list is enough */ }
       delete (window.__paperCache || {})[paper];
       await refresh();
       return;
@@ -373,19 +401,18 @@ $('content').addEventListener('click', async (event) => {
   const tagEl = event.target.closest('[data-tag]');
   if (tagEl && !tagEl.dataset.act) {
     V.tag = V.tag === tagEl.dataset.tag ? null : tagEl.dataset.tag;
-    V.selected = 0;
     render();
     return;
   }
-  const card = event.target.closest('[data-index]');
-  if (card) { V.selected = Number(card.dataset.index); renderContent(); }
+  const card = event.target.closest('.claim[data-claim]');
+  if (card) { V.selectedId = card.dataset.claim; renderContent(); }
 });
 
 $('papers').addEventListener('click', (event) => {
   const li = event.target.closest('[data-paper]');
   if (!li) return;
   V.paper = li.dataset.paper || null;
-  V.selected = 0;
+  V.selectedId = null;
   V.editing = null;
   render();
 });
@@ -394,7 +421,6 @@ $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
   if (!li) return;
   V.tag = V.tag === li.dataset.tag ? null : li.dataset.tag;
-  V.selected = 0;
   render();
 });
 
@@ -441,32 +467,45 @@ $('btn-export').addEventListener('click', async () => {
 
 $('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
 
-$('q').addEventListener('input', (e) => { V.q = e.target.value; V.selected = 0; renderContent(); });
+$('q').addEventListener('input', (e) => { V.q = e.target.value; renderContent(); });
 $('kind').addEventListener('change', (e) => { V.kind = e.target.value; renderContent(); });
 $('only-unreviewed').addEventListener('change', (e) => { V.unreviewed = e.target.checked; renderContent(); });
 $('group-by-tag').addEventListener('change', (e) => { V.group = e.target.checked; renderContent(); });
 
 // --- keyboard -------------------------------------------------------------
 
+function selectedRow(rows) {
+  return rows.find((row) => row.id === V.selectedId) || rows[0] || null;
+}
+
+function moveSelection(rows, step) {
+  if (!rows.length) return;
+  const at = rows.findIndex((row) => row.id === V.selectedId);
+  const next = at < 0 ? 0 : Math.min(Math.max(at + step, 0), rows.length - 1);
+  V.selectedId = rows[next].id;
+  renderContent();
+  scrollToSelected();
+}
+
 document.addEventListener('keydown', async (event) => {
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
-    if (event.key === 'Escape') { V.editing = null; renderContent(); }
+    if (event.key === 'Escape' && V.editing) await cancelEdit();
     return;
   }
   const rows = visibleClaims();
   if (event.key === 'j' || event.key === 'ArrowDown') {
-    V.selected = Math.min(V.selected + 1, rows.length - 1); renderContent(); scrollToSelected();
+    moveSelection(rows, 1);
   } else if (event.key === 'k' || event.key === 'ArrowUp') {
-    V.selected = Math.max(V.selected - 1, 0); renderContent(); scrollToSelected();
+    moveSelection(rows, -1);
   } else if (event.key === 'e') {
-    const row = rows[V.selected];
+    const row = selectedRow(rows);
     if (row) { V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
-    const row = rows[V.selected];
+    const row = selectedRow(rows);
     if (row) await patchClaim(row.paper, row.id, { reviewed: !row.reviewed });
   } else if (event.key === 'Escape') {
-    V.editing = null; renderContent();
+    await cancelEdit();
   }
 });
 
@@ -506,6 +545,15 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
+function stateSignature(state) {
+  return JSON.stringify([
+    (state.papers || []).map((p) => [p.key, p.status, p.n_claims, p.n_proposed_tags]),
+    (state.claims || []).map((c) => [c.id, c.reviewed, c.updated || c.added, (c.tags || []).join(',')]),
+    (state.tags || []).map((t) => t.name),
+    (state.ledger || []).map((c) => c.id),
+  ]);
+}
+
 async function boot() {
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
@@ -516,9 +564,11 @@ async function boot() {
     if (!busy && V.editing) return;
     try {
       const next = await api('/api/state');
+      const changed = stateSignature(next) !== stateSignature(S);
       S = next;
-      renderStats();
       renderJobs();
+      if (!changed) return;
+      renderStats();
       if (!V.editing) { renderPapers(); renderTags(); renderContent(); }
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);

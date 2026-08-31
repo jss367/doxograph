@@ -11,6 +11,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urljoin
 
 import httpx
 
@@ -164,7 +165,9 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
             return Ref("arxiv", match.group(1), url)
     match = re.search(r'name=["\']citation_pdf_url["\']\s+content=["\']([^"\']+)', html, re.I)
     if match:
-        return Ref("pdf", match.group(1), url)
+        # The advertised link is often relative; resolve it against the page we
+        # actually landed on, after redirects.
+        return Ref("pdf", urljoin(str(response.url), match.group(1).strip()), url)
     match = re.search(rf'name=["\']citation_doi["\']\s+content=["\']({DOI_RE})', html, re.I)
     if match:
         return Ref("doi", match.group(1), url)
