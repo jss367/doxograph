@@ -29,16 +29,23 @@ function blankClaim(paper) {
 // thrown away by the redraw that follows it, and a second click would post the
 // same new claim twice under two ids. Tracked by claim id rather than on the
 // element, so a redraw during the request reapplies it.
-const savingClaims = new Set();
+const savingClaims = new Map();   // claim id -> requests in flight for it
+
+function isSaving(id) {
+  return (savingClaims.get(id) || 0) > 0;
+}
 
 function markSaving(id, busy) {
-  if (busy) savingClaims.add(id); else savingClaims.delete(id);
+  // Counted, not a flag: a review toggle and a save can overlap, and the first
+  // to finish must not unfreeze the form while the other is still running.
+  const n = (savingClaims.get(id) || 0) + (busy ? 1 : -1);
+  if (n > 0) savingClaims.set(id, n); else savingClaims.delete(id);
   applySavingState();
 }
 
 function applySavingState() {
   document.querySelectorAll('form[data-form]').forEach((form) => {
-    const busy = savingClaims.has(form.dataset.form);
+    const busy = isSaving(form.dataset.form);
     form.classList.toggle('saving', busy);
     form.querySelectorAll('input, textarea, select, button').forEach((field) => {
       field.disabled = busy;
@@ -418,9 +425,18 @@ function captureOpenEditor() {
 async function toggleReviewed(row) {
   // Shared by the review button — including the duplicate cards a claim gets in
   // grouped mode — and the `r` key, so both keep an open editor in step.
+  if (isSaving(row.id)) return;   // a request for it is in flight
   const reviewed = !row.reviewed;
   if (V.editing === row.id) captureOpenEditor();
-  await patchClaim(row.paper, row.id, { reviewed });
+  // Freeze the claim's form for the toggle too. A full-form save started
+  // during it carries the old checkbox and would land afterwards, putting the
+  // review flag back where it was.
+  markSaving(row.id, true);
+  try {
+    await patchClaim(row.paper, row.id, { reviewed });
+  } finally {
+    markSaving(row.id, false);
+  }
 
   // The request is long enough for the user to type in the form, or to open a
   // different claim's editor. Recapturing the DOM only makes sense in the first
@@ -466,7 +482,7 @@ $('content').addEventListener('submit', async (event) => {
   if (!form) return;
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
-  if (savingClaims.has(wrap.dataset.claim)) return;   // already saving
+  if (isSaving(wrap.dataset.claim)) return;   // a request for it is in flight
   const patch = readForm(form);
   V.error = null;
   markSaving(wrap.dataset.claim, true);

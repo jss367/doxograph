@@ -328,19 +328,32 @@ def pdf_metadata_doi(path: Path) -> str:
     return ""
 
 
-def title_is_on_the_page(title: str, text: str) -> bool:
-    """Does the record we just fetched name the paper the page belongs to?
+def front_matter(text: str) -> str:
+    """The top of the first page, where the title is printed.
+
+    Bounded by the abstract when there is one, and by a character count
+    otherwise. A first page can carry a bibliography, and a paper cited there
+    or in the abstract is named alongside its DOI, so a page-wide search would
+    accept that pair as the upload's identity.
+    """
+    head = text[:1500]
+    abstract = re.search(r"\babstract\b", head, re.I)
+    return head[:abstract.start()] if abstract else head[:600]
+
+
+def title_is_in_the_front_matter(title: str, text: str) -> bool:
+    """Does the record we just fetched name the paper this page belongs to?
 
     A DOI printed on a first page is usually the paper's own, but it can be one
-    it cites, and the two cases look alike. Fetching the record and looking for
-    its title on the page tells them apart: the paper's own title is printed
+    it cites, and the two look alike. Fetching the record and looking for its
+    title above the abstract tells them apart: the paper's own title is printed
     there, a cited paper's is not. Compared on letters and digits alone,
     because extraction inserts line breaks and turns ligatures into anything.
     """
     def squash(value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", value.lower())
 
-    needle, haystack = squash(title), squash(text)
+    needle, haystack = squash(title), squash(front_matter(text))
     if len(needle) < 12:            # too short to be evidence either way
         return False
     return needle[:60] in haystack
@@ -382,7 +395,7 @@ def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = 
             meta = fetch_crossref(normalize_doi(match.group(0)), client)
         except (httpx.HTTPError, KeyError, ValueError):
             continue
-        if title_is_on_the_page(meta.get("title", ""), text):
+        if title_is_in_the_front_matter(meta.get("title", ""), text):
             return meta
     name = Path(display_name or path.name).name
     title = re.sub(r"[_-]+", " ", Path(name).stem).strip()

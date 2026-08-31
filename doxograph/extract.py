@@ -364,9 +364,14 @@ def retag_paper(key: str) -> dict:
     # against, so a tag added or renamed between the two cannot be mistaken for
     # one the model invented.
     prompt_vocabulary = store.load_tags()
-    # What each claim was tagged with when the prompt was built. Anything that
-    # differs afterwards was changed by somebody else while the model thought.
-    tags_before = {c["id"]: sorted(c.get("tags", [])) for c in claims}
+    def state_of(claim: dict) -> tuple:
+        # Everything the answer depends on: the text and evidence the model was
+        # shown, and the tags its answer would replace.
+        return (claim.get("text", ""), claim.get("evidence", ""), sorted(claim.get("tags", [])))
+
+    # Each claim as the prompt described it. Anything that differs afterwards
+    # was changed by somebody else while the model thought.
+    claims_before = {c["id"]: state_of(c) for c in claims}
     api = client()
     response = api.messages.create(
         model=config.MODEL,
@@ -406,11 +411,12 @@ def retag_paper(key: str) -> dict:
             assignment = by_id.get(claim["id"])
             if not assignment:
                 continue
-            # A claim whose tags changed during the call was retagged by
-            # somebody else — a person editing it, or a rename or delete
-            # rewriting it. That decision is newer than this one and is kept
-            # whole: the model was answering about tags that no longer apply.
-            if sorted(claim.get("tags", [])) != tags_before.get(claim["id"], []):
+            # A claim that changed during the call is left alone. Its tags may
+            # have been set by somebody else — a person editing them, or a
+            # rename or delete rewriting them — and that decision is newer than
+            # this one. Its text may have been rewritten too, in which case the
+            # answer describes a claim that no longer exists.
+            if state_of(claim) != claims_before.get(claim["id"]):
                 continue
             claim["tags"] = sorted(
                 {store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known}

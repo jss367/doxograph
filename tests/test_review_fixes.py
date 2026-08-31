@@ -123,6 +123,11 @@ def retag_corpus():
 
 
 def test_retag_preserves_an_edit_made_during_the_model_call(monkeypatch, retag_corpus):
+    """A claim rewritten during the call keeps its text and its old tags.
+
+    The answer for it describes wording that no longer exists, so it is not
+    applied. Every other claim still takes the answer.
+    """
     first_id, second_id = retag_corpus
 
     def concurrent_edit():
@@ -139,7 +144,8 @@ def test_retag_preserves_an_edit_made_during_the_model_call(monkeypatch, retag_c
     claims = {c["id"]: c for c in store.load_paper("doe2026study")["claims"]}
     assert claims[second_id]["text"] == "Corrected by hand."   # the edit survived
     assert claims[second_id]["reviewed"] is True
-    assert claims[second_id]["tags"] == ["beta"]               # and the retag applied
+    assert claims[second_id]["tags"] == ["alpha"]              # tags for the old text
+    assert claims[first_id]["tags"] == ["beta"]                # untouched claim retagged
 
 
 def test_retag_drops_tags_absent_from_the_vocabulary(monkeypatch, retag_corpus):
@@ -2412,3 +2418,51 @@ def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
 
     assert response.json() == {"queued": 1}
     assert where["on_the_loop"] is False, "the copy blocked the event loop"
+
+
+# --- round 29 findings ----------------------------------------------------
+
+BIBLIOGRAPHY_ON_PAGE_ONE = """
+A two-page note with no DOI of its own
+
+Abstract. A short remark on distribution shift.
+
+References
+[1] Cortical dynamics under distribution shift. Journal of Made-Up Results,
+    2026. https://doi.org/10.1234/journal.2026.99
+"""
+
+
+def test_a_title_in_a_first_page_bibliography_is_not_identity(monkeypatch, tmp_path):
+    """The cited paper is named next to its DOI; that pair is not this paper."""
+    calls = identity_probe(monkeypatch, BIBLIOGRAPHY_ON_PAGE_ONE)
+    meta = ingest.guess_from_pdf(tmp_path / "note.pdf", None, "note.pdf")
+
+    assert calls["doi"] == ["10.1234/journal.2026.99"], "the DOI was never checked"
+    assert meta["doi"] == "", f"filed under the work it cites: {meta['title']}"
+    assert meta["title"] == "note"
+
+
+def test_a_title_above_the_abstract_is_identity(monkeypatch, tmp_path):
+    """The same check still accepts a paper's own front matter."""
+    identity_probe(monkeypatch, JOURNAL_PAGE_ONE)
+    meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
+    assert meta["doi"] == "10.1234/journal.2026.99"
+
+
+def test_a_claim_rewritten_during_a_retag_keeps_its_tags(monkeypatch):
+    """The answer describes wording the claim no longer has."""
+    store.add_tag("alpha")
+    store.add_tag("beta")
+    study_with_tags(["beta"])
+
+    def rewrite():
+        paper = store.load_paper("doe2026study")
+        paper["claims"][0]["text"] = "Rewritten by hand."
+        store.save_paper(paper)
+
+    retag_client(monkeypatch, rewrite)
+    result = extract.retag_paper("doe2026study")
+
+    assert result["claims"][0]["text"] == "Rewritten by hand."
+    assert result["claims"][0]["tags"] == ["beta"], "tags for the old wording were applied"
