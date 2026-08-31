@@ -310,12 +310,16 @@ def fetch_pdf(url: str, client: httpx.Client) -> Path:
     """Download a PDF to its own staging file and return that path."""
     config.pdfs_dir().mkdir(parents=True, exist_ok=True)
     handle, staged = tempfile.mkstemp(dir=config.pdfs_dir(), prefix=".download-", suffix=".pdf")
+    # Close the descriptor straight away and reopen by path. Opening the stream
+    # or checking its status can fail before any write, and a descriptor still
+    # owned by `mkstemp` at that point leaks for the life of the server.
+    os.close(handle)
     staging = Path(staged)
     try:
         with client.stream("GET", url, follow_redirects=True) as response:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
-            with os.fdopen(handle, "wb") as fh:
+            with staging.open("wb") as fh:
                 for chunk in response.iter_bytes(65536):
                     fh.write(chunk)
         if staging.read_bytes()[:5] != b"%PDF-":
@@ -460,8 +464,12 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
         dir=config.pdfs_dir(), prefix=f".incoming-{store.slugify(filename) or 'upload'}-", suffix=".pdf"
     )
     staging = Path(staged)
-    with os.fdopen(handle, "wb") as fh:
-        fh.write(data)
+    try:
+        with os.fdopen(handle, "wb") as fh:
+            fh.write(data)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
     try:
         with _client() as client:
             meta = guess_from_pdf(staging, client, display_name=filename)

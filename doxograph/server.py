@@ -51,11 +51,12 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
     try:
         _set(job, state="fetching")
         key, created = ingest.ingest_ref(ref)
-        _set(job, key=key, label=key, detail="" if created else "already in the corpus")
-        if not created:
-            _set(job, state="done")
-            return
-        if do_extract:
+        recovered = not created and store.needs_extraction(key)
+        _set(job, key=key, label=key,
+             detail="" if created else ("PDF recovered" if recovered else "already in the corpus"))
+        # Read whenever the paper has a PDF and no claims, rather than only when
+        # it was just created: a recovered download needs reading too.
+        if do_extract and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
         _set(job, state="done")
@@ -71,7 +72,7 @@ def _run_upload(job: dict, data: bytes, filename: str, do_extract: bool) -> None
         _set(job, state="fetching")
         key, created = ingest.ingest_pdf_bytes(data, filename)
         _set(job, key=key, label=key, detail="" if created else "already in the corpus")
-        if created and do_extract:
+        if do_extract and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
         _set(job, state="done")

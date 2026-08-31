@@ -32,10 +32,61 @@ STOPWORDS = {
 }
 
 
-# One lock per paper, so a read-modify-write on a paper file is atomic against
-# the request handlers and the upload pool that run concurrently in this process.
+# Two layers of locking. The thread lock serializes the request handlers and the
+# upload pool inside one process; the file lock extends that to other processes,
+# because `doxograph serve` and a `doxograph extract` run from a shell are two
+# processes writing the same corpus and a thread lock says nothing about that.
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
+_depth = threading.local()
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no fcntl
+    fcntl = None
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path):
+    """Hold an exclusive lock on `path` for the duration of the block."""
+    if fcntl is None:  # pragma: no cover - single-process fallback
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+@contextlib.contextmanager
+def _reentrant_file_lock(name: str, path: Path):
+    """Take the file lock once per thread, however deeply the block nests.
+
+    `flock` is held per open file description, so a nested acquire from the same
+    thread would open a second descriptor and block on itself.
+    """
+    held = getattr(_depth, "held", None)
+    if held is None:
+        held = _depth.held = {}
+    if held.get(name):
+        held[name] += 1
+        try:
+            yield
+        finally:
+            held[name] -= 1
+        return
+    held[name] = 1
+    try:
+        with _file_lock(path):
+            yield
+    finally:
+        held[name] -= 1
 
 
 # The tag vocabulary is a single shared file, so it gets one lock rather than
@@ -49,13 +100,13 @@ _vocab = threading.RLock()
 def paper_lock(key: str):
     with _locks_guard:
         lock = _locks.setdefault(key, threading.RLock())
-    with lock:
+    with lock, _reentrant_file_lock(f"paper:{key}", config.locks_dir() / f"{key}.lock"):
         yield
 
 
 @contextlib.contextmanager
 def vocab_lock():
-    with _vocab:
+    with _vocab, _reentrant_file_lock("vocab", config.locks_dir() / "vocabulary.lock"):
         yield
 
 
@@ -108,6 +159,7 @@ def reserve_key(base: str, **fields) -> str:
     reserve a second key while the first was still fetching its PDF.
     """
     config.papers_dir().mkdir(parents=True, exist_ok=True)
+    # O_EXCL is already atomic across processes, so this needs no extra lock.
     for candidate in [base] + [f"{base}{s}" for s in "abcdefghijklmnopqrstuvwxyz"]:
         try:
             handle = os.open(paper_path(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -412,6 +464,19 @@ def tag_counts(rows: list[dict]) -> dict[str, int]:
         for tag in row.get("tags", []):
             counts[tag] = counts.get(tag, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def needs_extraction(key: str) -> bool:
+    """A paper with its PDF but no claims is ready to be read.
+
+    Callers used to gate on "was this paper just created", which skipped a paper
+    whose PDF arrived later — after a failed download was retried, for instance.
+    """
+    try:
+        paper = load_paper(key)
+    except (KeyError, json.JSONDecodeError):
+        return False
+    return pdf_path(key).exists() and not paper.get("claims")
 
 
 def summarize(paper: dict) -> dict:

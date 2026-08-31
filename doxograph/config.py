@@ -41,12 +41,16 @@ def ledger_path() -> Path:
     return data_dir() / "ledger.yaml"
 
 
+def locks_dir() -> Path:
+    return data_dir() / "locks"
+
+
 def export_path() -> Path:
     return Path(os.environ.get("DOXOGRAPH_EXPORT", data_dir() / "export" / "doxograph.html")).expanduser()
 
 
 def ensure_dirs() -> None:
-    for d in (papers_dir(), pdfs_dir(), export_path().parent):
+    for d in (papers_dir(), pdfs_dir(), locks_dir(), export_path().parent):
         d.mkdir(parents=True, exist_ok=True)
 
 

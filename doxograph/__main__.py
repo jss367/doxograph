@@ -24,7 +24,8 @@ def cmd_add(args) -> int:
                 failures += 1
                 continue
             print(f"{'added' if created else 'already present'}: {key}")
-            if created and not args.no_extract:
+            failures += _report_missing_pdf(key)
+            if not args.no_extract and store.needs_extraction(key):
                 failures += _read(key)
             continue
         tokens.append(value)
@@ -41,9 +42,19 @@ def cmd_add(args) -> int:
             failures += 1
             continue
         print(f"{'added' if created else 'already present'}: {key}")
-        if created and not args.no_extract:
+        failures += _report_missing_pdf(key)
+        if not args.no_extract and store.needs_extraction(key):
             failures += _read(key)
     return 1 if failures else 0
+
+
+def _report_missing_pdf(key: str) -> int:
+    """A paper with no PDF is a partial result; say so and count it."""
+    if store.pdf_path(key).exists():
+        return 0
+    note = store.load_paper(key).get("notes") or "no PDF available"
+    print(f"  {key}: no PDF stored ({note}). Re-run add to retry the download.", file=sys.stderr)
+    return 1
 
 
 def _read(key: str) -> int:

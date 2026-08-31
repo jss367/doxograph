@@ -57,7 +57,9 @@ doxograph bibtex --out refs.bib
 ```
 
 `add`, `extract`, and `retag` exit nonzero if any reference or paper they were
-asked to handle failed, so a script can tell a partial run from a clean one.
+asked to handle failed, so a script can tell a partial run from a clean one. A
+paper that arrives without its PDF counts as a failure and says so; running
+`add` on it again retries the download and then reads it.
 
 A landing-page URL is identified from the page's own metadata (`citation_arxiv_id`,
 the canonical link, `citation_doi`, `citation_pdf_url`). An arXiv link in a
@@ -83,6 +85,7 @@ downloaded PDFs and in-progress notes.
 ```
 papers/<key>.json    one paper and its claims
 pdfs/<key>.pdf       the paper itself
+locks/               lock files, so two processes do not write at once
 tags.yaml            the topic vocabulary
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
@@ -94,7 +97,9 @@ version history for the corpus, `git init` inside the data directory.
 
 Writes are serialized per paper and keys are claimed atomically, so the upload
 pool and the review UI can touch the corpus at the same time without one
-overwriting the other.
+overwriting the other. The serialization spans processes as well as threads, via
+lock files under `locks/`, so running `doxograph extract` in a shell while
+`doxograph serve` is up is safe.
 
 ### tags.yaml
 

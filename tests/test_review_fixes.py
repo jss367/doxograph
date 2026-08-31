@@ -7,6 +7,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from pathlib import Path
+
 import httpx
 
 from doxograph import __main__, bib, config, extract, ingest, server, store
@@ -402,14 +404,34 @@ def test_add_returns_nonzero_for_an_unreadable_reference(monkeypatch, capsys):
 
 
 def test_add_returns_zero_when_the_reference_lands(monkeypatch):
-    monkeypatch.setattr(ingest, "ingest_ref", lambda ref, client=None: ("doe2026study", True))
+    def land(ref, client=None):
+        store.save_paper(store.new_paper("doe2026study"))
+        store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4\n")
+        return "doe2026study", True
+
+    monkeypatch.setattr(ingest, "ingest_ref", land)
     args = __main__.build_parser().parse_args(["add", "--no-extract", "2602.06941"])
     assert args.func(args) == 0
+
+
+def test_add_reports_a_paper_that_arrived_without_its_pdf(monkeypatch, capsys):
+    def land_without_pdf(ref, client=None):
+        paper = store.new_paper("doe2026study")
+        paper["notes"] = "PDF download failed: 503"
+        store.save_paper(paper)
+        return "doe2026study", True
+
+    monkeypatch.setattr(ingest, "ingest_ref", land_without_pdf)
+    args = __main__.build_parser().parse_args(["add", "--no-extract", "2602.06941"])
+    assert args.func(args) == 1
+    err = capsys.readouterr().err
+    assert "no PDF stored" in err and "503" in err
 
 
 def test_add_returns_nonzero_when_extraction_fails(monkeypatch, capsys):
     monkeypatch.setattr(ingest, "ingest_ref", lambda ref, client=None: ("doe2026study", True))
     store.save_paper(store.new_paper("doe2026study"))
+    store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4\n")   # extraction needs one
 
     def boom(key, keep_reviewed=True):
         raise RuntimeError("model refused")
@@ -983,3 +1005,172 @@ def test_uploading_a_pdf_for_a_record_that_lacks_one_attaches_it(monkeypatch):
     assert (key, created) == ("doe2026study", False)
     assert store.pdf_path("doe2026study").read_bytes() == b"%PDF-1.4\nbody"
     assert len(store.paper_keys()) == 1
+
+
+# --- round 8 findings -----------------------------------------------------
+
+def test_paper_lock_is_held_across_processes(tmp_path):
+    """A second OS process must block on the same paper's lock."""
+    import subprocess
+    import sys
+    import textwrap
+    import time
+
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+
+    # The child appends to a log under the lock; the parent holds it first.
+    log = tmp_path / "order.log"
+    script = textwrap.dedent(f"""
+        import os
+        os.environ["DOXOGRAPH_DATA"] = {str(config.data_dir())!r}
+        from doxograph import store
+        with store.paper_lock("doe2026study"):
+            open({str(log)!r}, "a").write("child\\n")
+    """)
+
+    with store.paper_lock("doe2026study"):
+        child = subprocess.Popen([sys.executable, "-c", script])
+        time.sleep(1.0)                      # the child is blocked, not finished
+        blocked_while_held = child.poll() is None
+        log.write_text("parent\n")
+    child.wait(timeout=15)
+
+    assert blocked_while_held, "the child did not wait for the lock"
+    assert child.returncode == 0
+    assert log.read_text().split() == ["parent", "child"]
+
+
+def test_paper_lock_is_reentrant_within_a_thread():
+    """Nesting must not deadlock on the file lock's own descriptor."""
+    store.save_paper(store.new_paper("doe2026study"))
+    with store.paper_lock("doe2026study"):
+        with store.paper_lock("doe2026study"):
+            store.add_claim("doe2026study", {"text": "X."})   # takes it a third time
+    assert len(store.load_paper("doe2026study")["claims"]) == 1
+
+
+def test_vocabulary_lock_is_held_across_processes(tmp_path):
+    import subprocess
+    import sys
+    import textwrap
+    import time
+
+    log = tmp_path / "vocab.log"
+    script = textwrap.dedent(f"""
+        import os
+        os.environ["DOXOGRAPH_DATA"] = {str(config.data_dir())!r}
+        from doxograph import store
+        with store.vocab_lock():
+            open({str(log)!r}, "a").write("child\\n")
+    """)
+
+    with store.vocab_lock():
+        child = subprocess.Popen([sys.executable, "-c", script])
+        time.sleep(1.0)
+        blocked = child.poll() is None
+        log.write_text("parent\n")
+    child.wait(timeout=15)
+
+    assert blocked, "the child did not wait for the vocabulary lock"
+    assert log.read_text().split() == ["parent", "child"]
+
+
+def test_needs_extraction_tracks_the_pdf_not_the_creation():
+    store.save_paper(store.new_paper("doe2026study"))
+    assert store.needs_extraction("doe2026study") is False      # no PDF yet
+
+    store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4\n")
+    assert store.needs_extraction("doe2026study") is True       # recovered
+
+    store.add_claim("doe2026study", {"text": "X."})
+    assert store.needs_extraction("doe2026study") is False      # already read
+    assert store.needs_extraction("no-such-paper") is False
+
+
+def test_recovering_a_pdf_makes_the_cli_read_the_paper(monkeypatch, capsys):
+    """The recovery path must reach extraction, not stop at created=False."""
+    meta = {
+        "title": "Recovery under steering", "authors": ["Jane Doe"], "year": 2026,
+        "abstract": "", "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "",
+                   "pdf_url": "https://arxiv.org/pdf/2602.06941"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
+
+    attempts = {"n": 0}
+
+    def flaky(url, client):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise httpx.ConnectError("blip")
+        path = config.pdfs_dir() / ".download-t.pdf"
+        path.write_bytes(b"%PDF-1.4\n")
+        return path
+
+    monkeypatch.setattr(ingest, "fetch_pdf", flaky)
+
+    read = []
+    monkeypatch.setattr(extract, "extract_paper",
+                        lambda key, keep_reviewed=True: read.append(key))
+
+    args = __main__.build_parser().parse_args(["add", "2602.06941"])
+    assert args.func(args) == 1              # first run: no PDF, reported
+    assert read == []
+    assert "no PDF stored" in capsys.readouterr().err
+
+    assert args.func(args) == 0              # second run: recovered and read
+    assert read == ["doe2026recovery"]
+
+
+def open_descriptor_count() -> int:
+    """How many file descriptors this process currently holds."""
+    for probe in ("/dev/fd", "/proc/self/fd"):
+        path = Path(probe)
+        if path.is_dir():
+            return len(list(path.iterdir()))
+    pytest.skip("no way to count open descriptors on this platform")
+
+
+def test_a_failed_download_closes_its_staging_descriptor():
+    """An early failure must not leak the descriptor `mkstemp` handed back."""
+
+    class Failing:
+        def stream(self, *args, **kwargs):
+            raise httpx.ConnectError("refused")
+
+    # One failure first, so any one-off descriptors are already accounted for.
+    with pytest.raises(httpx.ConnectError):
+        ingest.fetch_pdf("https://example.org/x.pdf", Failing())
+
+    before = open_descriptor_count()
+    for _ in range(25):
+        with pytest.raises(httpx.ConnectError):
+            ingest.fetch_pdf("https://example.org/x.pdf", Failing())
+    after = open_descriptor_count()
+
+    assert after - before < 5, f"leaked about {after - before} descriptors over 25 failures"
+    assert list(config.pdfs_dir().glob(".download-*")) == []
+
+
+def test_a_failed_download_leaves_no_staging_file(monkeypatch):
+    class NotAPdf:
+        def stream(self, *args, **kwargs):
+            class R:
+                headers = {"content-type": "text/html"}
+
+                def raise_for_status(self):
+                    return None
+
+                def iter_bytes(self, n):
+                    yield b"<html>not a pdf</html>"
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+            return R()
+
+    with pytest.raises(ValueError, match="rather than a PDF"):
+        ingest.fetch_pdf("https://example.org/x.pdf", NotAPdf())
+    assert list(config.pdfs_dir().glob(".download-*")) == []
