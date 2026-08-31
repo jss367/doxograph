@@ -1557,3 +1557,42 @@ def test_a_hand_written_claim_after_extraction_gets_a_fresh_id():
     used = {c["id"] for c in extracted["claims"]}
     manual = store.add_claim("doe2026study", {"text": "By hand."})
     assert manual["id"] not in used
+
+
+# --- round 14 findings ----------------------------------------------------
+
+def test_a_reused_paper_key_does_not_reuse_claim_ids():
+    """Deleting a paper must not let its citekey hand out the same ids again."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    first = store.add_claim("doe2026study", {"text": "One."})
+    second = store.add_claim("doe2026study", {"text": "Two."})
+    assert [first["id"], second["id"]] == ["doe2026study-c1", "doe2026study-c2"]
+
+    store.delete_paper("doe2026study")
+    # A different paper that happens to produce the same coarse citekey.
+    key = store.reserve_key("doe2026study", title="A Study of Something Else")
+    assert key == "doe2026study"
+
+    fresh = store.add_claim(key, {"text": "Unrelated."})
+    assert fresh["id"] == "doe2026study-c3", "a retired claim id came back"
+
+
+def test_retired_ids_survive_several_incarnations():
+    for round_number in range(3):
+        store.save_paper(store.new_paper("doe2026study"))
+        store.add_claim("doe2026study", {"text": f"Round {round_number}."})
+        store.delete_paper("doe2026study")
+    key = store.reserve_key("doe2026study")
+    claim = store.add_claim(key, {"text": "After three."})
+    assert claim["id"] == "doe2026study-c4"
+
+
+def test_a_key_with_no_history_starts_at_one():
+    key = store.reserve_key("doe2026study")
+    assert store.add_claim(key, {"text": "First."})["id"] == "doe2026study-c1"
+
+
+def test_deleting_a_paper_with_no_claims_records_nothing():
+    store.save_paper(store.new_paper("doe2026study"))
+    store.delete_paper("doe2026study")
+    assert not store.tombstones_path().exists() or store._read_tombstones() == {}

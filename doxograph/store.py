@@ -157,6 +157,36 @@ def citekey(title: str, authors: list[str], year: int | str | None) -> str:
     return f"{surname or 'anon'}{year or 'nd'}{word}"
 
 
+def tombstones_path() -> Path:
+    return config.data_dir() / "retired-claim-ids.json"
+
+
+def _read_tombstones() -> dict:
+    path = tombstones_path()
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def retire_claim_ids(key: str, seq: int) -> None:
+    """Remember how far a deleted paper's claim ids got.
+
+    A citekey can be handed out again — delete a paper, add a different one with
+    the same surname, year and first title word — and its claims would restart at
+    c1. An in-flight PATCH or retag reply from before the deletion is matched by
+    id alone and would land on the new paper's claim.
+    """
+    with vocab_lock():   # any process-wide file needs a cross-process lock
+        retired = _read_tombstones()
+        if seq > retired.get(key, 0):
+            retired[key] = seq
+            write_atomic(tombstones_path(), json.dumps(retired, indent=2, sort_keys=True) + "\n")
+
+
 def reserve_key(base: str, **fields) -> str:
     """Claim an unused key by creating its file atomically, identity included.
 
@@ -177,8 +207,9 @@ def reserve_key(base: str, **fields) -> str:
             handle = os.open(paper_path(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             continue
+        paper = new_paper(candidate, **fields)
         with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            json.dump(new_paper(candidate, **fields), fh, indent=2, ensure_ascii=False)
+            json.dump(paper, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         return candidate
     raise RuntimeError(f"cannot find an unused key for {base!r}")
@@ -250,13 +281,22 @@ def all_papers() -> list[dict]:
 @_locked
 def delete_paper(key: str) -> None:
     """Remove a paper under its lock, so an in-flight save cannot resurrect it."""
+    try:
+        seq = load_paper(key).get("claim_seq") or 0
+    except (KeyError, json.JSONDecodeError):
+        seq = 0
     paper_path(key).unlink(missing_ok=True)
     pdf_path(key).unlink(missing_ok=True)
+    if seq:
+        retire_claim_ids(key, seq)
 
 
 def new_paper(key: str, **fields) -> dict:
     paper = {
         "key": key,
+        # Continue past any claim ids a previous paper under this key handed out,
+        # so every construction path is covered rather than only `reserve_key`.
+        "claim_seq": _read_tombstones().get(key, 0),
         "added": now(),
         "updated": now(),
         "title": "",
@@ -271,7 +311,6 @@ def new_paper(key: str, **fields) -> dict:
         "status": "fetched",
         "extraction": None,
         "proposed_tags": [],
-        "claim_seq": 0,
         "claims": [],
         "notes": "",
     }

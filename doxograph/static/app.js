@@ -63,11 +63,25 @@ function visibleClaims() {
 
 // --- rendering ------------------------------------------------------------
 
+// `render` leaves an open editor alone: it is what the background poll calls,
+// and rebuilding under the cursor would move focus.
 function render() {
   renderStats();
   renderPapers();
   renderTags();
   if (!V.editing) renderContent();
+  renderJobs();
+}
+
+// `renderAll` is for a view change the user asked for. The draft is captured
+// first, so rebuilding the editor is safe, and the claim list has to be rebuilt
+// or a filter would change the sidebar without changing what is listed.
+function renderAll() {
+  captureOpenEditor();
+  renderStats();
+  renderPapers();
+  renderTags();
+  renderContent();
   renderJobs();
 }
 
@@ -170,8 +184,13 @@ async function loadProposed(key, wanted) {
   } catch (e) { delete window.__paperCache[key]; }
 }
 
-function claimCard(row) {
-  if (V.editing === row.id) {
+// `shown` carries the claim ids already drawn as an editor this pass. In grouped
+// mode a claim appears once per topic, and emitting a form for each occurrence
+// would put several elements under one `data-form`, so `captureOpenEditor` would
+// read the first while the user typed into another.
+function claimCard(row, shown) {
+  if (V.editing === row.id && shown && !shown.has(row.id)) {
+    shown.add(row.id);
     const draft = V.drafts[row.id];
     return editForm(draft ? { ...row, ...draft } : row);
   }
@@ -245,11 +264,16 @@ function editForm(row) {
 function renderContent() {
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
+  const shown = new Set();
+  const card = (row) => claimCard(row, shown);
   const rows = visibleClaims();
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
-  if (V.newClaim && V.editing === NEW_CLAIM_ID) html += editForm(V.newClaim);
+  if (V.newClaim && V.editing === NEW_CLAIM_ID) {
+    shown.add(NEW_CLAIM_ID);
+    html += editForm(V.newClaim);
+  }
 
   if (!rows.length) {
     if (!V.newClaim) {
@@ -277,14 +301,14 @@ function renderContent() {
       const description = (S.tags.find((t) => t.name === tag) || {}).description || '';
       html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span></h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
-        + group.map(claimCard).join('') + '</div>';
+        + group.map(card).join('') + '</div>';
     }
     if (untagged.length) {
       html += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
-        + untagged.map(claimCard).join('') + '</div>';
+        + untagged.map(card).join('') + '</div>';
     }
   } else {
-    html += rows.map(claimCard).join('');
+    html += rows.map(card).join('');
   }
   $('content').innerHTML = html;
   if (main) main.scrollTop = scrollTop;
@@ -429,9 +453,8 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'open-paper') {
-      captureOpenEditor();
       V.paper = paper; V.tag = null; V.selectedId = null;
-      render();
+      renderAll();
       return;
     }
     if (act === 'reextract') {
@@ -481,9 +504,8 @@ $('content').addEventListener('click', async (event) => {
 
   const tagEl = event.target.closest('[data-tag]');
   if (tagEl && !tagEl.dataset.act) {
-    captureOpenEditor();
     V.tag = V.tag === tagEl.dataset.tag ? null : tagEl.dataset.tag;
-    render();
+    renderAll();
     return;
   }
   const card = event.target.closest('.claim[data-claim]');
@@ -506,15 +528,14 @@ $('papers').addEventListener('click', (event) => {
   V.selectedId = null;
   V.editing = null;
   V.newClaim = null;
-  render();
+  render();   // the editor is closed here, so render redraws the list anyway
 });
 
 $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
   if (!li) return;
-  captureOpenEditor();
   V.tag = V.tag === li.dataset.tag ? null : li.dataset.tag;
-  render();
+  renderAll();
 });
 
 $('btn-add').addEventListener('click', async () => {
