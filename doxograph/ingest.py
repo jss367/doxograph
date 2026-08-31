@@ -272,8 +272,13 @@ def pdf_first_page_text(path: Path, pages: int = 2) -> str:
         return ""
 
 
-def guess_from_pdf(path: Path, client: httpx.Client) -> dict:
-    """Try arXiv ID, then DOI, then fall back to the filename as a title."""
+def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = None) -> dict:
+    """Try arXiv ID, then DOI, then fall back to the filename as a title.
+
+    `display_name` is the name the file arrived under. The path itself is a
+    randomized staging file, so using its stem would put an `mkstemp` suffix in
+    the title and citekey and give the same PDF different metadata every upload.
+    """
     text = pdf_first_page_text(path)
     match = re.search(rf"arXiv:({ARXIV_NEW}|{ARXIV_OLD})", text, re.I)
     if match:
@@ -287,35 +292,58 @@ def guess_from_pdf(path: Path, client: httpx.Client) -> dict:
             return fetch_crossref(normalize_doi(match.group(0)), client)
         except (httpx.HTTPError, KeyError, ValueError):
             pass
-    title = re.sub(r"[_-]+", " ", path.stem).strip()
+    name = Path(display_name or path.name).name
+    title = re.sub(r"[_-]+", " ", Path(name).stem).strip()
     return {
-        "title": title or path.name,
+        "title": title or name,
         "authors": [],
         "year": None,
         "abstract": "",
         "venue": "",
         "doi": "",
-        "source": {"kind": "file", "id": path.name, "url": "", "pdf_url": ""},
+        "source": {"kind": "file", "id": name, "url": "", "pdf_url": ""},
     }
 
 
 # --- downloading ----------------------------------------------------------
 
-def download_pdf(url: str, dest: Path, client: httpx.Client) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with client.stream("GET", url, follow_redirects=True) as response:
-        response.raise_for_status()
-        content_type = response.headers.get("content-type", "")
-        tmp = dest.with_suffix(".pdf.part")
-        with tmp.open("wb") as handle:
-            for chunk in response.iter_bytes(65536):
-                handle.write(chunk)
-    with tmp.open("rb") as handle:
-        magic = handle.read(5)
-    if magic != b"%PDF-":
-        tmp.unlink(missing_ok=True)
-        raise ValueError(f"{url} returned {content_type or 'unknown content'} rather than a PDF")
-    tmp.replace(dest)
+def fetch_pdf(url: str, client: httpx.Client) -> Path:
+    """Download a PDF to its own staging file and return that path."""
+    config.pdfs_dir().mkdir(parents=True, exist_ok=True)
+    handle, staged = tempfile.mkstemp(dir=config.pdfs_dir(), prefix=".download-", suffix=".pdf")
+    staging = Path(staged)
+    try:
+        with client.stream("GET", url, follow_redirects=True) as response:
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            with os.fdopen(handle, "wb") as fh:
+                for chunk in response.iter_bytes(65536):
+                    fh.write(chunk)
+        if staging.read_bytes()[:5] != b"%PDF-":
+            raise ValueError(f"{url} returned {content_type or 'unknown content'} rather than a PDF")
+        return staging
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+
+
+def publish_pdf(key: str, staging: Path) -> bool:
+    """Move a staged PDF into place, only if the paper still exists.
+
+    Publishing outside the paper's lock could recreate a `<key>.pdf` for a paper
+    that was removed while the download was running, leaving an orphan file.
+    """
+    with store.paper_lock(key):
+        if not store.paper_path(key).exists():
+            staging.unlink(missing_ok=True)
+            return False
+        os.replace(staging, store.pdf_path(key))
+        return True
+
+
+def download_pdf(url: str, key: str, client: httpx.Client) -> bool:
+    """Fetch a PDF and attach it to a paper. False if the paper went away."""
+    return publish_pdf(key, fetch_pdf(url, client))
 
 
 # "Is this paper already here, and if not what key does it get" has to be one
@@ -379,6 +407,24 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
 
         with _claim_lock:
             existing = find_existing(meta)
+        if existing:
+            # A transient download failure leaves a paper with no PDF, and every
+            # later Add would return here without retrying. Recover it instead.
+            pdf_url = (meta.get("source") or {}).get("pdf_url")
+            if pdf_url and not store.pdf_path(existing).exists():
+                try:
+                    download_pdf(pdf_url, existing, client)
+                    with store.paper_lock(existing):
+                        paper = store.load_paper(existing)
+                        paper["notes"] = ""
+                        store.save_paper(paper)
+                except (httpx.HTTPError, ValueError, KeyError):
+                    pass
+            return existing, False
+
+        with _claim_lock:
+            # Re-check under the lock: the recovery path above released it.
+            existing = find_existing(meta)
             if existing:
                 return existing, False
             # The reservation carries the identity, so a second request for the
@@ -389,7 +435,7 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
         notes = ""
         if pdf_url:
             try:
-                download_pdf(pdf_url, store.pdf_path(key), client)
+                download_pdf(pdf_url, key, client)
             except (httpx.HTTPError, ValueError) as exc:
                 notes = f"PDF download failed: {exc}"
         if notes:
@@ -419,7 +465,7 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
         fh.write(data)
     try:
         with _client() as client:
-            meta = guess_from_pdf(staging, client)
+            meta = guess_from_pdf(staging, client, display_name=filename)
             with _claim_lock:
                 existing = find_existing(meta)
                 if existing and (meta.get("source") or {}).get("kind") != "file":

@@ -355,13 +355,17 @@ def retag_paper(key: str) -> dict:
         }],
     )
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
-    known = set(store.tag_names())
     by_id = {a["id"]: a for a in payload.get("assignments", [])}
 
     # Reload before saving: the model call takes long enough that a claim may
     # have been edited or reviewed meanwhile, and saving the object loaded
     # before the wait would discard those corrections. Apply only the tags.
-    with store.paper_lock(key):
+    #
+    # The vocabulary is read here rather than before the call, and under its own
+    # lock: a rename or delete during the call would otherwise let this save put
+    # a removed tag back on a claim. Vocabulary before paper, as everywhere.
+    with store.vocab_lock(), store.paper_lock(key):
+        known = set(store.tag_names())
         paper = store.load_paper(key)
         for claim in paper.get("claims", []):
             assignment = by_id.get(claim["id"])

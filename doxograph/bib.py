@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from . import store
 
-ESCAPES = {"&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_"}
+# `%` starts a comment in a .bib file, so an unescaped one truncates the rest
+# of the line including its closing brace. Percent-encoded URLs hit this
+# constantly, which is why urls and DOIs go through `escape` too.
+ESCAPES = {
+    "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
+    "~": r"\textasciitilde{}",
+}
 
 
 def escape(value: str) -> str:
@@ -26,7 +32,7 @@ def entry(paper: dict) -> str:
 
     if source.get("kind") == "arxiv":
         kind = "misc"
-        fields += [("eprint", source.get("id", "")), ("archivePrefix", "arXiv")]
+        fields += [("eprint", escape(source.get("id", ""))), ("archivePrefix", "arXiv")]
         if paper.get("venue") and paper["venue"] != "arXiv":
             fields.append(("note", escape(paper["venue"])))
     else:
@@ -34,9 +40,9 @@ def entry(paper: dict) -> str:
         if paper.get("venue"):
             fields.append(("journal", escape(paper["venue"])))
     if paper.get("doi"):
-        fields.append(("doi", paper["doi"]))
+        fields.append(("doi", escape(paper["doi"])))
     if source.get("url"):
-        fields.append(("url", source["url"]))
+        fields.append(("url", escape(source["url"])))
 
     body = ",\n".join(f"  {name} = {{{value}}}" if not value.startswith("{") else f"  {name} = {value}"
                       for name, value in fields if value)

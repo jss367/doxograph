@@ -7,7 +7,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, config, extract, ingest, server, store
+import httpx
+
+from doxograph import __main__, bib, config, extract, ingest, server, store
 
 
 # --- proposed topics: accepting and discarding are different -------------
@@ -342,7 +344,7 @@ def test_concurrent_uploads_of_the_same_filename_keep_their_own_pdfs(monkeypatch
     import threading
     import time
 
-    def fake_guess(path, client):
+    def fake_guess(path, client, display_name=None):
         # Read, pause, read again: a shared staging path shows up as a mismatch.
         first = path.read_bytes()
         time.sleep(0.15)
@@ -439,7 +441,7 @@ def test_concurrent_uploads_that_share_a_citekey_get_separate_papers(monkeypatch
 
     barrier = threading.Barrier(2)
 
-    def fake_guess(path, client):
+    def fake_guess(path, client, display_name=None):
         marker = path.read_bytes().split(b"marker:")[1].split(b"\n")[0].decode()
         # Both workers reach the key decision together, which is what made
         # exists()-then-write unsafe.
@@ -749,3 +751,189 @@ def test_rename_and_accept_do_not_deadlock():
     assert all(not t.is_alive() for t in threads), "deadlocked"
     assert not errors, errors
     assert "renamed" in store.tag_names() and "fresh" in store.tag_names()
+
+
+# --- round 6 findings -----------------------------------------------------
+
+def test_upload_metadata_comes_from_the_arrival_filename(monkeypatch):
+    """The staging path is randomized; it must not reach the title or the key."""
+    monkeypatch.setattr(ingest, "pdf_first_page_text", lambda path, pages=2: "no identifiers")
+    data = b"%PDF-1.4\n" + bytes(64)
+    key, created = ingest.ingest_pdf_bytes(data, "Attention_Is_All_You_Need.pdf")
+    paper = store.load_paper(key)
+    assert created
+    assert paper["title"] == "Attention Is All You Need"
+    assert paper["source"]["id"] == "Attention_Is_All_You_Need.pdf"
+    assert "incoming" not in key and "incoming" not in paper["title"]
+
+
+def test_the_same_upload_twice_gets_the_same_metadata(monkeypatch):
+    """Randomized staging names used to make each upload look like a new paper."""
+    monkeypatch.setattr(ingest, "pdf_first_page_text", lambda path, pages=2: "no identifiers")
+    data = b"%PDF-1.4\n" + bytes(64)
+    first, _ = ingest.ingest_pdf_bytes(data, "paper.pdf")
+    second, _ = ingest.ingest_pdf_bytes(data, "paper.pdf")
+    titles = {store.load_paper(k)["title"] for k in (first, second)}
+    assert titles == {"paper"}, titles
+
+
+def test_re_adding_a_paper_recovers_a_missing_pdf(monkeypatch):
+    """A transient download failure must not make the paper unrecoverable."""
+    meta = {
+        "title": "Recovery under steering", "authors": ["Jane Doe"], "year": 2026,
+        "abstract": "", "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "",
+                   "pdf_url": "https://arxiv.org/pdf/2602.06941"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
+
+    attempts = {"n": 0}
+
+    def flaky(url, client):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise httpx.ConnectError("network blip")
+        path = config.pdfs_dir() / ".download-test.pdf"
+        path.write_bytes(b"%PDF-1.4\nrecovered")
+        return path
+
+    monkeypatch.setattr(ingest, "fetch_pdf", flaky)
+
+    key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    assert created
+    assert not store.pdf_path(key).exists()
+    assert "PDF download failed" in store.load_paper(key)["notes"]
+
+    again, created_again = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    assert (again, created_again) == (key, False)
+    assert store.pdf_path(key).read_bytes() == b"%PDF-1.4\nrecovered"
+    assert store.load_paper(key)["notes"] == ""
+    assert len(store.paper_keys()) == 1
+
+
+def test_a_present_pdf_is_not_downloaded_again(monkeypatch):
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
+    calls = {"n": 0}
+
+    def counted(url, client):
+        calls["n"] += 1
+        path = config.pdfs_dir() / f".download-{calls['n']}.pdf"
+        path.write_bytes(b"%PDF-1.4\n")
+        return path
+
+    monkeypatch.setattr(ingest, "fetch_pdf", counted)
+    ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    assert calls["n"] == 1
+
+
+def test_publishing_a_pdf_for_a_removed_paper_leaves_no_orphan():
+    """A download finishing after Remove must not recreate the PDF."""
+    store.save_paper(store.new_paper("doe2026study"))
+    staged = config.pdfs_dir() / ".download-staged.pdf"
+    staged.write_bytes(b"%PDF-1.4\n")
+
+    store.delete_paper("doe2026study")
+    assert ingest.publish_pdf("doe2026study", staged) is False
+    assert not store.pdf_path("doe2026study").exists()
+    assert not staged.exists(), "the staged file was left behind"
+
+
+def test_publishing_a_pdf_for_a_live_paper_succeeds():
+    store.save_paper(store.new_paper("doe2026study"))
+    staged = config.pdfs_dir() / ".download-staged.pdf"
+    staged.write_bytes(b"%PDF-1.4\nbody")
+    assert ingest.publish_pdf("doe2026study", staged) is True
+    assert store.pdf_path("doe2026study").read_bytes() == b"%PDF-1.4\nbody"
+
+
+def test_retag_reads_the_vocabulary_while_holding_its_lock(monkeypatch):
+    """The invariant: `known` is read under the vocabulary lock, not before it.
+
+    Asserting the interleaving directly needs the deletion to land in the gap
+    between the snapshot and the save, which is not reproducible from outside.
+    So this asserts the property that closes the gap instead: at the moment
+    retag reads the vocabulary, this thread owns the vocabulary lock.
+    """
+    store.add_tag("alpha")
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    claim = store.add_claim("doe2026study", {"text": "X.", "tags": ["alpha"]})
+
+    held = []
+    real_tag_names = store.tag_names
+
+    def watched_tag_names():
+        held.append(store._vocab._is_owned())
+        return real_tag_names()
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            payload = {"assignments": [{"id": claim["id"], "tags": ["alpha"]}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    monkeypatch.setattr(store, "tag_names", watched_tag_names)
+    extract.retag_paper("doe2026study")
+
+    # The prompt-building read happens before the lock; the read that decides
+    # what gets written must happen under it.
+    assert held, "the vocabulary was never read"
+    assert held[-1] is True, "retag applied tags using a vocabulary read outside the lock"
+
+
+def test_retag_drops_a_tag_that_is_no_longer_in_the_vocabulary(monkeypatch):
+    """Whatever the interleaving, an undeclared tag must never be written."""
+    store.add_tag("alpha")
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    claim = store.add_claim("doe2026study", {"text": "X.", "tags": ["alpha"]})
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            payload = {"assignments": [{"id": claim["id"], "tags": ["alpha", "never-declared"]}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    extract.retag_paper("doe2026study")
+    assert store.load_paper("doe2026study")["claims"][0]["tags"] == ["alpha"]
+
+
+# --- BibTeX escaping ------------------------------------------------------
+
+def test_percent_in_a_url_is_escaped():
+    store.save_paper(store.new_paper(
+        "doe2026study", title="A Study", authors=["Jane Doe"], year=2026,
+        source={"kind": "url", "id": "u", "url": "https://ex.org/a%20b?q=1&r=2"},
+    ))
+    text = bib.render()
+    assert r"url = {https://ex.org/a\%20b?q=1\&r=2}" in text
+    # every field line must still close its brace
+    for line in text.splitlines():
+        if " = {" in line:
+            assert line.rstrip(",").endswith("}"), line
+
+
+def test_percent_in_a_doi_is_escaped():
+    store.save_paper(store.new_paper("doe2026study", title="A Study", authors=["Jane Doe"],
+                                     year=2026, venue="Nature", doi="10.1000/a%2Fb"))
+    assert r"doi = {10.1000/a\%2Fb}" in bib.render()
+
+
+def test_tilde_in_a_url_is_escaped():
+    store.save_paper(store.new_paper(
+        "doe2026study", title="A Study", authors=["Jane Doe"], year=2026,
+        source={"kind": "url", "id": "u", "url": "https://ex.org/~jane/p.pdf"},
+    ))
+    assert r"\textasciitilde{}jane" in bib.render()
