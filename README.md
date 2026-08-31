@@ -86,6 +86,7 @@ downloaded PDFs and in-progress notes.
 papers/<key>.json    one paper and its claims
 pdfs/<key>.pdf       the paper itself
 locks/               lock files, so two processes do not write at once
+retired-keys.json    keys of removed papers, never issued again
 tags.yaml            the topic vocabulary
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
@@ -99,7 +100,14 @@ Writes are serialized per paper and keys are claimed atomically, so the upload
 pool and the review UI can touch the corpus at the same time without one
 overwriting the other. The serialization spans processes as well as threads, via
 lock files under `locks/`, so running `doxograph extract` in a shell while
-`doxograph serve` is up is safe.
+`doxograph serve` is up is safe. Locking needs `fcntl` or `msvcrt`; on a platform
+with neither, doxograph refuses to run rather than pretend the corpus is
+protected. The Windows path is implemented but untested.
+
+A removed paper's key is retired rather than reused, so a key names one paper for
+all time. Re-adding a paper you deleted therefore gets a suffixed key. That is
+the point: a slow operation carrying a key — an extraction job, a download, a
+queued edit — never has to work out which paper it meant.
 
 ### tags.yaml
 

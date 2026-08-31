@@ -15,6 +15,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,26 +43,61 @@ _depth = threading.local()
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover - Windows has no fcntl
+except ImportError:  # pragma: no cover - not on POSIX
     fcntl = None
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 
 @contextlib.contextmanager
 def _file_lock(path: Path):
-    """Hold an exclusive lock on `path` for the duration of the block."""
-    if fcntl is None:  # pragma: no cover - single-process fallback
-        yield
-        return
+    """Hold an exclusive lock on `path` for the duration of the block.
+
+    Silently doing nothing when no locking primitive exists would be worse than
+    not locking at all: the corpus would look protected while two processes
+    overwrote each other. If neither primitive is available this refuses to run.
+
+    The Windows branch uses `msvcrt.locking`, which is untested here — this was
+    developed and exercised on macOS.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(path, "a+")
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    if fcntl is not None:
+        handle = open(path, "a+")
         try:
-            yield
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    finally:
-        handle.close()
+            handle.close()
+        return
+
+    if msvcrt is not None:  # pragma: no cover - Windows only
+        handle = open(path, "a+")
+        try:
+            handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)   # LK_LOCK retries ten times then raises
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            handle.close()
+        return
+
+    raise RuntimeError(  # pragma: no cover - neither primitive exists
+        "no file-locking primitive available (need fcntl or msvcrt); "
+        "doxograph cannot protect the corpus against concurrent writers here"
+    )
 
 
 @contextlib.contextmanager
@@ -157,34 +193,41 @@ def citekey(title: str, authors: list[str], year: int | str | None) -> str:
     return f"{surname or 'anon'}{year or 'nd'}{word}"
 
 
-def tombstones_path() -> Path:
-    return config.data_dir() / "retired-claim-ids.json"
+def retired_keys_path() -> Path:
+    return config.data_dir() / "retired-keys.json"
 
 
-def _read_tombstones() -> dict:
-    path = tombstones_path()
+def retired_keys() -> set[str]:
+    """Citekeys that have belonged to a paper and must never be issued again.
+
+    Reusing a key means a key no longer identifies one paper for all time, and
+    everything that carries a key across a slow operation — an extraction job, a
+    PDF download, a queued PATCH, a retag reply — then has to prove which
+    incarnation it meant. Retiring the key removes that whole class instead of
+    guarding each carrier.
+    """
+    path = retired_keys_path()
     if not path.exists():
-        return {}
+        return set()
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-        return loaded if isinstance(loaded, dict) else {}
     except json.JSONDecodeError:
-        return {}
+        return set()
+    return set(loaded) if isinstance(loaded, list) else set()
 
 
-def retire_claim_ids(key: str, seq: int) -> None:
-    """Remember how far a deleted paper's claim ids got.
+def retire_key(key: str) -> None:
+    """Record a key as spent. Uses its own lock, which nothing else nests inside.
 
-    A citekey can be handed out again — delete a paper, add a different one with
-    the same surname, year and first title word — and its claims would restart at
-    c1. An in-flight PATCH or retag reply from before the deletion is matched by
-    id alone and would land on the new paper's claim.
+    Deliberately not the vocabulary lock: `delete_paper` calls this while holding
+    the paper lock, and a tag rename holds the vocabulary lock while taking paper
+    locks, so sharing that lock would invert the order and deadlock.
     """
-    with vocab_lock():   # any process-wide file needs a cross-process lock
-        retired = _read_tombstones()
-        if seq > retired.get(key, 0):
-            retired[key] = seq
-            write_atomic(tombstones_path(), json.dumps(retired, indent=2, sort_keys=True) + "\n")
+    with _reentrant_file_lock("retired", config.locks_dir() / "retired-keys.lock"):
+        known = retired_keys()
+        if key not in known:
+            known.add(key)
+            write_atomic(retired_keys_path(), json.dumps(sorted(known), indent=2) + "\n")
 
 
 def reserve_key(base: str, **fields) -> str:
@@ -201,8 +244,11 @@ def reserve_key(base: str, **fields) -> str:
     reserve a second key while the first was still fetching its PDF.
     """
     config.papers_dir().mkdir(parents=True, exist_ok=True)
+    spent = retired_keys()
     # O_EXCL is already atomic across processes, so this needs no extra lock.
     for candidate in [base] + [f"{base}{s}" for s in "abcdefghijklmnopqrstuvwxyz"]:
+        if candidate in spent:
+            continue
         try:
             handle = os.open(paper_path(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
@@ -281,22 +327,17 @@ def all_papers() -> list[dict]:
 @_locked
 def delete_paper(key: str) -> None:
     """Remove a paper under its lock, so an in-flight save cannot resurrect it."""
-    try:
-        seq = load_paper(key).get("claim_seq") or 0
-    except (KeyError, json.JSONDecodeError):
-        seq = 0
+    # Retire before unlinking. The other order leaves a window where the key is
+    # free but not yet recorded, and a concurrent ingest could take it.
+    retire_key(key)
     paper_path(key).unlink(missing_ok=True)
     pdf_path(key).unlink(missing_ok=True)
-    if seq:
-        retire_claim_ids(key, seq)
 
 
 def new_paper(key: str, **fields) -> dict:
     paper = {
         "key": key,
-        # Continue past any claim ids a previous paper under this key handed out,
-        # so every construction path is covered rather than only `reserve_key`.
-        "claim_seq": _read_tombstones().get(key, 0),
+        "claim_seq": 0,
         "added": now(),
         "updated": now(),
         "title": "",

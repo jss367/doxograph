@@ -1561,38 +1561,79 @@ def test_a_hand_written_claim_after_extraction_gets_a_fresh_id():
 
 # --- round 14 findings ----------------------------------------------------
 
-def test_a_reused_paper_key_does_not_reuse_claim_ids():
-    """Deleting a paper must not let its citekey hand out the same ids again."""
+def test_a_deleted_paper_key_is_never_issued_again():
+    """A citekey identifies one paper for all time, so nothing has to prove which."""
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    first = store.add_claim("doe2026study", {"text": "One."})
-    second = store.add_claim("doe2026study", {"text": "Two."})
-    assert [first["id"], second["id"]] == ["doe2026study-c1", "doe2026study-c2"]
-
+    store.add_claim("doe2026study", {"text": "One."})
     store.delete_paper("doe2026study")
-    # A different paper that happens to produce the same coarse citekey.
+
+    # A different paper that produces the same coarse citekey.
     key = store.reserve_key("doe2026study", title="A Study of Something Else")
-    assert key == "doe2026study"
-
-    fresh = store.add_claim(key, {"text": "Unrelated."})
-    assert fresh["id"] == "doe2026study-c3", "a retired claim id came back"
+    assert key == "doe2026studya", "the retired key was issued again"
+    assert store.add_claim(key, {"text": "Unrelated."})["id"] == "doe2026studya-c1"
 
 
-def test_retired_ids_survive_several_incarnations():
-    for round_number in range(3):
-        store.save_paper(store.new_paper("doe2026study"))
-        store.add_claim("doe2026study", {"text": f"Round {round_number}."})
-        store.delete_paper("doe2026study")
-    key = store.reserve_key("doe2026study")
-    claim = store.add_claim(key, {"text": "After three."})
-    assert claim["id"] == "doe2026study-c4"
+def test_keys_keep_retiring_across_incarnations():
+    issued = []
+    for _ in range(3):
+        key = store.reserve_key("doe2026study")
+        issued.append(key)
+        store.add_claim(key, {"text": "X."})
+        store.delete_paper(key)
+    assert issued == ["doe2026study", "doe2026studya", "doe2026studyb"]
+    assert store.retired_keys() == set(issued)
 
 
-def test_a_key_with_no_history_starts_at_one():
-    key = store.reserve_key("doe2026study")
-    assert store.add_claim(key, {"text": "First."})["id"] == "doe2026study-c1"
+def test_a_key_with_no_history_is_issued_as_is():
+    assert store.reserve_key("doe2026study") == "doe2026study"
 
 
-def test_deleting_a_paper_with_no_claims_records_nothing():
+def test_retiring_uses_a_lock_that_no_other_lock_nests_inside():
+    """`delete_paper` holds the paper lock while retiring.
+
+    Sharing the vocabulary lock here would invert the documented order — a tag
+    rename holds vocabulary and takes paper locks — and deadlock. This asserts
+    the two do not contend.
+    """
+    import threading
+
+    store.add_tag("alpha")
+    for n in range(3):
+        store.save_paper(store.new_paper(f"doe2026s{n}"))
+        store.add_claim(f"doe2026s{n}", {"text": "X.", "tags": ["alpha"]})
+
+    errors = []
+    start = threading.Barrier(2)
+
+    def rename():
+        try:
+            start.wait(timeout=5)
+            store.rename_tag("alpha", "renamed")
+        except Exception as exc:
+            errors.append(exc)
+
+    def remove():
+        try:
+            start.wait(timeout=5)
+            for n in range(3):
+                store.delete_paper(f"doe2026s{n}")
+        except Exception as exc:
+            errors.append(exc)
+
+    # Daemons: if the lock order inverts these never finish, and a non-daemon
+    # thread would hang the interpreter at exit instead of failing the test.
+    threads = [threading.Thread(target=rename, daemon=True),
+               threading.Thread(target=remove, daemon=True)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert all(not t.is_alive() for t in threads), "deleting a paper deadlocked against a tag rename"
+    assert not errors, errors
+
+
+def test_deleting_a_paper_records_its_key_even_with_no_claims():
     store.save_paper(store.new_paper("doe2026study"))
     store.delete_paper("doe2026study")
-    assert not store.tombstones_path().exists() or store._read_tombstones() == {}
+    assert store.retired_keys() == {"doe2026study"}
