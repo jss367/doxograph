@@ -43,6 +43,16 @@ async function refresh() {
   render();
 }
 
+// `refresh` goes through `render`, which leaves an open editor — and therefore
+// the whole claim list — alone. Anything that adds or removes a row has to
+// rebuild the list even while an editor is open, or the deleted row stays on
+// screen and stays clickable. This keeps the open editor's draft across it.
+async function refreshAll() {
+  captureOpenEditor();
+  S = await api('/api/state');
+  renderAll();
+}
+
 // --- filtering ------------------------------------------------------------
 
 function haystack(row) {
@@ -387,13 +397,15 @@ async function toggleReviewed(row) {
   const reviewed = !row.reviewed;
   if (V.editing === row.id) captureOpenEditor();
   await patchClaim(row.paper, row.id, { reviewed });
-  if (V.editing === row.id) {
-    // Capture again: the request can take long enough for the user to go back
-    // to the form and type, and that typing is only in the DOM.
-    captureOpenEditor();
-    V.drafts[row.id] = { ...V.drafts[row.id], reviewed };
-    renderContent();
-  }
+
+  // The request is long enough for the user to type in the form, or to open a
+  // different claim's editor. Recapturing the DOM only makes sense in the first
+  // case, but this claim's stored draft has to be corrected either way — it
+  // holds the pre-toggle value, and saving it later would undo the toggle.
+  const stillOpen = V.editing === row.id;
+  if (stillOpen) captureOpenEditor();
+  if (V.drafts[row.id]) V.drafts[row.id] = { ...V.drafts[row.id], reviewed };
+  if (stillOpen) renderContent();
 }
 
 async function patchClaim(paper, claim, patch) {
@@ -502,7 +514,10 @@ $('content').addEventListener('click', async (event) => {
       delete V.drafts[claim];
       if (V.editing === claim) { V.editing = null; V.error = null; }
       if (V.selectedId === claim) V.selectedId = null;
-      await refresh();
+      // Deleting any claim changes the list, including when the open editor
+      // belongs to a different one; without a content rebuild the deleted card
+      // stays visible and clickable and the next action on it 404s.
+      await refreshAll();
       return;
     }
     if (act === 'open-paper') {
@@ -577,7 +592,7 @@ $('content').addEventListener('click', async (event) => {
         body: JSON.stringify({ [field]: [button.dataset.tag] }),
       });
       delete (window.__paperCache || {})[paper];
-      await refresh();
+      await refreshAll();
       return;
     }
   }
