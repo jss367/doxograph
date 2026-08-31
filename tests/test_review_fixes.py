@@ -1637,3 +1637,70 @@ def test_deleting_a_paper_records_its_key_even_with_no_claims():
     store.save_paper(store.new_paper("doe2026study"))
     store.delete_paper("doe2026study")
     assert store.retired_keys() == {"doe2026study"}
+
+
+# --- round 16 findings ----------------------------------------------------
+
+def test_reserving_a_key_holds_the_retirement_lock(monkeypatch):
+    """Check and create must be one transaction.
+
+    Reading the retired set and creating separately leaves a gap in which a
+    concurrent `delete_paper` retires and unlinks a key; the caller then still
+    believes it is free and recreates it. Asserted as the invariant, because the
+    gap is microseconds and not reachable from outside.
+    """
+    held = []
+    real = store.retired_keys
+
+    def watched():
+        held.append(bool(getattr(store._depth, "held", {}).get("retired")))
+        return real()
+
+    monkeypatch.setattr(store, "retired_keys", watched)
+    store.reserve_key("doe2026study")
+
+    assert held, "the retired set was never consulted"
+    assert all(held), "the retired set was read without holding the retirement lock"
+
+
+def test_key_allocation_continues_past_z():
+    """The a-z ceiling became permanent once keys were retired."""
+    for candidate in store.key_candidates("doe2026study"):
+        store.save_paper(store.new_paper(candidate))
+        if candidate.endswith("z") and len(candidate) == len("doe2026study") + 1:
+            break
+
+    assert store.reserve_key("doe2026study") == "doe2026studyaa"
+
+
+def test_repeated_delete_and_readd_never_runs_out():
+    """Thirty cycles on one coarse key used to fail permanently at the 27th."""
+    issued = []
+    for _ in range(30):
+        key = store.reserve_key("doe2026study")
+        issued.append(key)
+        store.delete_paper(key)
+    assert len(set(issued)) == 30
+    assert issued[26] == "doe2026studyz"           # the old ceiling
+    assert issued[27] == "doe2026studyaa"          # continued past it
+    assert store.reserve_key("doe2026study") not in set(issued)
+
+
+def test_many_metadata_free_uploads_of_the_same_filename(monkeypatch):
+    """The reported path: several files all called paper.pdf."""
+    monkeypatch.setattr(ingest, "pdf_first_page_text", lambda path, pages=2: "no identifiers")
+    keys = []
+    for n in range(30):
+        key, created = ingest.ingest_pdf_bytes(b"%PDF-1.4\nbody" + bytes([n]), "paper.pdf")
+        assert created, f"upload {n} did not create a paper"
+        keys.append(key)
+    assert len(set(keys)) == 30
+
+
+def test_key_exhaustion_still_reports_clearly(monkeypatch):
+    monkeypatch.setattr(store, "MAX_KEY_CANDIDATES", 3)
+    monkeypatch.setattr(store, "key_candidates", lambda base: iter([base, base + "a", base + "b"]))
+    for suffix in ("", "a", "b"):
+        store.save_paper(store.new_paper("doe2026study" + suffix))
+    with pytest.raises(RuntimeError, match="cannot find an unused key"):
+        store.reserve_key("doe2026study")

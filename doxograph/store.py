@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import itertools
 import json
 import os
 import re
+import string
 import tempfile
 import threading
 import time
@@ -193,6 +195,28 @@ def citekey(title: str, authors: list[str], year: int | str | None) -> str:
     return f"{surname or 'anon'}{year or 'nd'}{word}"
 
 
+# Enough candidates that exhausting them means something is wrong, rather than
+# a corpus that legitimately reused one coarse key too many times.
+MAX_KEY_CANDIDATES = 10_000
+
+
+def key_candidates(base: str):
+    """`base`, then base+a … base+z, then base+aa, base+ab, and onward.
+
+    A fixed a–z ceiling became a permanent wall once keys were retired: enough
+    delete-and-re-add cycles on one coarse key, or a few metadata-free uploads
+    all called paper.pdf, and every later ingest for that base would fail.
+    """
+    yield base
+    produced = 1
+    for width in itertools.count(1):
+        for combo in itertools.product(string.ascii_lowercase, repeat=width):
+            yield base + "".join(combo)
+            produced += 1
+            if produced >= MAX_KEY_CANDIDATES:
+                return
+
+
 def retired_keys_path() -> Path:
     return config.data_dir() / "retired-keys.json"
 
@@ -244,21 +268,27 @@ def reserve_key(base: str, **fields) -> str:
     reserve a second key while the first was still fetching its PDF.
     """
     config.papers_dir().mkdir(parents=True, exist_ok=True)
-    spent = retired_keys()
-    # O_EXCL is already atomic across processes, so this needs no extra lock.
-    for candidate in [base] + [f"{base}{s}" for s in "abcdefghijklmnopqrstuvwxyz"]:
-        if candidate in spent:
-            continue
-        try:
-            handle = os.open(paper_path(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            continue
-        paper = new_paper(candidate, **fields)
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            json.dump(paper, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
-        return candidate
-    raise RuntimeError(f"cannot find an unused key for {base!r}")
+    # The retirement lock spans the check and the create. Reading the retired set
+    # and then creating separately leaves a gap in which a concurrent
+    # `delete_paper` can retire and unlink a key, after which this caller still
+    # believes it is free and recreates it.
+    with _reentrant_file_lock("retired", config.locks_dir() / "retired-keys.lock"):
+        spent = retired_keys()
+        for candidate in key_candidates(base):
+            if candidate in spent:
+                continue
+            try:
+                handle = os.open(paper_path(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                continue
+            paper = new_paper(candidate, **fields)
+            with os.fdopen(handle, "w", encoding="utf-8") as fh:
+                json.dump(paper, fh, indent=2, ensure_ascii=False)
+                fh.write("\n")
+            return candidate
+    raise RuntimeError(
+        f"cannot find an unused key for {base!r} after {MAX_KEY_CANDIDATES} candidates"
+    )
 
 
 def paper_path(key: str) -> Path:
