@@ -477,6 +477,9 @@ $('content').addEventListener('click', async (event) => {
   }
   const card = event.target.closest('.claim[data-claim]');
   if (card && card.dataset.claim !== V.selectedId) {
+    // Selecting another claim redraws the list, which would rebuild an open
+    // editor from the server row; keep what is typed in it first.
+    captureOpenEditor();
     V.selectedId = card.dataset.claim;
     renderContent();
   }

@@ -304,6 +304,29 @@ def new_claim(paper: dict, **fields) -> dict:
     return claim
 
 
+def clean_ledger_links(links: Any) -> list[dict]:
+    """Keep only links that name a claim currently in the ledger.
+
+    A model can invent an ID that looks right, and `ledger.yaml` can change
+    during a long extraction. Either way the corpus would record a relationship
+    to a claim that does not exist and the UI would show the bare ID.
+    """
+    known = {c["id"] for c in load_ledger()}
+    cleaned = []
+    for link in links or []:
+        if not isinstance(link, dict):
+            continue
+        claim = (link.get("claim") or "").strip()
+        if claim not in known:
+            continue
+        cleaned.append({
+            "claim": claim,
+            "relation": link.get("relation") or config.LEDGER_RELATIONS[-1],
+            "note": (link.get("note") or "").strip(),
+        })
+    return cleaned
+
+
 CLAIM_FIELDS = {
     "text", "kind", "strength", "tags", "evidence", "quote", "locator",
     "ledger_links", "reviewed",
@@ -317,7 +340,7 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
         if claim.get("id") == claim_id:
             for field, value in patch.items():
                 if field in CLAIM_FIELDS:
-                    claim[field] = value
+                    claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
             claim["updated"] = now()
             refresh_status(paper)
             save_paper(paper)
@@ -328,7 +351,10 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
 @_locked
 def add_claim(key: str, patch: dict) -> dict:
     paper = load_paper(key)
-    claim = new_claim(paper, **{k: v for k, v in patch.items() if k in CLAIM_FIELDS})
+    fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS}
+    if "ledger_links" in fields:
+        fields["ledger_links"] = clean_ledger_links(fields["ledger_links"])
+    claim = new_claim(paper, **fields)
     # A hand-written claim needs no review, but a blank one is not a claim yet.
     # An explicit `reviewed` in the patch still wins.
     if "reviewed" not in patch:

@@ -58,6 +58,9 @@ class Ref:
     kind: str  # arxiv | doi | pdf | page
     value: str
     raw: str
+    # A PDF link the landing page advertised. Kept alongside a DOI so it can be
+    # used when Crossref has no PDF of its own, instead of being discarded.
+    pdf_url: str = ""
 
 
 def parse_ref(token: str) -> Ref | None:
@@ -231,17 +234,19 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
         if match:
             return Ref("arxiv", match.group(1), url)
 
+    advertised = _meta_content(html, "citation_pdf_url")
+    # The advertised link is often relative; resolve it against the page we
+    # actually landed on, after redirects.
+    advertised = urljoin(str(response.url), advertised) if advertised else ""
+
     doi = _meta_content(html, "citation_doi", "dc.identifier.doi")
     if doi:
         match = re.search(DOI_RE, doi)
         if match:
-            return Ref("doi", normalize_doi(match.group(0)), url)
+            return Ref("doi", normalize_doi(match.group(0)), url, pdf_url=advertised)
 
-    pdf_url = _meta_content(html, "citation_pdf_url")
-    if pdf_url:
-        # The advertised link is often relative; resolve it against the page we
-        # actually landed on, after redirects.
-        return Ref("pdf", urljoin(str(response.url), pdf_url), url)
+    if advertised:
+        return Ref("pdf", advertised, url)
 
     # Last resort, and only within the head, where a bibliography does not reach.
     match = re.search(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", head, re.I)
@@ -392,6 +397,10 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             meta = fetch_arxiv(ref.value, client)
         elif ref.kind == "doi":
             meta = fetch_crossref(ref.value, client)
+            # Crossref often has no PDF for a paywalled or hybrid journal, but
+            # the page we came from told us where one is.
+            if ref.pdf_url and not (meta.get("source") or {}).get("pdf_url"):
+                meta["source"]["pdf_url"] = ref.pdf_url
         elif ref.kind == "pdf":
             meta = {
                 "title": Path(ref.value.split("?")[0]).stem.replace("-", " ").replace("_", " "),

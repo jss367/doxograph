@@ -1313,3 +1313,119 @@ def test_ledger_writes_are_atomic_too():
     assert store.load_ledger() == [{"id": "L1", "text": "A claim."}]
     store.save_ledger([{"id": "L1", "text": "A claim."}, {"id": "L2", "text": "Another."}])
     assert [c["id"] for c in store.load_ledger()] == ["L1", "L2"]
+
+
+# --- round 11 findings ----------------------------------------------------
+
+def test_a_page_pdf_link_survives_doi_resolution():
+    """A publisher page that gives both a DOI and a PDF must not lose the PDF."""
+    html = ('<head><meta name="citation_doi" content="10.1145/3442188.3445922">'
+            '<meta name="citation_pdf_url" content="/pdf/article.pdf"></head>')
+    client = FakePageClient("https://journal.example.org/issue/a", html)
+    ref = ingest.resolve_page("https://journal.example.org/issue/a", client)
+    assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
+    assert ref.pdf_url == "https://journal.example.org/pdf/article.pdf"
+
+
+def test_the_carried_pdf_is_used_when_crossref_has_none(monkeypatch):
+    crossref = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "Journal", "doi": "10.1145/3442188.3445922",
+        "source": {"kind": "doi", "id": "10.1145/3442188.3445922",
+                   "url": "https://doi.org/10.1145/3442188.3445922", "pdf_url": ""},
+    }
+    monkeypatch.setattr(ingest, "fetch_crossref", lambda doi, client: dict(crossref))
+    fetched = []
+
+    def fake_fetch(url, client):
+        fetched.append(url)
+        path = config.pdfs_dir() / ".download-t.pdf"
+        path.write_bytes(b"%PDF-1.4\n")
+        return path
+
+    monkeypatch.setattr(ingest, "fetch_pdf", fake_fetch)
+    ref = ingest.Ref("doi", "10.1145/3442188.3445922", "",
+                     pdf_url="https://journal.example.org/pdf/article.pdf")
+    key, created = ingest.ingest_ref(ref)
+
+    assert created
+    assert fetched == ["https://journal.example.org/pdf/article.pdf"]
+    assert store.pdf_path(key).exists()
+    assert store.needs_extraction(key) is True
+
+
+def test_crossrefs_own_pdf_wins_over_the_carried_one(monkeypatch):
+    crossref = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "Journal", "doi": "10.1145/3442188.3445922",
+        "source": {"kind": "doi", "id": "10.1145/3442188.3445922", "url": "",
+                   "pdf_url": "https://crossref.example.org/a.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_crossref", lambda doi, client: dict(crossref))
+    fetched = []
+    monkeypatch.setattr(ingest, "fetch_pdf", lambda url, client: (
+        fetched.append(url), config.pdfs_dir() / ".d.pdf")[1])
+    (config.pdfs_dir() / ".d.pdf").write_bytes(b"%PDF-1.4\n")
+
+    ingest.ingest_ref(ingest.Ref("doi", "10.1145/3442188.3445922", "",
+                                 pdf_url="https://journal.example.org/pdf/article.pdf"))
+    assert fetched == ["https://crossref.example.org/a.pdf"]
+
+
+# --- ledger links must name a real claim ---------------------------------
+
+def test_extraction_drops_a_link_to_a_claim_that_does_not_exist():
+    store.save_ledger([{"id": "L1", "text": "A real claim."}])
+    store.save_paper(store.new_paper("doe2026study"))
+    payload = {
+        "summary": "s", "relevance": "r", "proposed_tags": [],
+        "claims": [{
+            "text": "A finding.", "kind": "finding", "strength": "headline", "tags": [],
+            "evidence": "", "quote": "", "locator": "",
+            "ledger_links": [
+                {"claim": "L1", "relation": "supports", "note": "real"},
+                {"claim": "L9", "relation": "supports", "note": "invented"},
+                {"claim": "", "relation": "supports", "note": "empty"},
+            ],
+        }],
+    }
+    paper = extract.merge_extraction("doe2026study", payload)
+    links = paper["claims"][0]["ledger_links"]
+    assert [l["claim"] for l in links] == ["L1"]
+    assert links[0]["note"] == "real"
+
+
+def test_a_link_is_dropped_if_the_ledger_changed_during_the_call():
+    store.save_ledger([{"id": "L1", "text": "A claim."}])
+    store.save_paper(store.new_paper("doe2026study"))
+    payload = {
+        "summary": "", "relevance": "", "proposed_tags": [],
+        "claims": [{"text": "A finding.", "kind": "finding", "strength": "aside", "tags": [],
+                    "evidence": "", "quote": "", "locator": "",
+                    "ledger_links": [{"claim": "L1", "relation": "supports", "note": "n"}]}],
+    }
+    store.save_ledger([{"id": "L2", "text": "Renumbered."}])   # while the model worked
+    paper = extract.merge_extraction("doe2026study", payload)
+    assert paper["claims"][0]["ledger_links"] == []
+
+
+def test_the_api_cannot_attach_a_bogus_ledger_link():
+    store.save_ledger([{"id": "L1", "text": "A claim."}])
+    store.save_paper(store.new_paper("doe2026study"))
+    claim = store.add_claim("doe2026study", {
+        "text": "X.",
+        "ledger_links": [{"claim": "L1", "relation": "supports", "note": "ok"},
+                         {"claim": "nope", "relation": "supports", "note": "bad"}],
+    })
+    assert [l["claim"] for l in claim["ledger_links"]] == ["L1"]
+
+    updated = store.update_claim("doe2026study", claim["id"], {
+        "ledger_links": [{"claim": "also-nope", "relation": "contradicts", "note": ""}]})
+    assert updated["ledger_links"] == []
+
+
+def test_a_link_with_no_ledger_at_all_is_dropped():
+    store.save_paper(store.new_paper("doe2026study"))
+    claim = store.add_claim("doe2026study", {
+        "text": "X.", "ledger_links": [{"claim": "L1", "relation": "supports", "note": ""}]})
+    assert claim["ledger_links"] == []

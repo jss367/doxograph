@@ -274,10 +274,9 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
             evidence=(raw.get("evidence") or "").strip(),
             quote=(raw.get("quote") or "").strip(),
             locator=(raw.get("locator") or "").strip(),
-            ledger_links=[
-                link for link in raw.get("ledger_links", [])
-                if isinstance(link, dict) and link.get("claim")
-            ],
+            # Validated against the ledger as it is now, not as it was when the
+            # prompt was built: the call is long and the file can change.
+            ledger_links=store.clean_ledger_links(raw.get("ledger_links")),
         )
         if not claim["text"]:
             continue
