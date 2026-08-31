@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from . import bib, config, export, extract, ingest, store
@@ -217,7 +218,9 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
     queued = 0
     for upload in files:
         name = upload.filename or "upload.pdf"
-        staged = ingest.stage_upload(upload.file, name)
+        # On a worker thread: copying a large drop on the event loop would stop
+        # the page polling, saving or doing anything else until it finished.
+        staged = await run_in_threadpool(ingest.stage_upload, upload.file, name)
         job = _new_job(name)
         try:
             _pool.submit(_run_upload, job, staged, name, extract_now)

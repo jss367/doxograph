@@ -513,9 +513,18 @@ async function saveClaim(wrap, patch) {
     // Read it before reopening this one redraws it away.
     captureOpenEditor();
     // Keep what was typed so the save can be retried; the server row is stale.
-    V.drafts[wrap.dataset.claim] = { ...V.drafts[wrap.dataset.claim], ...patch };
-    V.error = `Could not save the claim: ${error.message}`;
-    V.editing = wrap.dataset.claim;
+    const id = wrap.dataset.claim;
+    V.drafts[id] = { ...V.drafts[id], ...patch };
+    // Reopen this claim's editor only where it can actually be seen. The user
+    // may have moved to another paper or filter while the request ran, and an
+    // editor the list cannot render is an editor nobody can reach — it would
+    // also stop the background poll, which stands down whenever one is open.
+    const onScreen = visibleClaims().some((row) => row.id === id);
+    if (onScreen && (!V.editing || V.editing === id)) V.editing = id;
+    V.error = onScreen
+      ? `Could not save the claim: ${error.message}`
+      : `Could not save a claim in ${wrap.dataset.paper}: ${error.message}. `
+        + 'What you typed is kept — open that paper to retry.';
     renderContent();
   }
 }

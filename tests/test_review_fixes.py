@@ -2318,3 +2318,97 @@ def test_a_rejected_upload_leaves_no_staging_file(monkeypatch):
 
     assert not staged.exists()
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
+
+
+# --- round 27 findings ----------------------------------------------------
+
+def retag_client(monkeypatch, during_the_call):
+    """A retag call that runs `during_the_call` before answering."""
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            during_the_call()
+            payload = {"assignments": [{"id": "doe2026study-c1", "tags": ["alpha"]}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+
+
+def study_with_tags(tags):
+    paper = store.new_paper("doe2026study", title="A Study")
+    paper["claims"] = [{"id": "doe2026study-c1", "text": "A finding.", "kind": "finding",
+                        "strength": "aside", "tags": list(tags), "evidence": "", "quote": "",
+                        "locator": "", "ledger_links": [], "reviewed": False}]
+    store.save_paper(paper)
+
+
+def set_claim_tags(tags):
+    paper = store.load_paper("doe2026study")
+    paper["claims"][0]["tags"] = sorted(tags)
+    store.save_paper(paper)
+
+
+def test_a_tag_a_person_adds_during_a_retag_is_kept(monkeypatch):
+    """The added tag is in the vocabulary the model saw, and still survives."""
+    store.add_tag("alpha")
+    store.add_tag("beta")
+    study_with_tags(["alpha"])
+
+    retag_client(monkeypatch, lambda: set_claim_tags(["alpha", "beta"]))
+    result = extract.retag_paper("doe2026study")
+
+    assert result["claims"][0]["tags"] == ["alpha", "beta"], "a person's edit was reversed"
+
+
+def test_a_tag_a_person_removes_during_a_retag_stays_off(monkeypatch):
+    """The other direction: the model's answer must not put it back."""
+    store.add_tag("alpha")
+    store.add_tag("beta")
+    study_with_tags(["alpha", "beta"])
+
+    retag_client(monkeypatch, lambda: set_claim_tags(["beta"]))
+    result = extract.retag_paper("doe2026study")
+
+    assert result["claims"][0]["tags"] == ["beta"], "a removed tag was restored"
+
+
+def test_an_untouched_claim_still_takes_the_models_answer(monkeypatch):
+    """The rule only stands down for claims somebody else changed."""
+    store.add_tag("alpha")
+    store.add_tag("beta")
+    study_with_tags(["beta"])
+
+    retag_client(monkeypatch, lambda: None)
+    result = extract.retag_paper("doe2026study")
+
+    assert result["claims"][0]["tags"] == ["alpha"]
+
+
+def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
+    """A large drop must not stop the page from polling or saving."""
+    import asyncio
+
+    where = {}
+    real_stage = ingest.stage_upload
+
+    def watched(source, filename):
+        try:
+            asyncio.get_running_loop()
+            where["on_the_loop"] = True
+        except RuntimeError:
+            where["on_the_loop"] = False
+        return real_stage(source, filename)
+
+    monkeypatch.setattr(ingest, "stage_upload", watched)
+    monkeypatch.setattr(server._pool, "submit",
+                        lambda fn, job, staged, name, extract_now: staged.unlink(missing_ok=True))
+
+    with TestClient(server.app) as client:
+        response = client.post("/api/upload?extract_now=false",
+                               files={"files": ("big.pdf", b"%PDF-1.4\n" + b"x" * 100_000)})
+
+    assert response.json() == {"queued": 1}
+    assert where["on_the_loop"] is False, "the copy blocked the event loop"

@@ -364,7 +364,9 @@ def retag_paper(key: str) -> dict:
     # against, so a tag added or renamed between the two cannot be mistaken for
     # one the model invented.
     prompt_vocabulary = store.load_tags()
-    prompt_tags = {t["name"] for t in prompt_vocabulary}
+    # What each claim was tagged with when the prompt was built. Anything that
+    # differs afterwards was changed by somebody else while the model thought.
+    tags_before = {c["id"]: sorted(c.get("tags", [])) for c in claims}
     api = client()
     response = api.messages.create(
         model=config.MODEL,
@@ -404,12 +406,14 @@ def retag_paper(key: str) -> dict:
             assignment = by_id.get(claim["id"])
             if not assignment:
                 continue
-            assigned = {store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known}
-            # A tag on the claim now that was not in the vocabulary the model
-            # saw arrived during the call — a rename rewriting the claim, or a
-            # person tagging it — and the model had no chance to keep it. The
-            # assignment is not evidence against it.
-            arrived_during_call = set(claim.get("tags", [])) - prompt_tags
-            claim["tags"] = sorted(assigned | (arrived_during_call & known))
+            # A claim whose tags changed during the call was retagged by
+            # somebody else — a person editing it, or a rename or delete
+            # rewriting it. That decision is newer than this one and is kept
+            # whole: the model was answering about tags that no longer apply.
+            if sorted(claim.get("tags", [])) != tags_before.get(claim["id"], []):
+                continue
+            claim["tags"] = sorted(
+                {store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known}
+            )
         store.save_paper(paper)
     return paper
