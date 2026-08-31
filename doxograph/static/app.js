@@ -8,8 +8,11 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
 // only in the browser until Save, so navigating away or filtering it out cannot
 // leave a blank claim behind on the server.
 const NEW_CLAIM_ID = '__new__';
-const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false,
-            group: true, editing: null, selectedId: null, newClaim: null, error: null };
+// pendingEdit holds what was typed into an existing claim's editor when its
+// save failed. Without it a re-render would redraw the form from the unchanged
+// server row and silently discard the correction.
+const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
+            editing: null, selectedId: null, newClaim: null, pendingEdit: null, error: null };
 
 function blankClaim(paper) {
   return {
@@ -166,7 +169,10 @@ async function loadProposed(key, wanted) {
 }
 
 function claimCard(row) {
-  if (V.editing === row.id) return editForm(row);
+  if (V.editing === row.id) {
+    const pending = V.pendingEdit && V.pendingEdit.id === row.id ? V.pendingEdit : null;
+    return editForm(pending ? { ...row, ...pending } : row);
+  }
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
   const tags = (row.tags || []).map((t) => `<span class="tag" data-tag="${esc(t)}">#${esc(t)}</span>`).join(' ');
@@ -296,6 +302,7 @@ function renderJobs() {
 function cancelEdit() {
   V.editing = null;
   V.newClaim = null;   // nothing was persisted, so there is nothing to clean up
+  V.pendingEdit = null;
   V.error = null;
   renderContent();
 }
@@ -361,7 +368,10 @@ $('content').addEventListener('submit', async (event) => {
   V.editing = null;
   try {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
+    V.pendingEdit = null;
   } catch (error) {
+    // Keep what was typed so the save can be retried; the server row is stale.
+    V.pendingEdit = { id: wrap.dataset.claim, ...patch };
     V.error = `Could not save the claim: ${error.message}`;
     V.editing = wrap.dataset.claim;
     renderContent();
@@ -374,7 +384,12 @@ $('content').addEventListener('click', async (event) => {
     const act = button.dataset.act;
     const paper = button.dataset.paper;
     const claim = button.dataset.claim;
-    if (act === 'edit') { V.editing = claim; renderContent(); return; }
+    if (act === 'edit') {
+      if (V.pendingEdit && V.pendingEdit.id !== claim) V.pendingEdit = null;
+      V.editing = claim;
+      renderContent();
+      return;
+    }
     if (act === 'cancel') { cancelEdit(); return; }
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';

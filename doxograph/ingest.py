@@ -9,7 +9,6 @@ from __future__ import annotations
 import re
 import os
 import tempfile
-import threading
 import html as html_module
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -349,12 +348,6 @@ def download_pdf(url: str, key: str, client: httpx.Client) -> bool:
     return publish_pdf(key, fetch_pdf(url, client))
 
 
-# "Is this paper already here, and if not what key does it get" has to be one
-# step: the upload and ingest pools run several papers at once, and two of them
-# can be the same paper or produce the same coarse key.
-_claim_lock = threading.Lock()
-
-
 def _client() -> httpx.Client:
     return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
 
@@ -408,7 +401,7 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
         else:
             raise ValueError(f"cannot ingest a {ref.kind} reference")
 
-        with _claim_lock:
+        with store.claim_lock():
             existing = find_existing(meta)
         if existing:
             # A transient download failure leaves a paper with no PDF, and every
@@ -425,7 +418,7 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
                     pass
             return existing, False
 
-        with _claim_lock:
+        with store.claim_lock():
             # Re-check under the lock: the recovery path above released it.
             existing = find_existing(meta)
             if existing:
@@ -473,7 +466,7 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
     try:
         with _client() as client:
             meta = guess_from_pdf(staging, client, display_name=filename)
-            with _claim_lock:
+            with store.claim_lock():
                 existing = find_existing(meta)
                 if existing and (meta.get("source") or {}).get("kind") != "file":
                     key, created = existing, False

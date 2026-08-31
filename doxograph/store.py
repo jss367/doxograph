@@ -94,6 +94,7 @@ def _reentrant_file_lock(name: str, path: Path):
 # rewrite (vocabulary then each paper) and an accept (vocabulary then that
 # paper) cannot deadlock against each other.
 _vocab = threading.RLock()
+_claim = threading.RLock()
 
 
 @contextlib.contextmanager
@@ -101,6 +102,17 @@ def paper_lock(key: str):
     with _locks_guard:
         lock = _locks.setdefault(key, threading.RLock())
     with lock, _reentrant_file_lock(f"paper:{key}", config.locks_dir() / f"{key}.lock"):
+        yield
+
+
+@contextlib.contextmanager
+def claim_lock():
+    """Guard "is this paper already here, and if not what key does it get".
+
+    Lock order is claim before paper: ingest holds this while reserving and then
+    publishes a PDF under the paper lock.
+    """
+    with _claim, _reentrant_file_lock("claim", config.locks_dir() / "claim.lock"):
         yield
 
 
@@ -180,21 +192,32 @@ def pdf_path(key: str) -> Path:
     return config.pdfs_dir() / f"{key}.pdf"
 
 
+def write_atomic(path: Path, text: str) -> None:
+    """Replace a file's contents in one step.
+
+    `write_text` truncates before writing, and the readers of `tags.yaml` —
+    `/api/state`, the extraction prompt, retag — do not take the vocabulary
+    lock, so a truncated read is reachable. A retag prompted with an empty
+    vocabulary would return empty assignments and clear real tags.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, staged = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(staged, path)
+    except BaseException:
+        Path(staged).unlink(missing_ok=True)
+        raise
+
+
 def write_json(path: Path, payload: Any) -> None:
     """Write atomically so an interrupted or concurrent save cannot truncate a file.
 
     The temporary name is unique per write; a fixed `.tmp` sibling would be
     shared by two concurrent writers of the same paper.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, staged = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n")
-        os.replace(staged, path)
-    except BaseException:
-        Path(staged).unlink(missing_ok=True)
-        raise
+    write_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n")
 
 
 def load_paper(key: str) -> dict:
@@ -360,12 +383,10 @@ def load_tags() -> list[dict]:
 
 def save_tags(tags: list[dict]) -> None:
     """Caller must hold `vocab_lock`; every public mutator below does."""
-    path = config.tags_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(tags, key=lambda t: t["name"])
-    path.write_text(
+    write_atomic(
+        config.tags_path(),
         yaml.safe_dump({"tags": ordered}, sort_keys=False, allow_unicode=True, width=100),
-        encoding="utf-8",
     )
 
 
@@ -434,11 +455,9 @@ def load_ledger() -> list[dict]:
 
 
 def save_ledger(claims: list[dict]) -> None:
-    path = config.ledger_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    write_atomic(
+        config.ledger_path(),
         yaml.safe_dump({"claims": claims}, sort_keys=False, allow_unicode=True, width=100),
-        encoding="utf-8",
     )
 
 

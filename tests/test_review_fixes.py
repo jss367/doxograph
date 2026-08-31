@@ -1174,3 +1174,142 @@ def test_a_failed_download_leaves_no_staging_file(monkeypatch):
     with pytest.raises(ValueError, match="rather than a PDF"):
         ingest.fetch_pdf("https://example.org/x.pdf", NotAPdf())
     assert list(config.pdfs_dir().glob(".download-*")) == []
+
+
+# --- round 9 findings -----------------------------------------------------
+
+def test_claim_lock_is_held_across_processes(tmp_path):
+    """Two processes ingesting the same paper must not both reserve a key."""
+    import subprocess
+    import sys
+    import textwrap
+    import time
+
+    log = tmp_path / "claim.log"
+    script = textwrap.dedent(f"""
+        import os
+        os.environ["DOXOGRAPH_DATA"] = {str(config.data_dir())!r}
+        from doxograph import store
+        with store.claim_lock():
+            open({str(log)!r}, "a").write("child\\n")
+    """)
+
+    with store.claim_lock():
+        child = subprocess.Popen([sys.executable, "-c", script])
+        time.sleep(1.0)
+        blocked = child.poll() is None
+        log.write_text("parent\n")
+    child.wait(timeout=15)
+
+    assert blocked, "the child did not wait for the claim lock"
+    assert log.read_text().split() == ["parent", "child"]
+
+
+def test_two_processes_ingesting_one_paper_make_one_paper(tmp_path):
+    """The whole check-and-reserve transaction, across real processes.
+
+    An outcome guard, not a proof. Both children busy-wait to a shared
+    wall-clock instant, but the window between `find_existing` and
+    `reserve_key` is microseconds and process startup jitter is larger, so this
+    still passes with the cross-process lock removed. It is kept because it
+    exercises the real two-process path end to end and would catch a coarser
+    regression. `test_claim_lock_is_held_across_processes` is the test that
+    actually fails without the lock.
+    """
+    import subprocess
+    import sys
+    import textwrap
+    import time
+
+    start_at = time.time() + 3.0
+    script = textwrap.dedent(f"""
+        import os, time
+        os.environ["DOXOGRAPH_DATA"] = {str(config.data_dir())!r}
+        from doxograph import ingest, store
+        meta = {{
+            "title": "Recovery under steering", "authors": ["Jane Doe"], "year": 2026,
+            "abstract": "", "venue": "arXiv", "doi": "",
+            "source": {{"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": ""}},
+        }}
+        ingest.fetch_arxiv = lambda i, c: meta
+        while time.time() < {start_at!r}:      # busy-wait to the shared instant
+            pass
+        key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+        print(f"{{key}} {{created}}")
+    """)
+
+    procs = [subprocess.Popen([sys.executable, "-c", script],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+             for _ in range(2)]
+    results = [p.communicate(timeout=60) for p in procs]
+    outputs = [out.strip() for out, _ in results]
+
+    assert all(p.returncode == 0 for p in procs), results
+    keys = {line.split()[0] for line in outputs}
+    created = [line.split()[1] for line in outputs]
+    assert len(keys) == 1, f"two processes made two papers: {outputs}"
+    assert created.count("True") == 1, f"both processes claimed to create it: {outputs}"
+    assert len(store.paper_keys()) == 1
+
+
+def test_the_vocabulary_is_never_observed_half_written():
+    """Readers do not take the lock, so the write has to be atomic."""
+    import threading
+
+    for n in range(12):
+        store.add_tag(f"topic-{n}", f"description number {n}")
+
+    stop = threading.Event()
+    bad = []
+
+    def reader():
+        while not stop.is_set():
+            names = store.tag_names()
+            if names and len(names) < 12:
+                bad.append(sorted(names))
+
+    def writer():
+        for n in range(40):
+            store.add_tag(f"extra-{n}", "x")
+
+    watcher = threading.Thread(target=reader)
+    watcher.start()
+    writer()
+    stop.set()
+    watcher.join(timeout=5)
+
+    assert bad == [], f"a partial vocabulary was visible: {bad[:3]}"
+    assert len(store.tag_names()) == 52
+
+
+def test_the_vocabulary_is_replaced_rather_than_truncated(monkeypatch):
+    """The atomicity mechanism itself.
+
+    The concurrent-reader test above asserts the invariant but cannot reliably
+    hit the truncation window. This one is deterministic: a write that goes
+    through `os.replace` cannot be observed half-done, and an in-place
+    `write_text` never calls it.
+    """
+    import os as os_module
+
+    store.add_tag("alpha", "first")
+    replaced = []
+    real_replace = os_module.replace
+
+    def watched_replace(src_path, dest_path, *args, **kwargs):
+        replaced.append(str(dest_path))
+        return real_replace(src_path, dest_path, *args, **kwargs)
+
+    monkeypatch.setattr(store.os, "replace", watched_replace)
+    store.add_tag("beta", "second")
+
+    assert any(name.endswith("tags.yaml") for name in replaced), (
+        f"tags.yaml was not published through os.replace: {replaced}")
+    assert sorted(store.tag_names()) == ["alpha", "beta"]
+
+
+def test_ledger_writes_are_atomic_too():
+    store.save_ledger([{"id": "L1", "text": "A claim."}])
+    assert store.load_ledger() == [{"id": "L1", "text": "A claim."}]
+    store.save_ledger([{"id": "L1", "text": "A claim."}, {"id": "L2", "text": "Another."}])
+    assert [c["id"] for c in store.load_ledger()] == ["L1", "L2"]
