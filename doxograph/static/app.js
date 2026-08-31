@@ -306,6 +306,14 @@ function renderContent() {
   const shown = new Set();
   const card = (row) => claimCard(row, shown);
   const rows = visibleClaims();
+  // An editor for a claim the current filters exclude cannot be drawn, and
+  // leaving `V.editing` set would also hold down the background poll, which
+  // stands aside whenever an editor is open. Park it: keep the draft, close
+  // the editor. The text is read from the form that is still on screen.
+  if (V.editing && V.editing !== NEW_CLAIM_ID && !rows.some((row) => row.id === V.editing)) {
+    captureOpenEditor();
+    V.editing = null;
+  }
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
@@ -508,7 +516,14 @@ async function saveClaim(wrap, patch) {
       // As on the success path: an existing claim's editor may have been
       // opened while the POST ran, and its text is only in the DOM.
       captureOpenEditor();
-      V.error = `Could not save the claim: ${error.message}`;
+      // Moving to another paper abandons an unsaved new claim, so the draft
+      // can be gone by now. The user did click Save on this text, so put it
+      // back rather than losing it to a failure they did not choose.
+      if (!V.newClaim) V.newClaim = { ...blankClaim(paper), ...patch };
+      V.error = (!V.paper || V.paper === paper)
+        ? `Could not save the claim: ${error.message}`
+        : `Could not save a new claim in ${paper}: ${error.message}. `
+          + 'What you typed is kept — open that paper to retry.';
       renderContent();          // the draft is still held, ready to retry
       return;
     }

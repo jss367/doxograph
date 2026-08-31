@@ -2466,3 +2466,104 @@ def test_a_claim_rewritten_during_a_retag_keeps_its_tags(monkeypatch):
 
     assert result["claims"][0]["text"] == "Rewritten by hand."
     assert result["claims"][0]["tags"] == ["beta"], "tags for the old wording were applied"
+
+
+# --- round 30 findings ----------------------------------------------------
+
+def test_a_correction_made_during_a_re_read_survives(monkeypatch):
+    """A claim edited while the model was reading is newer than its answer."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    claim = store.add_claim("doe2026study",
+                            {"text": "Original wording.", "tags": [], "reviewed": False})
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            store.update_claim("doe2026study", claim["id"], {"text": "Corrected by hand."})
+            payload = {"summary": "", "relevance": "", "proposed_tags": [],
+                       "claims": [{"text": "A fresh claim.", "kind": "finding",
+                                   "strength": "aside", "tags": [], "evidence": "",
+                                   "quote": "", "locator": "", "ledger_links": []}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+    paper = extract.extract_paper("doe2026study")
+
+    texts = [c["text"] for c in paper["claims"]]
+    assert "Corrected by hand." in texts, "the correction was overwritten by the re-read"
+    assert "A fresh claim." in texts
+
+
+def test_a_claim_written_during_a_re_read_survives(monkeypatch):
+    """A claim added by hand while the model read is not in the snapshot."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            store.add_claim("doe2026study",
+                            {"text": "Written by hand.", "tags": [], "reviewed": False})
+            payload = {"summary": "", "relevance": "", "proposed_tags": [],
+                       "claims": [{"text": "A fresh claim.", "kind": "finding",
+                                   "strength": "aside", "tags": [], "evidence": "",
+                                   "quote": "", "locator": "", "ledger_links": []}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+    paper = extract.extract_paper("doe2026study")
+
+    texts = [c["text"] for c in paper["claims"]]
+    assert "Written by hand." in texts, "a hand-written claim was discarded"
+    assert "A fresh claim." in texts
+
+
+def test_an_untouched_unreviewed_claim_is_still_replaced(monkeypatch):
+    """The rule only spares claims that changed; a re-read still replaces."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.add_claim("doe2026study",
+                    {"text": "Original wording.", "tags": [], "reviewed": False})
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            payload = {"summary": "", "relevance": "", "proposed_tags": [],
+                       "claims": [{"text": "A fresh claim.", "kind": "finding",
+                                   "strength": "aside", "tags": [], "evidence": "",
+                                   "quote": "", "locator": "", "ledger_links": []}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+    paper = extract.extract_paper("doe2026study")
+
+    assert [c["text"] for c in paper["claims"]] == ["A fresh claim."]
+
+
+def test_the_cli_does_not_read_a_local_pdf_whole(monkeypatch, tmp_path, capsys):
+    """`doxograph add file.pdf` streams it into staging like an upload does."""
+    read_whole = []
+    real_read_bytes = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes",
+                        lambda self: (read_whole.append(self.name), real_read_bytes(self))[1])
+    monkeypatch.setattr(ingest, "guess_from_pdf", lambda path, client, display_name=None: {
+        "title": "A Local Paper", "authors": [], "year": None, "abstract": "", "venue": "",
+        "doi": "", "source": {"kind": "file", "id": display_name, "url": "", "pdf_url": ""}})
+
+    pdf = tmp_path / "local.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 200_000)
+
+    code = __main__.main(["add", str(pdf), "--no-extract"])
+
+    assert code == 0, capsys.readouterr()
+    assert "local.pdf" not in read_whole, "the CLI read the whole PDF into memory"

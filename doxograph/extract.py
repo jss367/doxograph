@@ -227,9 +227,18 @@ The attached PDF is:
 Extract its claims."""
 
 
+def claim_state(claim: dict) -> str:
+    """Everything about a claim a person can change, as a comparable string."""
+    return json.dumps({k: v for k, v in claim.items() if k != "id"}, sort_keys=True, default=str)
+
+
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
     """Run extraction and merge the result into the stored paper."""
     paper = store.load_paper(key)
+    # The claims as they stood when the prompt was built. A re-read is long
+    # enough for somebody to correct a claim while it runs, and a correction
+    # made after the model saw the paper is newer than anything it returns.
+    claims_before = {c["id"]: claim_state(c) for c in paper.get("claims", [])}
     # One read of the vocabulary, used both to build the prompt and to record
     # what the model was shown. Reading it twice would let a tag added between
     # the two reads reach the prompt without reaching the snapshot, and the merge
@@ -256,24 +265,35 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         raise RuntimeError(f"extraction refused for {key}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
     return merge_extraction(key, payload, response, keep_reviewed=keep_reviewed,
-                            prompt_tags=prompt_tags)
+                            prompt_tags=prompt_tags, claims_before=claims_before)
 
 
 def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,
-                     prompt_tags: set[str] | None = None) -> dict:
+                     prompt_tags: set[str] | None = None,
+                     claims_before: dict[str, str] | None = None) -> dict:
     with store.paper_lock(key):
-        return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags)
+        return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags, claims_before)
 
 
 def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,
-                      prompt_tags: set[str] | None = None) -> dict:
+                      prompt_tags: set[str] | None = None,
+                      claims_before: dict[str, str] | None = None) -> dict:
     paper = store.load_paper(key)
     # Derive the id high-water mark from every claim, before the reviewed-only
     # filter below hides some of them. Deriving it from the kept subset would let
     # a discarded claim's id be issued to a new one, and an in-flight retag reply
     # or PATCH for the discarded claim is matched by id alone.
     store.ensure_claim_seq(paper)
-    kept = [c for c in paper.get("claims", []) if keep_reviewed and c.get("reviewed")]
+    def changed_during_the_call(claim: dict) -> bool:
+        # Written or corrected after the model was given the paper: a claim the
+        # snapshot does not know, or one whose contents no longer match it.
+        if claims_before is None:
+            return False
+        before = claims_before.get(claim["id"])
+        return before is None or before != claim_state(claim)
+
+    kept = [c for c in paper.get("claims", [])
+            if (keep_reviewed and c.get("reviewed")) or changed_during_the_call(c)]
     known = set(store.tag_names())
 
     # Names that were in the vocabulary when the prompt was built and are not in

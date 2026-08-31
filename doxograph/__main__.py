@@ -18,7 +18,11 @@ def cmd_add(args) -> int:
         path = Path(value).expanduser()
         if path.is_file() and path.suffix.lower() == ".pdf":
             try:
-                key, created = ingest.ingest_pdf_bytes(path.read_bytes(), path.name)
+                # Streamed into staging rather than read whole: a scanned PDF
+                # can be hundreds of megabytes.
+                with path.open("rb") as handle:
+                    staged = ingest.stage_upload(handle, path.name)
+                key, created = ingest.ingest_staged_pdf(staged, path.name)
             except Exception as exc:
                 print(f"{path.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
                 failures += 1
