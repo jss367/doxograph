@@ -566,3 +566,186 @@ def test_entities_are_decoded_in_a_doi_too():
     client = FakePageClient("https://journal.example.org/a", html)
     ref = ingest.resolve_page("https://journal.example.org/a", client)
     assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
+
+
+# --- round 5 findings -----------------------------------------------------
+
+def test_reservation_is_visible_to_deduplication_immediately():
+    """A reserved key must already carry its identity, not an empty placeholder."""
+    key = store.reserve_key("doe2026study", source={"kind": "arxiv", "id": "2602.06941"},
+                            doi="", title="A Study")
+    assert ingest.find_existing({"source": {"kind": "arxiv", "id": "2602.06941v2"}, "doi": ""}) == key
+
+
+def test_concurrent_ingests_of_one_paper_make_one_paper(monkeypatch):
+    """Two requests for the same arXiv ID must not race past each other."""
+    import threading
+    import time
+
+    barrier = threading.Barrier(2)
+    meta = {
+        "title": "Recovery under steering", "authors": ["Jane Doe"], "year": 2026,
+        "abstract": "", "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": ""},
+    }
+
+    def fake_fetch(arxiv_id, client):
+        barrier.wait(timeout=5)   # both arrive at the claim step together
+        return {**meta, "source": {**meta["source"], "id": arxiv_id}}
+
+    monkeypatch.setattr(ingest, "fetch_arxiv", fake_fetch)
+    monkeypatch.setattr(ingest, "download_pdf",
+                        lambda url, dest, client: (_ for _ in ()).throw(AssertionError("no pdf_url")))
+
+    results, errors = {}, []
+
+    def add(version):
+        try:
+            time.sleep(0.01)
+            key, created = ingest.ingest_ref(ingest.Ref("arxiv", f"2602.06941{version}", ""))
+            results[version] = (key, created)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=add, args=(v,)) for v in ("v1", "v2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, errors
+    keys = {key for key, _ in results.values()}
+    assert len(keys) == 1, f"the same paper was ingested twice: {results}"
+    assert sum(1 for _, created in results.values() if created) == 1
+    assert len(store.paper_keys()) == 1
+
+
+def test_concurrent_tag_accepts_both_land():
+    """Two papers' proposals accepted at once must both reach the vocabulary."""
+    import threading
+
+    for key, tag in (("doe2026a", "alpha"), ("doe2026b", "beta")):
+        paper = store.new_paper(key)
+        paper["proposed_tags"] = [{"name": tag, "description": f"{tag} desc"}]
+        store.save_paper(paper)
+
+    start = threading.Barrier(2)
+    errors = []
+
+    client = TestClient(server.app)
+
+    def accept(key, tag):
+        try:
+            start.wait(timeout=5)   # build the client first, so the barrier is the only gate
+            client.post(f"/api/papers/{key}/proposed-tags", json={"accept": [tag]})
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=accept, args=a) for a in (("doe2026a", "alpha"), ("doe2026b", "beta"))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert not errors, errors
+    assert set(store.tag_names()) == {"alpha", "beta"}, "one accepted tag was dropped"
+
+
+def test_many_concurrent_tag_adds_all_land():
+    import threading
+
+    start = threading.Barrier(6)
+
+    def add(n):
+        start.wait(timeout=5)
+        store.add_tag(f"topic-{n}", f"number {n}")
+
+    threads = [threading.Thread(target=add, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert set(store.tag_names()) == {f"topic-{n}" for n in range(6)}
+
+
+def test_deleting_a_paper_while_a_merge_is_saving_leaves_no_ghost():
+    """Remove must not race a completing re-read into a paper with no PDF.
+
+    The merge parks between its load and its save. The delete is attempted at
+    exactly that moment: without the lock it unlinks both files and the merge's
+    save then recreates the JSON, leaving a paper whose PDF is gone.
+    """
+    import threading
+
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4\n")
+
+    parked = threading.Event()
+    delete_attempted = threading.Event()
+    errors = []
+
+    def merge():
+        try:
+            with store.paper_lock("doe2026study"):
+                paper = store.load_paper("doe2026study")
+                parked.set()
+                delete_attempted.wait(timeout=2)   # give the delete its chance
+                paper["summary"] = "merged"
+                store.save_paper(paper)
+        except Exception as exc:
+            errors.append(exc)
+
+    def remove():
+        try:
+            parked.wait(timeout=5)
+            threading.Timer(0.2, delete_attempted.set).start()
+            store.delete_paper("doe2026study")     # blocks on the lock when locked
+            delete_attempted.set()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=merge), threading.Thread(target=remove)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, errors
+    assert not store.paper_path("doe2026study").exists(), "the merge recreated a deleted paper"
+    assert not store.pdf_path("doe2026study").exists(), "a ghost paper was left with no PDF"
+
+
+def test_rename_and_accept_do_not_deadlock():
+    """Lock order is vocabulary then paper on both paths."""
+    import threading
+
+    store.add_tag("old", "to be renamed")
+    paper = store.new_paper("doe2026study")
+    paper["proposed_tags"] = [{"name": "fresh", "description": "new one"}]
+    store.save_paper(paper)
+    store.add_claim("doe2026study", {"text": "X.", "tags": ["old"]})
+
+    errors = []
+
+    def rename():
+        try:
+            store.rename_tag("old", "renamed")
+        except Exception as exc:
+            errors.append(exc)
+
+    def accept():
+        try:
+            with TestClient(server.app) as client:
+                client.post("/api/papers/doe2026study/proposed-tags", json={"accept": ["fresh"]})
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=rename), threading.Thread(target=accept)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert all(not t.is_alive() for t in threads), "deadlocked"
+    assert not errors, errors
+    assert "renamed" in store.tag_names() and "fresh" in store.tag_names()

@@ -381,17 +381,22 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             existing = find_existing(meta)
             if existing:
                 return existing, False
-            key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]))
+            # The reservation carries the identity, so a second request for the
+            # same paper finds it while this one is still fetching the PDF.
+            key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]), **meta)
+
         pdf_url = (meta.get("source") or {}).get("pdf_url")
+        notes = ""
         if pdf_url:
             try:
                 download_pdf(pdf_url, store.pdf_path(key), client)
             except (httpx.HTTPError, ValueError) as exc:
-                meta.setdefault("notes", "")
-                meta["notes"] = f"PDF download failed: {exc}"
-
-        paper = store.new_paper(key, **meta)
-        store.save_paper(paper)
+                notes = f"PDF download failed: {exc}"
+        if notes:
+            with store.paper_lock(key):
+                paper = store.load_paper(key)
+                paper["notes"] = notes
+                store.save_paper(paper)
         return key, True
     finally:
         if own_client:
@@ -421,9 +426,8 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
                     if not store.pdf_path(existing).exists():
                         shutil.copyfile(staging, store.pdf_path(existing))
                     return existing, False
-                key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]))
+                key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]), **meta)
             shutil.copyfile(staging, store.pdf_path(key))
-            store.save_paper(store.new_paper(key, **meta))
             return key, True
     finally:
         staging.unlink(missing_ok=True)

@@ -280,7 +280,9 @@ def resolve_proposed_tags(key: str, body: ProposedTagsBody) -> dict:
     Discarding only clears the proposal — a discarded name must not end up in
     the vocabulary, which is the whole point of proposals being separate.
     """
-    with store.paper_lock(key):
+    # Vocabulary lock before paper lock: `rename_tag` takes them in that order,
+    # and accepting a tag takes both, so the reverse order here would deadlock.
+    with store.vocab_lock(), store.paper_lock(key):
         try:
             paper = store.load_paper(key)
         except KeyError:

@@ -38,11 +38,24 @@ _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 
 
+# The tag vocabulary is a single shared file, so it gets one lock rather than
+# one per paper. Lock order is vocabulary before paper, everywhere, so a tag
+# rewrite (vocabulary then each paper) and an accept (vocabulary then that
+# paper) cannot deadlock against each other.
+_vocab = threading.RLock()
+
+
 @contextlib.contextmanager
 def paper_lock(key: str):
     with _locks_guard:
         lock = _locks.setdefault(key, threading.RLock())
     with lock:
+        yield
+
+
+@contextlib.contextmanager
+def vocab_lock():
+    with _vocab:
         yield
 
 
@@ -81,13 +94,18 @@ def citekey(title: str, authors: list[str], year: int | str | None) -> str:
     return f"{surname or 'anon'}{year or 'nd'}{word}"
 
 
-def reserve_key(base: str) -> str:
-    """Claim an unused key by creating its file atomically.
+def reserve_key(base: str, **fields) -> str:
+    """Claim an unused key by creating its file atomically, identity included.
 
     Checking `exists()` and writing later is not enough: several papers are
     ingested concurrently, two of them can produce the same coarse key, and both
     would see it unused. `O_EXCL` makes the claim itself the check, so the loser
     moves on to the next candidate.
+
+    `fields` are written into the placeholder, so the reserved paper already
+    carries its arXiv ID or DOI. A reservation with an empty source would be
+    invisible to `find_existing`, and a second request for the same paper would
+    reserve a second key while the first was still fetching its PDF.
     """
     config.papers_dir().mkdir(parents=True, exist_ok=True)
     for candidate in [base] + [f"{base}{s}" for s in "abcdefghijklmnopqrstuvwxyz"]:
@@ -96,7 +114,7 @@ def reserve_key(base: str) -> str:
         except FileExistsError:
             continue
         with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            json.dump(new_paper(candidate), fh, indent=2, ensure_ascii=False)
+            json.dump(new_paper(candidate, **fields), fh, indent=2, ensure_ascii=False)
             fh.write("\n")
         return candidate
     raise RuntimeError(f"cannot find an unused key for {base!r}")
@@ -154,7 +172,9 @@ def all_papers() -> list[dict]:
     return papers
 
 
+@_locked
 def delete_paper(key: str) -> None:
+    """Remove a paper under its lock, so an in-flight save cannot resurrect it."""
     paper_path(key).unlink(missing_ok=True)
     pdf_path(key).unlink(missing_ok=True)
 
@@ -287,6 +307,7 @@ def load_tags() -> list[dict]:
 
 
 def save_tags(tags: list[dict]) -> None:
+    """Caller must hold `vocab_lock`; every public mutator below does."""
     path = config.tags_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(tags, key=lambda t: t["name"])
@@ -302,20 +323,29 @@ def tag_names() -> list[str]:
 
 def add_tag(name: str, description: str = "") -> list[dict]:
     name = slugify(name)
-    tags = load_tags()
-    if name and name not in {t["name"] for t in tags}:
-        tags.append({"name": name, "description": description})
-        save_tags(tags)
-    return tags
+    with vocab_lock():
+        tags = load_tags()
+        if name and name not in {t["name"] for t in tags}:
+            tags.append({"name": name, "description": description})
+            save_tags(tags)
+        return tags
 
 
 def rename_tag(old: str, new: str) -> None:
     """Rename across the vocabulary and every claim. Merges if `new` exists."""
     new = slugify(new)
-    tags = [t for t in load_tags() if t["name"] != old]
-    if new not in {t["name"] for t in tags}:
-        tags.append({"name": new, "description": next((t.get("description", "") for t in load_tags() if t["name"] == old), "")})
-    save_tags(tags)
+    with vocab_lock():
+        current = load_tags()
+        tags = [t for t in current if t["name"] != old]
+        if new not in {t["name"] for t in tags}:
+            description = next((t.get("description", "") for t in current if t["name"] == old), "")
+            tags.append({"name": new, "description": description})
+        save_tags(tags)
+        _retag_all(old, new)
+
+
+def _retag_all(old: str, new: str | None) -> None:
+    """Rewrite or drop a tag across every paper. Called holding `vocab_lock`."""
     for key in paper_keys():
         with paper_lock(key):
             try:
@@ -324,28 +354,21 @@ def rename_tag(old: str, new: str) -> None:
                 continue
             touched = False
             for claim in paper.get("claims", []):
-                if old in claim.get("tags", []):
-                    claim["tags"] = sorted({new if t == old else t for t in claim["tags"]})
-                    touched = True
+                if old not in claim.get("tags", []):
+                    continue
+                kept = {t for t in claim["tags"] if t != old}
+                if new:
+                    kept.add(new)
+                claim["tags"] = sorted(kept)
+                touched = True
             if touched:
                 save_paper(paper)
 
 
 def delete_tag(name: str) -> None:
-    save_tags([t for t in load_tags() if t["name"] != name])
-    for key in paper_keys():
-        with paper_lock(key):
-            try:
-                paper = load_paper(key)
-            except (KeyError, json.JSONDecodeError):
-                continue
-            touched = False
-            for claim in paper.get("claims", []):
-                if name in claim.get("tags", []):
-                    claim["tags"] = [t for t in claim["tags"] if t != name]
-                    touched = True
-            if touched:
-                save_paper(paper)
+    with vocab_lock():
+        save_tags([t for t in load_tags() if t["name"] != name])
+        _retag_all(name, None)
 
 
 # --- your own claims ------------------------------------------------------
