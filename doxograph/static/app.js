@@ -8,12 +8,13 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
 // only in the browser until Save, so navigating away or filtering it out cannot
 // leave a blank claim behind on the server.
 const NEW_CLAIM_ID = '__new__';
-// pendingEdit is the local draft for an existing claim's open editor: what was
-// typed but not yet saved, whether because the save failed or because something
-// redrew the list. Without it a re-render redraws from the unchanged server row
-// and silently discards the edit.
+// drafts holds unsaved editor contents, keyed by claim id: what was typed but
+// not yet saved, whether because the save failed or because something redrew the
+// list. Without it a re-render redraws from the unchanged server row and
+// silently discards the edit. A map rather than one slot, so opening a second
+// claim's editor does not throw away the first one's draft.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
-            editing: null, selectedId: null, newClaim: null, pendingEdit: null, error: null };
+            editing: null, selectedId: null, newClaim: null, drafts: {}, error: null };
 
 function blankClaim(paper) {
   return {
@@ -171,8 +172,8 @@ async function loadProposed(key, wanted) {
 
 function claimCard(row) {
   if (V.editing === row.id) {
-    const pending = V.pendingEdit && V.pendingEdit.id === row.id ? V.pendingEdit : null;
-    return editForm(pending ? { ...row, ...pending } : row);
+    const draft = V.drafts[row.id];
+    return editForm(draft ? { ...row, ...draft } : row);
   }
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
@@ -301,9 +302,9 @@ function renderJobs() {
 // --- actions --------------------------------------------------------------
 
 function cancelEdit() {
+  if (V.editing) delete V.drafts[V.editing];   // discard only this claim's draft
   V.editing = null;
   V.newClaim = null;   // nothing was persisted, so there is nothing to clean up
-  V.pendingEdit = null;
   V.error = null;
   renderContent();
 }
@@ -318,7 +319,7 @@ function captureOpenEditor() {
   if (wrap.dataset.claim === NEW_CLAIM_ID) {
     V.newClaim = { ...V.newClaim, ...patch };
   } else {
-    V.pendingEdit = { id: wrap.dataset.claim, ...patch };
+    V.drafts[wrap.dataset.claim] = { ...V.drafts[wrap.dataset.claim], ...patch };
   }
 }
 
@@ -383,10 +384,10 @@ $('content').addEventListener('submit', async (event) => {
   V.editing = null;
   try {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
-    V.pendingEdit = null;
+    delete V.drafts[wrap.dataset.claim];
   } catch (error) {
     // Keep what was typed so the save can be retried; the server row is stale.
-    V.pendingEdit = { id: wrap.dataset.claim, ...patch };
+    V.drafts[wrap.dataset.claim] = { ...V.drafts[wrap.dataset.claim], ...patch };
     V.error = `Could not save the claim: ${error.message}`;
     V.editing = wrap.dataset.claim;
     renderContent();
@@ -400,7 +401,9 @@ $('content').addEventListener('click', async (event) => {
     const paper = button.dataset.paper;
     const claim = button.dataset.claim;
     if (act === 'edit') {
-      if (V.pendingEdit && V.pendingEdit.id !== claim) V.pendingEdit = null;
+      // Opening another claim's editor redraws the list, so keep whatever is in
+      // the one currently open. Drafts are per claim, so both survive.
+      captureOpenEditor();
       V.editing = claim;
       renderContent();
       return;

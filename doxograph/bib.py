@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from . import store
 
-# `%` starts a comment in a .bib file, so an unescaped one truncates the rest
-# of the line including its closing brace. Percent-encoded URLs hit this
-# constantly, which is why urls and DOIs go through `escape` too.
+# Characters that change how a .bib file parses. `%` starts a comment, so an
+# unescaped one truncates the rest of the line including its closing brace, and
+# percent-encoded URLs hit that constantly. A literal brace is worse: it
+# unbalances the field and can swallow everything up to the next one.
+#
+# Each character of the input is looked at once, so replacements that themselves
+# contain a backslash or braces are not re-escaped.
 ESCAPES = {
     "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
     "~": r"\textasciitilde{}",
+    "\\": r"\textbackslash{}",
+    "{": r"\{", "}": r"\}",
 }
 
 
@@ -24,7 +30,7 @@ def author_field(authors: list[str]) -> str:
 def entry(paper: dict) -> str:
     source = paper.get("source") or {}
     fields = [
-        ("title", f"{{{escape(paper.get('title', ''))}}}"),
+        ("title", escape(paper.get("title", ""))),
         ("author", author_field(paper.get("authors", []))),
     ]
     if paper.get("year"):
@@ -44,8 +50,10 @@ def entry(paper: dict) -> str:
     if source.get("url"):
         fields.append(("url", escape(source["url"])))
 
-    body = ",\n".join(f"  {name} = {{{value}}}" if not value.startswith("{") else f"  {name} = {value}"
-                      for name, value in fields if value)
+    # Every value is escaped and wrapped the same way. Deciding by whether the
+    # value happened to start with a brace was fragile once braces could be
+    # escaped content rather than a wrapper.
+    body = ",\n".join(f"  {name} = {{{value}}}" for name, value in fields if value)
     return f"@{kind}{{{paper['key']},\n{body}\n}}"
 
 
