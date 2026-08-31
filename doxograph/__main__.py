@@ -10,36 +10,51 @@ from . import bib, config, export, extract, ingest, store
 
 
 def cmd_add(args) -> int:
+    """Add papers. Exits nonzero if any requested reference did not go through."""
     config.ensure_dirs()
+    failures = 0
     tokens: list[str] = []
     for value in args.refs:
         path = Path(value).expanduser()
         if path.is_file() and path.suffix.lower() == ".pdf":
-            key, created = ingest.ingest_pdf_bytes(path.read_bytes(), path.name)
+            try:
+                key, created = ingest.ingest_pdf_bytes(path.read_bytes(), path.name)
+            except Exception as exc:
+                print(f"{path.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failures += 1
+                continue
             print(f"{'added' if created else 'already present'}: {key}")
             if created and not args.no_extract:
-                extract.extract_paper(key)
-                print(f"  read: {len(store.load_paper(key)['claims'])} claims")
+                failures += _read(key)
             continue
         tokens.append(value)
 
     refs, unknown = ingest.parse_refs(" ".join(tokens))
     for token in unknown:
         print(f"could not read reference: {token}", file=sys.stderr)
+    failures += len(unknown)
     for ref in refs:
         try:
             key, created = ingest.ingest_ref(ref)
         except Exception as exc:
             print(f"{ref.value}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            failures += 1
             continue
         print(f"{'added' if created else 'already present'}: {key}")
         if created and not args.no_extract:
-            try:
-                extract.extract_paper(key)
-                print(f"  read: {len(store.load_paper(key)['claims'])} claims")
-            except Exception as exc:
-                print(f"  extraction failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-    return 0 if refs or not unknown else 1
+            failures += _read(key)
+    return 1 if failures else 0
+
+
+def _read(key: str) -> int:
+    """Extract one paper. Returns 1 if it failed, so callers can count failures."""
+    try:
+        extract.extract_paper(key)
+    except Exception as exc:
+        print(f"  extraction failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print(f"  read: {len(store.load_paper(key)['claims'])} claims")
+    return 0
 
 
 def cmd_extract(args) -> int:
@@ -47,24 +62,28 @@ def cmd_extract(args) -> int:
         p["key"] for p in store.all_papers()
         if args.all or not p.get("claims")
     ]
+    failures = 0
     for key in keys:
         try:
             paper = extract.extract_paper(key, keep_reviewed=not args.replace_reviewed)
             print(f"{key}: {len(paper['claims'])} claims, {len(paper['proposed_tags'])} proposed topics")
         except Exception as exc:
             print(f"{key}: {type(exc).__name__}: {exc}", file=sys.stderr)
-    return 0
+            failures += 1
+    return 1 if failures else 0
 
 
 def cmd_retag(args) -> int:
     keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
+    failures = 0
     for key in keys:
         try:
             extract.retag_paper(key)
             print(f"retagged {key}")
         except Exception as exc:
             print(f"{key}: {type(exc).__name__}: {exc}", file=sys.stderr)
-    return 0
+            failures += 1
+    return 1 if failures else 0
 
 
 def cmd_list(args) -> int:

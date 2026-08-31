@@ -7,7 +7,9 @@ advertise a PDF, and local PDF files.
 from __future__ import annotations
 
 import re
+import os
 import shutil
+import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -173,32 +175,83 @@ def fetch_crossref(doi: str, client: httpx.Client) -> dict:
     }
 
 
+def _meta_content(html: str, *names: str) -> str | None:
+    """Read a <meta name=...> value, tolerating attribute order."""
+    for name in names:
+        for pattern in (
+            rf'name=["\']{name}["\']\s+content=["\']([^"\']+)',
+            rf'content=["\']([^"\']+)["\']\s+name=["\']{name}["\']',
+            rf'property=["\']{name}["\']\s+content=["\']([^"\']+)',
+        ):
+            match = re.search(pattern, html, re.I)
+            if match:
+                return match.group(1).strip()
+    return None
+
+
+def _head(html: str) -> str:
+    """The document head, where identity metadata lives."""
+    match = re.search(r"<head\b.*?</head>", html, re.I | re.S)
+    return match.group(0) if match else html[:20_000]
+
+
 def resolve_page(url: str, client: httpx.Client) -> Ref:
-    """Look at a landing page for an arXiv ID, a DOI, or a PDF link."""
+    """Identify a landing page from its own metadata.
+
+    Deliberately does not search the whole document for an arXiv link: a journal
+    page cites other papers in its bibliography and related-articles list, and
+    picking one of those would silently ingest and extract the wrong paper.
+    Identity comes from citation metadata, the canonical URL, or the head.
+    """
     response = client.get(url, follow_redirects=True)
     response.raise_for_status()
     if "application/pdf" in response.headers.get("content-type", ""):
         return Ref("pdf", str(response.url), url)
     html = response.text[:400_000]
-    for pattern in (
-        re.compile(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", re.I),
-        re.compile(rf"arXiv:({ARXIV_NEW}|{ARXIV_OLD})", re.I),
-    ):
-        match = pattern.search(html)
+    head = _head(html)
+
+    arxiv_id = _meta_content(html, "citation_arxiv_id", "citation_technical_report_number")
+    if arxiv_id:
+        match = re.search(rf"({ARXIV_NEW}|{ARXIV_OLD})", arxiv_id)
         if match:
             return Ref("arxiv", match.group(1), url)
-    match = re.search(r'name=["\']citation_pdf_url["\']\s+content=["\']([^"\']+)', html, re.I)
-    if match:
+
+    # The canonical link and og:url name the page itself, unlike any other href.
+    canonical = re.search(r'rel=["\']canonical["\']\s+href=["\']([^"\']+)', head, re.I)
+    for candidate in (
+        _meta_content(html, "og:url"),
+        canonical.group(1) if canonical else None,
+        str(response.url),
+    ):
+        if not candidate:
+            continue
+        match = re.search(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", candidate, re.I)
+        if match:
+            return Ref("arxiv", match.group(1), url)
+
+    doi = _meta_content(html, "citation_doi", "dc.identifier.doi")
+    if doi:
+        match = re.search(DOI_RE, doi)
+        if match:
+            return Ref("doi", normalize_doi(match.group(0)), url)
+
+    pdf_url = _meta_content(html, "citation_pdf_url")
+    if pdf_url:
         # The advertised link is often relative; resolve it against the page we
         # actually landed on, after redirects.
-        return Ref("pdf", urljoin(str(response.url), match.group(1).strip()), url)
-    match = re.search(rf'name=["\']citation_doi["\']\s+content=["\']({DOI_RE})', html, re.I)
+        return Ref("pdf", urljoin(str(response.url), pdf_url), url)
+
+    # Last resort, and only within the head, where a bibliography does not reach.
+    match = re.search(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", head, re.I)
     if match:
-        return Ref("doi", normalize_doi(match.group(1)), url)
-    match = re.search(DOI_RE, html)
+        return Ref("arxiv", match.group(1), url)
+    match = re.search(DOI_RE, head)
     if match:
         return Ref("doi", normalize_doi(match.group(0)), url)
-    raise ValueError(f"no arXiv ID, DOI, or PDF link found at {url}")
+    raise ValueError(
+        f"could not identify the paper at {url} from its own metadata; "
+        "paste the arXiv ID, the DOI, or a direct PDF link instead"
+    )
 
 
 # --- PDF text, for files with no metadata anywhere -----------------------
@@ -265,14 +318,29 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
 
 
+def source_identity(source: dict) -> tuple[str, str] | None:
+    """A comparable identity for a source, with arXiv versions collapsed.
+
+    `fetch_arxiv` already treats 2602.06941, v1 and v2 as one record, so
+    deduplication has to as well or an updated preprint becomes a second paper.
+    """
+    kind = (source or {}).get("kind") or ""
+    value = ((source or {}).get("id") or "").strip()
+    if not value:
+        return None
+    if kind == "arxiv":
+        return ("arxiv", re.sub(r"v\d+$", "", value, flags=re.I).lower())
+    return (kind, value.lower())
+
+
 def find_existing(meta: dict) -> str | None:
     """Match on arXiv ID or DOI so re-pasting a reference does not duplicate it."""
-    source_id = (meta.get("source") or {}).get("id")
-    doi = (meta.get("doi") or "").lower()
+    identity = source_identity(meta.get("source") or {})
+    doi = normalize_doi(meta.get("doi") or "").lower()
     for paper in store.all_papers():
-        if source_id and (paper.get("source") or {}).get("id") == source_id:
+        if identity and source_identity(paper.get("source") or {}) == identity:
             return paper["key"]
-        if doi and (paper.get("doi") or "").lower() == doi:
+        if doi and normalize_doi(paper.get("doi") or "").lower() == doi:
             return paper["key"]
     return None
 
@@ -325,8 +393,15 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
     config.ensure_dirs()
     if not data.startswith(b"%PDF-"):
         raise ValueError(f"{filename} is not a PDF")
-    staging = config.pdfs_dir() / f".incoming-{store.slugify(filename) or 'upload'}.pdf"
-    staging.write_bytes(data)
+    # A unique staging path per upload: the upload pool runs three at a time and
+    # two files can share a basename, in which case one job would overwrite or
+    # unlink the other's staging file mid-read.
+    handle, staged = tempfile.mkstemp(
+        dir=config.pdfs_dir(), prefix=f".incoming-{store.slugify(filename) or 'upload'}-", suffix=".pdf"
+    )
+    staging = Path(staged)
+    with os.fdopen(handle, "wb") as fh:
+        fh.write(data)
     try:
         with _client() as client:
             meta = guess_from_pdf(staging, client)

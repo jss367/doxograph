@@ -7,7 +7,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import extract, ingest, server, store
+from doxograph import __main__, config, extract, ingest, server, store
 
 
 # --- proposed topics: accepting and discarding are different -------------
@@ -189,12 +189,22 @@ def test_relative_citation_pdf_url_is_resolved(advertised, expected):
     assert ref.value == expected
 
 
-def test_arxiv_id_on_a_landing_page_still_wins_over_a_pdf_link():
-    html = '<a href="https://arxiv.org/abs/2602.06941">preprint</a>' \
-           '<meta name="citation_pdf_url" content="/local.pdf">'
-    client = FakePageClient("https://example.org/landing", html)
-    ref = ingest.resolve_page("https://example.org/landing", client)
-    assert (ref.kind, ref.value) == ("arxiv", "2602.06941")
+def test_a_cited_arxiv_link_does_not_hijack_the_page():
+    """An arXiv link in the bibliography is a different paper from this one.
+
+    This replaces an earlier test that asserted the opposite. That test encoded
+    the bug: any arXiv link anywhere in the document used to win, so pasting a
+    journal URL could ingest and extract whichever preprint it happened to cite.
+    """
+    html = (
+        '<head><meta name="citation_pdf_url" content="/local.pdf"></head>'
+        '<body><ol class="references">'
+        '<li><a href="https://arxiv.org/abs/2602.06941">some cited preprint</a></li>'
+        '</ol></body>'
+    )
+    client = FakePageClient("https://journal.example.org/article/123", html)
+    ref = ingest.resolve_page("https://journal.example.org/article/123", client)
+    assert (ref.kind, ref.value) == ("pdf", "https://journal.example.org/local.pdf")
 
 
 # --- round 2 findings -----------------------------------------------------
@@ -255,3 +265,166 @@ def test_summary_exposes_updated_so_the_client_can_version_its_cache():
     store.add_claim("doe2026study", {"text": "A holds for B."})
     later = store.summarize(store.load_paper("doe2026study"))
     assert later["updated"] >= summary["updated"]
+
+
+# --- round 3 findings -----------------------------------------------------
+
+def test_citation_arxiv_id_identifies_the_page():
+    html = ('<head><meta name="citation_arxiv_id" content="2602.06941">'
+            '<meta name="citation_pdf_url" content="/local.pdf"></head>'
+            '<body><a href="https://arxiv.org/abs/1111.22222">cited</a></body>')
+    client = FakePageClient("https://journal.example.org/a", html)
+    ref = ingest.resolve_page("https://journal.example.org/a", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2602.06941")
+
+
+def test_canonical_url_identifies_an_arxiv_page():
+    html = ('<head><link rel="canonical" href="https://arxiv.org/abs/2602.06941"></head>'
+            '<body><a href="https://arxiv.org/abs/1111.22222">cited</a></body>')
+    client = FakePageClient("https://arxiv.org/abs/2602.06941v2", html)
+    ref = ingest.resolve_page("https://arxiv.org/abs/2602.06941v2", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2602.06941")
+
+
+def test_an_arxiv_link_in_the_head_is_a_last_resort():
+    html = ('<head><meta name="og:title" content="A paper">'
+            '<link rel="alternate" href="https://arxiv.org/abs/2602.06941"></head>'
+            '<body><a href="https://arxiv.org/abs/1111.22222">cited</a></body>')
+    client = FakePageClient("https://blog.example.org/post", html)
+    ref = ingest.resolve_page("https://blog.example.org/post", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2602.06941")
+
+
+def test_citation_doi_is_preferred_over_the_pdf_link():
+    html = ('<head><meta name="citation_doi" content="10.1145/3442188.3445922">'
+            '<meta name="citation_pdf_url" content="/local.pdf"></head>')
+    client = FakePageClient("https://journal.example.org/a", html)
+    ref = ingest.resolve_page("https://journal.example.org/a", client)
+    assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
+
+
+def test_an_unidentifiable_page_says_what_to_do_instead():
+    html = '<head><title>Some page</title></head><body>no identifiers here</body>'
+    client = FakePageClient("https://example.org/page", html)
+    with pytest.raises(ValueError, match="paste the arXiv ID"):
+        ingest.resolve_page("https://example.org/page", client)
+
+
+@pytest.mark.parametrize("stored,pasted", [
+    ("2602.06941", "2602.06941v2"),
+    ("2602.06941v1", "2602.06941v2"),
+    ("2602.06941v1", "2602.06941"),
+    ("2602.06941V2", "2602.06941v2"),
+])
+def test_arxiv_versions_are_one_paper_for_deduplication(stored, pasted):
+    store.save_paper(store.new_paper(
+        "doe2026study", title="A Study",
+        source={"kind": "arxiv", "id": stored, "url": ""},
+    ))
+    meta = {"source": {"kind": "arxiv", "id": pasted}, "doi": ""}
+    assert ingest.find_existing(meta) == "doe2026study"
+
+
+def test_different_arxiv_papers_are_not_merged():
+    store.save_paper(store.new_paper(
+        "doe2026study", source={"kind": "arxiv", "id": "2602.06941v1", "url": ""}))
+    assert ingest.find_existing({"source": {"kind": "arxiv", "id": "2602.06942v1"}, "doi": ""}) is None
+
+
+def test_dois_match_regardless_of_trailing_punctuation():
+    store.save_paper(store.new_paper("doe2026study", doi="10.1038/example",
+                                     source={"kind": "doi", "id": "10.1038/example"}))
+    assert ingest.find_existing({"source": {}, "doi": "10.1038/example."}) == "doe2026study"
+
+
+def test_concurrent_uploads_of_the_same_filename_keep_their_own_pdfs(monkeypatch):
+    """Two uploads sharing a basename must not stage to the same path."""
+    import threading
+    import time
+
+    def fake_guess(path, client):
+        # Read, pause, read again: a shared staging path shows up as a mismatch.
+        first = path.read_bytes()
+        time.sleep(0.15)
+        second = path.read_bytes()
+        assert first == second, "staging file changed underneath this upload"
+        marker = first.split(b"marker:")[1].split(b"\n")[0].decode()
+        return {
+            "title": f"Paper {marker}", "authors": [f"Author {marker}"], "year": 2026,
+            "abstract": "", "venue": "", "doi": "",
+            "source": {"kind": "file", "id": f"{marker}.pdf", "url": "", "pdf_url": ""},
+        }
+
+    monkeypatch.setattr(ingest, "guess_from_pdf", fake_guess)
+
+    results, errors = {}, []
+
+    def upload(marker):
+        try:
+            data = b"%PDF-1.4\nmarker:" + marker.encode() + b"\n" + bytes([0] * 64)
+            key, _ = ingest.ingest_pdf_bytes(data, "paper.pdf")
+            results[marker] = key
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=upload, args=(m,)) for m in ("alpha", "beta")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    assert len(set(results.values())) == 2, f"uploads collided: {results}"
+    for marker, key in results.items():
+        assert marker.encode() in store.pdf_path(key).read_bytes()
+    leftovers = list(config.pdfs_dir().glob(".incoming-*"))
+    assert leftovers == [], f"staging files left behind: {leftovers}"
+
+
+# --- the CLI must report failure -----------------------------------------
+
+def test_add_returns_nonzero_when_every_reference_fails(monkeypatch, capsys):
+    def boom(ref, client=None):
+        raise RuntimeError("arXiv is down")
+
+    monkeypatch.setattr(ingest, "ingest_ref", boom)
+    args = __main__.build_parser().parse_args(["add", "--no-extract", "2602.06941"])
+    assert args.func(args) == 1
+    assert "arXiv is down" in capsys.readouterr().err
+
+
+def test_add_returns_nonzero_for_an_unreadable_reference(monkeypatch, capsys):
+    args = __main__.build_parser().parse_args(["add", "--no-extract", "definitely-not-a-reference"])
+    assert args.func(args) == 1
+    assert "could not read reference" in capsys.readouterr().err
+
+
+def test_add_returns_zero_when_the_reference_lands(monkeypatch):
+    monkeypatch.setattr(ingest, "ingest_ref", lambda ref, client=None: ("doe2026study", True))
+    args = __main__.build_parser().parse_args(["add", "--no-extract", "2602.06941"])
+    assert args.func(args) == 0
+
+
+def test_add_returns_nonzero_when_extraction_fails(monkeypatch, capsys):
+    monkeypatch.setattr(ingest, "ingest_ref", lambda ref, client=None: ("doe2026study", True))
+    store.save_paper(store.new_paper("doe2026study"))
+
+    def boom(key, keep_reviewed=True):
+        raise RuntimeError("model refused")
+
+    monkeypatch.setattr(extract, "extract_paper", boom)
+    args = __main__.build_parser().parse_args(["add", "2602.06941"])
+    assert args.func(args) == 1
+    assert "extraction failed" in capsys.readouterr().err
+
+
+def test_extract_returns_nonzero_when_a_paper_fails(monkeypatch, capsys):
+    store.save_paper(store.new_paper("doe2026study"))
+
+    def boom(key, keep_reviewed=True):
+        raise RuntimeError("no PDF")
+
+    monkeypatch.setattr(extract, "extract_paper", boom)
+    args = __main__.build_parser().parse_args(["extract", "doe2026study"])
+    assert args.func(args) == 1
+    assert "no PDF" in capsys.readouterr().err

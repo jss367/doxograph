@@ -56,6 +56,15 @@ doxograph export --out notes.html     # one self-contained HTML file
 doxograph bibtex --out refs.bib
 ```
 
+`add`, `extract`, and `retag` exit nonzero if any reference or paper they were
+asked to handle failed, so a script can tell a partial run from a clean one.
+
+A landing-page URL is identified from the page's own metadata (`citation_arxiv_id`,
+the canonical link, `citation_doi`, `citation_pdf_url`). An arXiv link in a
+bibliography is not treated as the page's identity, since that would ingest a
+cited paper instead of the one you pasted. When nothing identifies the page,
+paste the arXiv ID, the DOI, or a direct PDF link.
+
 In the web app: drop PDFs anywhere on the page, or paste references into the
 box. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
 reviewed, `Escape` cancels. Clicking a topic filters to it.
