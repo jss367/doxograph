@@ -24,6 +24,28 @@ function blankClaim(paper) {
   };
 }
 
+// Claims with a save in flight. Their form is read-only until the request
+// settles: text typed after Save was clicked is not in the request and would be
+// thrown away by the redraw that follows it, and a second click would post the
+// same new claim twice under two ids. Tracked by claim id rather than on the
+// element, so a redraw during the request reapplies it.
+const savingClaims = new Set();
+
+function markSaving(id, busy) {
+  if (busy) savingClaims.add(id); else savingClaims.delete(id);
+  applySavingState();
+}
+
+function applySavingState() {
+  document.querySelectorAll('form[data-form]').forEach((form) => {
+    const busy = savingClaims.has(form.dataset.form);
+    form.classList.toggle('saving', busy);
+    form.querySelectorAll('input, textarea, select, button').forEach((field) => {
+      field.disabled = busy;
+    });
+  });
+}
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -302,6 +324,7 @@ function renderContent() {
         : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
     }
     $('content').innerHTML = html;
+  applySavingState();
     if (main) main.scrollTop = scrollTop;
     return;
   }
@@ -331,6 +354,7 @@ function renderContent() {
     html += rows.map(card).join('');
   }
   $('content').innerHTML = html;
+  applySavingState();
   if (main) main.scrollTop = scrollTop;
 }
 
@@ -442,9 +466,18 @@ $('content').addEventListener('submit', async (event) => {
   if (!form) return;
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
+  if (savingClaims.has(wrap.dataset.claim)) return;   // already saving
   const patch = readForm(form);
   V.error = null;
+  markSaving(wrap.dataset.claim, true);
+  try {
+    await saveClaim(wrap, patch);
+  } finally {
+    markSaving(wrap.dataset.claim, false);
+  }
+});
 
+async function saveClaim(wrap, patch) {
   if (wrap.dataset.claim === NEW_CLAIM_ID) {
     const paper = V.newClaim.paper;
     // Keep what was typed on the draft, so a failed save can be retried
@@ -475,9 +508,9 @@ $('content').addEventListener('submit', async (event) => {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
     delete V.drafts[wrap.dataset.claim];
   } catch (error) {
-    // The list stayed interactive during the request, so the open editor may
-    // now belong to a different claim, holding text that exists only in the
-    // DOM. Read it before reopening this one redraws it away.
+    // Only this form was frozen during the request, so the open editor may now
+    // belong to a different claim, holding text that exists only in the DOM.
+    // Read it before reopening this one redraws it away.
     captureOpenEditor();
     // Keep what was typed so the save can be retried; the server row is stale.
     V.drafts[wrap.dataset.claim] = { ...V.drafts[wrap.dataset.claim], ...patch };
@@ -485,7 +518,7 @@ $('content').addEventListener('submit', async (event) => {
     V.editing = wrap.dataset.claim;
     renderContent();
   }
-});
+}
 
 $('content').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');

@@ -360,6 +360,11 @@ def retag_paper(key: str) -> dict:
         f"- {c['id']}: {c.get('text', '')}" + (f" [evidence: {c['evidence']}]" if c.get("evidence") else "")
         for c in claims
     )
+    # One read, feeding both the prompt and the snapshot the merge compares
+    # against, so a tag added or renamed between the two cannot be mistaken for
+    # one the model invented.
+    prompt_vocabulary = store.load_tags()
+    prompt_tags = {t["name"] for t in prompt_vocabulary}
     api = client()
     response = api.messages.create(
         model=config.MODEL,
@@ -376,7 +381,7 @@ def retag_paper(key: str) -> dict:
         messages=[{
             "role": "user",
             "content": (
-                f"{vocabulary_block()}\n\n"
+                f"{vocabulary_block(prompt_vocabulary)}\n\n"
                 f"Claims from \"{paper.get('title') or key}\":\n{listing}\n\n"
                 "Return the tags for each claim id."
             ),
@@ -397,9 +402,14 @@ def retag_paper(key: str) -> dict:
         paper = store.load_paper(key)
         for claim in paper.get("claims", []):
             assignment = by_id.get(claim["id"])
-            if assignment:
-                claim["tags"] = sorted(
-                    {store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known}
-                )
+            if not assignment:
+                continue
+            assigned = {store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known}
+            # A tag on the claim now that was not in the vocabulary the model
+            # saw arrived during the call — a rename rewriting the claim, or a
+            # person tagging it — and the model had no chance to keep it. The
+            # assignment is not evidence against it.
+            arrived_during_call = set(claim.get("tags", [])) - prompt_tags
+            claim["tags"] = sorted(assigned | (arrived_during_call & known))
         store.save_paper(paper)
     return paper

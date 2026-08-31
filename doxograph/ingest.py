@@ -7,12 +7,15 @@ advertise a PDF, and local PDF files.
 from __future__ import annotations
 
 import re
+import io
 import os
+import shutil
 import tempfile
 import html as html_module
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 from urllib.parse import urljoin
 
 import httpx
@@ -560,25 +563,42 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             client.close()
 
 
-def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
-    """Add a dropped PDF. Returns (key, created)."""
+def stage_upload(source: BinaryIO, filename: str) -> Path:
+    """Copy an incoming file to its own staging path, in chunks.
+
+    A unique staging path per upload: the upload pool runs three at a time and
+    two files can share a basename, in which case one job would overwrite or
+    unlink the other's staging file mid-read.
+    """
     config.ensure_dirs()
-    if not data.startswith(b"%PDF-"):
-        raise ValueError(f"{filename} is not a PDF")
-    # A unique staging path per upload: the upload pool runs three at a time and
-    # two files can share a basename, in which case one job would overwrite or
-    # unlink the other's staging file mid-read.
     handle, staged = tempfile.mkstemp(
         dir=config.pdfs_dir(), prefix=f".incoming-{store.slugify(filename) or 'upload'}-", suffix=".pdf"
     )
     staging = Path(staged)
     try:
         with os.fdopen(handle, "wb") as fh:
-            fh.write(data)
+            shutil.copyfileobj(source, fh, 65536)
     except BaseException:
         staging.unlink(missing_ok=True)
         raise
+    return staging
+
+
+def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
+    """Add a dropped PDF held in memory. Returns (key, created)."""
+    return ingest_staged_pdf(stage_upload(io.BytesIO(data), filename), filename)
+
+
+def ingest_staged_pdf(staging: Path, filename: str) -> tuple[str, bool]:
+    """Add an upload already written to `staging`, and take ownership of it.
+
+    The file is removed on every path out, including the failures, so a
+    rejected or duplicate upload leaves nothing behind in the PDF directory.
+    """
     try:
+        with staging.open("rb") as fh:
+            if fh.read(5) != b"%PDF-":
+                raise ValueError(f"{filename} is not a PDF")
         with _client() as client:
             meta = guess_from_pdf(staging, client, display_name=filename)
             with store.claim_lock():

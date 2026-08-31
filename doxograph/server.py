@@ -85,10 +85,10 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
         _prune_jobs()
 
 
-def _run_upload(job: dict, data: bytes, filename: str, do_extract: bool) -> None:
+def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> None:
     try:
         _set(job, state="fetching")
-        key, created = ingest.ingest_pdf_bytes(data, filename)
+        key, created = ingest.ingest_staged_pdf(staged, filename)
         _set(job, key=key, label=key, detail="" if created else "already in the corpus")
         if do_extract and store.needs_extraction(key):
             _set(job, state="reading")
@@ -208,11 +208,22 @@ def api_ingest(body: IngestBody) -> dict:
 
 @app.post("/api/upload")
 async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
+    """Stage every upload on disk, then hand the worker its path.
+
+    Reading each file into memory kept the whole batch resident: three workers
+    run at a time and every queued job held its own `bytes` until its turn came,
+    so a drop of ten large PDFs cost ten PDFs of memory rather than three.
+    """
     queued = 0
     for upload in files:
-        data = await upload.read()
-        job = _new_job(upload.filename or "upload.pdf")
-        _pool.submit(_run_upload, job, data, upload.filename or "upload.pdf", extract_now)
+        name = upload.filename or "upload.pdf"
+        staged = ingest.stage_upload(upload.file, name)
+        job = _new_job(name)
+        try:
+            _pool.submit(_run_upload, job, staged, name, extract_now)
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            raise
         queued += 1
     return {"queued": queued}
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 
 import pytest
@@ -2229,3 +2230,91 @@ def test_a_download_is_not_read_back_into_memory(monkeypatch):
         assert read_whole == [], "the staged download was read back in full"
     finally:
         staged.unlink(missing_ok=True)
+
+
+# --- round 26 findings ----------------------------------------------------
+
+def test_a_rename_during_a_retag_is_not_undone(monkeypatch):
+    """The rename rewrites the claim; the stale assignment must not revert it."""
+    store.add_tag("alpha")
+    store.add_tag("old-name")
+    paper = store.new_paper("doe2026study", title="A Study")
+    paper["claim_seq"] = 1
+    paper["claims"] = [{"id": "doe2026study-c1", "text": "A finding.", "kind": "finding",
+                        "strength": "aside", "tags": ["alpha", "old-name"], "evidence": "",
+                        "quote": "", "locator": "", "ledger_links": [], "reviewed": False}]
+    store.save_paper(paper)
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            # The rename lands while the model is thinking.
+            store.rename_tag("old-name", "new-name")
+            payload = {"assignments": [{"id": "doe2026study-c1", "tags": ["alpha", "old-name"]}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    result = extract.retag_paper("doe2026study")
+
+    assert result["claims"][0]["tags"] == ["alpha", "new-name"], "the rename was undone"
+
+
+def test_a_tag_deleted_during_a_retag_stays_off(monkeypatch):
+    """The other half of the same rule: a vanished tag is not written back."""
+    store.add_tag("alpha")
+    store.add_tag("doomed")
+    paper = store.new_paper("doe2026study", title="A Study")
+    paper["claims"] = [{"id": "doe2026study-c1", "text": "A finding.", "kind": "finding",
+                        "strength": "aside", "tags": ["alpha", "doomed"], "evidence": "",
+                        "quote": "", "locator": "", "ledger_links": [], "reviewed": False}]
+    store.save_paper(paper)
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            store.delete_tag("doomed")
+            payload = {"assignments": [{"id": "doe2026study-c1", "tags": ["alpha", "doomed"]}]}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    result = extract.retag_paper("doe2026study")
+    assert result["claims"][0]["tags"] == ["alpha"]
+
+
+def test_an_upload_is_staged_on_disk_not_held_in_memory(monkeypatch):
+    """The worker gets a path; the batch no longer costs one buffer per file."""
+    handed = []
+    monkeypatch.setattr(server._pool, "submit",
+                        lambda fn, job, staged, name, extract_now: handed.append((staged, name)))
+
+    body = b"%PDF-1.4\n" + b"x" * 200_000
+    with TestClient(server.app) as client:
+        response = client.post("/api/upload?extract_now=false",
+                               files={"files": ("big.pdf", body, "application/pdf")})
+
+    assert response.json() == {"queued": 1}
+    staged, name = handed[0]
+    assert isinstance(staged, Path), f"the worker was handed {type(staged).__name__}"
+    try:
+        assert staged.read_bytes() == body
+        assert name == "big.pdf"
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def test_a_rejected_upload_leaves_no_staging_file(monkeypatch):
+    """`ingest_staged_pdf` owns the file it is given, on every path out."""
+    staged = ingest.stage_upload(io.BytesIO(b"<html>not a pdf</html>"), "fake.pdf")
+    assert staged.exists()
+
+    with pytest.raises(ValueError, match="is not a PDF"):
+        ingest.ingest_staged_pdf(staged, "fake.pdf")
+
+    assert not staged.exists()
+    assert list(config.pdfs_dir().glob(".incoming-*")) == []
