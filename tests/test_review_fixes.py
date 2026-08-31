@@ -1839,3 +1839,32 @@ def test_re_extraction_on_a_wholly_unreviewed_legacy_paper():
     paper = extract.merge_extraction("doe2026study", payload)
     ids = [c["id"] for c in paper["claims"]]
     assert ids == ["doe2026study-c17", "doe2026study-c18", "doe2026study-c19"], ids
+
+
+# --- round 19: removal detected after the PDF landed -----------------------
+
+def test_removal_after_a_successful_recovery_is_reported(monkeypatch):
+    """A KeyError on the post-publication reload means the paper went away."""
+    recovery_corpus(monkeypatch)
+
+    def lands_then_vanishes(url, key, client):
+        store.pdf_path(key).write_bytes(b"%PDF-1.4\n")
+        store.paper_path(key).unlink()      # removed between publish and reload
+        return True
+
+    monkeypatch.setattr(ingest, "download_pdf", lands_then_vanishes)
+    with pytest.raises(ingest.PaperRemoved):
+        ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+
+
+def test_a_failed_retry_is_still_tolerated(monkeypatch):
+    """Only removal is fatal; a download that simply fails leaves the paper."""
+    recovery_corpus(monkeypatch)
+
+    def fails(url, key, client):
+        raise httpx.ConnectError("still down")
+
+    monkeypatch.setattr(ingest, "download_pdf", fails)
+    key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    assert (key, created) == ("doe2026study", False)
+    assert store.load_paper("doe2026study")["notes"] == "PDF download failed: 503"

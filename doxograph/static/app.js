@@ -349,15 +349,35 @@ function cancelEdit() {
 // redrawing. Field edits live only in the DOM until submit, so any rebuild that
 // does not read them back first discards them. The exceptions are deliberate —
 // `cancelEdit` and a successful save drop the draft on purpose.
+function closeEditorsNotBelongingTo(paper) {
+  // An editor for a claim on another paper would keep `V.editing` set while
+  // being invisible, which suppresses redraws; a new claim would render under
+  // the wrong header and save to the paper it was started on.
+  if (V.editing && V.editing !== NEW_CLAIM_ID) {
+    const row = S.claims.find((c) => c.id === V.editing);
+    if (row && row.paper !== paper) V.editing = null;
+  }
+  if (V.newClaim && V.newClaim.paper !== paper) {
+    V.newClaim = null;
+    if (V.editing === NEW_CLAIM_ID) V.editing = null;
+  }
+}
+
 function captureOpenEditor() {
-  const form = document.querySelector('form[data-form]');
+  // Keyed off `V.editing` rather than whatever form is in the DOM. The DOM lags
+  // the state — `renderAll` captures before redrawing, so a form for an editor
+  // that was just closed is still present — and capturing from it resurrected a
+  // cleared new-claim draft without its `paper`, which then saved to the wrong
+  // paper or rendered under the wrong header.
+  if (!V.editing) return;
+  const form = document.querySelector(`form[data-form="${V.editing}"]`);
   if (!form) return;
-  const wrap = form.closest('[data-claim]');
   const patch = readForm(form);
-  if (wrap.dataset.claim === NEW_CLAIM_ID) {
+  if (V.editing === NEW_CLAIM_ID) {
+    if (!V.newClaim) return;   // never recreate a draft that was discarded
     V.newClaim = { ...V.newClaim, ...patch };
   } else {
-    V.drafts[wrap.dataset.claim] = { ...V.drafts[wrap.dataset.claim], ...patch };
+    V.drafts[V.editing] = { ...V.drafts[V.editing], ...patch };
   }
 }
 
@@ -465,6 +485,8 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'open-paper') {
+      captureOpenEditor();
+      closeEditorsNotBelongingTo(paper);
       V.paper = paper; V.tag = null; V.selectedId = null;
       renderAll();
       return;
@@ -509,7 +531,21 @@ $('content').addEventListener('click', async (event) => {
       const p = S.papers.find((x) => x.key === paper);
       if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
       await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
+      // Clear the editor before refreshing. `render()` skips the content while
+      // `V.editing` is set, so the deleted paper's header and form would stay
+      // on screen and saving would only 404 and redraw the same stale editor.
+      S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
+      if (V.editing && V.editing !== NEW_CLAIM_ID) {
+        const row = S.claims.find((c) => c.id === V.editing);
+        if (!row || row.paper === paper) V.editing = null;
+      }
+      if (V.newClaim && V.newClaim.paper === paper) {
+        V.newClaim = null;
+        if (V.editing === NEW_CLAIM_ID) V.editing = null;
+      }
       V.paper = null;
+      V.selectedId = null;
+      V.error = null;
       await refresh();
       return;
     }

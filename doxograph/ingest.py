@@ -427,15 +427,25 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             pdf_url = (meta.get("source") or {}).get("pdf_url")
             if pdf_url and not store.pdf_path(existing).exists():
                 try:
-                    if not download_pdf(pdf_url, existing, client):
-                        raise PaperRemoved(
-                            f"{existing} was removed while its PDF was being recovered")
+                    published = download_pdf(pdf_url, existing, client)
+                except (httpx.HTTPError, ValueError):
+                    published = None   # a failed retry is fine; the paper is here
+                if published is False:
+                    raise PaperRemoved(
+                        f"{existing} was removed while its PDF was being recovered")
+                if published:
                     with store.paper_lock(existing):
-                        paper = store.load_paper(existing)
+                        try:
+                            paper = store.load_paper(existing)
+                        except KeyError:
+                            # Removed after the PDF landed. A swallowed KeyError
+                            # here would report a successful ingest for a paper
+                            # that no longer exists.
+                            raise PaperRemoved(
+                                f"{existing} was removed while its PDF was being recovered"
+                            ) from None
                         paper["notes"] = ""
                         store.save_paper(paper)
-                except (httpx.HTTPError, ValueError, KeyError):
-                    pass   # a failed retry is fine; the paper is already here
             return existing, False
 
         with store.claim_lock():
