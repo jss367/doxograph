@@ -2001,3 +2001,57 @@ def test_without_a_snapshot_nothing_is_dropped():
     store.save_paper(store.new_paper("doe2026study"))
     paper = extract.merge_extraction("doe2026study", extraction_payload(["whatever"]))
     assert paper["claims"][0]["tags"] == ["whatever"]
+
+
+# --- round 22: the prompt and its snapshot must come from one read ---------
+
+def test_the_prompt_and_the_snapshot_come_from_one_vocabulary_read(monkeypatch):
+    """Two reads let a tag added between them reach the prompt but not the snapshot.
+
+    Asserted by counting: the vocabulary is read exactly once before the prompt
+    is handed to the model, so the two cannot disagree.
+    """
+    store.add_tag("alpha")
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+
+    reads = []
+    real_load_tags = store.load_tags
+    monkeypatch.setattr(store, "load_tags",
+                        lambda: (reads.append(1), real_load_tags())[1])
+
+    seen = {}
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            seen["prompt"] = kwargs["messages"][0]["content"][1]["text"]
+            seen["reads_before_prompt"] = len(reads)
+            payload = {"summary": "", "relevance": "", "proposed_tags": [], "claims": []}
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+    extract.extract_paper("doe2026study")
+
+    assert "- alpha:" in seen["prompt"], "the vocabulary did not reach the prompt"
+    assert seen["reads_before_prompt"] == 1, (
+        f"the vocabulary was read {seen['reads_before_prompt']} times before the prompt; "
+        "a tag arriving between reads would be in the prompt but not the snapshot")
+
+
+def test_a_tag_added_just_before_the_call_is_still_recognised():
+    """The regression the single read prevents, asserted at the merge."""
+    store.add_tag("alpha")
+    store.add_tag("late-arrival")
+    store.save_paper(store.new_paper("doe2026study"))
+    prompt_tags = set(store.tag_names())      # both names were shown
+
+    store.delete_tag("late-arrival")          # deleted while the call ran
+
+    paper = extract.merge_extraction(
+        "doe2026study", extraction_payload(["alpha", "late-arrival"]), prompt_tags=prompt_tags)
+    assert paper["claims"][0]["tags"] == ["alpha"]
+    assert [t["name"] for t in paper["proposed_tags"]] == []

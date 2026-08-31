@@ -162,8 +162,8 @@ def client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
-def vocabulary_block() -> str:
-    tags = store.load_tags()
+def vocabulary_block(tags: list[dict] | None = None) -> str:
+    tags = store.load_tags() if tags is None else tags
     if not tags:
         return (
             "The tag vocabulary is empty; this is the first paper. Propose the tags you need, "
@@ -209,13 +209,13 @@ def _pdf_block(key: str) -> dict:
     }
 
 
-def _instructions(paper: dict) -> str:
+def _instructions(paper: dict, tags: list[dict] | None = None) -> str:
     return f"""\
 My research:
 
 {context_block()}
 
-{vocabulary_block()}
+{vocabulary_block(tags)}
 
 {ledger_block()}
 
@@ -230,10 +230,12 @@ Extract its claims."""
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
     """Run extraction and merge the result into the stored paper."""
     paper = store.load_paper(key)
-    # The vocabulary the model is about to be shown. Recorded so the merge can
-    # tell a name the model invented from one that was deleted or renamed while
-    # the call was in flight.
-    prompt_tags = set(store.tag_names())
+    # One read of the vocabulary, used both to build the prompt and to record
+    # what the model was shown. Reading it twice would let a tag added between
+    # the two reads reach the prompt without reaching the snapshot, and the merge
+    # would then be unable to tell it from a name the model invented.
+    tags = store.load_tags()
+    prompt_tags = {t["name"] for t in tags}
     api = client()
     response = api.messages.create(
         model=config.MODEL,
@@ -246,7 +248,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         },
         messages=[{
             "role": "user",
-            "content": [_pdf_block(key), {"type": "text", "text": _instructions(paper)}],
+            "content": [_pdf_block(key), {"type": "text", "text": _instructions(paper, tags)}],
         }],
     )
     if response.stop_reason == "refusal":

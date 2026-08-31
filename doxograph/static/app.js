@@ -381,6 +381,21 @@ function captureOpenEditor() {
   }
 }
 
+async function toggleReviewed(row) {
+  // Shared by the review button — including the duplicate cards a claim gets in
+  // grouped mode — and the `r` key, so both keep an open editor in step.
+  const reviewed = !row.reviewed;
+  if (V.editing === row.id) captureOpenEditor();
+  await patchClaim(row.paper, row.id, { reviewed });
+  if (V.editing === row.id) {
+    // Capture again: the request can take long enough for the user to go back
+    // to the form and type, and that typing is only in the DOM.
+    captureOpenEditor();
+    V.drafts[row.id] = { ...V.drafts[row.id], reviewed };
+    renderContent();
+  }
+}
+
 async function patchClaim(paper, claim, patch) {
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
@@ -473,17 +488,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'review') {
-      const row = S.claims.find((c) => c.id === claim);
-      const reviewed = !row.reviewed;
-      // In grouped mode this button also appears on duplicate cards of a claim
-      // whose editor is open elsewhere. `render()` leaves that editor alone, so
-      // its checkbox would keep the old value and saving would undo the toggle.
-      if (V.editing === claim) captureOpenEditor();
-      await patchClaim(paper, claim, { reviewed });
-      if (V.editing === claim) {
-        V.drafts[claim] = { ...V.drafts[claim], reviewed };
-        renderContent();
-      }
+      await toggleReviewed(S.claims.find((c) => c.id === claim));
       return;
     }
     if (act === 'del') {
@@ -699,7 +704,7 @@ document.addEventListener('keydown', async (event) => {
     if (row) { captureOpenEditor(); V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
     const row = selectedRow(rows);
-    if (row) await patchClaim(row.paper, row.id, { reviewed: !row.reviewed });
+    if (row) await toggleReviewed(row);
   } else if (event.key === 'Escape') {
     cancelEdit();
   }
