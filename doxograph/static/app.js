@@ -489,8 +489,11 @@ async function saveClaim(wrap, patch) {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
       });
     } catch (error) {
+      // As on the success path: an existing claim's editor may have been
+      // opened while the POST ran, and its text is only in the DOM.
+      captureOpenEditor();
       V.error = `Could not save the claim: ${error.message}`;
-      renderContent();          // editor stays open, still holding the text
+      renderContent();          // the draft is still held, ready to retry
       return;
     }
     // The user may have opened an existing claim's editor while the POST was
@@ -671,10 +674,14 @@ $('content').addEventListener('click', async (event) => {
 $('papers').addEventListener('click', (event) => {
   const li = event.target.closest('[data-paper]');
   if (!li) return;
+  const next = li.dataset.paper || null;
+  // Clicking the paper already selected is not navigation. It used to run the
+  // whole abandon path anyway, which threw away a new claim being written.
+  if (next === V.paper) return;
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
   // that one was never persisted and belongs to the paper being left.
   captureOpenEditor();
-  V.paper = li.dataset.paper || null;
+  V.paper = next;
   V.selectedId = null;
   V.editing = null;
   V.newClaim = null;
