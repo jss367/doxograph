@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 import os
-import shutil
 import tempfile
 import threading
 import html as html_module
@@ -469,11 +468,19 @@ def ingest_pdf_bytes(data: bytes, filename: str) -> tuple[str, bool]:
             with _claim_lock:
                 existing = find_existing(meta)
                 if existing and (meta.get("source") or {}).get("kind") != "file":
-                    if not store.pdf_path(existing).exists():
-                        shutil.copyfile(staging, store.pdf_path(existing))
-                    return existing, False
-                key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]), **meta)
-            shutil.copyfile(staging, store.pdf_path(key))
-            return key, True
+                    key, created = existing, False
+                    attach = not store.pdf_path(existing).exists()
+                else:
+                    key = store.reserve_key(
+                        store.citekey(meta["title"], meta["authors"], meta["year"]), **meta
+                    )
+                    created, attach = True, True
+
+            # Publish through the same locked, atomic helper the downloads use,
+            # so a concurrent Remove cannot be followed by an orphan PDF and a
+            # half-copied file is never visible as the paper's PDF.
+            if attach:
+                publish_pdf(key, staging)
+            return key, created
     finally:
         staging.unlink(missing_ok=True)

@@ -937,3 +937,49 @@ def test_tilde_in_a_url_is_escaped():
         source={"kind": "url", "id": "u", "url": "https://ex.org/~jane/p.pdf"},
     ))
     assert r"\textasciitilde{}jane" in bib.render()
+
+
+# --- round 7 findings -----------------------------------------------------
+
+def test_uploading_to_a_removed_paper_leaves_no_orphan_pdf(monkeypatch):
+    """An upload publishes through the locked helper, like a download does."""
+    monkeypatch.setattr(ingest, "pdf_first_page_text", lambda path, pages=2: "no identifiers")
+
+    real_publish = ingest.publish_pdf
+
+    def publish_after_removal(key, staging):
+        # Stand in for Remove landing between the reservation and the copy.
+        store.delete_paper(key)
+        return real_publish(key, staging)
+
+    monkeypatch.setattr(ingest, "publish_pdf", publish_after_removal)
+    key, _ = ingest.ingest_pdf_bytes(b"%PDF-1.4\n" + bytes(64), "paper.pdf")
+
+    assert not store.pdf_path(key).exists(), "an orphan PDF was left for a removed paper"
+    assert list(config.pdfs_dir().glob(".incoming-*")) == []
+    assert list(config.pdfs_dir().glob(".download-*")) == []
+
+
+def test_a_normal_upload_still_attaches_its_pdf(monkeypatch):
+    monkeypatch.setattr(ingest, "pdf_first_page_text", lambda path, pages=2: "no identifiers")
+    key, created = ingest.ingest_pdf_bytes(b"%PDF-1.4\nbody", "paper.pdf")
+    assert created
+    assert store.pdf_path(key).read_bytes() == b"%PDF-1.4\nbody"
+    assert list(config.pdfs_dir().glob(".incoming-*")) == []
+
+
+def test_uploading_a_pdf_for_a_record_that_lacks_one_attaches_it(monkeypatch):
+    """The existing-paper branch publishes through the helper too."""
+    store.save_paper(store.new_paper(
+        "doe2026study", title="A Study",
+        source={"kind": "arxiv", "id": "2602.06941", "url": ""},
+    ))
+    monkeypatch.setattr(ingest, "guess_from_pdf", lambda path, client, display_name=None: {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": ""},
+    })
+    key, created = ingest.ingest_pdf_bytes(b"%PDF-1.4\nbody", "paper.pdf")
+    assert (key, created) == ("doe2026study", False)
+    assert store.pdf_path("doe2026study").read_bytes() == b"%PDF-1.4\nbody"
+    assert len(store.paper_keys()) == 1

@@ -9,7 +9,7 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
 // leave a blank claim behind on the server.
 const NEW_CLAIM_ID = '__new__';
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false,
-            group: true, editing: null, selectedId: null, newClaim: null };
+            group: true, editing: null, selectedId: null, newClaim: null, error: null };
 
 function blankClaim(paper) {
   return {
@@ -240,6 +240,7 @@ function renderContent() {
   const rows = visibleClaims();
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
+  if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
   if (V.newClaim && V.editing === NEW_CLAIM_ID) html += editForm(V.newClaim);
 
   if (!rows.length) {
@@ -295,6 +296,7 @@ function renderJobs() {
 function cancelEdit() {
   V.editing = null;
   V.newClaim = null;   // nothing was persisted, so there is nothing to clean up
+  V.error = null;
   renderContent();
 }
 
@@ -333,18 +335,37 @@ $('content').addEventListener('submit', async (event) => {
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
   const patch = readForm(form);
-  V.editing = null;
+  V.error = null;
+
   if (wrap.dataset.claim === NEW_CLAIM_ID) {
     const paper = V.newClaim.paper;
+    // Keep what was typed on the draft, so a failed save can be retried
+    // instead of losing the text.
+    V.newClaim = { ...V.newClaim, ...patch };
+    if (!patch.text) { V.editing = null; V.newClaim = null; renderContent(); return; }
+    try {
+      await api(`/api/papers/${encodeURIComponent(paper)}/claims`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+      });
+    } catch (error) {
+      V.error = `Could not save the claim: ${error.message}`;
+      renderContent();          // editor stays open, still holding the text
+      return;
+    }
+    V.editing = null;
     V.newClaim = null;
-    if (!patch.text) { renderContent(); return; }   // an empty claim is not worth saving
-    await api(`/api/papers/${encodeURIComponent(paper)}/claims`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-    });
     await refresh();
     return;
   }
-  await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
+
+  V.editing = null;
+  try {
+    await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
+  } catch (error) {
+    V.error = `Could not save the claim: ${error.message}`;
+    V.editing = wrap.dataset.claim;
+    renderContent();
+  }
 });
 
 $('content').addEventListener('click', async (event) => {
