@@ -271,6 +271,7 @@ def new_paper(key: str, **fields) -> dict:
         "status": "fetched",
         "extraction": None,
         "proposed_tags": [],
+        "claim_seq": 0,
         "claims": [],
         "notes": "",
     }
@@ -279,11 +280,25 @@ def new_paper(key: str, **fields) -> dict:
 
 
 def next_claim_id(paper: dict) -> str:
-    used = {c.get("id", "") for c in paper.get("claims", [])}
-    n = len(used) + 1
-    while f"{paper['key']}-c{n}" in used:
-        n += 1
-    return f"{paper['key']}-c{n}"
+    """Allocate a claim id that has never been used on this paper.
+
+    Counting the current claims recycles the id of a deleted one, and ids travel
+    in flight: a retag response or a PATCH issued before the deletion is matched
+    by id alone and would land on the unrelated replacement. The high-water mark
+    is stored on the paper, and derived from existing ids for corpora written
+    before it existed.
+    """
+    seq = paper.get("claim_seq")
+    if seq is None:
+        used = []
+        for claim in paper.get("claims", []):
+            match = re.search(r"-c(\d+)$", claim.get("id", ""))
+            if match:
+                used.append(int(match.group(1)))
+        seq = max(used, default=0)
+    seq += 1
+    paper["claim_seq"] = seq
+    return f"{paper['key']}-c{seq}"
 
 
 def new_claim(paper: dict, **fields) -> dict:

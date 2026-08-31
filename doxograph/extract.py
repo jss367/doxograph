@@ -284,6 +284,9 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
         working["claims"] = kept + fresh
 
     paper["claims"] = kept + fresh
+    # `working` is where the ids were allocated; carry the high-water mark back
+    # so a later hand-written claim cannot reuse one of them.
+    paper["claim_seq"] = working.get("claim_seq", paper.get("claim_seq", 0))
     paper["summary"] = (payload.get("summary") or paper.get("summary") or "").strip()
     paper["relevance"] = (payload.get("relevance") or paper.get("relevance") or "").strip()
 

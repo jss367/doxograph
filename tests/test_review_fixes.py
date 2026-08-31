@@ -1484,3 +1484,76 @@ def test_a_metadata_free_upload_named_with_a_brace_round_trips(monkeypatch):
     assert r"\}" in text
     structural = delimiter_braces(text)
     assert structural.count("{") == structural.count("}"), text
+
+
+# --- round 13 findings ----------------------------------------------------
+
+def test_a_deleted_claims_id_is_never_reused():
+    """A recycled id lets an in-flight retag or PATCH land on the replacement."""
+    store.save_paper(store.new_paper("doe2026study"))
+    first = store.add_claim("doe2026study", {"text": "One."})
+    second = store.add_claim("doe2026study", {"text": "Two."})
+    assert (first["id"], second["id"]) == ("doe2026study-c1", "doe2026study-c2")
+
+    store.delete_claim("doe2026study", second["id"])       # the highest one
+    third = store.add_claim("doe2026study", {"text": "Three."})
+    assert third["id"] == "doe2026study-c3", "the deleted id was recycled"
+
+
+def test_ids_stay_unique_after_deleting_everything():
+    store.save_paper(store.new_paper("doe2026study"))
+    seen = set()
+    for _ in range(5):
+        claim = store.add_claim("doe2026study", {"text": "X."})
+        seen.add(claim["id"])
+        store.delete_claim("doe2026study", claim["id"])
+    assert len(seen) == 5, seen
+    assert store.load_paper("doe2026study")["claim_seq"] == 5
+
+
+def test_the_counter_is_derived_for_a_corpus_written_before_it_existed():
+    """An older paper file has claims but no `claim_seq`."""
+    paper = store.new_paper("doe2026study")
+    paper["claims"] = [
+        {"id": "doe2026study-c1", "text": "One.", "tags": [], "ledger_links": []},
+        {"id": "doe2026study-c7", "text": "Seven.", "tags": [], "ledger_links": []},
+    ]
+    del paper["claim_seq"]
+    store.save_paper(paper)
+
+    claim = store.add_claim("doe2026study", {"text": "Next."})
+    assert claim["id"] == "doe2026study-c8", "the counter did not continue past the highest id"
+
+
+def test_extraction_does_not_reuse_ids_across_runs():
+    store.save_paper(store.new_paper("doe2026study"))
+    payload = {
+        "summary": "", "relevance": "", "proposed_tags": [],
+        "claims": [{"text": f"Claim {n}.", "kind": "finding", "strength": "aside", "tags": [],
+                    "evidence": "", "quote": "", "locator": "", "ledger_links": []}
+                   for n in range(3)],
+    }
+    first = extract.merge_extraction("doe2026study", payload)
+    first_ids = [c["id"] for c in first["claims"]]
+
+    # Keep one, then re-extract: the fresh claims must not take retired ids.
+    store.update_claim("doe2026study", first_ids[0], {"reviewed": True})
+    second = extract.merge_extraction("doe2026study", payload)
+    second_ids = [c["id"] for c in second["claims"]]
+
+    assert len(set(second_ids)) == len(second_ids)
+    reissued = (set(second_ids) - {first_ids[0]}) & set(first_ids)
+    assert reissued == set(), f"ids were reissued: {reissued}"
+
+
+def test_a_hand_written_claim_after_extraction_gets_a_fresh_id():
+    store.save_paper(store.new_paper("doe2026study"))
+    payload = {
+        "summary": "", "relevance": "", "proposed_tags": [],
+        "claims": [{"text": "Extracted.", "kind": "finding", "strength": "aside", "tags": [],
+                    "evidence": "", "quote": "", "locator": "", "ledger_links": []}],
+    }
+    extracted = extract.merge_extraction("doe2026study", payload)
+    used = {c["id"] for c in extracted["claims"]}
+    manual = store.add_claim("doe2026study", {"text": "By hand."})
+    assert manual["id"] not in used

@@ -309,9 +309,11 @@ function cancelEdit() {
   renderContent();
 }
 
+// The rule: every handler that changes what is displayed calls this before
+// redrawing. Field edits live only in the DOM until submit, so any rebuild that
+// does not read them back first discards them. The exceptions are deliberate —
+// `cancelEdit` and a successful save drop the draft on purpose.
 function captureOpenEditor() {
-  // Field edits live only in the DOM until submit, so anything that rebuilds
-  // the list has to read them back first or they are silently discarded.
   const form = document.querySelector('form[data-form]');
   if (!form) return;
   const wrap = form.closest('[data-claim]');
@@ -426,7 +428,12 @@ $('content').addEventListener('click', async (event) => {
       await refresh();
       return;
     }
-    if (act === 'open-paper') { V.paper = paper; V.tag = null; V.selectedId = null; render(); return; }
+    if (act === 'open-paper') {
+      captureOpenEditor();
+      V.paper = paper; V.tag = null; V.selectedId = null;
+      render();
+      return;
+    }
     if (act === 'reextract') {
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
       await refresh();
@@ -441,6 +448,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'add-claim') {
+      captureOpenEditor();
       V.newClaim = blankClaim(paper);
       V.editing = NEW_CLAIM_ID;
       renderContent();
@@ -491,10 +499,13 @@ $('content').addEventListener('click', async (event) => {
 $('papers').addEventListener('click', (event) => {
   const li = event.target.closest('[data-paper]');
   if (!li) return;
+  // Keep an existing claim's edits, but still abandon a new unsaved claim:
+  // that one was never persisted and belongs to the paper being left.
+  captureOpenEditor();
   V.paper = li.dataset.paper || null;
   V.selectedId = null;
   V.editing = null;
-  V.newClaim = null;   // switching papers abandons an unsaved claim
+  V.newClaim = null;
   render();
 });
 
@@ -563,6 +574,7 @@ function selectedRow(rows) {
 
 function moveSelection(rows, step) {
   if (!rows.length) return;
+  captureOpenEditor();
   const at = rows.findIndex((row) => row.id === V.selectedId);
   const next = at < 0 ? 0 : Math.min(Math.max(at + step, 0), rows.length - 1);
   V.selectedId = rows[next].id;
@@ -583,7 +595,7 @@ document.addEventListener('keydown', async (event) => {
     moveSelection(rows, -1);
   } else if (event.key === 'e') {
     const row = selectedRow(rows);
-    if (row) { V.editing = row.id; renderContent(); }
+    if (row) { captureOpenEditor(); V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
     const row = selectedRow(rows);
     if (row) await patchClaim(row.paper, row.id, { reviewed: !row.reviewed });
