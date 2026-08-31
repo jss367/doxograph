@@ -2059,12 +2059,14 @@ def test_a_tag_added_just_before_the_call_is_still_recognised():
 
 # --- round 24 findings ----------------------------------------------------
 
-JOURNAL_PAGE_ONE = """
-Cortical dynamics under distribution shift
+JOURNAL_TITLE = "Cortical dynamics under distribution shift"
+
+JOURNAL_PAGE_ONE = f"""
+{JOURNAL_TITLE}
 Journal of Made-Up Results 12(3), 2026.  https://doi.org/10.1234/journal.2026.99
 
 Abstract. We revisit the setting of Smith et al. (arXiv:2301.09876) and show
-that their result does not hold under shift.
+that their result does not hold under shift. See also doi:10.5555/cited.2019.7.
 """
 
 ARXIV_PAGE_ONE = """
@@ -2074,26 +2076,35 @@ Endogenous steering resistance
 We build on Smith et al. (arXiv:2301.09876).
 """
 
+CROSSREF_TITLES = {
+    "10.1234/journal.2026.99": JOURNAL_TITLE,
+    "10.5555/cited.2019.7": "Something else entirely, cited in passing",
+    "10.9999/cited.2020.1": "A paper in the bibliography",
+}
 
-def identity_probe(monkeypatch, page_one: str, page_two: str = ""):
-    """Record which lookup `guess_from_pdf` reaches for, and with what id."""
-    calls = {}
+
+def identity_probe(monkeypatch, page_one: str, page_two: str = "", embedded: str = ""):
+    """Record which lookups `guess_from_pdf` tries, and with what identifier."""
+    calls = {"doi": [], "arxiv": []}
 
     def pages(path, pages=2):
         return page_one if pages == 1 else page_one + page_two
 
+    def arxiv(ident, client):
+        calls["arxiv"].append(ident)
+        return {"title": "arxiv paper", "authors": [], "year": None, "abstract": "", "venue": "",
+                "doi": "", "source": {"kind": "arxiv", "id": ident, "url": "", "pdf_url": ""}}
+
+    def crossref(ident, client):
+        calls["doi"].append(ident)
+        return {"title": CROSSREF_TITLES.get(ident, "unknown work"), "authors": [], "year": None,
+                "abstract": "", "venue": "", "doi": ident,
+                "source": {"kind": "doi", "id": ident, "url": "", "pdf_url": ""}}
+
     monkeypatch.setattr(ingest, "pdf_first_page_text", pages)
-
-    def record(kind, title):
-        def lookup(ident, client):
-            calls[kind] = ident
-            return {"title": title, "authors": [], "year": None, "abstract": "", "venue": "",
-                    "doi": ident if kind == "doi" else "",
-                    "source": {"kind": kind, "id": ident, "url": "", "pdf_url": ""}}
-        return lookup
-
-    monkeypatch.setattr(ingest, "fetch_arxiv", record("arxiv", "arxiv paper"))
-    monkeypatch.setattr(ingest, "fetch_crossref", record("doi", "journal paper"))
+    monkeypatch.setattr(ingest, "pdf_metadata_doi", lambda path: embedded)
+    monkeypatch.setattr(ingest, "fetch_arxiv", arxiv)
+    monkeypatch.setattr(ingest, "fetch_crossref", crossref)
     return calls
 
 
@@ -2102,16 +2113,16 @@ def test_a_cited_arxiv_id_does_not_become_the_uploads_identity(monkeypatch, tmp_
     calls = identity_probe(monkeypatch, JOURNAL_PAGE_ONE)
     meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
 
-    assert "arxiv" not in calls, f"filed under the paper it cites: {calls}"
-    assert calls["doi"] == "10.1234/journal.2026.99"
-    assert meta["title"] == "journal paper"
+    assert calls["arxiv"] == [], f"filed under the preprint it cites: {calls}"
+    assert meta["doi"] == "10.1234/journal.2026.99"
+    assert meta["title"] == JOURNAL_TITLE
 
 
 def test_the_arxiv_stamp_is_still_read_as_identity(monkeypatch, tmp_path):
     """The margin stamp is the file's own id, even alongside a cited one."""
     calls = identity_probe(monkeypatch, ARXIV_PAGE_ONE)
     ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
-    assert calls["arxiv"] == "2504.01234"
+    assert calls["arxiv"] == ["2504.01234"]
 
 
 def test_identity_does_not_come_from_the_reference_list(monkeypatch, tmp_path):
@@ -2120,7 +2131,7 @@ def test_identity_does_not_come_from_the_reference_list(monkeypatch, tmp_path):
     calls = identity_probe(monkeypatch, "Untitled draft\n", references)
     meta = ingest.guess_from_pdf(tmp_path / "my-draft.pdf", None, "my-draft.pdf")
 
-    assert calls == {}, f"identified from the bibliography: {calls}"
+    assert calls == {"doi": [], "arxiv": []}, f"identified from the bibliography: {calls}"
     assert meta["title"] == "my draft"
 
 
@@ -2134,3 +2145,87 @@ def test_a_paper_deleted_mid_listing_does_not_fail_the_listing(monkeypatch):
 
     with TestClient(server.app) as client:
         assert client.get("/api/state").status_code == 200
+
+
+# --- round 25 findings ----------------------------------------------------
+
+CITED_ONLY_PAGE = """
+A working paper with no DOI of its own
+
+We extend the analysis of Jones (2019), doi:10.5555/cited.2019.7, to the
+multilingual case.
+"""
+
+
+def test_a_cited_doi_does_not_become_the_uploads_identity(monkeypatch, tmp_path):
+    """The only DOI on the page belongs to a paper this one cites."""
+    calls = identity_probe(monkeypatch, CITED_ONLY_PAGE)
+    meta = ingest.guess_from_pdf(tmp_path / "working-paper.pdf", None, "working-paper.pdf")
+
+    assert calls["doi"] == ["10.5555/cited.2019.7"], "the DOI was never checked"
+    assert meta["doi"] == "", f"filed under the paper it cites: {meta['title']}"
+    assert meta["title"] == "working paper"
+
+
+CITED_FIRST_PAGE = f"""
+{JOURNAL_TITLE}
+
+Abstract. Following Jones (2019), doi:10.5555/cited.2019.7, we revisit the
+setting and show that the result does not hold under shift.
+
+Published in the Journal of Made-Up Results.  https://doi.org/10.1234/journal.2026.99
+"""
+
+
+def test_the_papers_own_doi_wins_over_one_it_cites_first(monkeypatch, tmp_path):
+    """A page can cite a DOI above the one in its own imprint line."""
+    calls = identity_probe(monkeypatch, CITED_FIRST_PAGE)
+    meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
+
+    assert calls["doi"] == ["10.5555/cited.2019.7", "10.1234/journal.2026.99"]
+    assert meta["doi"] == "10.1234/journal.2026.99"
+
+
+def test_a_doi_in_the_files_metadata_is_taken_as_identity(monkeypatch, tmp_path):
+    """XMP is the publisher's own statement, so no title check is needed."""
+    calls = identity_probe(monkeypatch, "scanned page with no readable text\n",
+                           embedded="10.1234/journal.2026.99")
+    meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
+
+    assert calls["doi"] == ["10.1234/journal.2026.99"]
+    assert meta["title"] == JOURNAL_TITLE
+
+
+def test_a_download_is_not_read_back_into_memory(monkeypatch):
+    """The signature check must not undo the streaming it follows."""
+    read_whole = []
+    real_read_bytes = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes",
+                        lambda self: (read_whole.append(self.name), real_read_bytes(self))[1])
+
+    class Streamed:
+        def stream(self, *args, **kwargs):
+            class R:
+                headers = {"content-type": "application/pdf"}
+
+                def raise_for_status(self):
+                    return None
+
+                def iter_bytes(self, n):
+                    yield b"%PDF-1.4\n"
+                    for _ in range(4):
+                        yield b"x" * n
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+            return R()
+
+    staged = ingest.fetch_pdf("https://example.org/big.pdf", Streamed())
+    try:
+        assert staged.stat().st_size > 65536
+        assert read_whole == [], "the staged download was read back in full"
+    finally:
+        staged.unlink(missing_ok=True)

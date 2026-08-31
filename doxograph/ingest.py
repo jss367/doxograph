@@ -296,6 +296,53 @@ def pdf_first_page_text(path: Path, pages: int = 2) -> str:
         return ""
 
 
+def pdf_metadata_doi(path: Path) -> str:
+    """The DOI a publisher wrote into the file's own metadata, if there is one.
+
+    This is the one DOI that cannot have come from the bibliography, so it is
+    taken without further checking. Publishers put it in the XMP packet
+    (`prism:doi`, `dc:identifier`) and sometimes in the older document info
+    dictionary as well.
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return ""
+    try:
+        reader = PdfReader(str(path))
+        candidates = [str(v) for v in (reader.metadata or {}).values()]
+        xmp = reader.xmp_metadata
+        if xmp is not None:
+            candidates += [str(v) for v in (getattr(xmp, "dc_identifier", None) or [])]
+            candidates.append(str(getattr(xmp, "pdf_keywords", "") or ""))
+            candidates.append(xmp.rdf_root.toxml() if xmp.rdf_root is not None else "")
+    except Exception:
+        return ""
+    for value in candidates:
+        match = re.search(DOI_RE, value)
+        if match:
+            return normalize_doi(match.group(0))
+    return ""
+
+
+def title_is_on_the_page(title: str, text: str) -> bool:
+    """Does the record we just fetched name the paper the page belongs to?
+
+    A DOI printed on a first page is usually the paper's own, but it can be one
+    it cites, and the two cases look alike. Fetching the record and looking for
+    its title on the page tells them apart: the paper's own title is printed
+    there, a cited paper's is not. Compared on letters and digits alone,
+    because extraction inserts line breaks and turns ligatures into anything.
+    """
+    def squash(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+    needle, haystack = squash(title), squash(text)
+    if len(needle) < 12:            # too short to be evidence either way
+        return False
+    return needle[:60] in haystack
+
+
 def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = None) -> dict:
     """Try arXiv ID, then DOI, then fall back to the filename as a title.
 
@@ -317,12 +364,23 @@ def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = 
             return fetch_arxiv(match.group(1), client)
         except (httpx.HTTPError, ValueError, ET.ParseError):
             pass
-    match = re.search(DOI_RE, text)
-    if match:
+    embedded = pdf_metadata_doi(path)
+    if embedded:
         try:
-            return fetch_crossref(normalize_doi(match.group(0)), client)
+            return fetch_crossref(embedded, client)
         except (httpx.HTTPError, KeyError, ValueError):
             pass
+    # A DOI printed on the page is only accepted if the record it resolves to
+    # is titled like this page. Front matter and citations both print DOIs in
+    # the same form, and taking the wrong one files the upload under the paper
+    # it cites.
+    for match in re.finditer(DOI_RE, text):
+        try:
+            meta = fetch_crossref(normalize_doi(match.group(0)), client)
+        except (httpx.HTTPError, KeyError, ValueError):
+            continue
+        if title_is_on_the_page(meta.get("title", ""), text):
+            return meta
     name = Path(display_name or path.name).name
     title = re.sub(r"[_-]+", " ", Path(name).stem).strip()
     return {
@@ -354,7 +412,11 @@ def fetch_pdf(url: str, client: httpx.Client) -> Path:
             with staging.open("wb") as fh:
                 for chunk in response.iter_bytes(65536):
                     fh.write(chunk)
-        if staging.read_bytes()[:5] != b"%PDF-":
+        # The signature only. `read_bytes` here would pull a streamed download
+        # back into memory in full, which is what the chunked loop above avoids.
+        with staging.open("rb") as fh:
+            signature = fh.read(5)
+        if signature != b"%PDF-":
             raise ValueError(f"{url} returned {content_type or 'unknown content'} rather than a PDF")
         return staging
     except BaseException:

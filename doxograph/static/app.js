@@ -460,9 +460,13 @@ $('content').addEventListener('submit', async (event) => {
       renderContent();          // editor stays open, still holding the text
       return;
     }
-    V.editing = null;
+    // The user may have opened an existing claim's editor while the POST was
+    // running. Read it before the redraw, and leave it open — only the new
+    // claim's own editor is finished with.
+    captureOpenEditor();
+    if (V.editing === NEW_CLAIM_ID) V.editing = null;
     V.newClaim = null;
-    await refresh();
+    await refreshAll();          // a row appeared, so the list has to be rebuilt
     return;
   }
 
