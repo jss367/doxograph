@@ -8,9 +8,10 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
 // only in the browser until Save, so navigating away or filtering it out cannot
 // leave a blank claim behind on the server.
 const NEW_CLAIM_ID = '__new__';
-// pendingEdit holds what was typed into an existing claim's editor when its
-// save failed. Without it a re-render would redraw the form from the unchanged
-// server row and silently discard the correction.
+// pendingEdit is the local draft for an existing claim's open editor: what was
+// typed but not yet saved, whether because the save failed or because something
+// redrew the list. Without it a re-render redraws from the unchanged server row
+// and silently discards the edit.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
             editing: null, selectedId: null, newClaim: null, pendingEdit: null, error: null };
 
@@ -307,6 +308,20 @@ function cancelEdit() {
   renderContent();
 }
 
+function captureOpenEditor() {
+  // Field edits live only in the DOM until submit, so anything that rebuilds
+  // the list has to read them back first or they are silently discarded.
+  const form = document.querySelector('form[data-form]');
+  if (!form) return;
+  const wrap = form.closest('[data-claim]');
+  const patch = readForm(form);
+  if (wrap.dataset.claim === NEW_CLAIM_ID) {
+    V.newClaim = { ...V.newClaim, ...patch };
+  } else {
+    V.pendingEdit = { id: wrap.dataset.claim, ...patch };
+  }
+}
+
 async function patchClaim(paper, claim, patch) {
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
@@ -447,14 +462,24 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
   }
+  // The edit form lives inside a `.claim` wrapper, so a click on one of its
+  // fields bubbles down to the card-selection branch below. Re-rendering there
+  // replaces the form, drops focus, and redraws from the stored row, which
+  // makes the editor unusable with a mouse.
+  if (event.target.closest('form[data-form]')) return;
+
   const tagEl = event.target.closest('[data-tag]');
   if (tagEl && !tagEl.dataset.act) {
+    captureOpenEditor();
     V.tag = V.tag === tagEl.dataset.tag ? null : tagEl.dataset.tag;
     render();
     return;
   }
   const card = event.target.closest('.claim[data-claim]');
-  if (card) { V.selectedId = card.dataset.claim; renderContent(); }
+  if (card && card.dataset.claim !== V.selectedId) {
+    V.selectedId = card.dataset.claim;
+    renderContent();
+  }
 });
 
 $('papers').addEventListener('click', (event) => {
@@ -470,6 +495,7 @@ $('papers').addEventListener('click', (event) => {
 $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
   if (!li) return;
+  captureOpenEditor();
   V.tag = V.tag === li.dataset.tag ? null : li.dataset.tag;
   render();
 });
@@ -517,10 +543,11 @@ $('btn-export').addEventListener('click', async () => {
 
 $('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
 
-$('q').addEventListener('input', (e) => { V.q = e.target.value; renderContent(); });
-$('kind').addEventListener('change', (e) => { V.kind = e.target.value; renderContent(); });
-$('only-unreviewed').addEventListener('change', (e) => { V.unreviewed = e.target.checked; renderContent(); });
-$('group-by-tag').addEventListener('change', (e) => { V.group = e.target.checked; renderContent(); });
+// Each filter keeps whatever is typed in an open editor before redrawing.
+$('q').addEventListener('input', (e) => { captureOpenEditor(); V.q = e.target.value; renderContent(); });
+$('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
+$('only-unreviewed').addEventListener('change', (e) => { captureOpenEditor(); V.unreviewed = e.target.checked; renderContent(); });
+$('group-by-tag').addEventListener('change', (e) => { captureOpenEditor(); V.group = e.target.checked; renderContent(); });
 
 // --- keyboard -------------------------------------------------------------
 
