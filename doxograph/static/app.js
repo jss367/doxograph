@@ -4,10 +4,20 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
-// onto claims one-to-one. draft holds a just-created blank claim so cancelling
-// its editor can remove it again.
+// onto claims one-to-one. newClaim holds a claim being written by hand; it lives
+// only in the browser until Save, so navigating away or filtering it out cannot
+// leave a blank claim behind on the server.
+const NEW_CLAIM_ID = '__new__';
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false,
-            group: true, editing: null, selectedId: null, draft: null };
+            group: true, editing: null, selectedId: null, newClaim: null };
+
+function blankClaim(paper) {
+  return {
+    id: NEW_CLAIM_ID, paper, text: '', kind: S.kinds[0] || 'finding',
+    strength: 'supporting', tags: [], evidence: '', quote: '', locator: '',
+    ledger_links: [], reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
+  };
+}
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -121,10 +131,14 @@ function paperHeader(key) {
 function proposedPanel(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper || !paper.n_proposed_tags) return '';
-  const full = window.__paperCache && window.__paperCache[key];
-  const proposed = full ? full.proposed_tags : null;
+  // Keyed by the paper's updated timestamp, so a re-read that replaces the
+  // proposals invalidates the cache instead of showing names the server will
+  // no longer accept.
+  const entry = (window.__paperCache || {})[key];
+  const fresh = entry && entry !== 'loading' && entry.updated === paper.updated;
+  const proposed = fresh ? entry.proposed_tags : null;
   if (!proposed) {
-    loadProposed(key);
+    loadProposed(key, paper.updated);
     return `<div class="proposed">Loading proposed topics…</div>`;
   }
   if (!proposed.length) return '';
@@ -139,14 +153,16 @@ function proposedPanel(key) {
   </div>`;
 }
 
-async function loadProposed(key) {
+async function loadProposed(key, wanted) {
   window.__paperCache = window.__paperCache || {};
   if (window.__paperCache[key] === 'loading') return;
   window.__paperCache[key] = 'loading';
   try {
-    window.__paperCache[key] = await api(`/api/papers/${encodeURIComponent(key)}`);
+    const paper = await api(`/api/papers/${encodeURIComponent(key)}`);
+    window.__paperCache[key] = { updated: paper.updated, proposed_tags: paper.proposed_tags || [] };
+    if (wanted && paper.updated !== wanted) delete window.__paperCache[key];  // changed again mid-flight
     if (!V.editing) renderContent();
-  } catch (e) { window.__paperCache[key] = null; }
+  } catch (e) { delete window.__paperCache[key]; }
 }
 
 function claimCard(row) {
@@ -224,11 +240,14 @@ function renderContent() {
   const rows = visibleClaims();
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
+  if (V.newClaim && V.editing === NEW_CLAIM_ID) html += editForm(V.newClaim);
 
   if (!rows.length) {
-    html += S.papers.length
-      ? '<p class="empty">No claims match these filters.</p>'
-      : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
+    if (!V.newClaim) {
+      html += S.papers.length
+        ? '<p class="empty">No claims match these filters.</p>'
+        : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
+    }
     $('content').innerHTML = html;
     if (main) main.scrollTop = scrollTop;
     return;
@@ -273,23 +292,10 @@ function renderJobs() {
 
 // --- actions --------------------------------------------------------------
 
-async function discardDraft() {
-  if (!V.draft) return;
-  const draft = S.claims.find((c) => c.id === V.draft.id);
-  // Only remove it if it is still blank; anything typed and saved is a real claim.
-  if (!draft || !(draft.text || '').trim()) {
-    try {
-      await api(`/api/papers/${encodeURIComponent(V.draft.paper)}/claims/${encodeURIComponent(V.draft.id)}`,
-                { method: 'DELETE' });
-    } catch (e) { /* already gone */ }
-  }
-  V.draft = null;
-}
-
-async function cancelEdit() {
-  const wasDraft = V.draft && V.draft.id === V.editing;
+function cancelEdit() {
   V.editing = null;
-  if (wasDraft) { await discardDraft(); await refresh(); } else { renderContent(); }
+  V.newClaim = null;   // nothing was persisted, so there is nothing to clean up
+  renderContent();
 }
 
 async function patchClaim(paper, claim, patch) {
@@ -326,9 +332,19 @@ $('content').addEventListener('submit', async (event) => {
   if (!form) return;
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
+  const patch = readForm(form);
   V.editing = null;
-  if (V.draft && V.draft.id === wrap.dataset.claim) V.draft = null;  // saved, so it is a real claim now
-  await patchClaim(wrap.dataset.paper, wrap.dataset.claim, readForm(form));
+  if (wrap.dataset.claim === NEW_CLAIM_ID) {
+    const paper = V.newClaim.paper;
+    V.newClaim = null;
+    if (!patch.text) { renderContent(); return; }   // an empty claim is not worth saving
+    await api(`/api/papers/${encodeURIComponent(paper)}/claims`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+    });
+    await refresh();
+    return;
+  }
+  await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
 });
 
 $('content').addEventListener('click', async (event) => {
@@ -338,7 +354,7 @@ $('content').addEventListener('click', async (event) => {
     const paper = button.dataset.paper;
     const claim = button.dataset.claim;
     if (act === 'edit') { V.editing = claim; renderContent(); return; }
-    if (act === 'cancel') { await cancelEdit(); return; }
+    if (act === 'cancel') { cancelEdit(); return; }
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
       button.closest('.linkrow').style.display = 'none';
@@ -371,11 +387,8 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'add-claim') {
-      const created = await api(`/api/papers/${encodeURIComponent(paper)}/claims`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      V.draft = { id: created.id, paper };
-      await refresh();
-      V.editing = created.id;
+      V.newClaim = blankClaim(paper);
+      V.editing = NEW_CLAIM_ID;
       renderContent();
       return;
     }
@@ -414,6 +427,7 @@ $('papers').addEventListener('click', (event) => {
   V.paper = li.dataset.paper || null;
   V.selectedId = null;
   V.editing = null;
+  V.newClaim = null;   // switching papers abandons an unsaved claim
   render();
 });
 
@@ -490,7 +504,7 @@ function moveSelection(rows, step) {
 document.addEventListener('keydown', async (event) => {
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
-    if (event.key === 'Escape' && V.editing) await cancelEdit();
+    if (event.key === 'Escape' && V.editing) cancelEdit();
     return;
   }
   const rows = visibleClaims();
@@ -505,7 +519,7 @@ document.addEventListener('keydown', async (event) => {
     const row = selectedRow(rows);
     if (row) await patchClaim(row.paper, row.id, { reviewed: !row.reviewed });
   } else if (event.key === 'Escape') {
-    await cancelEdit();
+    cancelEdit();
   }
 });
 
@@ -547,7 +561,7 @@ document.addEventListener('drop', async (event) => {
 
 function stateSignature(state) {
   return JSON.stringify([
-    (state.papers || []).map((p) => [p.key, p.status, p.n_claims, p.n_proposed_tags]),
+    (state.papers || []).map((p) => [p.key, p.status, p.n_claims, p.n_proposed_tags, p.updated]),
     (state.claims || []).map((c) => [c.id, c.reviewed, c.updated || c.added, (c.tags || []).join(',')]),
     (state.tags || []).map((t) => t.name),
     (state.ledger || []).map((c) => c.id),

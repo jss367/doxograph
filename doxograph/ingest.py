@@ -24,6 +24,26 @@ ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?"
 ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
 DOI_RE = r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+"
 
+def normalize_doi(doi: str) -> str:
+    """Trim citation punctuation off a DOI picked up from surrounding prose.
+
+    DOI_RE has to allow `.`, `;`, `(` and `)` because DOIs genuinely contain
+    them, so a DOI pasted from a sentence carries the sentence's punctuation
+    into the Crossref request. A trailing `)` is dropped only when unbalanced,
+    which leaves keys like 10.1002/(SICI)1097-0258(19980815)17:15 intact.
+    """
+    doi = doi.strip().strip("<>")
+    closers = ".,;:\'\"\u2019\u201d"
+    while doi:
+        if doi[-1] in closers:
+            doi = doi[:-1]
+        elif doi[-1] == ")" and doi.count(")") > doi.count("("):
+            doi = doi[:-1]
+        else:
+            break
+    return doi
+
+
 _ARXIV_PATTERNS = [
     re.compile(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", re.I),
     re.compile(rf"arxiv[:\s]+({ARXIV_NEW}|{ARXIV_OLD})", re.I),
@@ -49,12 +69,16 @@ def parse_ref(token: str) -> Ref | None:
     if token.lower().startswith(("doi:", "https://doi.org/", "http://doi.org/")):
         match = re.search(DOI_RE, token)
         if match:
-            return Ref("doi", match.group(0), token)
+            return Ref("doi", normalize_doi(match.group(0)), token)
     if token.startswith(("http://", "https://")):
         return Ref("pdf" if token.lower().split("?")[0].endswith(".pdf") else "page", token, token)
-    match = re.fullmatch(DOI_RE, token)
+    # Tolerate wrapping punctuation on both sides; normalize_doi then decides
+    # what trailing characters are the DOI's own.
+    match = re.search(rf"({DOI_RE})[\s.,;:!?\]\}}>\"']*$", token)
     if match:
-        return Ref("doi", token, token)
+        doi = normalize_doi(match.group(1))
+        if doi:
+            return Ref("doi", doi, token)
     return None
 
 
@@ -170,10 +194,10 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
         return Ref("pdf", urljoin(str(response.url), match.group(1).strip()), url)
     match = re.search(rf'name=["\']citation_doi["\']\s+content=["\']({DOI_RE})', html, re.I)
     if match:
-        return Ref("doi", match.group(1), url)
+        return Ref("doi", normalize_doi(match.group(1)), url)
     match = re.search(DOI_RE, html)
     if match:
-        return Ref("doi", match.group(0).rstrip(".;,)\"'"), url)
+        return Ref("doi", normalize_doi(match.group(0)), url)
     raise ValueError(f"no arXiv ID, DOI, or PDF link found at {url}")
 
 
@@ -203,7 +227,7 @@ def guess_from_pdf(path: Path, client: httpx.Client) -> dict:
     match = re.search(DOI_RE, text)
     if match:
         try:
-            return fetch_crossref(match.group(0).rstrip(".;,)\"'"), client)
+            return fetch_crossref(normalize_doi(match.group(0)), client)
         except (httpx.HTTPError, KeyError, ValueError):
             pass
     title = re.sub(r"[_-]+", " ", path.stem).strip()

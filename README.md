@@ -60,9 +60,10 @@ In the web app: drop PDFs anywhere on the page, or paste references into the
 box. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
 reviewed, `Escape` cancels. Clicking a topic filters to it.
 
-"Add claim by hand" opens an editor on a blank draft; cancelling removes the
-draft rather than leaving an empty claim behind. A proposed topic is added to
-the vocabulary only by Accept — Discard just clears the proposal.
+"Add claim by hand" opens an editor that exists only in the browser; the claim
+is created when you save it, so cancelling, filtering it away, or switching
+papers leaves nothing behind. A proposed topic is added to the vocabulary only
+by Accept; Discard just clears the proposal.
 
 ## The corpus on disk
 

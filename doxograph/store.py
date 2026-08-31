@@ -185,8 +185,10 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
 def add_claim(key: str, patch: dict) -> dict:
     paper = load_paper(key)
     claim = new_claim(paper, **{k: v for k, v in patch.items() if k in CLAIM_FIELDS})
-    # A hand-written claim needs no review, but a blank draft is not a claim yet.
-    claim["reviewed"] = bool(claim["text"].strip())
+    # A hand-written claim needs no review, but a blank one is not a claim yet.
+    # An explicit `reviewed` in the patch still wins.
+    if "reviewed" not in patch:
+        claim["reviewed"] = bool(claim["text"].strip())
     paper.setdefault("claims", []).append(claim)
     refresh_status(paper)
     save_paper(paper)
@@ -342,6 +344,7 @@ def summarize(paper: dict) -> dict:
         "relevance": paper.get("relevance", ""),
         "source": paper.get("source", {}),
         "added": paper.get("added"),
+        "updated": paper.get("updated"),
         "n_claims": len(claims),
         "n_unreviewed": sum(1 for c in claims if not c.get("reviewed")),
         "n_proposed_tags": len(paper.get("proposed_tags", [])),

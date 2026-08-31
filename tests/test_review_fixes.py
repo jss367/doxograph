@@ -195,3 +195,63 @@ def test_arxiv_id_on_a_landing_page_still_wins_over_a_pdf_link():
     client = FakePageClient("https://example.org/landing", html)
     ref = ingest.resolve_page("https://example.org/landing", client)
     assert (ref.kind, ref.value) == ("arxiv", "2602.06941")
+
+
+# --- round 2 findings -----------------------------------------------------
+
+@pytest.mark.parametrize("token,expected", [
+    ("10.1038/s41586-021-03819-2.", "10.1038/s41586-021-03819-2"),
+    ("10.1038/s41586-021-03819-2,", "10.1038/s41586-021-03819-2"),
+    ("(10.1145/3442188.3445922)", "10.1145/3442188.3445922"),
+    ("[10.1038/x.y].", "10.1038/x.y"),
+    ("doi:10.1038/example.", "10.1038/example"),
+    ("https://doi.org/10.1038/example;", "10.1038/example"),
+    # parentheses that belong to the identifier survive
+    ("10.1002/(SICI)1097-0258(19980815)17:15", "10.1002/(SICI)1097-0258(19980815)17:15"),
+])
+def test_citation_punctuation_is_stripped_from_dois(token, expected):
+    refs, unknown = ingest.parse_refs(token)
+    assert unknown == []
+    assert [(r.kind, r.value) for r in refs] == [("doi", expected)]
+
+
+def test_normalize_doi_leaves_a_clean_doi_alone():
+    assert ingest.normalize_doi("10.1038/s41586-021-03819-2") == "10.1038/s41586-021-03819-2"
+
+
+def test_a_doi_inside_prose_is_still_recognized_per_token():
+    refs, unknown = ingest.parse_refs("see 10.1145/3442188.3445922, and also 10.1038/x.y.")
+    assert [r.value for r in refs] == ["10.1145/3442188.3445922", "10.1038/x.y"]
+    assert unknown == ["see", "and", "also"]
+
+
+def test_add_claim_honors_an_explicit_reviewed_flag():
+    store.save_paper(store.new_paper("doe2026study"))
+    claim = store.add_claim("doe2026study", {"text": "A holds for B.", "reviewed": False})
+    assert claim["reviewed"] is False
+    assert store.load_paper("doe2026study")["status"] == "extracted"
+
+
+def test_creating_a_claim_through_the_api_stores_the_whole_patch():
+    store.save_paper(store.new_paper("doe2026study"))
+    store.add_tag("alpha")
+    with TestClient(server.app) as client:
+        response = client.post("/api/papers/doe2026study/claims", json={
+            "text": "A holds for B.", "kind": "method", "strength": "headline",
+            "tags": ["alpha"], "evidence": "n = 10", "quote": "verbatim", "locator": "p. 1",
+            "reviewed": True,
+        })
+    claim = response.json()
+    assert (claim["text"], claim["kind"], claim["strength"]) == ("A holds for B.", "method", "headline")
+    assert claim["tags"] == ["alpha"] and claim["reviewed"] is True
+    assert len(store.load_paper("doe2026study")["claims"]) == 1
+
+
+def test_summary_exposes_updated_so_the_client_can_version_its_cache():
+    store.save_paper(store.new_paper("doe2026study"))
+    summary = store.summarize(store.load_paper("doe2026study"))
+    assert summary["updated"]
+
+    store.add_claim("doe2026study", {"text": "A holds for B."})
+    later = store.summarize(store.load_paper("doe2026study"))
+    assert later["updated"] >= summary["updated"]
