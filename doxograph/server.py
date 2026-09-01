@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from . import bib, config, export, extract, ingest, store
+from . import __version__, bib, config, export, extract, ingest, store
 
 STATIC = Path(__file__).parent / "static"
 
@@ -174,6 +174,23 @@ def app_js() -> PlainTextResponse:
     return PlainTextResponse(
         (STATIC / "app.js").read_text(encoding="utf-8"), media_type="application/javascript"
     )
+
+
+ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
+
+
+@app.get("/api/health")
+def health() -> dict:
+    """Say the server is up, and whether it is in the middle of something.
+
+    The macOS launcher polls this while it waits for uvicorn to bind, and asks
+    it again on quit to find out whether anything would be lost. `/api/state`
+    answers both questions but loads the whole corpus to do it, which is the
+    wrong price for a readiness probe.
+    """
+    with _jobs_lock:
+        busy = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
+    return {"app": "doxograph", "version": __version__, "busy": busy}
 
 
 @app.get("/api/state")

@@ -1,0 +1,218 @@
+import Darwin
+import Foundation
+
+/// Owns the `doxograph serve` process behind the window.
+///
+/// The app does not reimplement the server: it starts the one that is already
+/// installed, waits for it to answer, and points a web view at it. If a server
+/// is already listening it is adopted instead, so launching the app twice, or
+/// launching it over a `doxograph serve` running in a terminal, does not fight
+/// over the port or kill work that is already in flight.
+final class ServerController {
+    enum Failure {
+        case commandNotFound
+        case launchFailed(String)
+        case neverAnswered(String)
+    }
+
+    private static let preferredPort = 8765
+    private static let portDefaultsKey = "DoxographPort"
+
+    private let host = "127.0.0.1"
+    private let queue = DispatchQueue(label: "com.jss367.doxograph.server")
+    private let log = LogBuffer()
+    private var process: Process?
+    private var port = ServerController.preferredPort
+
+    /// True when this app started the server, and so is responsible for it.
+    private(set) var ownsServer = false
+
+    var baseURL: URL { URL(string: "http://\(host):\(port)")! }
+
+    // MARK: - Starting
+
+    func start(onReady: @escaping (URL) -> Void, onFailure: @escaping (Failure) -> Void) {
+        queue.async {
+            let result = self.bringUp()
+            DispatchQueue.main.async {
+                switch result {
+                case .success: onReady(self.baseURL)
+                case .failure(let failure): onFailure(failure)
+                }
+            }
+        }
+    }
+
+    private enum Outcome {
+        case success
+        case failure(Failure)
+    }
+
+    private func bringUp() -> Outcome {
+        let preferred = UserDefaults.standard.object(forKey: Self.portDefaultsKey) as? Int
+            ?? Self.preferredPort
+
+        if health(on: preferred, timeout: 1.5) != nil {
+            port = preferred
+            ownsServer = false
+            return .success
+        }
+
+        guard let command = Locate.doxographCommand() else { return .failure(.commandNotFound) }
+        guard let free = firstFreePort(from: preferred) else {
+            return .failure(.launchFailed("No free port near \(preferred)."))
+        }
+        port = free
+
+        do {
+            try spawn(command: command)
+        } catch {
+            return .failure(.launchFailed("\(command): \(error.localizedDescription)"))
+        }
+        ownsServer = true
+        return waitUntilAnswering()
+    }
+
+    private func spawn(command: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = ["serve", "--host", host, "--port", String(port)]
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["PYTHONUNBUFFERED"] = "1"
+        // A Dock launch starts with a minimal PATH. Nothing in the server shells
+        // out today, but its own directory costs nothing to put back.
+        let binDirectory = (command as NSString).deletingLastPathComponent
+        environment["PATH"] = [binDirectory, environment["PATH"] ?? "/usr/bin:/bin"].joined(separator: ":")
+        process.environment = environment
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        let log = self.log
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            log.append(String(decoding: data, as: UTF8.self))
+        }
+
+        try process.run()
+        self.process = process
+    }
+
+    /// Poll until uvicorn binds. Imports alone take a couple of seconds, and a
+    /// cold start on a slow disk takes longer, so the ceiling is generous.
+    private func waitUntilAnswering() -> Outcome {
+        let deadline = Date().addingTimeInterval(60)
+        while Date() < deadline {
+            if health(on: port, timeout: 1) != nil { return .success }
+            if let process, !process.isRunning {
+                return .failure(.neverAnswered(log.tail(lines: 25).isEmpty
+                    ? "The server exited immediately."
+                    : log.tail(lines: 25)))
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return .failure(.neverAnswered(log.tail(lines: 25).isEmpty
+            ? "The server did not answer within a minute."
+            : log.tail(lines: 25)))
+    }
+
+    // MARK: - Stopping
+
+    /// Ask the server to shut down, and give uvicorn a moment to do it cleanly.
+    /// An adopted server is left alone: this app did not start it.
+    func stop() {
+        guard ownsServer, let process, process.isRunning else { return }
+        process.terminate()
+        let exited = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            process.waitUntilExit()
+            exited.signal()
+        }
+        if exited.wait(timeout: .now() + 5) == .timedOut {
+            kill(process.processIdentifier, SIGKILL)
+        }
+    }
+
+    // MARK: - Health
+
+    /// Number of papers the server is still fetching or reading, or nil if it
+    /// is not answering. Used to warn before quitting mid-extraction.
+    func activeJobs(completion: @escaping (Int?) -> Void) {
+        queue.async {
+            let busy = self.health(on: self.port, timeout: 2)
+            DispatchQueue.main.async { completion(busy) }
+        }
+    }
+
+    /// Returns the server's busy count, or nil when whatever is on the port is
+    /// not doxograph. Checking the name matters: adopting a stranger's port
+    /// would show the user someone else's web app.
+    private func health(on port: Int, timeout: TimeInterval) -> Int? {
+        guard let url = URL(string: "http://\(host):\(port)/api/health") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+
+        var busy: Int?
+        let finished = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { finished.signal() }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  body["app"] as? String == "doxograph" else { return }
+            busy = body["busy"] as? Int ?? 0
+        }.resume()
+        _ = finished.wait(timeout: .now() + timeout + 2)
+        return busy
+    }
+
+    // MARK: - Ports
+
+    private func firstFreePort(from start: Int) -> Int? {
+        (start...(start + 20)).first(where: portIsFree)
+    }
+
+    private func portIsFree(_ port: Int) -> Bool {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        var reuse: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return bound == 0
+    }
+}
+
+/// The server's output, kept so a failed start can say why instead of showing
+/// an empty window.
+final class LogBuffer {
+    private var lines: [String] = []
+    private let lock = NSLock()
+
+    func append(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        lines.append(contentsOf: text.components(separatedBy: "\n"))
+        if lines.count > 200 { lines.removeFirst(lines.count - 200) }
+    }
+
+    func tail(lines count: Int) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .suffix(count)
+            .joined(separator: "\n")
+    }
+}
