@@ -591,9 +591,11 @@ async function removePaper(paper) {
   const p = S.papers.find((x) => x.key === paper);
   if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
   await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
-  // Clear the editor before refreshing. `render()` skips the content while
-  // `V.editing` is set, so the deleted paper's header and form would stay
-  // on screen and saving would only 404 and redraw the same stale editor.
+  // Close an editor that belonged to the deleted paper, so its form is not
+  // captured as a draft for a claim that no longer exists. An editor on some
+  // other paper's claim stays open, which is why this ends in `refreshAll`:
+  // `refresh` would leave the claim list alone while an editor is open and
+  // the deleted paper's cards would stay on screen with buttons that 404.
   S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
   if (V.editing && V.editing !== NEW_CLAIM_ID) {
     const row = S.claims.find((c) => c.id === V.editing);
@@ -610,7 +612,7 @@ async function removePaper(paper) {
   const selected = S.claims.find((c) => c.id === V.selectedId);
   if (!selected || selected.paper === paper) V.selectedId = null;
   V.error = null;
-  await refresh();
+  await refreshAll();
 }
 
 $('content').addEventListener('click', async (event) => {

@@ -214,3 +214,38 @@ def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
+    _paper("paper-a", "Paper A")
+    _paper("paper-b", "Paper B")
+
+    async def scenario():
+        draft_text = "An edit on Paper B that outlives removing Paper A."
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            page.on("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
+            with _server() as url:
+                await page.goto(url)
+                menu = page.locator("#ctxmenu")
+                textarea = page.locator('form[data-form="paper-b-c1"] textarea[name="text"]')
+                cards_a = page.locator('#content .claim[data-paper="paper-a"]')
+                await cards_a.first.wait_for()
+                await page.locator('[data-act="edit"][data-claim="paper-b-c1"]').click()
+                await textarea.fill(draft_text)
+
+                await page.locator('#papers [data-paper="paper-a"]').click(button="right")
+                await menu.get_by_role("button", name="Remove paper").click()
+                await page.locator('#papers [data-paper="paper-a"]').wait_for(state="detached")
+
+                # Paper A's cards leave with it even though Paper B's editor is open,
+                # and that editor keeps what was typed.
+                await cards_a.first.wait_for(state="detached")
+                assert await textarea.input_value() == draft_text
+
+            await browser.close()
+
+    asyncio.run(scenario())
