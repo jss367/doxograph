@@ -1,5 +1,7 @@
 """The parts of the server the macOS app leans on."""
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -143,8 +145,8 @@ def test_health_reads_the_arrival_count_before_the_job_count(monkeypatch):
 
     def finish_the_upload():
         server._new_job("paper.pdf")
-        with server._uploads_lock:
-            server._uploads_arriving -= 1
+        with server._arrivals_lock:
+            server._requests_arriving -= 1
 
     class SlippingLock:
         """Lets that upload land in the gap between health's two samples."""
@@ -163,14 +165,14 @@ def test_health_reads_the_arrival_count_before_the_job_count(monkeypatch):
                 finish_the_upload()
             return released
 
-    monkeypatch.setattr(server, "_uploads_arriving", 1)
+    monkeypatch.setattr(server, "_requests_arriving", 1)
     monkeypatch.setattr(server, "_jobs_lock", SlippingLock(server._jobs_lock))
-    monkeypatch.setattr(server, "_uploads_lock", SlippingLock(server._uploads_lock))
+    monkeypatch.setattr(server, "_arrivals_lock", SlippingLock(server._arrivals_lock))
 
     body = server.health()
 
     assert fired, "health took no sample at all"
-    assert server._uploads_arriving == 0, "the upload never finished"
+    assert server._requests_arriving == 0, "the upload never finished"
     assert len(server._jobs) == 1, "the upload left no job behind"
     assert (body["jobs"], body["arriving"], body["busy"]) == (1, 1, 2), (
         "health sampled the job count before the arrival count, so the paper "
@@ -227,13 +229,75 @@ def test_a_failed_upload_stops_being_counted(monkeypatch):
         assert client.get("/api/health").json()["busy"] == 0
 
 
-def test_health_is_not_charged_for_other_requests():
-    """Only `/api/upload` is counted: every other route would inflate `busy`
-    and make the app ask about work that does not exist."""
+def test_health_counts_an_ingest_that_is_still_being_handled(monkeypatch):
+    """The same window as the upload one, on the route the page posts links to.
+
+    `/api/ingest` makes its jobs at the end of the handler, so from the moment
+    the request lands until then there is nothing for `busy` to see. The body is
+    small, so the window is short, but a quit that falls in it stops an owned
+    server and the papers are never fetched.
+    """
+    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    seen = []
+    real_parse = server.ingest.parse_refs
+
+    def watched(text):
+        # Inside the handler, before a single job exists.
+        seen.append(server.health())
+        return real_parse(text)
+
+    monkeypatch.setattr(server.ingest, "parse_refs", watched)
+
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/ingest", json={"text": "arxiv.org/abs/2401.00001", "extract": False})
+
+    assert response.json()["queued"] == 1
+    assert seen[0]["jobs"] == 0, "the job does not exist yet — that is the point"
+    assert seen[0]["arriving"] == 1, "the ingest request was invisible to health"
+    assert seen[0]["busy"] == 1
+
+
+def test_only_reads_escape_the_arrival_count():
+    """What is counted is decided by the method, not by a list of routes.
+
+    A list of the routes that can create work goes stale the first time someone
+    adds one, and silently: the new route is simply not counted and a quit lands
+    on top of it. So the rule is the request's own method — the `/api/whatever`
+    below does not exist, and is still counted, which is exactly the property
+    that keeps this true as the route table grows.
+
+    Reads have to be left out: `/api/health` is a GET and would otherwise report
+    itself as busy forever.
+    """
+    seen = {}
+
+    async def app(scope, receive, send):
+        seen[scope["method"]] = server._requests_arriving
+
+    counter = server.CountArrivingRequests(app)
+    for method in ("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"):
+        asyncio.run(counter({"type": "http", "method": method, "path": "/api/whatever"},
+                            None, None))
+
+    assert sorted(m for m, count in seen.items() if count == 1) == [
+        "DELETE", "PATCH", "POST", "PUT"]
+    assert sorted(m for m, count in seen.items() if count == 0) == ["GET", "HEAD", "OPTIONS"]
+    assert server._requests_arriving == 0, "the count did not come back down"
+
+
+def test_health_does_not_count_itself():
+    """It is a GET, and it reports the count from inside its own request."""
     with TestClient(server.app) as client:
         assert client.get("/api/health").json()["busy"] == 0
+
+
+def test_a_finished_mutating_request_stops_being_counted():
+    """A count that did not fall would have the app warning about work forever."""
+    with TestClient(server.app) as client:
         assert client.post("/api/ingest", json={"text": "", "extract": False}).status_code == 200
         assert client.get("/api/health").json()["busy"] == 0
+        assert server._requests_arriving == 0
 
 
 def test_pdf_is_an_attachment_by_default():

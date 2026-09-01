@@ -24,27 +24,47 @@ _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 _job_counter = 0
 
-UPLOAD_PATH = "/api/upload"
-_uploads_lock = threading.Lock()
-_uploads_arriving = 0
+#: Methods that cannot make work, and so are not counted. Everything else is.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+_arrivals_lock = threading.Lock()
+_requests_arriving = 0
 
 
-class CountArrivingUploads:
-    """Counts an upload from the moment its request lands, not from staging.
+class CountArrivingRequests:
+    """Counts a request that might become work from the moment it lands.
 
-    `api_upload` cannot count this itself. Its `files: list[UploadFile]`
-    parameter means Starlette has received and parsed the entire multipart body
-    before the handler runs, and that receive is exactly the window nobody can
-    see: the job does not exist yet, so `/api/health` answers `busy: 0` while a
-    paper is still arriving, and the macOS launcher stops the server it started
-    on top of it. The app keeps its own count of the papers it is sending, but
-    only for the drops it makes itself — a PDF dropped on the page posts straight
-    from the browser to this route and never passes through it.
+    A handler cannot count this for itself. `api_upload`'s
+    `files: list[UploadFile]` parameter means Starlette has received and parsed
+    the whole multipart body before the handler runs, and that receive is
+    exactly the window nobody can see: the job does not exist yet, so
+    `/api/health` answers `busy: 0` while a paper is still arriving, and the
+    macOS launcher stops the server it started on top of it. The same hole,
+    narrower, is in front of every other handler — a JSON body is still a body
+    that has to arrive, and `/api/ingest` posted by the page can be receiving or
+    parsing when the user quits. The app keeps its own count of the papers it is
+    sending, but only for the drops it makes itself; anything the page posts
+    goes straight to the server and never passes through it.
 
-    Counting here instead covers every client: the page inside the app, the page
-    in a browser, curl, anything later. The two counts overlap rather than
-    leaving a seam, since this one starts before the app's can end and outlasts
-    the job's creation.
+    Counting here covers every client: the page inside the app, the page in a
+    browser, curl, anything later. The two counts overlap rather than leaving a
+    seam, since this one starts before the app's can end and outlasts the job's
+    creation.
+
+    The net is cast by method rather than by a list of routes, and that is the
+    point. "Routes that can create work" is a list that goes stale the first
+    time someone adds one — upload, ingest, extract and retag today, whatever
+    comes next tomorrow — and the failure is silent: the new route simply is not
+    counted, and a quit lands on top of it. A method is a property of the
+    request itself, so the rule stays true as the route table grows. It costs
+    nothing to be broad, either. The number's only job is to be nonzero while
+    the server is holding something that might become work, and a small JSON
+    POST is inside this count for microseconds — far too briefly for a quit to
+    catch it and ask a question about nothing.
+
+    Reads are what is left out, and they have to be: `/api/health` is itself a
+    GET, so counting reads would have it report itself as busy, and the page
+    polls `/api/state` twice a second.
 
     Written against ASGI rather than as an `@app.middleware("http")` function so
     that it does not pump every other response — a whole paper, on `/pdf/{key}`
@@ -55,19 +75,19 @@ class CountArrivingUploads:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"] != UPLOAD_PATH:
+        if scope["type"] != "http" or scope.get("method", "GET") in SAFE_METHODS:
             return await self.app(scope, receive, send)
-        global _uploads_arriving
-        with _uploads_lock:
-            _uploads_arriving += 1
+        global _requests_arriving
+        with _arrivals_lock:
+            _requests_arriving += 1
         try:
             await self.app(scope, receive, send)
         finally:
-            with _uploads_lock:
-                _uploads_arriving -= 1
+            with _arrivals_lock:
+                _requests_arriving -= 1
 
 
-app.add_middleware(CountArrivingUploads)
+app.add_middleware(CountArrivingRequests)
 
 
 def _finish(job: dict, key: str) -> None:
@@ -233,18 +253,19 @@ def health() -> dict:
     answers both questions but loads the whole corpus to do it, which is the
     wrong price for a readiness probe.
 
-    An upload counts from the moment its request arrives, before it is a job at
-    all. For the sliver between the job being made and the response going out
-    the same paper is counted twice, which reads as one paper too many rather
-    than one too few — the safe direction for a number whose only job is to
-    stop someone quitting on top of work.
+    A request that could make work counts from the moment it arrives, before it
+    is a job at all. For the sliver between the job being made and the response
+    going out the same paper is counted twice, which reads as one paper too many
+    rather than one too few — the safe direction for a number whose only job is
+    to stop someone quitting on top of work. This route is a GET, so it is never
+    counted and never reports itself.
 
     The two counters are sampled under separate locks, so the order they are
     read in is the whole of what makes this snapshot safe: read `arriving`
-    first. An upload only stops being counted once its response has gone out,
-    and it creates its job before it answers, so an `arriving` of zero already
-    implies that anything in flight a moment ago has left a job behind for the
-    read that follows. The other order guarantees nothing: `jobs` would be
+    first. A request only stops being counted once its response has gone out,
+    and it makes its jobs before it answers, so an `arriving` of zero already
+    implies that anything in flight a moment ago has left its jobs behind for
+    the read that follows. The other order guarantees nothing: `jobs` would be
     sampled at an instant `arriving` cannot vouch for, and a paper landing
     between the two reads would fall through both — an idle answer, and a
     launcher stopping the server on top of a queued job. Do not swap these.
@@ -257,9 +278,17 @@ def health() -> dict:
     An app deciding whether it may quit needs to tell those apart. `busy` stays
     their sum, which is what it has always meant, so nothing that reads only
     that number has to change.
+
+    `arriving` is every request on the wire that is not a read, not only the
+    uploads it began as; see `CountArrivingRequests` for why the net is that
+    wide. The field name is unchanged because its meaning is: work in flight
+    that belongs to whoever is sending it. An app that reads it as "papers being
+    added" is right about the only thing it does with the number — whether it is
+    zero — and wrong only about the wording of a dialog it shows in the
+    microseconds a small POST is on the wire.
     """
-    with _uploads_lock:
-        arriving = _uploads_arriving
+    with _arrivals_lock:
+        arriving = _requests_arriving
     with _jobs_lock:
         jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
     return {
