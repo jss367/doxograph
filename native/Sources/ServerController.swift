@@ -245,34 +245,73 @@ final class ServerController {
         /// Papers being fetched or read. These die with the server, so an
         /// adopted one carries them on after this app is gone.
         let jobs: Int
-        /// Upload requests whose bodies are still arriving. These die with
-        /// whoever is sending them — including this app, whose web view posts a
-        /// paper dropped on the page straight to the server.
+        /// Requests still on the wire — an upload's body arriving, a link being
+        /// posted. These die with whoever is sending them, including this app,
+        /// whose web view posts a paper dropped on the page straight to the
+        /// server.
         let arriving: Int
     }
 
-    /// What the server is in the middle of, or nil if it is not answering.
+    /// How a health probe turned out. The two ways of not getting an answer are
+    /// kept apart because they mean opposite things to someone deciding whether
+    /// it is safe to quit.
+    enum Probe {
+        /// The server answered, and this is what it said.
+        case answered(Health)
+        /// Nothing is listening: the connection was refused. Whatever the
+        /// server was doing, it is not doing it any more, so there is nothing
+        /// left to lose — and nothing to ask about.
+        case unreachable
+        /// Something is there and did not answer — a timeout, an error, a reply
+        /// that was not Doxograph's. This is the state a busy server can be in,
+        /// so what it is working on is unknown rather than nothing.
+        case unresponsive
+    }
+
+    /// What the server is in the middle of, or why that could not be found out.
     /// Used to warn before quitting on top of work.
-    func health(completion: @escaping (Health?) -> Void) {
+    func probe(completion: @escaping (Probe) -> Void) {
         queue.async {
-            let health = self.health(on: self.port, timeout: 2)
-            DispatchQueue.main.async { completion(health) }
+            let probe = self.probe(on: self.port, timeout: 2)
+            DispatchQueue.main.async { completion(probe) }
         }
     }
 
-    /// Returns what the server is working on, or nil when whatever is on the
-    /// port is not doxograph. Checking the name matters: adopting a stranger's
-    /// port would show the user someone else's web app.
+    /// What the server is working on, or nil when nothing on the port answered
+    /// as Doxograph. The port walk wants only that: an unresponsive stranger
+    /// and a refused connection are both "not something to adopt". Checking the
+    /// name matters, since adopting a stranger's port would show the user
+    /// someone else's web app.
     private func health(on port: Int, timeout: TimeInterval) -> Health? {
-        guard let url = URL(string: "http://\(host):\(port)/api/health") else { return nil }
+        guard case .answered(let health) = probe(on: port, timeout: timeout) else { return nil }
+        return health
+    }
+
+    /// Asks the server what it is doing, and says which kind of silence it got
+    /// when it does not find out.
+    ///
+    /// Everything that is not a refused connection is reported as unresponsive,
+    /// including an HTTP reply that is not Doxograph's health. A 500 from a
+    /// server under load, a proxy in the way, a half-written body: all of them
+    /// mean something is listening, and something listening may be mid-paper. A
+    /// refusal is the only answer that positively rules that out.
+    private func probe(on port: Int, timeout: TimeInterval) -> Probe {
+        guard let url = URL(string: "http://\(host):\(port)/api/health") else { return .unreachable }
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        var health: Health?
+        // Boxed rather than captured directly: the wait below can give up while
+        // the request is still in flight, and then the completion's write and
+        // this thread's read would land on the same variable at once.
+        let outcome = Guarded(Probe.unresponsive)
         let finished = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { data, response, _ in
+        URLSession.shared.dataTask(with: request) { data, response, error in
             defer { finished.signal() }
+            if let error = error as? URLError {
+                outcome.value = Self.meansNothingIsListening(error) ? .unreachable : .unresponsive
+                return
+            }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
                   let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   body["app"] as? String == "doxograph" else { return }
@@ -281,11 +320,28 @@ final class ServerController {
             // that reachable: the server on the port can be an older install
             // than the app that found it.
             let busy = body["busy"] as? Int ?? 0
-            health = Health(jobs: body["jobs"] as? Int ?? busy,
-                            arriving: body["arriving"] as? Int ?? 0)
+            outcome.value = .answered(Health(jobs: body["jobs"] as? Int ?? busy,
+                                             arriving: body["arriving"] as? Int ?? 0))
         }.resume()
-        _ = finished.wait(timeout: .now() + timeout + 2)
-        return health
+        // Giving up on the wait is itself a server that did not answer in time.
+        guard finished.wait(timeout: .now() + timeout + 2) == .success else { return .unresponsive }
+        return outcome.value
+    }
+
+    /// Whether a failed request means the port is empty rather than slow.
+    ///
+    /// A refused connection is the one failure that says the server is gone:
+    /// something has to be listening to be slow. `cannotConnectToHost` is what
+    /// a refusal on 127.0.0.1 arrives as; the rest of the family is there for
+    /// the same reason and costs nothing. A timeout is deliberately not in the
+    /// list — that is exactly the shape of a server too busy to answer.
+    private static func meansNothingIsListening(_ error: URLError) -> Bool {
+        switch error.code {
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - Ports
@@ -376,6 +432,20 @@ final class ServerController {
             }
         }
         return bound == 0
+    }
+}
+
+/// One value two threads may touch, behind a lock. Small enough to be worth
+/// having: without it a request that outlives the wait for it races the reader.
+final class Guarded<Value> {
+    private let lock = NSLock()
+    private var stored: Value
+
+    init(_ value: Value) { stored = value }
+
+    var value: Value {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); defer { lock.unlock() }; stored = newValue }
     }
 }
 

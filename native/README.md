@@ -42,7 +42,10 @@ If none of them exist it offers to let you choose the command, and remembers it.
   app starts its own only when no Doxograph answers anywhere in the range, and
   then it uses the lowest port that was free.
 - **A warning before quitting mid-extraction**, because reading a paper takes
-  minutes and dies with the server.
+  minutes and dies with the server. A server that does not answer the question
+  gets the warning too, worded for not knowing: a silent server may be a busy
+  one. A refused connection does not, since a server that is already gone has
+  nothing left to lose. Quitting anyway is always on offer.
 - **Native dialogs** for the page's `confirm()` and `alert()` calls, which a web
   view otherwise answers "no" to without asking.
 - **External links go to the browser.** arXiv and DOI links open in your default

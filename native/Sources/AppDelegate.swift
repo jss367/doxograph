@@ -171,16 +171,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // and the app quit anyway, which is the whole race this is here for.
         let uploadingBefore = Uploader.uploadsInFlight
         let ownsServer = server.ownsServer
-        server.health { health in
-            let uploading = max(uploadingBefore, Uploader.uploadsInFlight, health?.arriving ?? 0)
-            let reading = ownsServer ? (health?.jobs ?? 0) : 0
-            guard uploading == 0, reading == 0 else {
-                return NSApp.reply(
-                    toApplicationShouldTerminate: self.confirmQuit(uploading: uploading, reading: reading))
-            }
-            NSApp.reply(toApplicationShouldTerminate: true)
+        server.probe { probe in
+            NSApp.reply(toApplicationShouldTerminate: self.mayQuit(
+                probe, ownsServer: ownsServer, uploadingBefore: uploadingBefore))
         }
         return .terminateLater
+    }
+
+    /// Whether to go, given what the server said — or did not say.
+    ///
+    /// A probe that fails is the case this used to get backwards. Reading a
+    /// missing answer as a job count of zero turns "I could not find out" into
+    /// "nothing is happening", which is the one direction this code must never
+    /// err in: the server keeps extracting, the app approves the quit, stops it,
+    /// and the paper is lost without the warning it promises.
+    ///
+    /// Not every failure is the same, though, and prompting on all of them would
+    /// nag on every quit after a server crash — the server is gone, so there is
+    /// nothing left to lose by going. The two are distinguishable: a refused
+    /// connection means nothing is listening, while a timeout means something is
+    /// listening and not answering, which is exactly what a server in the middle
+    /// of a paper can look like. So a refusal quits, and a silence asks.
+    private func mayQuit(_ probe: ServerController.Probe, ownsServer: Bool, uploadingBefore: Int) -> Bool {
+        let uploadingHere = max(uploadingBefore, Uploader.uploadsInFlight)
+        switch probe {
+        case .answered(let health):
+            let uploading = max(uploadingHere, health.arriving)
+            // A paper being read dies with the server, and an adopted server
+            // does not die with this app.
+            let reading = ownsServer ? health.jobs : 0
+            guard uploading > 0 || reading > 0 else { return true }
+            return confirmQuit(uploading: uploading, reading: reading)
+        case .unreachable:
+            // Nothing is listening, so the server has no work to lose. This
+            // app's own upload still might be in flight, and it is about to
+            // fail, but it is the one thing here that is known rather than
+            // guessed — so it is still worth saying.
+            guard uploadingHere > 0 else { return true }
+            return confirmQuit(uploading: uploadingHere, reading: 0)
+        case .unresponsive:
+            // Something is on the port and would not say what it is doing. Any
+            // count in hand is a floor on work that cannot be seen the rest of,
+            // so the honest thing to say is that it is not known — not a number.
+            return confirmQuitNotKnowing()
+        }
     }
 
     /// Asks whether to quit on top of work in progress. True means quit.
@@ -221,6 +255,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.addButton(withTitle: "Quit Anyway")
             alert.addButton(withTitle: "Keep Going")
         }
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Asks whether to quit when the server would not say what it is doing.
+    ///
+    /// Its own question, not a count of zero or a guess dressed up as one. The
+    /// other prompt names what is at stake — a paper being added, two being read
+    /// — and there is no honest way to fill that in here. What can be said is
+    /// why the question is being asked at all, so the user can decide with the
+    /// same information the app has.
+    ///
+    /// Quit Anyway is offered here too, and it is the default button: a server
+    /// that has wedged must not be able to trap someone in the app.
+    private func confirmQuitNotKnowing() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Doxograph can’t tell whether it is still working."
+        alert.informativeText = """
+            The server did not answer. It may be part-way through reading a \
+            paper, and quitting now would stop it and leave the paper unread.
+            """
+        alert.addButton(withTitle: "Quit Anyway")
+        alert.addButton(withTitle: "Don’t Quit")
         return alert.runModal() == .alertFirstButtonReturn
     }
 
