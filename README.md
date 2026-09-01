@@ -78,6 +78,22 @@ one, the draft is held and a line at the top of the list offers to resume or
 discard it. Leaving the paper abandons it, since the draft belongs to that paper. A proposed topic is added to the vocabulary only
 by Accept; Discard just clears the proposal.
 
+## The Mac app
+
+```
+native/build.sh --install     # ~/Applications/Doxograph.app
+```
+
+A window and a Dock icon for the same server: drop a paper on the icon and it
+goes into the corpus, with no terminal and no browser tab. The app runs the
+`doxograph` you installed rather than bundling its own copy, so both read one
+corpus and there is no second implementation to keep in step. It needs the Xcode
+command line tools to build, and it adopts a `doxograph serve` that is already
+running instead of starting a second one. See `native/README.md`.
+
+Launched from the Dock it inherits none of your shell environment, so put the
+API key in `~/.credentials` rather than exporting it in `.zshrc`.
+
 ## The corpus on disk
 
 Everything lives in `~/doxograph-data` by default; set `DOXOGRAPH_DATA` to move

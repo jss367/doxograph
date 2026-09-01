@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from . import bib, config, export, extract, ingest, store
+from . import __version__, bib, config, export, extract, ingest, store
 
 STATIC = Path(__file__).parent / "static"
 
@@ -23,6 +23,71 @@ _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
 _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 _job_counter = 0
+
+#: Methods that cannot make work, and so are not counted. Everything else is.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+_arrivals_lock = threading.Lock()
+_requests_arriving = 0
+
+
+class CountArrivingRequests:
+    """Counts a request that might become work from the moment it lands.
+
+    A handler cannot count this for itself. `api_upload`'s
+    `files: list[UploadFile]` parameter means Starlette has received and parsed
+    the whole multipart body before the handler runs, and that receive is
+    exactly the window nobody can see: the job does not exist yet, so
+    `/api/health` answers `busy: 0` while a paper is still arriving, and the
+    macOS launcher stops the server it started on top of it. The same hole,
+    narrower, is in front of every other handler — a JSON body is still a body
+    that has to arrive, and `/api/ingest` posted by the page can be receiving or
+    parsing when the user quits. The app keeps its own count of the papers it is
+    sending, but only for the drops it makes itself; anything the page posts
+    goes straight to the server and never passes through it.
+
+    Counting here covers every client: the page inside the app, the page in a
+    browser, curl, anything later. The two counts overlap rather than leaving a
+    seam, since this one starts before the app's can end and outlasts the job's
+    creation.
+
+    The net is cast by method rather than by a list of routes, and that is the
+    point. "Routes that can create work" is a list that goes stale the first
+    time someone adds one — upload, ingest, extract and retag today, whatever
+    comes next tomorrow — and the failure is silent: the new route simply is not
+    counted, and a quit lands on top of it. A method is a property of the
+    request itself, so the rule stays true as the route table grows. It costs
+    nothing to be broad, either. The number's only job is to be nonzero while
+    the server is holding something that might become work, and a small JSON
+    POST is inside this count for microseconds — far too briefly for a quit to
+    catch it and ask a question about nothing.
+
+    Reads are what is left out, and they have to be: `/api/health` is itself a
+    GET, so counting reads would have it report itself as busy, and the page
+    polls `/api/state` twice a second.
+
+    Written against ASGI rather than as an `@app.middleware("http")` function so
+    that it does not pump every other response — a whole paper, on `/pdf/{key}`
+    — through an extra stream to do the counting.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method", "GET") in SAFE_METHODS:
+            return await self.app(scope, receive, send)
+        global _requests_arriving
+        with _arrivals_lock:
+            _requests_arriving += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            with _arrivals_lock:
+                _requests_arriving -= 1
+
+
+app.add_middleware(CountArrivingRequests)
 
 
 def _finish(job: dict, key: str) -> None:
@@ -174,6 +239,65 @@ def app_js() -> PlainTextResponse:
     return PlainTextResponse(
         (STATIC / "app.js").read_text(encoding="utf-8"), media_type="application/javascript"
     )
+
+
+ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
+
+
+@app.get("/api/health")
+def health() -> dict:
+    """Say the server is up, and whether it is in the middle of something.
+
+    The macOS launcher polls this while it waits for uvicorn to bind, and asks
+    it again on quit to find out whether anything would be lost. `/api/state`
+    answers both questions but loads the whole corpus to do it, which is the
+    wrong price for a readiness probe.
+
+    A request that could make work counts from the moment it arrives, before it
+    is a job at all. For the sliver between the job being made and the response
+    going out the same paper is counted twice, which reads as one paper too many
+    rather than one too few — the safe direction for a number whose only job is
+    to stop someone quitting on top of work. This route is a GET, so it is never
+    counted and never reports itself.
+
+    The two counters are sampled under separate locks, so the order they are
+    read in is the whole of what makes this snapshot safe: read `arriving`
+    first. A request only stops being counted once its response has gone out,
+    and it makes its jobs before it answers, so an `arriving` of zero already
+    implies that anything in flight a moment ago has left its jobs behind for
+    the read that follows. The other order guarantees nothing: `jobs` would be
+    sampled at an instant `arriving` cannot vouch for, and a paper landing
+    between the two reads would fall through both — an idle answer, and a
+    launcher stopping the server on top of a queued job. Do not swap these.
+
+    The two kinds of work are also reported apart, because they are not lost by
+    the same event. `jobs` dies with the server: stop it mid-extraction and the
+    paper stays unread. `arriving` dies with the client that is sending it, and
+    a client can stop while the server keeps running — the macOS app quitting
+    tears down its web view's upload even when the server it adopted lives on.
+    An app deciding whether it may quit needs to tell those apart. `busy` stays
+    their sum, which is what it has always meant, so nothing that reads only
+    that number has to change.
+
+    `arriving` is every request on the wire that is not a read, not only the
+    uploads it began as; see `CountArrivingRequests` for why the net is that
+    wide. The field name is unchanged because its meaning is: work in flight
+    that belongs to whoever is sending it. An app that reads it as "papers being
+    added" is right about the only thing it does with the number — whether it is
+    zero — and wrong only about the wording of a dialog it shows in the
+    microseconds a small POST is on the wire.
+    """
+    with _arrivals_lock:
+        arriving = _requests_arriving
+    with _jobs_lock:
+        jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
+    return {
+        "app": "doxograph",
+        "version": __version__,
+        "busy": jobs + arriving,
+        "jobs": jobs,
+        "arriving": arriving,
+    }
 
 
 @app.get("/api/state")
@@ -363,11 +487,23 @@ def api_bibtex() -> PlainTextResponse:
 
 
 @app.get("/pdf/{key}")
-def serve_pdf(key: str) -> FileResponse:
+def serve_pdf(key: str, inline: bool = False) -> FileResponse:
+    """Hand back a paper's PDF, as an attachment unless asked otherwise.
+
+    A browser keeps the attachment it has always been given. The Mac app asks
+    for `?inline=1`, because a WKWebView reads `Content-Disposition: attachment`
+    as an instruction to download the file rather than draw it, and a window
+    opened to read the paper that instead saves it somewhere is no use.
+    """
     path = store.pdf_path(key)
     if not path.exists():
         raise HTTPException(404, f"no PDF for {key}")
-    return FileResponse(path, media_type="application/pdf", filename=f"{key}.pdf")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"{key}.pdf",
+        content_disposition_type="inline" if inline else "attachment",
+    )
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> None:

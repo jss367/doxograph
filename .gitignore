@@ -11,3 +11,5 @@ venv/
 # DOXOGRAPH_DATA at a directory inside the checkout.
 /data/
 /doxograph-data/
+native/build/
+native/Doxograph.icns
