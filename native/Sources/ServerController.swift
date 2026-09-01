@@ -52,25 +52,26 @@ final class ServerController {
         let preferred = UserDefaults.standard.object(forKey: Self.portDefaultsKey) as? Int
             ?? Self.preferredPort
 
-        if health(on: preferred, timeout: 1.5) != nil {
-            port = preferred
+        switch choosePort(from: preferred) {
+        case .exhausted:
+            return .failure(.launchFailed("No free port near \(preferred)."))
+
+        case .adopt(let existing):
+            port = existing
             ownsServer = false
             return .success
-        }
 
-        guard let command = Locate.doxographCommand() else { return .failure(.commandNotFound) }
-        guard let free = firstFreePort(from: preferred) else {
-            return .failure(.launchFailed("No free port near \(preferred)."))
+        case .start(let free):
+            guard let command = Locate.doxographCommand() else { return .failure(.commandNotFound) }
+            port = free
+            do {
+                try spawn(command: command)
+            } catch {
+                return .failure(.launchFailed("\(command): \(error.localizedDescription)"))
+            }
+            ownsServer = true
+            return waitUntilAnswering()
         }
-        port = free
-
-        do {
-            try spawn(command: command)
-        } catch {
-            return .failure(.launchFailed("\(command): \(error.localizedDescription)"))
-        }
-        ownsServer = true
-        return waitUntilAnswering()
     }
 
     private func spawn(command: String) throws {
@@ -196,8 +197,37 @@ final class ServerController {
 
     // MARK: - Ports
 
-    private func firstFreePort(from start: Int) -> Int? {
-        (start...(start + 20)).first(where: portIsFree)
+    private enum PortChoice {
+        case adopt(Int)
+        case start(Int)
+        case exhausted
+    }
+
+    /// Which port this app should use: one pass up the candidates, adopting the
+    /// first Doxograph that answers and otherwise starting on the first port
+    /// nothing is using.
+    ///
+    /// It has to be one pass. Asking only about the preferred port and then
+    /// looking separately for somewhere free means a first instance pushed onto
+    /// 8766 by a stranger on 8765 is invisible to the second: 8766 reads as
+    /// merely occupied, and the second instance starts a third server on 8767
+    /// over the same corpus. The store's file locking keeps that from corrupting
+    /// anything, but two servers over one corpus is not what the app promises.
+    ///
+    /// A free port ends the walk without a probe, which is both the cheap answer
+    /// and the correct one: nothing can be listening past the port this app is
+    /// about to bind. So the probes cost a round trip each only for the run of
+    /// occupied ports below it, and they use a short timeout — a stranger's port
+    /// is the usual reason for one, and a local Doxograph answers `/api/health`
+    /// without touching the corpus.
+    private func choosePort(from start: Int) -> PortChoice {
+        for candidate in start...(start + 20) {
+            if portIsFree(candidate) { return .start(candidate) }
+            if health(on: candidate, timeout: candidate == start ? 1.5 : 0.5) != nil {
+                return .adopt(candidate)
+            }
+        }
+        return .exhausted
     }
 
     private func portIsFree(_ port: Int) -> Bool {

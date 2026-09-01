@@ -33,10 +33,12 @@ If none of them exist it offers to let you choose the command, and remembers it.
   Finder, are posted to `/api/upload`, the same endpoint the page uses. Dropping
   a paper on the icon while the app is closed launches it and adds the paper.
 - **File → Add Papers…** for the same thing through an open panel.
-- **Adopting a running server.** If something is already answering on port 8765
-  the app uses it rather than starting a second one, so launching the app over a
+- **Adopting a running server.** If a Doxograph is already answering the app
+  uses it rather than starting a second one, so launching the app over a
   `doxograph serve` in a terminal is harmless. It leaves an adopted server
-  running when it quits.
+  running when it quits. The search starts at port 8765 and walks upward, so a
+  server that had to fall back past something else on 8765 is adopted too; the
+  app starts its own only at the first port nothing is using.
 - **A warning before quitting mid-extraction**, because reading a paper takes
   minutes and dies with the server.
 - **Native dialogs** for the page's `confirm()` and `alert()` calls, which a web
