@@ -97,7 +97,12 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             decisionHandler(.cancel)
             if Uploader.isPDF(url) { onFilesDropped?([url]) }
         } else if isLocal(url) {
-            if let inline = inlinePDF(url) {
+            // A `target="_blank"` link arrives here first, with no target
+            // frame, before `createWebViewWith` has a window for it. Loading
+            // the PDF into `webView` at that point puts it in the main window
+            // with no page behind it; allowing lets the new window be made,
+            // and the same check runs again there with a frame to draw in.
+            if navigationAction.targetFrame != nil, let inline = inlinePDF(url) {
                 decisionHandler(.cancel)
                 webView.load(URLRequest(url: inline))
             } else {
