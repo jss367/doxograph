@@ -1,8 +1,17 @@
 """The parts of the server the macOS app leans on."""
 
+import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __version__, server, store
+from doxograph import __version__, config, server, store
+
+
+@pytest.fixture(autouse=True)
+def no_stray_jobs():
+    """`server._jobs` outlives any one test, and `busy` counts every entry."""
+    server._jobs.clear()
+    yield
+    server._jobs.clear()
 
 
 def test_health_identifies_the_app_and_is_idle_by_default():
@@ -38,6 +47,100 @@ def test_health_does_not_read_the_corpus(monkeypatch):
     monkeypatch.setattr(server.store, "all_papers", fail)
     with TestClient(server.app) as client:
         assert client.get("/api/health").status_code == 200
+
+
+def _multipart(body: bytes, boundary: str = "b0undary") -> bytes:
+    """One PDF, as a browser's `FormData` would post it."""
+    return (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="files"; filename="paper.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode() + body + f"\r\n--{boundary}--\r\n".encode()
+
+
+def test_health_counts_an_upload_whose_body_is_still_arriving(monkeypatch):
+    """The window a quit used to fall into.
+
+    A PDF dropped on the page posts straight to this route without going near
+    the Mac app's own upload counter, so nothing else can see it. Until the
+    request arrives in full there is no job either, and the launcher reading
+    `busy: 0` stops the server it started on top of a paper mid-flight.
+    """
+    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    seen = []
+
+    def body():
+        # Read on the way in, before the server has been handed a single byte.
+        seen.append(server.health()["busy"])
+        yield _multipart(b"%PDF-1.4\n" + b"x" * 50_000)
+
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/upload?extract_now=false", content=body(),
+            headers={"content-type": "multipart/form-data; boundary=b0undary"})
+
+    assert response.json() == {"queued": 1}
+    assert seen == [1], "the arriving upload was invisible to health"
+    for staged in config.pdfs_dir().glob(".incoming-*"):
+        staged.unlink()
+
+
+def test_health_counts_an_upload_that_is_staged_but_not_yet_a_job(monkeypatch):
+    """Staging a large PDF takes a while, and `_new_job` only runs after it."""
+    seen = []
+    real_stage = server.ingest.stage_upload
+
+    def watched(stream, name):
+        seen.append(server.health()["busy"])
+        return real_stage(stream, name)
+
+    monkeypatch.setattr(server.ingest, "stage_upload", watched)
+    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+
+    with TestClient(server.app) as client:
+        client.post("/api/upload?extract_now=false",
+                    files={"files": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")})
+
+    assert seen == [1]
+    for staged in config.pdfs_dir().glob(".incoming-*"):
+        staged.unlink()
+
+
+def test_a_finished_upload_stops_being_counted(monkeypatch):
+    """Otherwise the launcher would warn about a paper forever after."""
+    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    with TestClient(server.app) as client:
+        client.post("/api/upload?extract_now=false",
+                    files={"files": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")})
+        # The job it made outlives the request, so settle that separately: what
+        # is being checked here is that the request stopped being counted.
+        for job in list(server._jobs.values()):
+            server._set(job, state="done")
+        assert client.get("/api/health").json()["busy"] == 0
+    for staged in config.pdfs_dir().glob(".incoming-*"):
+        staged.unlink()
+
+
+def test_a_failed_upload_stops_being_counted(monkeypatch):
+    """A count that only falls on success would wedge quitting after one error."""
+    def explode(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(server.ingest, "stage_upload", explode)
+    with TestClient(server.app) as client:
+        with pytest.raises(RuntimeError):
+            client.post("/api/upload?extract_now=false",
+                        files={"files": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")})
+        assert client.get("/api/health").json()["busy"] == 0
+
+
+def test_health_is_not_charged_for_other_requests():
+    """Only `/api/upload` is counted: every other route would inflate `busy`
+    and make the app ask about work that does not exist."""
+    with TestClient(server.app) as client:
+        assert client.get("/api/health").json()["busy"] == 0
+        assert client.post("/api/ingest", json={"text": "", "extract": False}).status_code == 200
+        assert client.get("/api/health").json()["busy"] == 0
 
 
 def test_pdf_is_an_attachment_by_default():

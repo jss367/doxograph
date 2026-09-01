@@ -130,13 +130,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// A paper that is still being uploaded counts too, and counts even when
     /// the server was adopted rather than started here. An adopted server
     /// survives this app and keeps reading, but the upload does not: it runs in
-    /// this process, and a paper whose bytes stop arriving is never staged,
-    /// never becomes a job, and so never appears in the health count this asks
-    /// about. Quitting on top of one loses it without a word.
+    /// this process and dies with it, so the paper is lost either way.
+    ///
+    /// The server counts an upload from the moment its request arrives, which
+    /// covers a paper dropped on the page as well as one dropped on the app.
+    /// What it cannot see is the stretch before that — the copy into a
+    /// multipart body — so the two counts overlap rather than meeting.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard ready, server.ownsServer else {
-            guard Uploader.uploadsInFlight > 0 else { return .terminateNow }
-            return confirmQuit(reading: 0) ? .terminateNow : .terminateCancel
+            let uploading = Uploader.uploadsInFlight
+            guard uploading > 0 else { return .terminateNow }
+            return confirmQuit(uploading: uploading, reading: 0) ? .terminateNow : .terminateCancel
         }
         // Count the uploads on both sides of the question, because either
         // reading alone can miss work the other sees. The server answers a POST
@@ -145,10 +149,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // zero about a moment when the job did not exist yet. Reading the
         // uploads first catches that one; reading them again afterwards catches
         // a paper dropped while the question was being asked.
+        //
+        // Both samples are carried into the decision rather than looked up
+        // again inside it. Sampling twice and then asking a third time is what
+        // the earlier version did, and the third reading is taken after the
+        // upload has finished — so the sample that saw the work was thrown away
+        // and the app quit anyway, which is the whole race this is here for.
         let uploadingBefore = Uploader.uploadsInFlight
         server.activeJobs { busy in
-            guard uploadingBefore == 0, (busy ?? 0) == 0, Uploader.uploadsInFlight == 0 else {
-                return NSApp.reply(toApplicationShouldTerminate: self.confirmQuit(reading: busy ?? 0))
+            let uploading = max(uploadingBefore, Uploader.uploadsInFlight)
+            let reading = busy ?? 0
+            guard uploading == 0, reading == 0 else {
+                return NSApp.reply(
+                    toApplicationShouldTerminate: self.confirmQuit(uploading: uploading, reading: reading))
             }
             NSApp.reply(toApplicationShouldTerminate: true)
         }
@@ -157,11 +170,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Asks whether to quit on top of work in progress. True means quit.
     ///
+    /// Takes the counts its caller measured instead of measuring again: an
+    /// upload that finished a moment ago handed its paper to the server, and
+    /// reading zero here would be reading it too late to matter. The wording
+    /// can therefore lag by a beat — a paper that has just become a reading job
+    /// is still announced as one being added — but it is never silent about
+    /// work that exists.
+    ///
     /// Always offers the quit, so a count that somehow refuses to fall — a
     /// request that never returns, say — cannot trap the user in their own app.
-    private func confirmQuit(reading: Int) -> Bool {
-        let uploading = Uploader.uploadsInFlight
-        // The upload may have landed while the health request was in the air.
+    private func confirmQuit(uploading: Int, reading: Int) -> Bool {
         guard uploading > 0 || reading > 0 else { return true }
         let alert = NSAlert()
         switch (uploading, reading) {

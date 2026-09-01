@@ -24,6 +24,51 @@ _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 _job_counter = 0
 
+UPLOAD_PATH = "/api/upload"
+_uploads_lock = threading.Lock()
+_uploads_arriving = 0
+
+
+class CountArrivingUploads:
+    """Counts an upload from the moment its request lands, not from staging.
+
+    `api_upload` cannot count this itself. Its `files: list[UploadFile]`
+    parameter means Starlette has received and parsed the entire multipart body
+    before the handler runs, and that receive is exactly the window nobody can
+    see: the job does not exist yet, so `/api/health` answers `busy: 0` while a
+    paper is still arriving, and the macOS launcher stops the server it started
+    on top of it. The app keeps its own count of the papers it is sending, but
+    only for the drops it makes itself — a PDF dropped on the page posts straight
+    from the browser to this route and never passes through it.
+
+    Counting here instead covers every client: the page inside the app, the page
+    in a browser, curl, anything later. The two counts overlap rather than
+    leaving a seam, since this one starts before the app's can end and outlasts
+    the job's creation.
+
+    Written against ASGI rather than as an `@app.middleware("http")` function so
+    that it does not pump every other response — a whole paper, on `/pdf/{key}`
+    — through an extra stream to do the counting.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] != UPLOAD_PATH:
+            return await self.app(scope, receive, send)
+        global _uploads_arriving
+        with _uploads_lock:
+            _uploads_arriving += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            with _uploads_lock:
+                _uploads_arriving -= 1
+
+
+app.add_middleware(CountArrivingUploads)
+
 
 def _finish(job: dict, key: str) -> None:
     """Close a job, saying so when the paper arrived without its PDF.
@@ -187,9 +232,17 @@ def health() -> dict:
     it again on quit to find out whether anything would be lost. `/api/state`
     answers both questions but loads the whole corpus to do it, which is the
     wrong price for a readiness probe.
+
+    An upload counts from the moment its request arrives, before it is a job at
+    all. For the sliver between the job being made and the response going out
+    the same paper is counted twice, which reads as one paper too many rather
+    than one too few — the safe direction for a number whose only job is to
+    stop someone quitting on top of work.
     """
     with _jobs_lock:
         busy = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
+    with _uploads_lock:
+        busy += _uploads_arriving
     return {"app": "doxograph", "version": __version__, "busy": busy}
 
 

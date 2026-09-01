@@ -28,11 +28,12 @@ enum Uploader {
 
     /// How many papers this app is still copying or sending.
     ///
-    /// The server knows nothing about a dropped paper until its bytes have all
-    /// arrived and been staged: only then does it open a job, and only then
-    /// does `/api/health` count it. Between the drop and that moment the upload
-    /// exists solely in this process, so this is the only thing that can stop
-    /// a quit from throwing the paper away.
+    /// A dropped paper is not a job until its bytes have arrived and been
+    /// staged, so `/api/health` counts it from the moment its request lands
+    /// rather than from the job. That leaves only the stretch before the
+    /// request reaches the server — the copy into a multipart body, the
+    /// connection — during which the paper exists solely in this process. This
+    /// covers that stretch, and the two counts overlap rather than meeting.
     static var uploadsInFlight: Int {
         counter.lock()
         defer { counter.unlock() }
