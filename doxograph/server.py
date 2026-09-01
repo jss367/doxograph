@@ -239,6 +239,16 @@ def health() -> dict:
     than one too few — the safe direction for a number whose only job is to
     stop someone quitting on top of work.
 
+    The two counters are sampled under separate locks, so the order they are
+    read in is the whole of what makes this snapshot safe: read `arriving`
+    first. An upload only stops being counted once its response has gone out,
+    and it creates its job before it answers, so an `arriving` of zero already
+    implies that anything in flight a moment ago has left a job behind for the
+    read that follows. The other order guarantees nothing: `jobs` would be
+    sampled at an instant `arriving` cannot vouch for, and a paper landing
+    between the two reads would fall through both — an idle answer, and a
+    launcher stopping the server on top of a queued job. Do not swap these.
+
     The two kinds of work are also reported apart, because they are not lost by
     the same event. `jobs` dies with the server: stop it mid-extraction and the
     paper stays unread. `arriving` dies with the client that is sending it, and
@@ -248,10 +258,10 @@ def health() -> dict:
     their sum, which is what it has always meant, so nothing that reads only
     that number has to change.
     """
-    with _jobs_lock:
-        jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
     with _uploads_lock:
         arriving = _uploads_arriving
+    with _jobs_lock:
+        jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
     return {
         "app": "doxograph",
         "version": __version__,

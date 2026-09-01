@@ -128,6 +128,56 @@ def test_health_reports_reading_and_arriving_apart(monkeypatch):
         staged.unlink()
 
 
+def test_health_reads_the_arrival_count_before_the_job_count(monkeypatch):
+    """The order of the two samples is the whole of what makes them safe.
+
+    They are taken under different locks, so an upload can finish in the gap
+    between them. An upload on its way out creates its job first and only stops
+    being counted once its response has gone, so reading `arriving` first is
+    enough: a zero there means anything in flight has already left a job for the
+    second read to find. Read `jobs` first and the same paper falls through both
+    numbers — no job yet when `jobs` was read, no longer arriving when
+    `arriving` was — and an owned launcher quits on top of a queued job.
+    """
+    fired = []
+
+    def finish_the_upload():
+        server._new_job("paper.pdf")
+        with server._uploads_lock:
+            server._uploads_arriving -= 1
+
+    class SlippingLock:
+        """Lets that upload land in the gap between health's two samples."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __enter__(self):
+            return self._inner.__enter__()
+
+        def __exit__(self, *exception):
+            released = self._inner.__exit__(*exception)
+            # After the release, so the upload can take either lock itself.
+            if not fired:
+                fired.append(True)
+                finish_the_upload()
+            return released
+
+    monkeypatch.setattr(server, "_uploads_arriving", 1)
+    monkeypatch.setattr(server, "_jobs_lock", SlippingLock(server._jobs_lock))
+    monkeypatch.setattr(server, "_uploads_lock", SlippingLock(server._uploads_lock))
+
+    body = server.health()
+
+    assert fired, "health took no sample at all"
+    assert server._uploads_arriving == 0, "the upload never finished"
+    assert len(server._jobs) == 1, "the upload left no job behind"
+    assert (body["jobs"], body["arriving"], body["busy"]) == (1, 1, 2), (
+        "health sampled the job count before the arrival count, so the paper "
+        "that landed between the two reads was invisible to both"
+    )
+
+
 def test_health_counts_an_upload_that_is_staged_but_not_yet_a_job(monkeypatch):
     """Staging a large PDF takes a while, and `_new_job` only runs after it."""
     seen = []
