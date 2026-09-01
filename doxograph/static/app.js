@@ -1080,7 +1080,7 @@ function stateSignature(state) {
     (state.claims || []).map((c) => [c.id, c.reviewed, c.updated || c.added, (c.tags || []).join(',')]),
     (state.tags || []).map((t) => t.name),
     (state.ledger || []).map((c) => c.id),
-    (state.tensions || []).map((t) => [t.id, t.status, t.stale, t.found]),
+    (state.tensions || []).map((t) => [t.id, t.status, t.stale, t.found, (t.topics || []).join(',')]),
   ]);
 }
 
