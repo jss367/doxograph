@@ -143,35 +143,55 @@ final class ServerController {
 
     // MARK: - Health
 
-    /// Number of papers the server is still fetching or reading, or nil if it
-    /// is not answering. Used to warn before quitting mid-extraction.
-    func activeJobs(completion: @escaping (Int?) -> Void) {
+    /// What the server has in flight, split by what stopping would cost.
+    ///
+    /// The split is the point: the two numbers are lost by different events, so
+    /// an app deciding whether it may quit cannot use their sum.
+    struct Health {
+        /// Papers being fetched or read. These die with the server, so an
+        /// adopted one carries them on after this app is gone.
+        let jobs: Int
+        /// Upload requests whose bodies are still arriving. These die with
+        /// whoever is sending them — including this app, whose web view posts a
+        /// paper dropped on the page straight to the server.
+        let arriving: Int
+    }
+
+    /// What the server is in the middle of, or nil if it is not answering.
+    /// Used to warn before quitting on top of work.
+    func health(completion: @escaping (Health?) -> Void) {
         queue.async {
-            let busy = self.health(on: self.port, timeout: 2)
-            DispatchQueue.main.async { completion(busy) }
+            let health = self.health(on: self.port, timeout: 2)
+            DispatchQueue.main.async { completion(health) }
         }
     }
 
-    /// Returns the server's busy count, or nil when whatever is on the port is
-    /// not doxograph. Checking the name matters: adopting a stranger's port
-    /// would show the user someone else's web app.
-    private func health(on port: Int, timeout: TimeInterval) -> Int? {
+    /// Returns what the server is working on, or nil when whatever is on the
+    /// port is not doxograph. Checking the name matters: adopting a stranger's
+    /// port would show the user someone else's web app.
+    private func health(on port: Int, timeout: TimeInterval) -> Health? {
         guard let url = URL(string: "http://\(host):\(port)/api/health") else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        var busy: Int?
+        var health: Health?
         let finished = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: request) { data, response, _ in
             defer { finished.signal() }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
                   let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   body["app"] as? String == "doxograph" else { return }
-            busy = body["busy"] as? Int ?? 0
+            // A server too old to split the count answers `busy` alone. Read it
+            // as jobs, which is how it was read before the split. Adoption makes
+            // that reachable: the server on the port can be an older install
+            // than the app that found it.
+            let busy = body["busy"] as? Int ?? 0
+            health = Health(jobs: body["jobs"] as? Int ?? busy,
+                            arriving: body["arriving"] as? Int ?? 0)
         }.resume()
         _ = finished.wait(timeout: .now() + timeout + 2)
-        return busy
+        return health
     }
 
     // MARK: - Ports

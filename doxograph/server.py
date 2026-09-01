@@ -238,12 +238,27 @@ def health() -> dict:
     the same paper is counted twice, which reads as one paper too many rather
     than one too few — the safe direction for a number whose only job is to
     stop someone quitting on top of work.
+
+    The two kinds of work are also reported apart, because they are not lost by
+    the same event. `jobs` dies with the server: stop it mid-extraction and the
+    paper stays unread. `arriving` dies with the client that is sending it, and
+    a client can stop while the server keeps running — the macOS app quitting
+    tears down its web view's upload even when the server it adopted lives on.
+    An app deciding whether it may quit needs to tell those apart. `busy` stays
+    their sum, which is what it has always meant, so nothing that reads only
+    that number has to change.
     """
     with _jobs_lock:
-        busy = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
+        jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
     with _uploads_lock:
-        busy += _uploads_arriving
-    return {"app": "doxograph", "version": __version__, "busy": busy}
+        arriving = _uploads_arriving
+    return {
+        "app": "doxograph",
+        "version": __version__,
+        "busy": jobs + arriving,
+        "jobs": jobs,
+        "arriving": arriving,
+    }
 
 
 @app.get("/api/state")

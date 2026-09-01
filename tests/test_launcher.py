@@ -20,6 +20,8 @@ def test_health_identifies_the_app_and_is_idle_by_default():
     assert body["app"] == "doxograph"
     assert body["version"] == __version__
     assert body["busy"] == 0
+    assert body["jobs"] == 0
+    assert body["arriving"] == 0
 
 
 def test_health_counts_only_unfinished_jobs():
@@ -81,6 +83,47 @@ def test_health_counts_an_upload_whose_body_is_still_arriving(monkeypatch):
 
     assert response.json() == {"queued": 1}
     assert seen == [1], "the arriving upload was invisible to health"
+    for staged in config.pdfs_dir().glob(".incoming-*"):
+        staged.unlink()
+
+
+def test_health_reports_reading_and_arriving_apart(monkeypatch):
+    """What the two extra fields mean, and why they cannot be one number.
+
+    `jobs` is work that dies with the *server*: a reading job survives the Mac
+    app quitting on top of an adopted server. `arriving` is work that dies with
+    the *client*: the upload is being sent by the app's own web view, so it is
+    lost whether the server was adopted or not. The app asks about `arriving`
+    always and about `jobs` only when it owns the server, so folding them
+    together would make it either quit on top of an upload or refuse to quit
+    over a reading job that was never at risk.
+
+    `busy` stays the sum of the two, unchanged, for anything reading only that.
+    """
+    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    reading = server._new_job("reading.pdf")
+    server._set(reading, state="reading")
+    seen = []
+
+    def body():
+        seen.append(server.health())
+        yield _multipart(b"%PDF-1.4\n" + b"x" * 50_000)
+
+    try:
+        with TestClient(server.app) as client:
+            client.post(
+                "/api/upload?extract_now=false", content=body(),
+                headers={"content-type": "multipart/form-data; boundary=b0undary"})
+            idle = client.get("/api/health").json()
+    finally:
+        server._jobs.pop(reading["id"], None)
+
+    assert seen[0]["jobs"] == 1, "the reading job was not reported on its own"
+    assert seen[0]["arriving"] == 1, "the upload on the wire was not reported on its own"
+    assert seen[0]["busy"] == 2, "busy is still the sum of the two"
+    # The request is over, so nothing is arriving; the reading job and the
+    # queued one the upload made are both still work the server would lose.
+    assert (idle["jobs"], idle["arriving"], idle["busy"]) == (2, 0, 2)
     for staged in config.pdfs_dir().glob(".incoming-*"):
         staged.unlink()
 

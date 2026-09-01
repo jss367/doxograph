@@ -127,21 +127,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Reading a paper takes minutes and dies with the server, so quitting in
     /// the middle of one asks first.
     ///
-    /// A paper that is still being uploaded counts too, and counts even when
-    /// the server was adopted rather than started here. An adopted server
-    /// survives this app and keeps reading, but the upload does not: it runs in
-    /// this process and dies with it, so the paper is lost either way.
+    /// The two kinds of work in flight are not lost by the same event, which is
+    /// why an adopted server is not simply exempt from the question:
     ///
-    /// The server counts an upload from the moment its request arrives, which
-    /// covers a paper dropped on the page as well as one dropped on the app.
-    /// What it cannot see is the stretch before that — the copy into a
-    /// multipart body — so the two counts overlap rather than meeting.
+    /// - A paper being read dies with the server. When the server was adopted
+    ///   it outlives this app and keeps reading, so quitting costs nothing and
+    ///   the reading count is ignored.
+    /// - A paper being uploaded dies with whoever is sending it, and that is
+    ///   this app either way: the native uploader runs in this process, and a
+    ///   paper dropped on the page is posted by this app's web view. Quitting
+    ///   tears that request down even though the adopted server survives — the
+    ///   server living on does not help when the bytes stop arriving. So an
+    ///   upload is asked about whether the server is owned or adopted.
+    ///
+    /// Uploads are counted on both sides, because neither side sees them all.
+    /// This app knows only about the papers it sends itself; a paper dropped on
+    /// the page never touches its counter, and only the server sees that one.
+    /// The server counts from the moment the request arrives and this app
+    /// counts from before it is sent, so the two overlap rather than meeting,
+    /// and the larger is taken rather than the sum — one native upload is
+    /// usually in both at once, and the number only has to be right about being
+    /// nonzero.
+    ///
+    /// One honest false positive: on an adopted server the arriving upload may
+    /// belong to someone else — a browser tab, a curl in a terminal — that
+    /// quitting this app would not disturb, and the question gets asked anyway.
+    /// The server cannot say whose request it is, and guessing wrong the other
+    /// way loses a paper, so it errs toward asking.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard ready, server.ownsServer else {
-            let uploading = Uploader.uploadsInFlight
-            guard uploading > 0 else { return .terminateNow }
-            return confirmQuit(uploading: uploading, reading: 0) ? .terminateNow : .terminateCancel
-        }
+        guard ready else { return .terminateNow }
         // Count the uploads on both sides of the question, because either
         // reading alone can miss work the other sees. The server answers a POST
         // only once it has staged the file and made the job, so an upload that
@@ -156,9 +170,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // upload has finished — so the sample that saw the work was thrown away
         // and the app quit anyway, which is the whole race this is here for.
         let uploadingBefore = Uploader.uploadsInFlight
-        server.activeJobs { busy in
-            let uploading = max(uploadingBefore, Uploader.uploadsInFlight)
-            let reading = busy ?? 0
+        let ownsServer = server.ownsServer
+        server.health { health in
+            let uploading = max(uploadingBefore, Uploader.uploadsInFlight, health?.arriving ?? 0)
+            let reading = ownsServer ? (health?.jobs ?? 0) : 0
             guard uploading == 0, reading == 0 else {
                 return NSApp.reply(
                     toApplicationShouldTerminate: self.confirmQuit(uploading: uploading, reading: reading))
