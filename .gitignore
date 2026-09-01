@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+
+# Local corpus. The data directory defaults to ~/doxograph-data and is meant to
+# live outside the repo; this only catches the case where someone points
+# DOXOGRAPH_DATA at a directory inside the checkout.
+/data/
+/doxograph-data/
