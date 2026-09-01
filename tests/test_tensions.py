@@ -90,6 +90,24 @@ def test_editing_a_claim_marks_the_tension_stale_and_a_rerun_reopens_it():
     assert tension["stale"] is False
 
 
+def test_deciding_a_stale_tension_judges_the_current_text_but_reopening_does_not():
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    tid = store.tension_rows()[0]["id"]
+
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 4.6% of rollouts."})
+    assert store.tension_rows()[0]["stale"] is True
+    store.set_tension_status(tid, "confirmed")  # the reviewer read the new cards and decided
+    [tension] = store.tension_rows()
+    assert tension["status"] == "confirmed" and tension["stale"] is False
+
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 0.46% of rollouts."})
+    store.set_tension_status(tid, "open")       # reopening is not a judgment
+    assert store.tension_rows()[0]["stale"] is True
+    store.set_tension_status(tid, "dismissed")
+    assert store.tension_rows()[0]["stale"] is False
+
+
 def test_a_claim_edited_during_the_model_call_leaves_the_tension_stale():
     a, b, _ = build_corpus()
     snapshot = shown()                          # what the prompt was built from

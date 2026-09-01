@@ -867,6 +867,14 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
 
 
 def set_tension_status(tension_id: str, status: str) -> dict:
+    """Record the reviewer's decision.
+
+    Confirming or dismissing is a judgment about the claims as they read now,
+    so it also refreshes the fingerprints: a tension that went stale because a
+    claim was edited stops being stale once someone has decided it against the
+    current text. Reopening is not a judgment and leaves the fingerprints
+    alone, so a reopened tension stays stale until it is re-judged.
+    """
     if status not in TENSION_STATUSES:
         raise ValueError(f"status must be one of {TENSION_STATUSES}, not {status!r}")
     with tensions_lock():
@@ -875,6 +883,11 @@ def set_tension_status(tension_id: str, status: str) -> dict:
             if tension.get("id") == tension_id:
                 tension["status"] = status
                 tension["decided"] = now()
+                if status != "open":
+                    live = {c["id"]: c for c in claim_rows()}
+                    ids = tension.get("claims", [])
+                    if all(i in live for i in ids):
+                        tension["fingerprints"] = {i: claim_fingerprint(live[i]) for i in ids}
                 _save_tensions(data)
                 return tension
     raise KeyError(tension_id)
