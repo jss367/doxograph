@@ -17,6 +17,13 @@ final class ServerController {
 
     private static let preferredPort = 8765
     private static let portDefaultsKey = "DoxographPort"
+    /// Every number that is a TCP port at all. Port 0 is excluded on purpose:
+    /// `bind` treats it as "give me any free port", so it would read as free
+    /// forever and the server would be started with `--port 0`, listening
+    /// somewhere the app never looks.
+    private static let portRange = 1...65535
+    /// How many ports past the preferred one the walk may try.
+    private static let scanWidth = 20
     /// How long the port walk may spend probing before it settles for the free
     /// port it has already found. Only unresponsive occupants can run this out.
     private static let scanBudget: TimeInterval = 5
@@ -66,9 +73,24 @@ final class ServerController {
         return cancelled
     }
 
+    /// The port to start the walk from: the configured one when it is a port,
+    /// and the built-in one when it is not.
+    ///
+    /// A preference is a number a person typed, so it can be anything. A value
+    /// outside the port range is not a port the walk could fall back to, so it
+    /// is ignored rather than clamped: quietly reading `DoxographPort 70000` as
+    /// 65535 would put the app somewhere the user never asked for and looks
+    /// like it worked. Falling back to 8765 is the same thing that happens when
+    /// the key is absent or holds a string, which is the behaviour that is
+    /// already documented.
+    private static func startingPort() -> Int {
+        guard let configured = UserDefaults.standard.object(forKey: portDefaultsKey) as? Int,
+              portRange.contains(configured) else { return preferredPort }
+        return configured
+    }
+
     private func bringUp() -> Outcome {
-        let preferred = UserDefaults.standard.object(forKey: Self.portDefaultsKey) as? Int
-            ?? Self.preferredPort
+        let preferred = Self.startingPort()
 
         // Both of the steps below can take seconds — the port walk against an
         // unresponsive neighbour, the command lookup against a login shell that
@@ -306,10 +328,19 @@ final class ServerController {
     /// sum of their timeouts. Once it is spent the walk stops probing and takes
     /// the free port it has — but only if it has one, since with nowhere to
     /// start, finishing the walk is the only remaining hope of adopting.
+    ///
+    /// The walk stops at the top of the port space rather than a fixed twenty
+    /// past the start. 65535 is a port a person may reasonably configure, and
+    /// the ports above it do not exist: 65536 is not a slower candidate but a
+    /// number `portIsFree` cannot turn into a `UInt16`, which used to trap and
+    /// take the app down during launch. Clamping is also what keeps the range
+    /// from inverting — `start` is a port, so the `min` never lands below it,
+    /// and the guard says so for anyone who calls this with something else.
     private func choosePort(from start: Int) -> PortChoice {
+        guard Self.portRange.contains(start) else { return .exhausted }
         var firstFree: Int?
         let deadline = Date().addingTimeInterval(Self.scanBudget)
-        for candidate in start...(start + 20) {
+        for candidate in start...min(start + Self.scanWidth, Self.portRange.upperBound) {
             if portIsFree(candidate) {
                 if firstFree == nil { firstFree = candidate }
                 continue
@@ -323,7 +354,11 @@ final class ServerController {
         return .start(free)
     }
 
+    /// Whether nothing is listening on a port. A number that is not a port is
+    /// not free — the caller has nowhere to put it, and answering the question
+    /// at all is better than trapping on the conversion the way this used to.
     private func portIsFree(_ port: Int) -> Bool {
+        guard let number = UInt16(exactly: port) else { return false }
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return false }
         defer { close(descriptor) }
@@ -333,7 +368,7 @@ final class ServerController {
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(port).bigEndian
+        address.sin_port = number.bigEndian
         address.sin_addr.s_addr = inet_addr("127.0.0.1")
         let bound = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {

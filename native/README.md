@@ -61,6 +61,11 @@ defaults write com.jss367.doxograph DoxographCommand -string /path/to/.venv/bin/
 defaults write com.jss367.doxograph DoxographPort -int 8765
 ```
 
+`DoxographPort` has to be a port — a whole number from 1 to 65535. Anything
+else, including a number too large to be a port and a value that is not a
+number at all, is ignored and the app starts its search at 8765. The search
+still walks upward from wherever it starts, and stops at 65535.
+
 A Dock launch inherits none of your shell environment, so `ANTHROPIC_API_KEY`
 exported in `.zshrc` is invisible to it. Put the key in `~/.credentials` as
 `ANTHROPIC_API_KEY=...`, which is where the server looks next.
