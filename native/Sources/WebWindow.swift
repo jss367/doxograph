@@ -97,13 +97,37 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             decisionHandler(.cancel)
             if Uploader.isPDF(url) { onFilesDropped?([url]) }
         } else if isLocal(url) {
-            decisionHandler(.allow)
+            if let inline = inlinePDF(url) {
+                decisionHandler(.cancel)
+                webView.load(URLRequest(url: inline))
+            } else {
+                decisionHandler(.allow)
+            }
         } else {
             // arXiv and DOI links belong in the browser, not in a window with
             // no address bar and no way back.
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
         }
+    }
+
+    /// The address to open instead, for a PDF that would otherwise arrive as a
+    /// download.
+    ///
+    /// `/pdf/{key}` is served as an attachment, which is what a browser wants:
+    /// clicking PDF there saves the paper. A web view reads the same response
+    /// as an instruction to download, so the window opened to read the paper
+    /// comes up empty. `?inline=1` asks for the identical file with a
+    /// disposition WebKit draws. Nil when the URL needs no rewriting.
+    private func inlinePDF(_ url: URL) -> URL? {
+        guard url.path.hasPrefix("/pdf/"),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
+        var items = components.queryItems ?? []
+        guard !items.contains(where: { $0.name == "inline" }) else { return nil }
+        items.append(URLQueryItem(name: "inline", value: "1"))
+        components.queryItems = items
+        return components.url
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -143,7 +167,11 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
                                  defer: false)
         auxiliary.title = url.lastPathComponent
         auxiliary.contentView = child
+        // The window is kept alive by `auxiliaryWindows` instead, so that
+        // closing it cannot leave AppKit talking to a released object; the
+        // delegate below drops it once it has closed.
         auxiliary.isReleasedWhenClosed = false
+        auxiliary.delegate = self
         auxiliary.center()
         auxiliary.makeKeyAndOrderFront(nil)
         auxiliaryWindows.append(auxiliary)
@@ -151,9 +179,20 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     }
 
     func webViewDidClose(_ webView: WKWebView) {
-        guard let index = auxiliaryWindows.firstIndex(where: { $0.contentView === webView }) else { return }
-        auxiliaryWindows[index].close()
-        auxiliaryWindows.remove(at: index)
+        auxiliaryWindows.first { $0.contentView === webView }?.close()
+    }
+
+    /// Closing an auxiliary window is the end of it. Without this the window,
+    /// its web view and the PDF it rendered would stay in `auxiliaryWindows`
+    /// until the app quit, so a morning of opening papers would never give the
+    /// memory back.
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow, closing !== window else { return }
+        // Dropped a turn later: AppKit is still closing the window while this
+        // runs, and this array may hold its last reference.
+        DispatchQueue.main.async { [weak self] in
+            self?.auxiliaryWindows.removeAll { $0 === closing }
+        }
     }
 
     // MARK: - Page dialogs

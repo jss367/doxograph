@@ -23,45 +23,54 @@ enum Uploader {
         url.pathExtension.lowercased() == "pdf"
     }
 
+    /// Uploads the given PDFs. Callable from the main thread — the disk work
+    /// happens off it — and `completion` comes back on the main queue.
     static func upload(
         _ urls: [URL],
         to baseURL: URL,
         extractNow: Bool,
         completion: @escaping (Result<Int, Error>) -> Void
     ) {
-        guard !urls.isEmpty else { return completion(.success(0)) }
+        let finish = { (result: Result<Int, Error>) in
+            DispatchQueue.main.async { completion(result) }
+        }
+        guard !urls.isEmpty else { return finish(.success(0)) }
         var components = URLComponents(url: baseURL.appendingPathComponent("api/upload"),
                                        resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "extract_now", value: extractNow ? "true" : "false")]
         guard let endpoint = components?.url else {
-            return completion(.failure(UploadError.unreadable(baseURL.absoluteString)))
+            return finish(.failure(UploadError.unreadable(baseURL.absoluteString)))
         }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         let boundary = "doxograph-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
-        let body: URL
-        do {
-            body = try multipartFile(for: urls, boundary: boundary)
-        } catch {
-            return completion(.failure(error))
-        }
+        // Assembling the body copies every dropped PDF, and drops arrive on the
+        // main thread. Doing that here would freeze the window for the length
+        // of the copy, which on a batch of large papers is long enough to
+        // beachball.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let body: URL
+            do {
+                body = try multipartFile(for: urls, boundary: boundary)
+            } catch {
+                return finish(.failure(error))
+            }
 
-        URLSession.shared.uploadTask(with: request, fromFile: body) { data, response, error in
-            try? FileManager.default.removeItem(at: body)
-            DispatchQueue.main.async {
-                if let error { return completion(.failure(error)) }
+            URLSession.shared.uploadTask(with: request, fromFile: body) { data, response, error in
+                try? FileManager.default.removeItem(at: body)
+                if let error { return finish(.failure(error)) }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard (200..<300).contains(status) else {
                     let detail = data.map { String(decoding: $0.prefix(500), as: UTF8.self) } ?? ""
-                    return completion(.failure(UploadError.rejected(status, detail)))
+                    return finish(.failure(UploadError.rejected(status, detail)))
                 }
                 let queued = (try? JSONSerialization.jsonObject(with: data ?? Data()))
                     .flatMap { ($0 as? [String: Any])?["queued"] as? Int }
-                completion(.success(queued ?? urls.count))
-            }
-        }.resume()
+                finish(.success(queued ?? urls.count))
+            }.resume()
+        }
     }
 
     /// Builds the request body on disk rather than in memory, so dropping a
@@ -74,7 +83,14 @@ enum Uploader {
         guard let handle = FileHandle(forWritingAtPath: path.path) else {
             throw UploadError.unreadable(path.lastPathComponent)
         }
-        defer { try? handle.close() }
+        // A PDF that will not open, or a disk that fills up, throws from the
+        // middle of the loop below. Only a body that reaches the upload gets
+        // cleaned up there, so an abandoned one is swept up here instead.
+        var complete = false
+        defer {
+            try? handle.close()
+            if !complete { try? FileManager.default.removeItem(at: path) }
+        }
 
         for url in urls {
             guard let source = FileHandle(forReadingAtPath: url.path) else {
@@ -95,6 +111,7 @@ enum Uploader {
             try handle.write(contentsOf: Data("\r\n".utf8))
         }
         try handle.write(contentsOf: Data("--\(boundary)--\r\n".utf8))
+        complete = true
         return path
     }
 

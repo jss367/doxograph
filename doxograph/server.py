@@ -380,11 +380,23 @@ def api_bibtex() -> PlainTextResponse:
 
 
 @app.get("/pdf/{key}")
-def serve_pdf(key: str) -> FileResponse:
+def serve_pdf(key: str, inline: bool = False) -> FileResponse:
+    """Hand back a paper's PDF, as an attachment unless asked otherwise.
+
+    A browser keeps the attachment it has always been given. The Mac app asks
+    for `?inline=1`, because a WKWebView reads `Content-Disposition: attachment`
+    as an instruction to download the file rather than draw it, and a window
+    opened to read the paper that instead saves it somewhere is no use.
+    """
     path = store.pdf_path(key)
     if not path.exists():
         raise HTTPException(404, f"no PDF for {key}")
-    return FileResponse(path, media_type="application/pdf", filename=f"{key}.pdf")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"{key}.pdf",
+        content_disposition_type="inline" if inline else "attachment",
+    )
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> None:

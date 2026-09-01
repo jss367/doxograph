@@ -113,9 +113,15 @@ final class ServerController {
             }
             Thread.sleep(forTimeInterval: 0.25)
         }
-        return .failure(.neverAnswered(log.tail(lines: 25).isEmpty
+        // Read the log before stopping, so the reason shown is the silence that
+        // ran out the clock and not the shutdown that followed it. The child is
+        // still running: without this it would hold the port for the rest of the
+        // session, behind a window saying the server never started.
+        let detail = log.tail(lines: 25).isEmpty
             ? "The server did not answer within a minute."
-            : log.tail(lines: 25)))
+            : log.tail(lines: 25)
+        stop()
+        return .failure(.neverAnswered(detail))
     }
 
     // MARK: - Stopping
