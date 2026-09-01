@@ -89,6 +89,22 @@ def test_editing_a_claim_marks_the_tension_stale_and_a_rerun_reopens_it():
     assert tension["stale"] is False
 
 
+def test_a_claim_edited_during_the_model_call_leaves_the_tension_stale():
+    a, b, _ = build_corpus()
+    snapshot = shown()                          # what the prompt was built from
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 4.6% of rollouts."})
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "old text"}], snapshot)
+    [tension] = store.tension_rows()
+    assert tension["stale"] is True             # the judgment is about text nobody can see any more
+    assert tension["fingerprints"][a] == store.claim_fingerprint(snapshot[a])
+
+    result = store.record_tensions("recovery-rate", [
+        {"claims": [a, b], "kind": "tension", "note": "new text"},
+    ], shown())
+    assert result == {"added": 0, "reopened": 1, "kept": 0}
+    assert store.tension_rows()[0]["stale"] is False
+
+
 def test_a_pair_found_under_two_topics_is_one_tension():
     a, b, _ = build_corpus()
     store.update_claim("doe2026recovery", a, {"tags": ["recovery-rate", "scaling"]})

@@ -802,7 +802,10 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
             a, b = _pair(ids)
             if live[a].get("paper") == live[b].get("paper"):
                 continue    # a paper in tension with itself is not what this is for
-            fingerprints = {a: claim_fingerprint(live[a]), b: claim_fingerprint(live[b])}
+            # Fingerprint what the model was shown, not what is on disk now. The
+            # judgment is about the prompt text; if a claim was edited during
+            # the call, `tension_rows` must be able to see that and say stale.
+            fingerprints = {a: claim_fingerprint(claims_by_id[a]), b: claim_fingerprint(claims_by_id[b])}
             note = (item.get("note") or "").strip()
             kind = item.get("kind") if item.get("kind") in TENSION_KINDS else TENSION_KINDS[-1]
             current = by_pair.get((a, b))
