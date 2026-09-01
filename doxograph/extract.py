@@ -1,14 +1,17 @@
 """Read a paper with Claude and return its claims.
 
-The PDF goes in first with a cache breakpoint on it, so re-running extraction
-against a changed field list or a grown tag vocabulary re-reads the paper from
-cache rather than paying for it again.
+The PDF is uploaded once through the Files API and referenced by id, so the
+request body stays small no matter how large the paper is (an inlined base64
+PDF over about 24 MB exceeds the 32 MB request limit). It goes in first with a
+cache breakpoint on it, so re-running extraction against a changed field list
+or a grown tag vocabulary re-reads the paper from cache rather than paying for
+it again.
 """
 
 from __future__ import annotations
 
-import base64
 import json
+from pathlib import Path
 
 import anthropic
 
@@ -192,19 +195,43 @@ def context_block() -> str:
     return "No research context has been recorded, so judge relevance broadly."
 
 
-def _pdf_block(key: str) -> dict:
+def _pdf_fingerprint(pdf: Path) -> dict:
+    """What identifies the bytes an upload was made from."""
+    st = pdf.stat()
+    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = False) -> str:
+    """The Files API id of the paper's PDF, uploading it if none is current.
+
+    The id is kept on the paper with the size and mtime of the file it came
+    from. A re-downloaded or replaced PDF then gets a fresh upload; the same
+    file is never uploaded twice. `force` discards the stored id, for when the
+    server no longer has the file.
+    """
     pdf = store.pdf_path(key)
     if not pdf.exists():
         raise FileNotFoundError(f"no PDF stored for {key}; add one before extracting")
+    fingerprint = _pdf_fingerprint(pdf)
+    upload = store.load_paper(key).get("pdf_upload") or {}
+    current = all(upload.get(k) == v for k, v in fingerprint.items())
+    if upload.get("file_id") and current and not force:
+        return upload["file_id"]
+    api = api or client()
+    uploaded = api.files.upload(file=pdf)
+    with store.paper_lock(key):
+        paper = store.load_paper(key)
+        paper["pdf_upload"] = {"file_id": uploaded.id, **fingerprint}
+        store.save_paper(paper)
+    return uploaded.id
+
+
+def _pdf_block(key: str, force_upload: bool = False) -> dict:
     return {
         "type": "document",
-        "source": {
-            "type": "base64",
-            "media_type": "application/pdf",
-            "data": base64.standard_b64encode(pdf.read_bytes()).decode("ascii"),
-        },
+        "source": {"type": "file", "file_id": upload_pdf(key, force=force_upload)},
         # Cache the paper itself: re-extraction after a schema or vocabulary
-        # change then re-reads it from cache instead of re-uploading it.
+        # change then re-reads it from cache instead of re-reading the file.
         "cache_control": {"type": "ephemeral", "ttl": "1h"},
     }
 
@@ -251,20 +278,32 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         tags = store.load_tags()
         prompt_tags = {t["name"] for t in tags}
         api = client()
-        response = api.messages.create(
-            model=config.MODEL,
-            max_tokens=16000,
-            system=SYSTEM,
-            thinking={"type": "adaptive"},
-            output_config={
-                "effort": "high",
-                "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
-            },
-            messages=[{
-                "role": "user",
-                "content": [_pdf_block(key), {"type": "text", "text": _instructions(paper, tags)}],
-            }],
-        )
+        instructions = {"type": "text", "text": _instructions(paper, tags)}
+
+        def read(pdf_block: dict):
+            return api.messages.create(
+                model=config.MODEL,
+                max_tokens=16000,
+                system=SYSTEM,
+                thinking={"type": "adaptive"},
+                output_config={
+                    "effort": "high",
+                    "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
+                },
+                messages=[{"role": "user", "content": [pdf_block, instructions]}],
+            )
+
+        pdf_block = _pdf_block(key)
+        try:
+            response = read(pdf_block)
+        except (anthropic.BadRequestError, anthropic.NotFoundError) as e:
+            # The stored upload can vanish from the server (deleted from the
+            # console, or the id belongs to another organization's key). When
+            # the error names it, upload the PDF again and read once more.
+            file_id = pdf_block.get("source", {}).get("file_id")
+            if not file_id or file_id not in str(e):
+                raise
+            response = read(_pdf_block(key, force_upload=True))
         if response.stop_reason == "refusal":
             detail = getattr(response.stop_details, "explanation", "") or ""
             raise RuntimeError(f"extraction refused for {key}: {detail}")
