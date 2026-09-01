@@ -17,6 +17,9 @@ final class ServerController {
 
     private static let preferredPort = 8765
     private static let portDefaultsKey = "DoxographPort"
+    /// How long the port walk may spend probing before it settles for the free
+    /// port it has already found. Only unresponsive occupants can run this out.
+    private static let scanBudget: TimeInterval = 5
 
     private let host = "127.0.0.1"
     private let queue = DispatchQueue(label: "com.jss367.doxograph.server")
@@ -203,9 +206,9 @@ final class ServerController {
         case exhausted
     }
 
-    /// Which port this app should use: one pass up the candidates, adopting the
-    /// first Doxograph that answers and otherwise starting on the first port
-    /// nothing is using.
+    /// Which port this app should use: one pass over the whole range, adopting
+    /// the first Doxograph that answers and otherwise starting on the first port
+    /// nothing was using.
     ///
     /// It has to be one pass. Asking only about the preferred port and then
     /// looking separately for somewhere free means a first instance pushed onto
@@ -214,20 +217,42 @@ final class ServerController {
     /// over the same corpus. The store's file locking keeps that from corrupting
     /// anything, but two servers over one corpus is not what the app promises.
     ///
-    /// A free port ends the walk without a probe, which is both the cheap answer
-    /// and the correct one: nothing can be listening past the port this app is
-    /// about to bind. So the probes cost a round trip each only for the run of
-    /// occupied ports below it, and they use a short timeout — a stranger's port
-    /// is the usual reason for one, and a local Doxograph answers `/api/health`
-    /// without touching the corpus.
+    /// The pass does not stop at the first free port either, and that is the
+    /// same bug one step along. A stranger holding 8765 pushes the first
+    /// instance onto 8766; the stranger goes away; the next launch finds 8765
+    /// free, and stopping there would start a second server beside the one still
+    /// answering on 8766. A free port says nothing about the ports above it, so
+    /// the free one is only remembered, and used at the end if the walk turned
+    /// up no Doxograph at all.
+    ///
+    /// Walking the whole range is close to free, because only an occupied port
+    /// costs anything. A free one is settled by the bind in `portIsFree`, which
+    /// is a syscall, so the usual case — nothing else listening anywhere near
+    /// 8765 — is twenty-one binds and no network at all. Probes are paid for
+    /// only where something is actually listening, and they use a short timeout
+    /// off the preferred port, where a stranger is the likely occupant and a
+    /// local Doxograph answers `/api/health` without touching the corpus.
+    ///
+    /// The budget is for the pathological range: twenty services that accept a
+    /// connection and then say nothing would otherwise hold the launch for the
+    /// sum of their timeouts. Once it is spent the walk stops probing and takes
+    /// the free port it has — but only if it has one, since with nowhere to
+    /// start, finishing the walk is the only remaining hope of adopting.
     private func choosePort(from start: Int) -> PortChoice {
+        var firstFree: Int?
+        let deadline = Date().addingTimeInterval(Self.scanBudget)
         for candidate in start...(start + 20) {
-            if portIsFree(candidate) { return .start(candidate) }
+            if portIsFree(candidate) {
+                if firstFree == nil { firstFree = candidate }
+                continue
+            }
+            if let free = firstFree, Date() >= deadline { return .start(free) }
             if health(on: candidate, timeout: candidate == start ? 1.5 : 0.5) != nil {
                 return .adopt(candidate)
             }
         }
-        return .exhausted
+        guard let free = firstFree else { return .exhausted }
+        return .start(free)
     }
 
     private func portIsFree(_ port: Int) -> Bool {
