@@ -129,3 +129,54 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
+    _paper("paper-a", "Paper A")
+    _paper("paper-b", "Paper B")
+
+    async def scenario():
+        prompts = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def accept(dialog):
+                prompts.append(dialog.message)
+                await dialog.accept()
+
+            page.on("dialog", accept)
+            with _server() as url:
+                await page.goto(url)
+                menu = page.locator("#ctxmenu")
+                paper_a = page.locator('#papers [data-paper="paper-a"]')
+                paper_b = page.locator('#papers [data-paper="paper-b"]')
+                await paper_b.click()
+
+                # "All papers" cannot be removed, so it gets no menu.
+                await page.locator('#papers [data-paper=""]').click(button="right")
+                assert await menu.is_hidden()
+
+                # Clicking elsewhere dismisses the menu without touching the paper.
+                await paper_a.click(button="right")
+                await menu.wait_for(state="visible")
+                await page.locator("#main").click()
+                await menu.wait_for(state="hidden")
+                assert await paper_a.count() == 1
+
+                await paper_a.click(button="right")
+                await menu.wait_for(state="visible")
+                assert "Paper A" in await menu.inner_text()
+                await menu.get_by_role("button", name="Remove paper").click()
+                await paper_a.wait_for(state="detached")
+
+                assert prompts == ["Remove Paper A and its claims?"]
+                assert await menu.is_hidden()
+                assert "active" in (await paper_b.get_attribute("class") or "")
+                assert "Paper B" in await page.locator(".paperhead h2").inner_text()
+
+            await browser.close()
+
+    asyncio.run(scenario())
