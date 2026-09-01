@@ -24,8 +24,13 @@ final class ServerController {
     private let host = "127.0.0.1"
     private let queue = DispatchQueue(label: "com.jss367.doxograph.server")
     private let log = LogBuffer()
-    private var process: Process?
     private var port = ServerController.preferredPort
+
+    /// Guards the two fields the startup queue and the quitting main thread
+    /// both touch. Everything else here is read and written on one of them.
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
 
     /// True when this app started the server, and so is responsible for it.
     private(set) var ownsServer = false
@@ -41,6 +46,9 @@ final class ServerController {
                 switch result {
                 case .success: onReady(self.baseURL)
                 case .failure(let failure): onFailure(failure)
+                // The app is on its way out. Nobody is left to show a window to
+                // or an alert about.
+                case .cancelled: break
                 }
             }
         }
@@ -49,11 +57,23 @@ final class ServerController {
     private enum Outcome {
         case success
         case failure(Failure)
+        case cancelled
+    }
+
+    private var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
     }
 
     private func bringUp() -> Outcome {
         let preferred = UserDefaults.standard.object(forKey: Self.portDefaultsKey) as? Int
             ?? Self.preferredPort
+
+        // Both of the steps below can take seconds — the port walk against an
+        // unresponsive neighbour, the command lookup against a login shell that
+        // sources a slow profile — and a quit can land in either of them.
+        guard !isCancelled else { return .cancelled }
 
         switch choosePort(from: preferred) {
         case .exhausted:
@@ -65,10 +85,11 @@ final class ServerController {
             return .success
 
         case .start(let free):
+            guard !isCancelled else { return .cancelled }
             guard let command = Locate.doxographCommand() else { return .failure(.commandNotFound) }
             port = free
             do {
-                try spawn(command: command)
+                guard try spawn(command: command) else { return .cancelled }
             } catch {
                 return .failure(.launchFailed("\(command): \(error.localizedDescription)"))
             }
@@ -77,7 +98,10 @@ final class ServerController {
         }
     }
 
-    private func spawn(command: String) throws {
+    /// Starts the server, and returns false if a quit got there first — in
+    /// which case whatever was started has already been shut down again.
+    @discardableResult
+    private func spawn(command: String) throws -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command)
         process.arguments = ["serve", "--host", host, "--port", String(port)]
@@ -100,8 +124,20 @@ final class ServerController {
             log.append(String(decoding: data, as: UTF8.self))
         }
 
+        // The handoff, and the reason the spawn and the store are inside one
+        // critical section rather than two: a quit that lands between them would
+        // find nothing to stop and leave the child behind. `stop()` takes the
+        // same lock to set the flag and read `process`, so it is always on one
+        // side or the other — it either misses the child entirely, because the
+        // flag was set before it was started, or it finds it stored. Holding the
+        // lock over `run()` costs the quitting thread a `posix_spawn`, which is
+        // not a wait for Python to load.
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled else { return false }
         try process.run()
         self.process = process
+        return true
     }
 
     /// Poll until uvicorn binds. Imports alone take a couple of seconds, and a
@@ -109,8 +145,12 @@ final class ServerController {
     private func waitUntilAnswering() -> Outcome {
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline {
+            // A quit during the wait has already terminated the child, so the
+            // exit below would otherwise be reported as a server that died on
+            // its own, to an app that is closing.
+            if isCancelled { return .cancelled }
             if health(on: port, timeout: 1) != nil { return .success }
-            if let process, !process.isRunning {
+            if let process = startedProcess, !process.isRunning {
                 return .failure(.neverAnswered(log.tail(lines: 25).isEmpty
                     ? "The server exited immediately."
                     : log.tail(lines: 25)))
@@ -124,16 +164,44 @@ final class ServerController {
         let detail = log.tail(lines: 25).isEmpty
             ? "The server did not answer within a minute."
             : log.tail(lines: 25)
-        stop()
+        if let process = startedProcess { shutDown(process) }
         return .failure(.neverAnswered(detail))
     }
 
     // MARK: - Stopping
 
+    /// The server this app spawned, if it got that far. An adopted server never
+    /// appears here: this app did not start it and does not stop it.
+    private var startedProcess: Process? {
+        lock.lock()
+        defer { lock.unlock() }
+        return process
+    }
+
     /// Ask the server to shut down, and give uvicorn a moment to do it cleanly.
-    /// An adopted server is left alone: this app did not start it.
+    ///
+    /// This also cancels a start that is still in flight, which is the only
+    /// reason the flag exists. Quitting while the port walk or the command
+    /// lookup was still running used to find no process to stop and return
+    /// immediately; the background queue would then spawn the server a moment
+    /// later, after the last chance to stop it had passed, leaving a
+    /// `doxograph serve` holding the port with no app attached to it. The next
+    /// launch adopts that orphan, so nothing breaks, but a server the user did
+    /// not ask for should not outlive the app they just quit.
+    ///
+    /// The cancel is one-way, which is what the one caller wants: the app calls
+    /// this from `applicationWillTerminate` and never starts a server again.
     func stop() {
-        guard ownsServer, let process, process.isRunning else { return }
+        lock.lock()
+        cancelled = true
+        let started = process
+        lock.unlock()
+        guard let started else { return }
+        shutDown(started)
+    }
+
+    private func shutDown(_ process: Process) {
+        guard process.isRunning else { return }
         process.terminate()
         let exited = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
