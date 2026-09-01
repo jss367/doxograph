@@ -732,15 +732,20 @@ def tensions_lock():
 
 
 def _read_tensions() -> dict:
+    """Read the ledger, reporting where it is malformed rather than reading it
+    as empty. Every writer starts here, so an empty reading would be written
+    back over the file: every decision gone and ids restarting at t1. Only a
+    missing file is an empty ledger. Writes are atomic, so a half-written file
+    is never seen; anything unreadable was edited by hand or damaged."""
     path = tensions_path()
     if not path.exists():
         return {"seq": 0, "tensions": []}
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"seq": 0, "tensions": []}
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(loaded, dict):
-        return {"seq": 0, "tensions": []}
+        raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
     loaded.setdefault("seq", 0)
     loaded.setdefault("tensions", [])
     return loaded

@@ -1,5 +1,6 @@
 """Tensions: pairs of claims from different papers that disagree."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from doxograph import export, extract, server, store, __main__
@@ -122,6 +123,21 @@ def test_deleting_a_claim_removes_its_tensions_from_view_and_from_the_next_write
     assert store.tension_rows() == []
     store.record_tensions("recovery-rate", [], shown())
     assert store.load_tensions() == []
+
+
+def test_an_unreadable_ledger_is_reported_and_never_written_over():
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    path = store.tensions_path()
+    path.write_text('{"seq": 1, "tensions": [', encoding="utf-8")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        store.record_tensions("recovery-rate", [], shown())
+    with pytest.raises(ValueError):
+        store.tension_rows()
+    assert path.read_text(encoding="utf-8") == '{"seq": 1, "tensions": ['
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="should hold an object"):
+        store.set_tension_status("t1", "confirmed")
 
 
 def test_status_must_be_known_and_tension_must_exist():
