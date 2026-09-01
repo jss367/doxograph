@@ -18,7 +18,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    "playwright>=1.55",
+]
 
 [project.scripts]
 doxograph = "doxograph.__main__:main"
@@ -28,3 +31,8 @@ packages = ["doxograph"]
 
 [tool.setuptools.package-data]
 doxograph = ["static/*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "browser: localhost browser smoke tests",
+]
