@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -2567,3 +2569,113 @@ def test_the_cli_does_not_read_a_local_pdf_whole(monkeypatch, tmp_path, capsys):
 
     assert code == 0, capsys.readouterr()
     assert "local.pdf" not in read_whole, "the CLI read the whole PDF into memory"
+
+
+# --- post-merge stabilization --------------------------------------------
+
+def test_overlapping_extractions_are_serialized_without_blocking_edits(monkeypatch):
+    """A second re-read starts only after the first merge has completed."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4\n")
+
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    second_started = threading.Event()
+    call_guard = threading.Lock()
+    call_count = 0
+
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            nonlocal call_count
+            with call_guard:
+                call_count += 1
+                call_number = call_count
+            if call_number == 1:
+                first_entered.set()
+                assert release_first.wait(5), "test did not release the first extraction"
+            else:
+                second_entered.set()
+            payload = {
+                "summary": "",
+                "relevance": "",
+                "proposed_tags": [],
+                "claims": [{
+                    "text": f"Extraction {call_number}.",
+                    "kind": "finding",
+                    "strength": "aside",
+                    "tags": [],
+                    "evidence": "",
+                    "quote": "",
+                    "locator": "",
+                    "ledger_links": [],
+                }],
+            }
+            block = type("B", (), {"type": "text", "text": json.dumps(payload)})()
+            return type("R", (), {"content": [block], "stop_reason": "end_turn", "usage": None})()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+
+    errors = []
+
+    def run(second=False):
+        if second:
+            second_started.set()
+        try:
+            extract.extract_paper("doe2026study")
+        except BaseException as exc:  # collect worker failures for the assertion thread
+            errors.append(exc)
+
+    first = threading.Thread(target=run)
+    second = threading.Thread(target=run, kwargs={"second": True})
+    first.start()
+    assert first_entered.wait(5), "the first extraction never reached the model"
+    second.start()
+    assert second_started.wait(5)
+    time.sleep(0.2)
+    assert not second_entered.is_set(), "the second model call overlapped the first"
+
+    # The extraction lock must not be the paper lock: an ordinary edit can land
+    # while the model call is parked and is reconciled by the merge.
+    manual = store.add_claim("doe2026study", {"text": "Written while reading."})
+    release_first.set()
+    first.join(5)
+    second.join(5)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    assert second_entered.is_set()
+    claims = store.load_paper("doe2026study")["claims"]
+    assert [claim["text"] for claim in claims] == ["Written while reading.", "Extraction 2."]
+    assert manual["id"] == claims[0]["id"]
+
+
+def test_extraction_lock_is_held_across_processes(tmp_path):
+    """The server and CLI cannot re-read one paper at the same time."""
+    import subprocess
+    import sys
+    import textwrap
+
+    log = tmp_path / "extraction-order.log"
+    script = textwrap.dedent(f"""
+        import os
+        os.environ["DOXOGRAPH_DATA"] = {str(config.data_dir())!r}
+        from doxograph import store
+        with store.extraction_lock("doe2026study"):
+            open({str(log)!r}, "a").write("child\\n")
+    """)
+
+    with store.extraction_lock("doe2026study"):
+        child = subprocess.Popen([sys.executable, "-c", script])
+        time.sleep(0.5)
+        blocked = child.poll() is None
+        log.write_text("parent\n")
+    child.wait(timeout=15)
+
+    assert blocked, "the child did not wait for the extraction lock"
+    assert child.returncode == 0
+    assert log.read_text().split() == ["parent", "child"]

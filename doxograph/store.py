@@ -40,6 +40,7 @@ STOPWORDS = {
 # because `doxograph serve` and a `doxograph extract` run from a shell are two
 # processes writing the same corpus and a thread lock says nothing about that.
 _locks: dict[str, threading.RLock] = {}
+_extraction_locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 _depth = threading.local()
 
@@ -140,6 +141,22 @@ def paper_lock(key: str):
     with _locks_guard:
         lock = _locks.setdefault(key, threading.RLock())
     with lock, _reentrant_file_lock(f"paper:{key}", config.locks_dir() / f"{key}.lock"):
+        yield
+
+
+@contextlib.contextmanager
+def extraction_lock(key: str):
+    """Serialize model-backed extractions for one paper.
+
+    This is deliberately separate from ``paper_lock``. An extraction holds it
+    across the slow model call so another re-read cannot take a stale snapshot,
+    while ordinary claim edits remain free to land and are reconciled by the
+    merge under ``paper_lock``.
+    """
+    with _locks_guard:
+        lock = _extraction_locks.setdefault(key, threading.RLock())
+    path = config.locks_dir() / f"{key}.extraction.lock"
+    with lock, _reentrant_file_lock(f"extraction:{key}", path):
         yield
 
 

@@ -234,38 +234,43 @@ def claim_state(claim: dict) -> str:
 
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
     """Run extraction and merge the result into the stored paper."""
-    paper = store.load_paper(key)
-    # The claims as they stood when the prompt was built. A re-read is long
-    # enough for somebody to correct a claim while it runs, and a correction
-    # made after the model saw the paper is newer than anything it returns.
-    claims_before = {c["id"]: claim_state(c) for c in paper.get("claims", [])}
-    # One read of the vocabulary, used both to build the prompt and to record
-    # what the model was shown. Reading it twice would let a tag added between
-    # the two reads reach the prompt without reaching the snapshot, and the merge
-    # would then be unable to tell it from a name the model invented.
-    tags = store.load_tags()
-    prompt_tags = {t["name"] for t in tags}
-    api = client()
-    response = api.messages.create(
-        model=config.MODEL,
-        max_tokens=16000,
-        system=SYSTEM,
-        thinking={"type": "adaptive"},
-        output_config={
-            "effort": "high",
-            "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
-        },
-        messages=[{
-            "role": "user",
-            "content": [_pdf_block(key), {"type": "text", "text": _instructions(paper, tags)}],
-        }],
-    )
-    if response.stop_reason == "refusal":
-        detail = getattr(response.stop_details, "explanation", "") or ""
-        raise RuntimeError(f"extraction refused for {key}: {detail}")
-    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
-    return merge_extraction(key, payload, response, keep_reviewed=keep_reviewed,
-                            prompt_tags=prompt_tags, claims_before=claims_before)
+    # A second re-read starting from the same snapshot cannot be distinguished
+    # from claims a person adds while the first call runs: both appear as new
+    # ids at merge time. Serialize only extractions across the model call. The
+    # paper lock remains short-lived, so manual edits can still land meanwhile.
+    with store.extraction_lock(key):
+        paper = store.load_paper(key)
+        # The claims as they stood when the prompt was built. A re-read is long
+        # enough for somebody to correct a claim while it runs, and a correction
+        # made after the model saw the paper is newer than anything it returns.
+        claims_before = {c["id"]: claim_state(c) for c in paper.get("claims", [])}
+        # One read of the vocabulary, used both to build the prompt and to record
+        # what the model was shown. Reading it twice would let a tag added between
+        # the two reads reach the prompt without reaching the snapshot, and the merge
+        # would then be unable to tell it from a name the model invented.
+        tags = store.load_tags()
+        prompt_tags = {t["name"] for t in tags}
+        api = client()
+        response = api.messages.create(
+            model=config.MODEL,
+            max_tokens=16000,
+            system=SYSTEM,
+            thinking={"type": "adaptive"},
+            output_config={
+                "effort": "high",
+                "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
+            },
+            messages=[{
+                "role": "user",
+                "content": [_pdf_block(key), {"type": "text", "text": _instructions(paper, tags)}],
+            }],
+        )
+        if response.stop_reason == "refusal":
+            detail = getattr(response.stop_details, "explanation", "") or ""
+            raise RuntimeError(f"extraction refused for {key}: {detail}")
+        payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+        return merge_extraction(key, payload, response, keep_reviewed=keep_reviewed,
+                                prompt_tags=prompt_tags, claims_before=claims_before)
 
 
 def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,

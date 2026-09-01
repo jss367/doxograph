@@ -176,10 +176,12 @@ or too confidently worded. The retagger has its own, shorter prompt in
 
 ```
 .venv/bin/pip install -e ".[dev]"
+.venv/bin/python -m playwright install chromium
 .venv/bin/python -m pytest
 ```
 
-The suite is offline. It covers reference parsing, the store and its status
+The suite is offline: its browser smoke test runs against a temporary local
+server and corpus. It covers reference parsing, the store and its status
 transitions, tag renaming and deletion across claims, the extraction merge
 including the keep-reviewed path, HTML escaping in the export, and BibTeX.
 Nothing in it calls the API.

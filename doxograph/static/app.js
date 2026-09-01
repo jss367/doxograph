@@ -14,7 +14,8 @@ const NEW_CLAIM_ID = '__new__';
 // silently discards the edit. A map rather than one slot, so opening a second
 // claim's editor does not throw away the first one's draft.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
-            editing: null, selectedId: null, newClaim: null, drafts: {}, error: null };
+            editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
+            drafts: {}, error: null };
 
 function blankClaim(paper) {
   return {
@@ -406,9 +407,23 @@ function closeEditorsNotBelongingTo(paper) {
     const row = S.claims.find((c) => c.id === V.editing);
     if (row && row.paper !== paper) V.editing = null;
   }
+  parkNewClaimForNavigation(paper);
+}
+
+function parkNewClaimForNavigation(paper) {
+  // Ordinary unsaved drafts are intentionally abandoned when leaving their
+  // paper. A failed submission is different: the user already clicked Save,
+  // so keep it outside the active-paper slot and restore it when they return.
   if (V.newClaim && V.newClaim.paper !== paper) {
+    if (V.newClaim.saveFailed) {
+      V.failedNewClaims[V.newClaim.paper] = V.newClaim;
+    }
     V.newClaim = null;
     if (V.editing === NEW_CLAIM_ID) V.editing = null;
+  }
+  if (!V.newClaim && paper && V.failedNewClaims[paper]) {
+    V.newClaim = V.failedNewClaims[paper];
+    delete V.failedNewClaims[paper];
   }
 }
 
@@ -519,7 +534,13 @@ async function saveClaim(wrap, patch) {
       // Moving to another paper abandons an unsaved new claim, so the draft
       // can be gone by now. The user did click Save on this text, so put it
       // back rather than losing it to a failure they did not choose.
-      if (!V.newClaim) V.newClaim = { ...blankClaim(paper), ...patch };
+      const failedDraft = { ...blankClaim(paper), ...patch, saveFailed: true };
+      if ((!V.paper || V.paper === paper) &&
+          (!V.newClaim || V.newClaim.paper === paper)) {
+        V.newClaim = failedDraft;
+      } else {
+        V.failedNewClaims[paper] = failedDraft;
+      }
       V.error = (!V.paper || V.paper === paper)
         ? `Could not save the claim: ${error.message}`
         : `Could not save a new claim in ${paper}: ${error.message}. `
@@ -533,6 +554,7 @@ async function saveClaim(wrap, patch) {
     captureOpenEditor();
     if (V.editing === NEW_CLAIM_ID) V.editing = null;
     V.newClaim = null;
+    delete V.failedNewClaims[paper];
     await refreshAll();          // a row appeared, so the list has to be rebuilt
     return;
   }
@@ -642,7 +664,9 @@ $('content').addEventListener('click', async (event) => {
     if (act === 'add-claim') {
       captureOpenEditor();
       // Resume a held draft rather than overwriting what was typed into it.
-      if (!V.newClaim || !(V.newClaim.text || '').trim()) V.newClaim = blankClaim(paper);
+      if (!V.newClaim || V.newClaim.paper !== paper || !(V.newClaim.text || '').trim()) {
+        V.newClaim = blankClaim(paper);
+      }
       V.editing = NEW_CLAIM_ID;
       renderContent();
       return;
@@ -663,6 +687,7 @@ $('content').addEventListener('click', async (event) => {
         V.newClaim = null;
         if (V.editing === NEW_CLAIM_ID) V.editing = null;
       }
+      delete V.failedNewClaims[paper];
       V.paper = null;
       V.selectedId = null;
       V.error = null;
@@ -712,10 +737,10 @@ $('papers').addEventListener('click', (event) => {
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
   // that one was never persisted and belongs to the paper being left.
   captureOpenEditor();
+  parkNewClaimForNavigation(next);
   V.paper = next;
   V.selectedId = null;
   V.editing = null;
-  V.newClaim = null;
   render();   // the editor is closed here, so render redraws the list anyway
 });
 
