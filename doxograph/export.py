@@ -185,14 +185,17 @@ def render(title: str = "Doxograph") -> str:
     if tensions:
         body.append("<h2>Where the papers disagree</h2>")
         body.append('<p class="sub">Pairs of claims from different papers that pull against each '
-                    'other. Confirmed ones have been checked by hand; open ones have not.</p>')
+                    'other. Confirmed ones have been checked by hand; open ones have not. One '
+                    'judged against earlier text has had a claim edited since, so its verdict '
+                    'may no longer fit.</p>')
         for tension in tensions:
             topics = "".join(f'<span class="tag">#{_e(t)}</span>' for t in tension.get("topics", []))
             status = "" if tension.get("status") == "confirmed" else \
                 '<span class="rel-tag">open</span>'
+            stale = '<span class="rel-tag">judged against earlier text</span>' if tension.get("stale") else ""
             body.append('<div class="ledger">')
             body.append(f'<p class="own"><span class="kind {_e(tension.get("kind"))}">'
-                        f'{_e(tension.get("kind"))}</span>{status}{topics}</p>')
+                        f'{_e(tension.get("kind"))}</span>{status}{stale}{topics}</p>')
             body.extend(_claim_html(r, ledger_by_id) for r in tension["claims"])
             if tension.get("note"):
                 body.append(f'<p class="sub">{_e(tension["note"])}</p>')

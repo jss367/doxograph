@@ -251,6 +251,15 @@ def test_export_lists_open_and_confirmed_tensions_but_not_dismissed():
     assert "Drop this one." not in html
 
 
+def test_export_marks_a_confirmed_tension_whose_claim_was_edited_since():
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    store.set_tension_status(store.tension_rows()[0]["id"], "confirmed")
+    assert "judged against earlier text</span>" not in export.render()
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 4.6% of rollouts."})
+    assert "judged against earlier text</span>" in export.render()
+
+
 def test_cli_lists_tensions_without_calling_the_model(capsys):
     a, b, _ = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "The note."}], shown())
