@@ -180,3 +180,37 @@ def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
+    _paper("paper-a", "Paper A")
+    _paper("paper-b", "Paper B")
+
+    async def scenario():
+        draft_text = "An edit that Escape on the menu must not throw away."
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                menu = page.locator("#ctxmenu")
+                textarea = page.locator('form[data-form="paper-b-c1"] textarea[name="text"]')
+                await page.locator('[data-act="edit"][data-claim="paper-b-c1"]').click()
+                await textarea.fill(draft_text)
+
+                # The first Escape only dismisses the menu; the editor keeps its text.
+                await page.locator('#papers [data-paper="paper-a"]').click(button="right")
+                await menu.wait_for(state="visible")
+                await page.keyboard.press("Escape")
+                await menu.wait_for(state="hidden")
+                assert await textarea.input_value() == draft_text
+
+                # With the menu closed, Escape reaches the editor as before.
+                await page.keyboard.press("Escape")
+                await textarea.wait_for(state="detached")
+
+            await browser.close()
+
+    asyncio.run(scenario())

@@ -791,9 +791,8 @@ $('ctxmenu').addEventListener('click', async (event) => {
 document.addEventListener('mousedown', (event) => {
   if (!$('ctxmenu').contains(event.target)) closePaperMenu();
 });
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') closePaperMenu();
-});
+// Escape is handled in the keyboard section below, ahead of the editor keys,
+// so closing the menu does not also cancel an open editor.
 $('side').addEventListener('scroll', closePaperMenu);
 window.addEventListener('resize', closePaperMenu);
 
@@ -870,6 +869,10 @@ function moveSelection(rows, step) {
 }
 
 document.addEventListener('keydown', async (event) => {
+  // While the paper menu is open Escape belongs to it. Falling through to the
+  // editor branches would also run `cancelEdit` and drop a draft the user
+  // only meant to keep by dismissing the menu.
+  if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key === 'Escape' && V.editing) cancelEdit();
