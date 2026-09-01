@@ -132,6 +132,23 @@ def test_renaming_or_deleting_a_tag_rewrites_tension_topics():
     assert tension["topics"] == []
 
 
+def test_a_topic_renamed_during_the_model_call_is_not_written_back():
+    a, b, _ = build_corpus()
+    snapshot = shown()                          # the prompt went out under "recovery-rate"
+    store.rename_tag("recovery-rate", "recovery")
+    result = store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], snapshot)
+    assert result == {"added": 1, "reopened": 0, "kept": 0}
+    [tension] = store.tension_rows()
+    assert tension["topics"] == []              # the pair is kept; the dead name is not
+
+    # The same race against a tension already on file must not re-add the name.
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], snapshot)
+    assert store.tension_rows()[0]["topics"] == []
+    # The next pass under the live name attaches it.
+    store.record_tensions("recovery", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    assert store.tension_rows()[0]["topics"] == ["recovery"]
+
+
 def test_deleting_a_claim_removes_its_tensions_from_view_and_from_the_next_write():
     a, b, c = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())

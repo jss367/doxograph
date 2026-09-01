@@ -804,6 +804,11 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
     - A pair the model did not return this time is kept. The pass is per topic
       and a claim can carry several topics, so absence from one topic's answer
       says nothing; and a confirmed tension is the reviewer's, not the model's.
+    - `topic` is attached only if both claims still carry it now. The tag can
+      be renamed or deleted while the model call is in flight; `_retag_all`
+      has already rewritten the tensions on file by then, and this late result
+      must not put the old name back. The pair itself is still recorded, and
+      the next pass under the new name attaches that.
 
     Returns `{"added": n, "reopened": n, "kept": n}`.
     """
@@ -829,9 +834,10 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
             fingerprints = {a: claim_fingerprint(claims_by_id[a]), b: claim_fingerprint(claims_by_id[b])}
             note = (item.get("note") or "").strip()
             kind = item.get("kind") if item.get("kind") in TENSION_KINDS else TENSION_KINDS[-1]
+            topic_live = all(topic in (live[i].get("tags") or []) for i in (a, b))
             current = by_pair.get((a, b))
             if current is not None:
-                if topic not in current.setdefault("topics", []):
+                if topic_live and topic not in current.setdefault("topics", []):
                     current["topics"].append(topic)
                     current["topics"].sort()
                 if current.get("fingerprints") == fingerprints:
@@ -845,7 +851,7 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
             record = {
                 "id": f"t{data['seq']}",
                 "claims": [a, b],
-                "topics": [topic],
+                "topics": [topic] if topic_live else [],
                 "kind": kind,
                 "note": note,
                 "status": "open",
