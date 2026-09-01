@@ -585,6 +585,36 @@ async function saveClaim(wrap, patch) {
   }
 }
 
+// Shared by the Remove button in the paper header and the right-click menu in
+// the paper list, so the menu can remove a paper that is not the one on screen.
+async function removePaper(paper) {
+  const p = S.papers.find((x) => x.key === paper);
+  if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
+  await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
+  // Close an editor that belonged to the deleted paper, so its form is not
+  // captured as a draft for a claim that no longer exists. An editor on some
+  // other paper's claim stays open, which is why this ends in `refreshAll`:
+  // `refresh` would leave the claim list alone while an editor is open and
+  // the deleted paper's cards would stay on screen with buttons that 404.
+  S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
+  if (V.editing && V.editing !== NEW_CLAIM_ID) {
+    const row = S.claims.find((c) => c.id === V.editing);
+    if (!row || row.paper === paper) V.editing = null;
+  }
+  if (V.newClaim && V.newClaim.paper === paper) {
+    V.newClaim = null;
+    if (V.editing === NEW_CLAIM_ID) V.editing = null;
+  }
+  delete V.failedNewClaims[paper];
+  // Removing a paper from the list while reading another one keeps that one
+  // open; only a paper that was itself on screen falls back to "All papers".
+  if (V.paper === paper) V.paper = null;
+  const selected = S.claims.find((c) => c.id === V.selectedId);
+  if (!selected || selected.paper === paper) V.selectedId = null;
+  V.error = null;
+  await refreshAll();
+}
+
 $('content').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
   if (button) {
@@ -672,26 +702,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'del-paper') {
-      const p = S.papers.find((x) => x.key === paper);
-      if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
-      await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
-      // Clear the editor before refreshing. `render()` skips the content while
-      // `V.editing` is set, so the deleted paper's header and form would stay
-      // on screen and saving would only 404 and redraw the same stale editor.
-      S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
-      if (V.editing && V.editing !== NEW_CLAIM_ID) {
-        const row = S.claims.find((c) => c.id === V.editing);
-        if (!row || row.paper === paper) V.editing = null;
-      }
-      if (V.newClaim && V.newClaim.paper === paper) {
-        V.newClaim = null;
-        if (V.editing === NEW_CLAIM_ID) V.editing = null;
-      }
-      delete V.failedNewClaims[paper];
-      V.paper = null;
-      V.selectedId = null;
-      V.error = null;
-      await refresh();
+      await removePaper(paper);
       return;
     }
     if (act === 'accept-tag' || act === 'reject-tag') {
@@ -743,6 +754,49 @@ $('papers').addEventListener('click', (event) => {
   V.editing = null;
   render();   // the editor is closed here, so render redraws the list anyway
 });
+
+// --- paper context menu --------------------------------------------------
+
+function openPaperMenu(paper, x, y) {
+  const p = S.papers.find((row) => row.key === paper);
+  const menu = $('ctxmenu');
+  menu.innerHTML = `
+    <li class="mh">${esc(p ? p.title || paper : paper)}</li>
+    <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
+  menu.hidden = false;
+  // Measure after showing, then keep the whole menu inside the window.
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 4))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 4))}px`;
+}
+
+function closePaperMenu() {
+  $('ctxmenu').hidden = true;
+}
+
+$('papers').addEventListener('contextmenu', (event) => {
+  const li = event.target.closest('[data-paper]');
+  if (!li || !li.dataset.paper) return;   // "All papers" has nothing to remove
+  event.preventDefault();
+  openPaperMenu(li.dataset.paper, event.clientX, event.clientY);
+});
+
+$('ctxmenu').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-act]');
+  if (!button) return;
+  closePaperMenu();
+  if (button.dataset.act === 'del-paper') await removePaper(button.dataset.paper);
+});
+
+// A press anywhere outside the menu dismisses it. Right-clicking another paper
+// also lands here first, then the contextmenu handler above reopens it there.
+document.addEventListener('mousedown', (event) => {
+  if (!$('ctxmenu').contains(event.target)) closePaperMenu();
+});
+// Escape is handled in the keyboard section below, ahead of the editor keys,
+// so closing the menu does not also cancel an open editor.
+$('side').addEventListener('scroll', closePaperMenu);
+window.addEventListener('resize', closePaperMenu);
 
 $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
@@ -817,6 +871,10 @@ function moveSelection(rows, step) {
 }
 
 document.addEventListener('keydown', async (event) => {
+  // While the paper menu is open Escape belongs to it. Falling through to the
+  // editor branches would also run `cancelEdit` and drop a draft the user
+  // only meant to keep by dismissing the menu.
+  if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key === 'Escape' && V.editing) cancelEdit();

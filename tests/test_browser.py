@@ -129,3 +129,123 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
+    _paper("paper-a", "Paper A")
+    _paper("paper-b", "Paper B")
+
+    async def scenario():
+        prompts = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def accept(dialog):
+                prompts.append(dialog.message)
+                await dialog.accept()
+
+            page.on("dialog", accept)
+            with _server() as url:
+                await page.goto(url)
+                menu = page.locator("#ctxmenu")
+                paper_a = page.locator('#papers [data-paper="paper-a"]')
+                paper_b = page.locator('#papers [data-paper="paper-b"]')
+                await paper_b.click()
+
+                # "All papers" cannot be removed, so it gets no menu.
+                await page.locator('#papers [data-paper=""]').click(button="right")
+                assert await menu.is_hidden()
+
+                # Clicking elsewhere dismisses the menu without touching the paper.
+                await paper_a.click(button="right")
+                await menu.wait_for(state="visible")
+                await page.locator("#main").click()
+                await menu.wait_for(state="hidden")
+                assert await paper_a.count() == 1
+
+                await paper_a.click(button="right")
+                await menu.wait_for(state="visible")
+                assert "Paper A" in await menu.inner_text()
+                await menu.get_by_role("button", name="Remove paper").click()
+                await paper_a.wait_for(state="detached")
+
+                assert prompts == ["Remove Paper A and its claims?"]
+                assert await menu.is_hidden()
+                assert "active" in (await paper_b.get_attribute("class") or "")
+                assert "Paper B" in await page.locator(".paperhead h2").inner_text()
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
+    _paper("paper-a", "Paper A")
+    _paper("paper-b", "Paper B")
+
+    async def scenario():
+        draft_text = "An edit that Escape on the menu must not throw away."
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                menu = page.locator("#ctxmenu")
+                textarea = page.locator('form[data-form="paper-b-c1"] textarea[name="text"]')
+                await page.locator('[data-act="edit"][data-claim="paper-b-c1"]').click()
+                await textarea.fill(draft_text)
+
+                # The first Escape only dismisses the menu; the editor keeps its text.
+                await page.locator('#papers [data-paper="paper-a"]').click(button="right")
+                await menu.wait_for(state="visible")
+                await page.keyboard.press("Escape")
+                await menu.wait_for(state="hidden")
+                assert await textarea.input_value() == draft_text
+
+                # With the menu closed, Escape reaches the editor as before.
+                await page.keyboard.press("Escape")
+                await textarea.wait_for(state="detached")
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
+    _paper("paper-a", "Paper A")
+    _paper("paper-b", "Paper B")
+
+    async def scenario():
+        draft_text = "An edit on Paper B that outlives removing Paper A."
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            page.on("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
+            with _server() as url:
+                await page.goto(url)
+                menu = page.locator("#ctxmenu")
+                textarea = page.locator('form[data-form="paper-b-c1"] textarea[name="text"]')
+                cards_a = page.locator('#content .claim[data-paper="paper-a"]')
+                await cards_a.first.wait_for()
+                await page.locator('[data-act="edit"][data-claim="paper-b-c1"]').click()
+                await textarea.fill(draft_text)
+
+                await page.locator('#papers [data-paper="paper-a"]').click(button="right")
+                await menu.get_by_role("button", name="Remove paper").click()
+                await page.locator('#papers [data-paper="paper-a"]').wait_for(state="detached")
+
+                # Paper A's cards leave with it even though Paper B's editor is open,
+                # and that editor keeps what was typed.
+                await cards_a.first.wait_for(state="detached")
+                assert await textarea.input_value() == draft_text
+
+            await browser.close()
+
+    asyncio.run(scenario())
