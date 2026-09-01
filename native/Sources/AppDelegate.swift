@@ -138,13 +138,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard Uploader.uploadsInFlight > 0 else { return .terminateNow }
             return confirmQuit(reading: 0) ? .terminateNow : .terminateCancel
         }
+        // Count the uploads on both sides of the question, because either
+        // reading alone can miss work the other sees. The server answers a POST
+        // only once it has staged the file and made the job, so an upload that
+        // lands while the health request is in the air leaves a count that says
+        // zero about a moment when the job did not exist yet. Reading the
+        // uploads first catches that one; reading them again afterwards catches
+        // a paper dropped while the question was being asked.
+        let uploadingBefore = Uploader.uploadsInFlight
         server.activeJobs { busy in
-            // Asking the server took a moment; read the uploads after it, not
-            // before, so the answer is about now.
-            guard (busy ?? 0) > 0 || Uploader.uploadsInFlight > 0 else {
-                return NSApp.reply(toApplicationShouldTerminate: true)
+            guard uploadingBefore == 0, (busy ?? 0) == 0, Uploader.uploadsInFlight == 0 else {
+                return NSApp.reply(toApplicationShouldTerminate: self.confirmQuit(reading: busy ?? 0))
             }
-            NSApp.reply(toApplicationShouldTerminate: self.confirmQuit(reading: busy ?? 0))
+            NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
     }
