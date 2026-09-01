@@ -603,7 +603,22 @@ def rename_tag(old: str, new: str) -> None:
 
 
 def _retag_all(old: str, new: str | None) -> None:
-    """Rewrite or drop a tag across every paper. Called holding `vocab_lock`."""
+    """Rewrite or drop a tag across every paper and every tension's topics.
+    Called holding `vocab_lock`; takes `tensions_lock` inside it, which is the
+    only order those two are ever held in."""
+    with tensions_lock():
+        data = _read_tensions()
+        touched = False
+        for tension in data["tensions"]:
+            if old not in tension.get("topics", []):
+                continue
+            kept = {t for t in tension["topics"] if t != old}
+            if new:
+                kept.add(new)
+            tension["topics"] = sorted(kept)   # a tension with no topics left is still a tension
+            touched = True
+        if touched:
+            _save_tensions(data)
     for key in paper_keys():
         with paper_lock(key):
             try:
@@ -725,8 +740,9 @@ def tensions_path() -> Path:
 
 @contextlib.contextmanager
 def tensions_lock():
-    """Guard `tensions.json`. Nothing else nests inside it, and it nests inside
-    nothing: the pass reads papers without their locks and writes only here."""
+    """Guard `tensions.json`. Nothing else nests inside it. It nests inside
+    `vocab_lock` alone, when a tag rename rewrites topics here; the tension
+    pass itself reads papers without their locks and writes only here."""
     with _tensions, _reentrant_file_lock("tensions", config.locks_dir() / "tensions.lock"):
         yield
 

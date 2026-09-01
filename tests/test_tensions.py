@@ -116,6 +116,22 @@ def test_a_pair_found_under_two_topics_is_one_tension():
     assert tension["topics"] == ["recovery-rate", "scaling"]
 
 
+def test_renaming_or_deleting_a_tag_rewrites_tension_topics():
+    a, b, _ = build_corpus()
+    store.update_claim("doe2026recovery", a, {"tags": ["recovery-rate", "scaling"]})
+    store.update_claim("li2025steer", b, {"tags": ["recovery-rate", "scaling"]})
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    store.record_tensions("scaling", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+
+    store.rename_tag("recovery-rate", "recovery")
+    assert store.tension_rows()[0]["topics"] == ["recovery", "scaling"]
+    store.rename_tag("scaling", "recovery")     # merging two topics leaves one, not a duplicate
+    assert store.tension_rows()[0]["topics"] == ["recovery"]
+    store.delete_tag("recovery")
+    [tension] = store.tension_rows()            # a tension without a topic is still a tension
+    assert tension["topics"] == []
+
+
 def test_deleting_a_claim_removes_its_tensions_from_view_and_from_the_next_write():
     a, b, c = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
