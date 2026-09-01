@@ -179,6 +179,23 @@ def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
         _prune_jobs()
 
 
+def _run_tensions(job: dict, topics: list[str]) -> None:
+    try:
+        added = reopened = 0
+        for index, topic in enumerate(topics, 1):
+            _set(job, state="reading", detail=f"{index} of {len(topics)}: {topic}")
+            result = extract.find_tensions(topic)
+            added += result["added"]
+            reopened += result["reopened"]
+        summary = f"{added} new" + (f", {reopened} reopened" if reopened else "")
+        _set(job, state="done", detail=f"{len(topics)} topics, {summary}")
+    except Exception as exc:
+        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+    finally:
+        _prune_jobs()
+
+
 def _run_retag(job: dict, keys: list[str]) -> None:
     try:
         for index, key in enumerate(keys, 1):
@@ -215,6 +232,14 @@ class ProposedTagsBody(BaseModel):
 
 class RetagBody(BaseModel):
     keys: list[str] | None = None
+
+
+class TensionsBody(BaseModel):
+    topics: list[str] | None = None
+
+
+class TensionStatusBody(BaseModel):
+    status: str
 
 
 class ExportBody(BaseModel):
@@ -312,6 +337,9 @@ def state() -> dict:
         "tags": store.load_tags(),
         "tag_counts": store.tag_counts(rows),
         "ledger": store.load_ledger(),
+        "tensions": store.tension_rows(rows),
+        "tension_kinds": store.TENSION_KINDS,
+        "tension_statuses": store.TENSION_STATUSES,
         "kinds": config.CLAIM_KINDS,
         "strengths": config.CLAIM_STRENGTHS,
         "relations": config.LEDGER_RELATIONS,
@@ -473,6 +501,41 @@ def patch_tag(name: str, body: RenameBody) -> dict:
 def remove_tag(name: str) -> dict:
     store.delete_tag(name)
     return {"tags": store.load_tags()}
+
+
+@app.post("/api/tensions")
+def find_tensions(body: TensionsBody) -> dict:
+    """Queue a pass over every topic where two papers could disagree.
+
+    Topics named in the body are taken as given, even ones with a single paper:
+    the pass returns nothing for them, cheaply, and a client that asks for a
+    topic by name should get an answer about that topic.
+    """
+    topics = body.topics if body.topics else store.tension_topics()
+    if not topics:
+        return {"queued": 0}
+    job = _new_job(f"tensions in {len(topics)} topics")
+    _pool.submit(_run_tensions, job, topics)
+    return {"queued": len(topics)}
+
+
+@app.patch("/api/tensions/{tension_id}")
+def patch_tension(tension_id: str, body: TensionStatusBody) -> dict:
+    try:
+        return store.set_tension_status(tension_id, body.status)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except KeyError:
+        raise HTTPException(404, f"no tension {tension_id}")
+
+
+@app.delete("/api/tensions/{tension_id}")
+def remove_tension(tension_id: str) -> dict:
+    try:
+        store.delete_tension(tension_id)
+    except KeyError:
+        raise HTTPException(404, f"no tension {tension_id}")
+    return {"deleted": tension_id}
 
 
 @app.post("/api/export")

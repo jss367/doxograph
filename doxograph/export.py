@@ -43,7 +43,7 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .kind { display: inline-block; font-size: .72rem; text-transform: uppercase;
   letter-spacing: .04em; padding: .05rem .35rem; border: 1px solid var(--line);
   border-radius: 3px; margin-right: .4rem; color: var(--muted); }
-.kind.negative, .kind.conjecture { color: var(--warn); border-color: var(--warn); }
+.kind.negative, .kind.conjecture, .kind.contradiction { color: var(--warn); border-color: var(--warn); }
 .tag { font-size: .78rem; color: var(--accent); margin-right: .4rem; white-space: nowrap; }
 .paper { padding: .9rem 0; border-bottom: 1px solid var(--line); }
 .paper .title { font-weight: 600; }
@@ -145,6 +145,7 @@ def render(title: str = "Doxograph") -> str:
     counts = store.tag_counts(rows)
     ledger = store.load_ledger()
     ledger_by_id = {c["id"]: c for c in ledger}
+    tensions = [t for t in store.tension_rows(rows) if t.get("status") != "dismissed"]
 
     body = [
         f"<h1>{_e(title)}</h1>",
@@ -180,6 +181,22 @@ def render(title: str = "Doxograph") -> str:
                     f'<span class="count" data-total="{len(untagged)}">{len(untagged)}</span></h3>')
         body.extend(_claim_html(r, ledger_by_id) for r in untagged)
         body.append("</section>")
+
+    if tensions:
+        body.append("<h2>Where the papers disagree</h2>")
+        body.append('<p class="sub">Pairs of claims from different papers that pull against each '
+                    'other. Confirmed ones have been checked by hand; open ones have not.</p>')
+        for tension in tensions:
+            topics = "".join(f'<span class="tag">#{_e(t)}</span>' for t in tension.get("topics", []))
+            status = "" if tension.get("status") == "confirmed" else \
+                '<span class="rel-tag">open</span>'
+            body.append('<div class="ledger">')
+            body.append(f'<p class="own"><span class="kind {_e(tension.get("kind"))}">'
+                        f'{_e(tension.get("kind"))}</span>{status}{topics}</p>')
+            body.extend(_claim_html(r, ledger_by_id) for r in tension["claims"])
+            if tension.get("note"):
+                body.append(f'<p class="sub">{_e(tension["note"])}</p>')
+            body.append("</div>")
 
     if ledger:
         body.append("<h2>Bearing on my own claims</h2>")

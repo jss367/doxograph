@@ -28,6 +28,11 @@ reads it with Claude, and records:
 - how it bears on your own claims: supports, contradicts, supplies a method
   for, refines, or is independent of them
 
+Once several papers share a topic, a second pass finds where they disagree:
+pairs of claims from different papers that pull against each other on the same
+question, each with a note on what the disagreement is and what might account
+for it. These are reviewed too, and the confirmed ones go into the export.
+
 Then you review. Extraction gets claims subtly wrong — wording that is too
 strong, a result attributed to the wrong condition, a missing caveat — so every
 claim starts unreviewed and the web app is built for correcting them quickly.
@@ -50,6 +55,8 @@ doxograph add 2602.06941              # arXiv ID, arXiv URL, DOI, PDF URL, or a 
 doxograph add --no-extract paper.pdf  # fetch now, read later
 doxograph extract                     # read every paper that has no claims yet
 doxograph retag                       # reassign topics against the current vocabulary
+doxograph tensions                    # find claims from different papers that disagree
+doxograph tensions --list             # show what has been found, without calling the model
 doxograph list                        # what is in the corpus
 doxograph tags                        # topics and their use counts
 doxograph export --out notes.html     # one self-contained HTML file
@@ -68,7 +75,8 @@ cited paper instead of the one you pasted. When nothing identifies the page,
 paste the arXiv ID, the DOI, or a direct PDF link.
 
 In the web app: drop PDFs anywhere on the page, or paste references into the
-box. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
+box. The Tensions entry in the sidebar shows where papers disagree; `Escape`
+returns to the claims. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
 reviewed, `Escape` cancels. Clicking a topic filters to it.
 
 "Add claim by hand" opens an editor that exists only in the browser; the claim
@@ -106,6 +114,7 @@ pdfs/<key>.pdf       the paper itself
 locks/               lock files, so two processes do not write at once
 retired-keys.json    keys of removed papers, never issued again
 tags.yaml            the topic vocabulary
+tensions.json        where papers disagree, and what you decided about each
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 export/              generated HTML
@@ -162,6 +171,27 @@ this" rather than a pile of notes.
 Free text describing your research and what makes a paper relevant. It goes
 into the extraction prompt and is the main lever on the quality of the
 `relevance` line and the ledger links.
+
+## Where papers disagree
+
+A doxography is only interesting where the recorded opinions differ, so
+Doxograph looks for that directly. `doxograph tensions`, or Find tensions in the
+web app, takes each topic with claims from at least two papers and asks the
+model which pairs of claims pull against each other. It sends claim text, not
+PDFs, so the pass is about as cheap as a retag.
+
+Each pair is a *contradiction* (both cannot be true as stated) or a *tension*
+(they point opposite ways but a difference in model, scale, task, or metric
+might reconcile them), with a note saying what the disagreement is. They start
+open. Confirm the ones that hold up and dismiss the rest; a claim card marks
+the tensions it is part of, and clicking the mark shows them.
+
+Tensions live in `tensions.json`. A repeat run leaves a decision alone: a pair
+you dismissed stays dismissed however many times the model proposes it. If you
+edit either claim afterwards, the tension is marked as judged against old text,
+and the next run re-judges it and sets it back to open. Deleting a claim
+removes its tensions. Open and confirmed tensions appear in the HTML export;
+dismissed ones do not.
 
 ## Re-reading a paper
 

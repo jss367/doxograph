@@ -703,3 +703,190 @@ def summarize(paper: dict) -> dict:
         "schema_version": (paper.get("extraction") or {}).get("schema_version"),
         "has_pdf": pdf_path(paper["key"]).exists(),
     }
+
+
+# --- tensions between papers ---------------------------------------------
+#
+# A tension is a pair of claims from two different papers that pull against
+# each other on the same question. They are found by a model pass over each
+# topic and then reviewed like claims: open until somebody confirms or
+# dismisses them. They live in one file rather than inside the paper files
+# because each one belongs to two papers at once.
+
+TENSION_KINDS = ["contradiction", "tension"]
+TENSION_STATUSES = ["open", "confirmed", "dismissed"]
+
+_tensions = threading.RLock()
+
+
+def tensions_path() -> Path:
+    return config.data_dir() / "tensions.json"
+
+
+@contextlib.contextmanager
+def tensions_lock():
+    """Guard `tensions.json`. Nothing else nests inside it, and it nests inside
+    nothing: the pass reads papers without their locks and writes only here."""
+    with _tensions, _reentrant_file_lock("tensions", config.locks_dir() / "tensions.lock"):
+        yield
+
+
+def _read_tensions() -> dict:
+    path = tensions_path()
+    if not path.exists():
+        return {"seq": 0, "tensions": []}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"seq": 0, "tensions": []}
+    if not isinstance(loaded, dict):
+        return {"seq": 0, "tensions": []}
+    loaded.setdefault("seq", 0)
+    loaded.setdefault("tensions", [])
+    return loaded
+
+
+def load_tensions() -> list[dict]:
+    return list(_read_tensions()["tensions"])
+
+
+def _save_tensions(data: dict) -> None:
+    """Caller holds `tensions_lock`."""
+    write_json(tensions_path(), data)
+
+
+def _pair(ids) -> tuple[str, str]:
+    a, b = sorted(ids)
+    return (a, b)
+
+
+def claim_fingerprint(claim: dict) -> str:
+    """What a tension's judgment rests on. If either claim's text or evidence
+    changes, the judgment was made about a claim that no longer exists."""
+    return json.dumps([claim.get("text", ""), claim.get("evidence", "")])
+
+
+def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]) -> dict:
+    """Merge one topic's model output into the file.
+
+    `found` is a list of `{"claims": [id, id], "kind", "note"}`; `claims_by_id`
+    is every claim the model was shown, as it stood when the prompt was built.
+
+    Rules, in order:
+    - A pair whose claims no longer both exist is dropped, wherever it came from.
+    - A pair already on file whose claims are unchanged is left exactly as it
+      is: its status is a decision somebody made and the model does not get to
+      remake it. A repeat run costs the reviewer nothing.
+    - A pair already on file whose claims have changed is refreshed and set
+      back to open: the old verdict was about different text.
+    - A new pair is added as open.
+    - A pair the model did not return this time is kept. The pass is per topic
+      and a claim can carry several topics, so absence from one topic's answer
+      says nothing; and a confirmed tension is the reviewer's, not the model's.
+
+    Returns `{"added": n, "reopened": n, "kept": n}`.
+    """
+    with tensions_lock():
+        data = _read_tensions()
+        # Prune against the corpus as it is now, not as the prompt saw it: a
+        # claim deleted during the call must not come back as half a tension.
+        live = {c["id"]: c for c in claim_rows()}
+        existing = [t for t in data["tensions"]
+                    if len(t.get("claims", [])) == 2 and all(i in live for i in t["claims"])]
+        by_pair = {_pair(t["claims"]): t for t in existing}
+        added = reopened = kept = 0
+        for item in found:
+            ids = [i for i in item.get("claims", []) if i in claims_by_id and i in live]
+            if len(set(ids)) != 2:
+                continue
+            a, b = _pair(ids)
+            if live[a].get("paper") == live[b].get("paper"):
+                continue    # a paper in tension with itself is not what this is for
+            fingerprints = {a: claim_fingerprint(live[a]), b: claim_fingerprint(live[b])}
+            note = (item.get("note") or "").strip()
+            kind = item.get("kind") if item.get("kind") in TENSION_KINDS else TENSION_KINDS[-1]
+            current = by_pair.get((a, b))
+            if current is not None:
+                if topic not in current.setdefault("topics", []):
+                    current["topics"].append(topic)
+                    current["topics"].sort()
+                if current.get("fingerprints") == fingerprints:
+                    kept += 1
+                    continue
+                current.update(kind=kind, note=note, fingerprints=fingerprints,
+                               status="open", found=now())
+                reopened += 1
+                continue
+            data["seq"] = int(data.get("seq") or 0) + 1
+            record = {
+                "id": f"t{data['seq']}",
+                "claims": [a, b],
+                "topics": [topic],
+                "kind": kind,
+                "note": note,
+                "status": "open",
+                "found": now(),
+                "fingerprints": fingerprints,
+            }
+            existing.append(record)
+            by_pair[(a, b)] = record
+            added += 1
+        data["tensions"] = existing
+        _save_tensions(data)
+        return {"added": added, "reopened": reopened, "kept": kept}
+
+
+def set_tension_status(tension_id: str, status: str) -> dict:
+    if status not in TENSION_STATUSES:
+        raise ValueError(f"status must be one of {TENSION_STATUSES}, not {status!r}")
+    with tensions_lock():
+        data = _read_tensions()
+        for tension in data["tensions"]:
+            if tension.get("id") == tension_id:
+                tension["status"] = status
+                tension["decided"] = now()
+                _save_tensions(data)
+                return tension
+    raise KeyError(tension_id)
+
+
+def delete_tension(tension_id: str) -> None:
+    with tensions_lock():
+        data = _read_tensions()
+        before = len(data["tensions"])
+        data["tensions"] = [t for t in data["tensions"] if t.get("id") != tension_id]
+        if len(data["tensions"]) == before:
+            raise KeyError(tension_id)
+        _save_tensions(data)
+
+
+def tension_rows(rows: list[dict] | None = None) -> list[dict]:
+    """Every tension whose claims still exist, joined to those claims.
+
+    Each row carries `claims` as the two claim rows (not ids), plus `stale`,
+    true when either claim has been edited since the tension was found. A stale
+    tension is still shown: the reviewer decides whether the edit settled it.
+    """
+    live = {c["id"]: c for c in (rows if rows is not None else claim_rows())}
+    out = []
+    for tension in load_tensions():
+        ids = tension.get("claims", [])
+        if len(ids) != 2 or not all(i in live for i in ids):
+            continue
+        fingerprints = tension.get("fingerprints") or {}
+        row = dict(tension)
+        row["claims"] = [live[i] for i in ids]
+        row["stale"] = any(fingerprints.get(i) != claim_fingerprint(live[i]) for i in ids)
+        out.append(row)
+    order = {s: n for n, s in enumerate(TENSION_STATUSES)}
+    out.sort(key=lambda t: (order.get(t.get("status"), 9), t.get("found") or ""), reverse=False)
+    return out
+
+
+def tension_topics(rows: list[dict] | None = None) -> list[str]:
+    """Topics where a tension is possible: claims from at least two papers."""
+    papers_by_tag: dict[str, set[str]] = {}
+    for row in rows if rows is not None else claim_rows():
+        for tag in row.get("tags", []):
+            papers_by_tag.setdefault(tag, set()).add(row["paper"])
+    return sorted(tag for tag, papers in papers_by_tag.items() if len(papers) >= 2)
