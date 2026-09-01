@@ -23,6 +23,22 @@ enum Uploader {
         url.pathExtension.lowercased() == "pdf"
     }
 
+    private static let counter = NSLock()
+    private static var inFlight = 0
+
+    /// How many papers this app is still copying or sending.
+    ///
+    /// The server knows nothing about a dropped paper until its bytes have all
+    /// arrived and been staged: only then does it open a job, and only then
+    /// does `/api/health` count it. Between the drop and that moment the upload
+    /// exists solely in this process, so this is the only thing that can stop
+    /// a quit from throwing the paper away.
+    static var uploadsInFlight: Int {
+        counter.lock()
+        defer { counter.unlock() }
+        return inFlight
+    }
+
     /// Uploads the given PDFs. Callable from the main thread — the disk work
     /// happens off it — and `completion` comes back on the main queue.
     static func upload(
@@ -31,7 +47,22 @@ enum Uploader {
         extractNow: Bool,
         completion: @escaping (Result<Int, Error>) -> Void
     ) {
+        // Counted from here rather than from the first byte on the wire: the
+        // copy in `multipartFile` is part of the upload as far as a quit is
+        // concerned. Every exit below runs `finish` exactly once, and `settled`
+        // makes a second call harmless, so the count cannot be left standing.
+        let papers = urls.count
+        counter.lock()
+        inFlight += papers
+        counter.unlock()
+        var settled = false
         let finish = { (result: Result<Int, Error>) in
+            counter.lock()
+            let first = !settled
+            settled = true
+            if first { inFlight -= papers }
+            counter.unlock()
+            guard first else { return }
             DispatchQueue.main.async { completion(result) }
         }
         guard !urls.isEmpty else { return finish(.success(0)) }

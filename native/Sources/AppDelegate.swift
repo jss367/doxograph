@@ -125,23 +125,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // MARK: - Quitting
 
     /// Reading a paper takes minutes and dies with the server, so quitting in
-    /// the middle of one asks first. An adopted server keeps running after this
-    /// app quits, so there is nothing to warn about.
+    /// the middle of one asks first.
+    ///
+    /// A paper that is still being uploaded counts too, and counts even when
+    /// the server was adopted rather than started here. An adopted server
+    /// survives this app and keeps reading, but the upload does not: it runs in
+    /// this process, and a paper whose bytes stop arriving is never staged,
+    /// never becomes a job, and so never appears in the health count this asks
+    /// about. Quitting on top of one loses it without a word.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard ready, server.ownsServer else { return .terminateNow }
+        guard ready, server.ownsServer else {
+            guard Uploader.uploadsInFlight > 0 else { return .terminateNow }
+            return confirmQuit(reading: 0) ? .terminateNow : .terminateCancel
+        }
         server.activeJobs { busy in
-            guard let busy, busy > 0 else { return NSApp.reply(toApplicationShouldTerminate: true) }
-            let alert = NSAlert()
-            alert.messageText = busy == 1
+            // Asking the server took a moment; read the uploads after it, not
+            // before, so the answer is about now.
+            guard (busy ?? 0) > 0 || Uploader.uploadsInFlight > 0 else {
+                return NSApp.reply(toApplicationShouldTerminate: true)
+            }
+            NSApp.reply(toApplicationShouldTerminate: self.confirmQuit(reading: busy ?? 0))
+        }
+        return .terminateLater
+    }
+
+    /// Asks whether to quit on top of work in progress. True means quit.
+    ///
+    /// Always offers the quit, so a count that somehow refuses to fall — a
+    /// request that never returns, say — cannot trap the user in their own app.
+    private func confirmQuit(reading: Int) -> Bool {
+        let uploading = Uploader.uploadsInFlight
+        // The upload may have landed while the health request was in the air.
+        guard uploading > 0 || reading > 0 else { return true }
+        let alert = NSAlert()
+        switch (uploading, reading) {
+        case (0, _):
+            alert.messageText = reading == 1
                 ? "Doxograph is still reading a paper."
-                : "Doxograph is still reading \(busy) papers."
+                : "Doxograph is still reading \(reading) papers."
             alert.informativeText = "Quitting now stops the extraction, and the papers stay unread."
             alert.addButton(withTitle: "Quit Anyway")
             alert.addButton(withTitle: "Keep Reading")
-            let quit = alert.runModal() == .alertFirstButtonReturn
-            NSApp.reply(toApplicationShouldTerminate: quit)
+        case (_, 0):
+            alert.messageText = uploading == 1
+                ? "Doxograph is still adding a paper."
+                : "Doxograph is still adding \(uploading) papers."
+            alert.informativeText = "Quitting now cancels the upload, and nothing is added."
+            alert.addButton(withTitle: "Quit Anyway")
+            alert.addButton(withTitle: "Keep Adding")
+        default:
+            alert.messageText = "Doxograph is still adding and reading papers."
+            alert.informativeText = """
+                Quitting now cancels the upload and stops the extraction, and \
+                the papers stay unread.
+                """
+            alert.addButton(withTitle: "Quit Anyway")
+            alert.addButton(withTitle: "Keep Going")
         }
-        return .terminateLater
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
