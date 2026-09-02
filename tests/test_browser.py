@@ -64,7 +64,7 @@ def _server():
             process.wait(timeout=5)
 
 
-def _paper(key: str, title: str) -> None:
+def _paper(key: str, title: str, *tags: str) -> None:
     paper = store.new_paper(key, title=title)
     paper["claims"] = [
         {
@@ -72,7 +72,7 @@ def _paper(key: str, title: str) -> None:
             "text": f"A claim from {title}.",
             "kind": "finding",
             "strength": "supporting",
-            "tags": [],
+            "tags": list(tags),
             "evidence": "",
             "quote": "",
             "locator": "",
@@ -249,3 +249,45 @@ def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_stale_confirmed_tension_can_be_confirmed_again_without_reopening():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery", [
+        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "tension", "note": "n"},
+    ], shown)
+    tid = store.tension_rows()[0]["id"]
+    store.set_tension_status(tid, "confirmed")
+    store.update_claim("paper-a", "paper-a-c1", {"text": "A reworded claim from Paper A."})
+    assert store.tension_rows()[0]["stale"] is True
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                card = page.locator(f'.tcard[data-tension="{tid}"]')
+                stale = card.locator(".stale")
+                await stale.wait_for(state="visible")
+                assert await card.locator(".st").text_content() == "confirmed"
+
+                # Still confirmed, so the same-status decision is on offer.
+                confirm = card.get_by_role("button", name="Confirm")
+                assert await confirm.count() == 1
+                await confirm.click()
+                await stale.wait_for(state="detached")
+
+                card = page.locator(f'.tcard[data-tension="{tid}"]')
+                assert await card.locator(".st").text_content() == "confirmed"
+                assert await card.get_by_role("button", name="Confirm").count() == 0
+                assert await card.get_by_role("button", name="Reopen").count() == 1
+            await browser.close()
+
+    asyncio.run(scenario())
+    [tension] = store.tension_rows()
+    assert tension["status"] == "confirmed" and tension["stale"] is False

@@ -448,3 +448,126 @@ def retag_paper(key: str) -> dict:
             )
         store.save_paper(paper)
     return paper
+
+
+# --- tensions between papers ---------------------------------------------
+
+TENSION_SYSTEM = """\
+You look for disagreements between research claims drawn from different papers.
+
+You are given every claim in one topic, grouped by paper. Return the pairs of
+claims, from two different papers, that pull against each other on the same
+question.
+
+A "contradiction" is a pair that cannot both be true as stated. A "tension" is
+a pair that point in opposite directions but could be reconciled by a
+difference in setup: a different model, scale, task, metric, or condition.
+Name that difference in the note when you can see it.
+
+Do not flag claims that merely address different aspects of the topic, differ
+in emphasis, or report different numbers for different things. Two papers
+measuring different quantities are not in tension. A paper that refines or
+extends another is not in tension with it. When in doubt, leave the pair out:
+an empty list is a good answer for a topic where everyone agrees.
+
+Each note is one or two sentences, in plain language, saying what the two
+claims disagree about and, for a tension, what might account for it. Refer to
+papers by author and year, not by claim id."""
+
+TENSION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tensions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claims": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "description": "The ids of the two claims, from different papers.",
+                    },
+                    "kind": {"type": "string", "enum": store.TENSION_KINDS},
+                    "note": {
+                        "type": "string",
+                        "description": "What they disagree about, and what might account for it.",
+                    },
+                },
+                "required": ["claims", "kind", "note"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["tensions"],
+    "additionalProperties": False,
+}
+
+
+def _tension_listing(rows: list[dict]) -> str:
+    by_paper: dict[str, list[dict]] = {}
+    for row in rows:
+        by_paper.setdefault(row["paper"], []).append(row)
+    blocks = []
+    for key, claims in by_paper.items():
+        first = claims[0]
+        authors = first.get("paper_authors") or []
+        head = f"{authors[0].split()[-1] if authors else key}"
+        if len(authors) > 1:
+            head += " et al."
+        head += f" ({first.get('paper_year') or 'n.d.'}): {first.get('paper_title') or key}"
+        lines = [f"## {head}"]
+        for claim in claims:
+            line = f"- {claim['id']} [{claim.get('kind', 'finding')}]: {claim.get('text', '')}"
+            if claim.get("evidence"):
+                line += f"\n  evidence: {claim['evidence']}"
+            lines.append(line)
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def find_tensions(topic: str, rows: list[dict] | None = None) -> dict:
+    """Ask the model which claims in `topic` disagree, and record the answer.
+
+    Cheap in the way retag is cheap: it sends claim text rather than PDFs. One
+    call per topic, and only topics with claims from at least two papers are
+    worth a call; `store.tension_topics` lists them.
+    """
+    rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
+    papers = {r["paper"] for r in rows}
+    if len(papers) < 2:
+        return {"added": 0, "reopened": 0, "kept": 0, "returned": 0}
+    description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
+    # The claims as the prompt shows them, keyed by id. The merge uses this to
+    # drop ids the model invented; staleness against later edits is judged
+    # separately, from the fingerprints the merge records.
+    shown = {r["id"]: r for r in rows}
+    api = client()
+    response = api.messages.create(
+        model=config.MODEL,
+        max_tokens=8000,
+        system=TENSION_SYSTEM,
+        thinking={"type": "adaptive"},
+        output_config={
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": TENSION_SCHEMA},
+        },
+        messages=[{
+            "role": "user",
+            "content": (
+                f"My research:\n\n{context_block()}\n\n"
+                f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
+                f"Claims, by paper:\n\n{_tension_listing(rows)}\n\n"
+                "Return the pairs of claims from different papers that are in tension."
+            ),
+        }],
+    )
+    if response.stop_reason == "refusal":
+        detail = getattr(response.stop_details, "explanation", "") or ""
+        raise RuntimeError(f"tension pass refused for {topic}: {detail}")
+    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    found = payload.get("tensions", [])
+    result = store.record_tensions(topic, found, shown)
+    result["returned"] = len(found)
+    return result
