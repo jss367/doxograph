@@ -1056,13 +1056,17 @@ def synthesis_basis(rows: list[dict]) -> dict[str, str]:
     return {r["id"]: claim_fingerprint(r) for r in rows}
 
 
-def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list[str]]:
+def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
     """The other half: the topic's tensions as the prompt shows them, by id,
-    with kind and status. Dismissed ones are left out of the prompt, so
-    dismissing one changes this as much as confirming one, or a pass finding
-    a new pair, does. `tensions` is `tension_rows` output, whose `topics` are
-    already filtered to what both claims still carry."""
-    return {t["id"]: [t.get("kind"), t.get("status")]
+    with kind, status, and whether the prompt said a claim had changed since
+    it was judged. Dismissed ones are left out of the prompt, so dismissing
+    one changes this as much as confirming one, or a pass finding a new pair,
+    does; so does re-judging a stale one against the current text. `tensions`
+    is `tension_rows` output, whose `topics` are already filtered to what both
+    claims still carry. A record from before the stale flag was kept holds
+    two-element lists, which never compare equal to these, so it reads as
+    stale until rewritten: what the model was told is not known."""
+    return {t["id"]: [t.get("kind"), t.get("status"), bool(t.get("stale"))]
             for t in sorted(tensions, key=lambda t: t["id"])
             if topic in t.get("topics", []) and t.get("status") != "dismissed"}
 

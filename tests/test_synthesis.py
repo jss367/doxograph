@@ -98,7 +98,7 @@ def test_the_basis_is_what_the_model_was_shown_not_what_is_on_disk():
     tensions = store.tension_rows()
     store.set_tension_status(tensions[0]["id"], "confirmed")
     record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"), tensions)
-    assert record["tensions"] == {tensions[0]["id"]: ["contradiction", "open"]}
+    assert record["tensions"] == {tensions[0]["id"]: ["contradiction", "open", False]}
     assert store.synthesis_rows()[0]["stale"] is True
 
 
@@ -110,7 +110,7 @@ def test_a_tension_decided_or_found_in_the_topic_makes_the_synthesis_stale():
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "contradiction", "note": "Doe vs Li."}], live)
     [found] = store.tension_rows()
     record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
-    assert record["tensions"] == {found["id"]: ["contradiction", "open"]}
+    assert record["tensions"] == {found["id"]: ["contradiction", "open", False]}
     assert store.synthesis_rows()[0]["stale"] is False
 
     # Confirming it is a judgment the synthesis was written without.
@@ -130,6 +130,39 @@ def test_a_tension_decided_or_found_in_the_topic_makes_the_synthesis_stale():
     store.record_tensions("scaling", [{"claims": [c, d], "kind": "tension", "note": "Scale."}], live)
     assert store.synthesis_rows()[0]["stale"] is False
     store.record_tensions("recovery-rate", [{"claims": [a, c], "kind": "tension", "note": "Doe vs Li again."}], live)
+    assert store.synthesis_rows()[0]["stale"] is True
+
+
+def test_a_tension_judged_against_earlier_text_is_said_so_and_re_judging_it_changes_the_basis():
+    a, b, c = build_corpus()
+    live = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "contradiction", "note": "Doe vs Li."}], live)
+    [found] = store.tension_rows()
+    store.set_tension_status(found["id"], "confirmed")
+    assert "[confirmed] contradiction between" in extract._tension_block("recovery-rate", store.tension_rows())
+
+    # Editing a claim leaves the confirmation standing against text nobody
+    # judged. The prompt says so, and the record keeps what the prompt said.
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 64% of rollouts."})
+    assert "[confirmed, a claim changed since] contradiction between" in \
+        extract._tension_block("recovery-rate", store.tension_rows())
+    record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
+    assert record["tensions"] == {found["id"]: ["contradiction", "confirmed", True]}
+    assert store.synthesis_rows()[0]["stale"] is False
+
+    # Confirming it again, against the new text, is a judgment the synthesis
+    # was written without.
+    store.set_tension_status(found["id"], "confirmed")
+    assert "[confirmed] contradiction between" in extract._tension_block("recovery-rate", store.tension_rows())
+    assert store.synthesis_rows()[0]["stale"] is True
+
+    # A record from before the stale flag was kept does not know what the
+    # prompt said, and reads as stale.
+    store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
+    assert store.synthesis_rows()[0]["stale"] is False
+    data = store._read_syntheses()
+    data["syntheses"]["recovery-rate"]["tensions"] = {found["id"]: ["contradiction", "confirmed"]}
+    store._save_syntheses(data)
     assert store.synthesis_rows()[0]["stale"] is True
 
 
@@ -306,7 +339,7 @@ def test_synthesize_topic_shows_claims_tensions_and_review_state_and_records_the
     # The basis records the tensions as the prompt showed them: the dismissed
     # one was left out of both.
     noted = next(t for t in store.tension_rows() if t["id"] != dismissed["id"])
-    assert row["tensions"] == {noted["id"]: ["contradiction", "open"]}
+    assert row["tensions"] == {noted["id"]: ["contradiction", "open", False]}
     assert row["stale"] is False
 
 

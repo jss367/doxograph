@@ -726,7 +726,9 @@ def _tension_block(topic: str, tensions: list[dict]) -> str:
     so the basis it records is the same reading the prompt was built from.
     Dismissed ones are left out: the reviewer has said there is nothing
     there. The status is given so a confirmed one carries more weight than
-    one nobody has looked at."""
+    one nobody has looked at. A stale one, where a claim was edited after the
+    tension was found or judged, says so, since its status and note speak to
+    text the model is not being shown."""
     noted = [t for t in tensions
              if topic in t.get("topics", []) and t.get("status") != "dismissed"]
     if not noted:
@@ -734,7 +736,8 @@ def _tension_block(topic: str, tensions: list[dict]) -> str:
     lines = ["Disagreements already noted, with whether a reviewer has confirmed them:"]
     for t in noted:
         a, b = t["claims"]
-        lines.append(f"- [{t['status']}] {t['kind']} between {a['id']} and {b['id']}: {t.get('note', '')}")
+        label = t["status"] + (", a claim changed since" if t.get("stale") else "")
+        lines.append(f"- [{label}] {t['kind']} between {a['id']} and {b['id']}: {t.get('note', '')}")
     return "\n".join(lines)
 
 
