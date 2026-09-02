@@ -1,14 +1,18 @@
 """Read a paper with Claude and return its claims.
 
-The PDF goes in first with a cache breakpoint on it, so re-running extraction
-against a changed field list or a grown tag vocabulary re-reads the paper from
-cache rather than paying for it again.
+The PDF is uploaded once through the Files API and referenced by id, so the
+request body stays small no matter how large the paper is (an inlined base64
+PDF over about 24 MB exceeds the 32 MB request limit). It goes in first with a
+cache breakpoint on it, so re-running extraction against a changed field list
+or a grown tag vocabulary re-reads the paper from cache rather than paying for
+it again.
 """
 
 from __future__ import annotations
 
-import base64
+import hashlib
 import json
+from pathlib import Path
 
 import anthropic
 
@@ -192,19 +196,106 @@ def context_block() -> str:
     return "No research context has been recorded, so judge relevance broadly."
 
 
-def _pdf_block(key: str) -> dict:
+def _pdf_fingerprint(pdf: Path) -> dict:
+    """What identifies the bytes an upload was made from."""
+    st = pdf.stat()
+    with pdf.open("rb") as contents:
+        digest = hashlib.file_digest(contents, "sha256").hexdigest()
+    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": digest}
+
+
+def _delete_superseded_uploads(key: str, api: anthropic.Anthropic) -> None:
+    """Delete old remote PDFs, retaining failures to retry on the next read."""
+    pending = list((store.load_paper(key).get("pdf_upload") or {}).get("superseded_file_ids", []))
+    deleted = []
+    for file_id in pending:
+        try:
+            api.files.delete(file_id)
+        except anthropic.NotFoundError:
+            deleted.append(file_id)
+            continue
+        except anthropic.APIError:
+            continue
+        deleted.append(file_id)
+    if not deleted:
+        return
+    with store.paper_lock(key):
+        paper = store.load_paper(key)
+        upload = paper.get("pdf_upload") or {}
+        remaining = [file_id for file_id in upload.get("superseded_file_ids", [])
+                     if file_id not in deleted]
+        if remaining:
+            upload["superseded_file_ids"] = remaining
+        else:
+            upload.pop("superseded_file_ids", None)
+        paper["pdf_upload"] = upload
+        store.save_paper(paper)
+
+
+def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = False) -> str:
+    """The Files API id of the paper's PDF, uploading it if none is current.
+
+    The id is kept on the paper with a fingerprint of the file it came from.
+    A re-downloaded or replaced PDF then gets a fresh upload; the same file is
+    never uploaded twice. `force` discards the stored id, for when the server
+    no longer has the file.
+    """
     pdf = store.pdf_path(key)
     if not pdf.exists():
         raise FileNotFoundError(f"no PDF stored for {key}; add one before extracting")
+    fingerprint = _pdf_fingerprint(pdf)
+    upload = store.load_paper(key).get("pdf_upload") or {}
+    current = all(upload.get(k) == v for k, v in fingerprint.items())
+    if upload.get("file_id") and current and not force:
+        if upload.get("superseded_file_ids"):
+            _delete_superseded_uploads(key, api or client())
+        return upload["file_id"]
+    api = api or client()
+    uploaded = api.files.upload(file=pdf)
+    with store.paper_lock(key):
+        paper = store.load_paper(key)
+        previous = paper.get("pdf_upload") or {}
+        superseded = list(previous.get("superseded_file_ids", []))
+        if previous.get("file_id") and previous["file_id"] != uploaded.id:
+            superseded.append(previous["file_id"])
+        pdf_upload = {"file_id": uploaded.id, **fingerprint}
+        if superseded:
+            pdf_upload["superseded_file_ids"] = list(dict.fromkeys(superseded))
+        paper["pdf_upload"] = pdf_upload
+        store.save_paper(paper)
+    _delete_superseded_uploads(key, api)
+    return uploaded.id
+
+
+def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
+    """Delete a paper's remote uploads before removing its local metadata."""
+    with store.extraction_lock(key), store.paper_lock(key):
+        try:
+            paper = store.load_paper(key)
+        except KeyError:
+            store.delete_paper(key)
+            return
+        upload = paper.get("pdf_upload") or {}
+        file_ids = list(dict.fromkeys([
+            *upload.get("superseded_file_ids", []),
+            *([upload["file_id"]] if upload.get("file_id") else []),
+        ]))
+        if file_ids:
+            api = api or client()
+        for file_id in file_ids:
+            try:
+                api.files.delete(file_id)
+            except anthropic.NotFoundError:
+                pass
+        store.delete_paper(key)
+
+
+def _pdf_block(key: str, force_upload: bool = False) -> dict:
     return {
         "type": "document",
-        "source": {
-            "type": "base64",
-            "media_type": "application/pdf",
-            "data": base64.standard_b64encode(pdf.read_bytes()).decode("ascii"),
-        },
+        "source": {"type": "file", "file_id": upload_pdf(key, force=force_upload)},
         # Cache the paper itself: re-extraction after a schema or vocabulary
-        # change then re-reads it from cache instead of re-uploading it.
+        # change then re-reads it from cache instead of re-reading the file.
         "cache_control": {"type": "ephemeral", "ttl": "1h"},
     }
 
@@ -251,20 +342,32 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         tags = store.load_tags()
         prompt_tags = {t["name"] for t in tags}
         api = client()
-        response = api.messages.create(
-            model=config.MODEL,
-            max_tokens=16000,
-            system=SYSTEM,
-            thinking={"type": "adaptive"},
-            output_config={
-                "effort": "high",
-                "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
-            },
-            messages=[{
-                "role": "user",
-                "content": [_pdf_block(key), {"type": "text", "text": _instructions(paper, tags)}],
-            }],
-        )
+        instructions = {"type": "text", "text": _instructions(paper, tags)}
+
+        def read(pdf_block: dict):
+            return api.messages.create(
+                model=config.MODEL,
+                max_tokens=16000,
+                system=SYSTEM,
+                thinking={"type": "adaptive"},
+                output_config={
+                    "effort": "high",
+                    "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
+                },
+                messages=[{"role": "user", "content": [pdf_block, instructions]}],
+            )
+
+        pdf_block = _pdf_block(key)
+        try:
+            response = read(pdf_block)
+        except (anthropic.BadRequestError, anthropic.NotFoundError) as e:
+            # The stored upload can vanish from the server (deleted from the
+            # console, or the id belongs to another organization's key). When
+            # the error names it, upload the PDF again and read once more.
+            file_id = pdf_block.get("source", {}).get("file_id")
+            if not file_id or file_id not in str(e):
+                raise
+            response = read(_pdf_block(key, force_upload=True))
         if response.stop_reason == "refusal":
             detail = getattr(response.stop_details, "explanation", "") or ""
             raise RuntimeError(f"extraction refused for {key}: {detail}")
