@@ -1,5 +1,7 @@
 """Tensions: pairs of claims from different papers that disagree."""
 
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -191,6 +193,29 @@ def test_a_topic_renamed_during_the_model_call_is_not_written_back():
     # The next pass under the live name attaches it.
     store.record_tensions("recovery", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
     assert store.tension_rows()[0]["topics"] == ["recovery"]
+
+
+def test_a_merge_during_a_rename_waits_for_the_tensions_to_be_rewritten_too(monkeypatch):
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    # A pass under any topic finishes just as the rename has rewritten the
+    # papers and not yet the tensions. Its merge must wait: run in that gap it
+    # would see "recovery-rate" on the tension and on neither claim, drop it,
+    # and leave the rename nothing to convert.
+    merge = threading.Thread(target=store.record_tensions, args=("scaling", [], shown()))
+    real_save = store.save_paper
+
+    def save_then_merge(paper):
+        real_save(paper)
+        if merge.ident is None:
+            merge.start()
+            merge.join(timeout=0.5)      # long enough to land in the gap, were it open
+
+    monkeypatch.setattr(store, "save_paper", save_then_merge)
+    store.rename_tag("recovery-rate", "recovery")
+    merge.join(timeout=5)
+    assert not merge.is_alive()
+    assert store.load_tensions()[0]["topics"] == ["recovery"]
 
 
 def test_a_topic_taken_off_a_claim_leaves_the_tension_on_read_and_on_the_next_write():

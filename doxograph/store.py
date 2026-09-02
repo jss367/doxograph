@@ -607,11 +607,12 @@ def _retag_all(old: str, new: str | None) -> None:
     Called holding `vocab_lock`; takes `tensions_lock` inside it, which is the
     only order those two are ever held in.
 
-    Papers first, tensions last. `record_tensions` attaches a topic only if
-    the claims still carry it, so a pass result that lands before the tension
-    rewrite is corrected by it, and one that lands after already sees the new
-    tags. The other order leaves a gap between the two writes where a result
-    sees the old tag on the claims and puts the old name back."""
+    Papers first, tensions last, and `record_tensions` waits on `vocab_lock`
+    for the whole of it: between the two writes the claims carry the new name
+    while the tensions still carry the old, and a merge landing there would
+    read the old name as one the claims dropped and take it off every tension
+    before this loop could convert it. A result that lands after sees the new
+    tags and attaches only what the claims still carry."""
     for key in paper_keys():
         with paper_lock(key):
             try:
@@ -747,8 +748,9 @@ def tensions_path() -> Path:
 @contextlib.contextmanager
 def tensions_lock():
     """Guard `tensions.json`. Nothing else nests inside it. It nests inside
-    `vocab_lock` alone, when a tag rename rewrites topics here; the tension
-    pass itself reads papers without their locks and writes only here."""
+    `vocab_lock` alone: a tag rename rewrites topics here, and a tension merge
+    takes both so it cannot land halfway through a rename. The pass itself
+    reads papers without their locks and writes only here."""
     with _tensions, _reentrant_file_lock("tensions", config.locks_dir() / "tensions.lock"):
         yield
 
@@ -837,9 +839,15 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
       edit does not touch this file, so `tension_rows` applies the same filter
       at read time; this write is where the file catches up.
 
+    The merge holds `vocab_lock` so that last rule cannot fire halfway through
+    a rename, when the claims already carry the new name and the tensions
+    still carry the old: it would read the old name as dropped and take it
+    off before `_retag_all` could convert it. Vocabulary before tensions, as
+    `_retag_all` takes them.
+
     Returns `{"added": n, "reopened": n, "kept": n}`.
     """
-    with tensions_lock():
+    with vocab_lock(), tensions_lock():
         data = _read_tensions()
         # Prune against the corpus as it is now, not as the prompt saw it: a
         # claim deleted during the call must not come back as half a tension.
