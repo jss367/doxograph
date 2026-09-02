@@ -48,15 +48,18 @@ final class ServerController {
 
     func start(onReady: @escaping (URL) -> Void, onFailure: @escaping (Failure) -> Void) {
         queue.async {
-            let result = self.bringUp()
-            DispatchQueue.main.async {
-                switch result {
-                case .success: onReady(self.baseURL)
-                case .failure(let failure): onFailure(failure)
-                // The app is on its way out. Nobody is left to show a window to
-                // or an alert about.
-                case .cancelled: break
-                }
+            self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+        }
+    }
+
+    private func deliver(_ result: Outcome, onReady: @escaping (URL) -> Void, onFailure: @escaping (Failure) -> Void) {
+        DispatchQueue.main.async {
+            switch result {
+            case .success: onReady(self.baseURL)
+            case .failure(let failure): onFailure(failure)
+            // The app is on its way out. Nobody is left to show a window to
+            // or an alert about.
+            case .cancelled: break
             }
         }
     }
@@ -232,8 +235,13 @@ final class ServerController {
         let started = process
         process = nil
         lock.unlock()
-        if let started { shutDown(started) }
-        start(onReady: onReady, onFailure: onFailure)
+        // The shutdown can wait up to ten seconds on a server that is slow to
+        // die, which is too long to hold the main thread. It happens on the
+        // startup queue, in front of the start it makes room for.
+        queue.async {
+            if let started { self.shutDown(started) }
+            self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+        }
     }
 
     private func shutDown(_ process: Process) {

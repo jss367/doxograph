@@ -177,8 +177,11 @@ enum Updater {
         }
         let range = "\(base)..\(head)"
         let changes = git(["log", "--oneline", "--no-decorate", range]).output.trimmed
-        let changed = git(["diff", "--name-only", range]).output
-            .split(separator: "\n").map(String.init)
+        // Everything below keys off this list, and a failure here would read as
+        // "nothing changed" and record the pull as installed. Refuse instead.
+        let diff = git(["diff", "--name-only", range])
+        guard diff.succeeded else { return .failure(.step("git diff", diff.output)) }
+        let changed = diff.output.split(separator: "\n").map(String.init)
 
         // An editable install picks up code changes on its own, but not a new
         // dependency or a new console script; a plain install picks up neither.
