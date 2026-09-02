@@ -2808,6 +2808,38 @@ def test_a_failed_remote_delete_is_retried_on_the_next_read(monkeypatch, paper_w
     assert "superseded_file_ids" not in store.load_paper(paper_with_pdf)["pdf_upload"]
 
 
+def test_removing_a_paper_deletes_all_of_its_remote_uploads(monkeypatch, paper_with_pdf):
+    paper = store.load_paper(paper_with_pdf)
+    paper["pdf_upload"] = {
+        "file_id": "file_current",
+        "superseded_file_ids": ["file_old_1", "file_old_2"],
+    }
+    store.save_paper(paper)
+    api = FilesClient()
+    monkeypatch.setattr(extract, "client", lambda: api)
+
+    with TestClient(server.app) as client:
+        response = client.delete(f"/api/papers/{paper_with_pdf}")
+
+    assert response.status_code == 200
+    assert api.files.deletions == ["file_old_1", "file_old_2", "file_current"]
+    assert not store.paper_path(paper_with_pdf).exists()
+    assert not store.pdf_path(paper_with_pdf).exists()
+
+
+def test_a_remote_failure_keeps_the_paper_metadata_for_delete_retry(monkeypatch, paper_with_pdf):
+    paper = store.load_paper(paper_with_pdf)
+    paper["pdf_upload"] = {"file_id": "file_current"}
+    store.save_paper(paper)
+    api = FilesClient(fail_delete={"file_current"})
+
+    with pytest.raises(anthropic.APIConnectionError):
+        extract.delete_paper(paper_with_pdf, api=api)
+
+    assert store.load_paper(paper_with_pdf)["pdf_upload"]["file_id"] == "file_current"
+    assert store.pdf_path(paper_with_pdf).exists()
+
+
 def test_an_upload_the_server_forgot_is_redone_once(monkeypatch, paper_with_pdf):
     api = FilesClient()
     monkeypatch.setattr(extract, "client", lambda: api)

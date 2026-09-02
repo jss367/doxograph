@@ -267,6 +267,29 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     return uploaded.id
 
 
+def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
+    """Delete a paper's remote uploads before removing its local metadata."""
+    with store.extraction_lock(key), store.paper_lock(key):
+        try:
+            paper = store.load_paper(key)
+        except KeyError:
+            store.delete_paper(key)
+            return
+        upload = paper.get("pdf_upload") or {}
+        file_ids = list(dict.fromkeys([
+            *upload.get("superseded_file_ids", []),
+            *([upload["file_id"]] if upload.get("file_id") else []),
+        ]))
+        if file_ids:
+            api = api or client()
+        for file_id in file_ids:
+            try:
+                api.files.delete(file_id)
+            except anthropic.NotFoundError:
+                pass
+        store.delete_paper(key)
+
+
 def _pdf_block(key: str, force_upload: bool = False) -> dict:
     return {
         "type": "document",

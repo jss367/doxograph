@@ -425,7 +425,7 @@ def patch_paper(key: str, patch: dict = Body(...)) -> dict:
 
 @app.delete("/api/papers/{key}")
 def remove_paper(key: str) -> dict:
-    store.delete_paper(key)
+    extract.delete_paper(key)
     return {"deleted": key}
 
 
