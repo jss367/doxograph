@@ -2687,19 +2687,29 @@ def test_extraction_lock_is_held_across_processes(tmp_path):
 
 
 class FakeFiles:
-    def __init__(self):
+    def __init__(self, fail_delete=()):
         self.uploads = []
+        self.deletions = []
+        self.fail_delete = set(fail_delete)
 
     def upload(self, file):
         self.uploads.append(file)
         return type("F", (), {"id": f"file_{len(self.uploads)}"})()
 
+    def delete(self, file_id):
+        self.deletions.append(file_id)
+        if file_id in self.fail_delete:
+            self.fail_delete.discard(file_id)
+            import httpx2
+            raise anthropic.APIConnectionError(
+                request=httpx2.Request("DELETE", f"https://api.anthropic.com/v1/files/{file_id}"))
+
 
 class FilesClient:
     """A client whose messages.create records the PDF block it was sent."""
 
-    def __init__(self, fail_on=()):
-        self.files = FakeFiles()
+    def __init__(self, fail_on=(), fail_delete=()):
+        self.files = FakeFiles(fail_delete)
         self.messages = self
         self.blocks = []
         self.fail_on = set(fail_on)
@@ -2761,6 +2771,7 @@ def test_a_replaced_pdf_is_uploaded_again(monkeypatch, paper_with_pdf):
     extract.extract_paper(paper_with_pdf)
 
     assert len(api.files.uploads) == 2
+    assert api.files.deletions == ["file_1"]
     assert api.blocks[-1]["source"]["file_id"] == "file_2"
     assert store.load_paper(paper_with_pdf)["pdf_upload"]["file_id"] == "file_2"
 
@@ -2777,7 +2788,24 @@ def test_same_size_and_mtime_with_different_bytes_is_uploaded_again(monkeypatch,
     extract.extract_paper(paper_with_pdf)
 
     assert len(api.files.uploads) == 2
+    assert api.files.deletions == ["file_1"]
     assert api.blocks[-1]["source"]["file_id"] == "file_2"
+
+
+def test_a_failed_remote_delete_is_retried_on_the_next_read(monkeypatch, paper_with_pdf):
+    api = FilesClient(fail_delete={"file_1"})
+    monkeypatch.setattr(extract, "client", lambda: api)
+    extract.extract_paper(paper_with_pdf)
+
+    store.pdf_path(paper_with_pdf).write_bytes(b"%PDF-1.4 replacement")
+    extract.extract_paper(paper_with_pdf)
+    assert store.load_paper(paper_with_pdf)["pdf_upload"]["superseded_file_ids"] == ["file_1"]
+
+    extract.extract_paper(paper_with_pdf)
+
+    assert len(api.files.uploads) == 2
+    assert api.files.deletions == ["file_1", "file_1"]
+    assert "superseded_file_ids" not in store.load_paper(paper_with_pdf)["pdf_upload"]
 
 
 def test_an_upload_the_server_forgot_is_redone_once(monkeypatch, paper_with_pdf):

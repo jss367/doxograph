@@ -204,6 +204,34 @@ def _pdf_fingerprint(pdf: Path) -> dict:
     return {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": digest}
 
 
+def _delete_superseded_uploads(key: str, api: anthropic.Anthropic) -> None:
+    """Delete old remote PDFs, retaining failures to retry on the next read."""
+    pending = list((store.load_paper(key).get("pdf_upload") or {}).get("superseded_file_ids", []))
+    deleted = []
+    for file_id in pending:
+        try:
+            api.files.delete(file_id)
+        except anthropic.NotFoundError:
+            deleted.append(file_id)
+            continue
+        except anthropic.APIError:
+            continue
+        deleted.append(file_id)
+    if not deleted:
+        return
+    with store.paper_lock(key):
+        paper = store.load_paper(key)
+        upload = paper.get("pdf_upload") or {}
+        remaining = [file_id for file_id in upload.get("superseded_file_ids", [])
+                     if file_id not in deleted]
+        if remaining:
+            upload["superseded_file_ids"] = remaining
+        else:
+            upload.pop("superseded_file_ids", None)
+        paper["pdf_upload"] = upload
+        store.save_paper(paper)
+
+
 def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = False) -> str:
     """The Files API id of the paper's PDF, uploading it if none is current.
 
@@ -219,13 +247,23 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     upload = store.load_paper(key).get("pdf_upload") or {}
     current = all(upload.get(k) == v for k, v in fingerprint.items())
     if upload.get("file_id") and current and not force:
+        if upload.get("superseded_file_ids"):
+            _delete_superseded_uploads(key, api or client())
         return upload["file_id"]
     api = api or client()
     uploaded = api.files.upload(file=pdf)
     with store.paper_lock(key):
         paper = store.load_paper(key)
-        paper["pdf_upload"] = {"file_id": uploaded.id, **fingerprint}
+        previous = paper.get("pdf_upload") or {}
+        superseded = list(previous.get("superseded_file_ids", []))
+        if previous.get("file_id") and previous["file_id"] != uploaded.id:
+            superseded.append(previous["file_id"])
+        pdf_upload = {"file_id": uploaded.id, **fingerprint}
+        if superseded:
+            pdf_upload["superseded_file_ids"] = list(dict.fromkeys(superseded))
+        paper["pdf_upload"] = pdf_upload
         store.save_paper(paper)
+    _delete_superseded_uploads(key, api)
     return uploaded.id
 
 
