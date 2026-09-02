@@ -66,9 +66,17 @@ cp "$here/Doxograph.icns" "$staging/Contents/Resources/Doxograph.icns"
 codesign --force --sign - "$staging" >/dev/null 2>&1 ||
   echo "note: could not sign the bundle; it will still run locally" >&2
 
-# Everything that could fail has. Swap the finished bundle into place.
-rm -rf "${app:?}"
-mv "$staging" "$app"
+# Everything that could fail has. Swap the finished bundle into place through
+# a backup, so even a failed rename leaves a launchable bundle behind.
+retired="$build/Doxograph.app.old"
+rm -rf "${retired:?}"
+[[ -e "$app" ]] && mv "$app" "$retired"
+if ! mv "$staging" "$app"; then
+  [[ -e "$retired" ]] && mv "$retired" "$app"
+  echo "build.sh: could not move the new bundle into place" >&2
+  exit 1
+fi
+rm -rf "${retired:?}"
 
 # Let Launch Services notice the bundle, so the Dock accepts PDF drops.
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister

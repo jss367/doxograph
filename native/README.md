@@ -43,8 +43,9 @@ checkout you pulled by hand but never rebuilt still gets its pip install and
 rebuild.
 
 The same thing by hand is `git pull --ff-only`, then `.venv/bin/pip install -e .`
-if `pyproject.toml` changed, then relaunching the app, plus
-`native/build.sh --install` when the Swift changed.
+if `pyproject.toml` or anything under `doxograph/` changed, then
+`native/build.sh --install` if anything under `native/` changed, and then
+relaunching the app.
 
 ## What it adds
 
