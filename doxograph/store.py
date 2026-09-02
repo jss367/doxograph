@@ -1053,14 +1053,29 @@ def synthesis_basis(rows: list[dict]) -> dict[str, str]:
     return {r["id"]: claim_fingerprint(r) for r in rows}
 
 
+# `before` for a `record_synthesis` call that has no snapshot to check against:
+# a direct write, with no model call in between to be overtaken.
+UNCHECKED = object()
+
+
 def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
-                     source: str = "model") -> dict | None:
+                     source: str = "model", before: dict | None | object = UNCHECKED) -> dict | None:
     """Write one topic's synthesis.
 
     `claims_by_id` is every claim the model was shown, as it stood when the
     prompt was built; the basis is fingerprinted from that, not from disk, so
     a claim edited during the call leaves the synthesis stale rather than
     silently current.
+
+    `before` is the record on file for this topic when the prompt was built,
+    or None if there was none. The web app leaves edit and delete enabled
+    while a synthesis job runs, so a reviewer can correct or delete the text
+    while the model is thinking. That decision is newer than this answer and
+    must not be written over, as extraction leaves a claim edited during its
+    call alone: if the record on file no longer matches `before`, whether it
+    was edited, deleted, or created meanwhile, nothing is written. A record
+    found exactly as the call left it is not a change, so a repeat run writes
+    as usual.
 
     Holds `vocab_lock` so a rename cannot interleave: `_retag_all` moves the
     record to the new name under that lock, and a result arriving after sees
@@ -1074,6 +1089,8 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
         if not live:
             return None
         data = _read_syntheses()
+        if before is not UNCHECKED and data["syntheses"].get(topic) != before:
+            return None
         record = {
             "topic": topic,
             "text": (text or "").strip(),

@@ -746,7 +746,8 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
 
     Returns `{"written": bool, "claims": n, "papers": n}`. `written` is False
     when the topic had no claims, or when it lost them all (or its name) while
-    the model was thinking.
+    the model was thinking, or when its synthesis was corrected by hand or
+    deleted meanwhile: that decision is newer than the answer and stands.
     """
     all_rows = rows if rows is not None else store.claim_rows()
     rows = store.topic_claims(topic, all_rows)
@@ -755,6 +756,9 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
         return {"written": False, "claims": 0, "papers": 0}
     description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
+    # The record on file as the call starts, so the write can tell whether a
+    # reviewer edited or deleted it while the model was thinking.
+    before = store.load_syntheses().get(topic)
     api = client()
     response = api.messages.create(
         model=config.MODEL,
@@ -780,5 +784,5 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
         detail = getattr(response.stop_details, "explanation", "") or ""
         raise RuntimeError(f"synthesis refused for {topic}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
-    record = store.record_synthesis(topic, payload.get("text", ""), shown)
+    record = store.record_synthesis(topic, payload.get("text", ""), shown, before=before)
     return {"written": record is not None, "claims": len(rows), "papers": len(papers)}

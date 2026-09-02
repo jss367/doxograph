@@ -218,6 +218,8 @@ Syntheses live in `syntheses.json`, one per topic. Edit one in the web app to
 correct it by hand. A synthesis goes stale when a claim in its topic is added,
 removed, or edited; it stays on view marked as such until you rewrite it or
 edit it yourself, either of which is a judgment against the current claims.
+An edit or deletion made while a rewrite is still running stands: the answer
+that arrives afterwards is discarded rather than written over it.
 Renaming a topic carries its synthesis along; deleting the topic deletes it.
 Syntheses appear under their topic in the HTML export.
 

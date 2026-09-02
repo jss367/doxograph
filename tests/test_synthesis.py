@@ -152,6 +152,62 @@ def test_a_topic_renamed_during_the_model_call_is_not_written_back():
     assert store.load_syntheses() == {}
 
 
+def test_a_hand_edit_during_the_model_call_wins():
+    """The web app leaves edit enabled while a synthesis job runs. A correction
+    saved meanwhile is newer than the model's answer and stands."""
+    build_corpus()
+    store.record_synthesis("recovery-rate", "first draft", shown("recovery-rate"))
+    before = store.load_syntheses().get("recovery-rate")
+    store.set_synthesis_text("recovery-rate", "corrected by hand")
+    assert store.record_synthesis("recovery-rate", "late answer", shown("recovery-rate"), before=before) is None
+    [row] = store.synthesis_rows()
+    assert (row["text"], row["source"]) == ("corrected by hand", "hand")
+
+
+def test_a_deletion_during_the_model_call_is_not_undone():
+    build_corpus()
+    store.record_synthesis("recovery-rate", "first draft", shown("recovery-rate"))
+    before = store.load_syntheses().get("recovery-rate")
+    store.delete_synthesis("recovery-rate")
+    assert store.record_synthesis("recovery-rate", "late answer", shown("recovery-rate"), before=before) is None
+    assert store.load_syntheses() == {}
+
+
+def test_a_synthesis_written_during_the_model_call_is_kept_and_an_unchanged_one_is_replaced():
+    build_corpus()
+    # None on file when the call started; one written meanwhile is kept.
+    store.record_synthesis("recovery-rate", "written meanwhile", shown("recovery-rate"))
+    assert store.record_synthesis("recovery-rate", "late answer", shown("recovery-rate"), before=None) is None
+    assert store.load_syntheses()["recovery-rate"]["text"] == "written meanwhile"
+    # Found as the call left it: a rewrite the reviewer asked for goes through.
+    before = store.load_syntheses().get("recovery-rate")
+    record = store.record_synthesis("recovery-rate", "rewritten", shown("recovery-rate"), before=before)
+    assert record is not None and store.load_syntheses()["recovery-rate"]["text"] == "rewritten"
+
+
+def test_synthesize_topic_leaves_a_correction_made_while_the_model_thought(monkeypatch):
+    build_corpus()
+    store.record_synthesis("recovery-rate", "first draft", shown("recovery-rate"))
+
+    class EditingClient(FakeClient):
+        """Answers after the reviewer has corrected the synthesis by hand."""
+
+        @property
+        def messages(self):
+            inner = super().messages
+
+            class Messages:
+                def create(self, **kwargs):
+                    store.set_synthesis_text("recovery-rate", "corrected by hand")
+                    return inner.create(**kwargs)
+            return Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: EditingClient("late answer"))
+    assert extract.synthesize_topic("recovery-rate") == {"written": False, "claims": 3, "papers": 2}
+    [row] = store.synthesis_rows()
+    assert (row["text"], row["source"]) == ("corrected by hand", "hand")
+
+
 def test_an_unreadable_file_is_reported_and_never_written_over():
     import pytest
     build_corpus()
