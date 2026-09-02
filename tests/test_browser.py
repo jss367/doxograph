@@ -349,3 +349,61 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
     asyncio.run(scenario())
     [row] = store.synthesis_rows()
     assert row["text"] == "Corrected [paper-a-c1]." and row["source"] == "hand" and row["stale"] is False
+
+
+@pytest.mark.browser
+def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery", "scaling")
+    _paper("paper-c", "Paper C", "scaling")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_synthesis("recovery", "Recovery as written.", shown)
+    store.record_synthesis("scaling", "Scaling as written.", shown)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                recovery = page.locator('.synth[data-topic="recovery"]')
+                scaling = page.locator('.synth[data-topic="scaling"]')
+                fields = page.locator("textarea[data-synth]")
+                await recovery.wait_for(state="visible")
+                await recovery.get_by_role("button", name="edit").click()
+                await page.locator('textarea[data-synth="recovery"]').fill("Recovery draft.")
+
+                # Reading a paper closes the editor: nothing is being edited on
+                # screen, so the background poll must be free to run. Coming
+                # back to All papers does not reopen it.
+                await page.click('#papers [data-paper="paper-a"]')
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="hidden")
+                assert await fields.count() == 0
+                await page.click('#papers [data-paper=""]')
+                await recovery.wait_for(state="visible")
+                assert await fields.count() == 0
+
+                # Another topic's editor opens on its own text, not the draft.
+                await scaling.get_by_role("button", name="edit").click()
+                assert await page.locator('textarea[data-synth="scaling"]').input_value() == "Scaling as written."
+                await page.locator('textarea[data-synth="scaling"]').fill("Scaling draft.")
+
+                # Opening the first again resumes its draft and parks the
+                # second's; each topic keeps its own.
+                await recovery.get_by_role("button", name="edit").click()
+                assert await page.locator('textarea[data-synth="recovery"]').input_value() == "Recovery draft."
+                assert await fields.count() == 1
+                await scaling.get_by_role("button", name="edit").click()
+                assert await page.locator('textarea[data-synth="scaling"]').input_value() == "Scaling draft."
+
+                # Cancel drops only that topic's draft.
+                await page.get_by_role("button", name="Cancel").click()
+                assert await fields.count() == 0
+                await scaling.get_by_role("button", name="edit").click()
+                assert await page.locator('textarea[data-synth="scaling"]').input_value() == "Scaling as written."
+                await recovery.get_by_role("button", name="edit").click()
+                assert await page.locator('textarea[data-synth="recovery"]').input_value() == "Recovery draft."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written.", "Scaling as written."]

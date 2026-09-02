@@ -18,11 +18,14 @@ const NEW_CLAIM_ID = '__new__';
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
 // synthEditing is the topic whose synthesis is open for correction by hand, and
-// synthDraft what has been typed into it, kept across redraws like claim drafts.
+// synthDrafts what has been typed into each, by topic, kept across redraws and
+// navigation like claim drafts. A map for the same reason `drafts` is: opening
+// a second topic's editor, or leaving the page the first is on, must not throw
+// away the first one's text.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
-            synthEditing: null, synthDraft: null };
+            synthEditing: null, synthDrafts: {} };
 
 function blankClaim(paper) {
   return {
@@ -392,9 +395,10 @@ function showView(view) {
   if (view === V.view) return;
   // The tensions view has no editor. Park any open one rather than leaving
   // `V.editing` set on a form that is no longer on screen, which would also
-  // stop the background poll.
+  // stop the background poll. The same for a synthesis editor.
   captureOpenEditor();
   V.editing = null;
+  parkSynthEditor();
   V.error = null;
   V.view = view;
   if (view !== 'tensions') V.tensionFocus = null;
@@ -464,14 +468,15 @@ function citeHtml(text) {
 function synthesisBlock(tag) {
   const synth = synthesisFor(tag);
   if (V.synthEditing === tag) {
-    const text = V.synthDraft !== null ? V.synthDraft : (synth ? synth.text : '');
+    const draft = V.synthDrafts[tag];
+    const text = draft !== undefined ? draft : (synth ? synth.text : '');
     return `<div class="synth" data-topic="${esc(tag)}">
       <textarea data-synth="${esc(tag)}">${esc(text)}</textarea>
       <div class="smeta">
         <span class="hint">Cite claims as [claim-id]; they become links.</span>
         <span class="cact" style="margin-left:auto">
           <button type="button" data-act="save-synth" data-topic="${esc(tag)}" class="primary">Save</button>
-          <button type="button" data-act="cancel-synth">Cancel</button>
+          <button type="button" data-act="cancel-synth" data-topic="${esc(tag)}">Cancel</button>
         </span>
       </div>
     </div>`;
@@ -483,7 +488,7 @@ function synthesisBlock(tag) {
     <div class="smeta">
       <span>${synth.source === 'hand' ? 'written by hand' : 'written by the model'} · ${esc((synth.written || '').slice(0, 10))}
         · ${synth.n_claims} claims in ${synth.n_papers} papers</span>
-      ${synth.stale ? '<span class="stale">claims have changed since</span>' : ''}
+      ${synth.stale ? '<span class="stale">claims or tensions have changed since</span>' : ''}
       <span class="cact" style="margin-left:auto">
         <button type="button" data-act="synthesize" data-topic="${esc(tag)}">Rewrite</button>
         <button type="button" data-act="edit-synth" data-topic="${esc(tag)}">edit</button>
@@ -534,6 +539,9 @@ function renderContent() {
     captureOpenEditor();
     V.editing = null;
   }
+  // Likewise a synthesis editor whose topic heading is not about to be drawn:
+  // under a paper there are no topic headings, and a filter can empty a group.
+  if (V.synthEditing && !synthesisTopicsOnScreen(rows).has(V.synthEditing)) parkSynthEditor();
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
@@ -650,6 +658,34 @@ function parkNewClaimForNavigation(paper) {
     V.newClaim = V.failedNewClaims[paper];
     delete V.failedNewClaims[paper];
   }
+}
+
+// The topics whose heading, and so whose synthesis, `renderContent` is about
+// to draw: every tag in grouped mode, the one filtered to otherwise, none
+// while reading a paper.
+function synthesisTopicsOnScreen(rows) {
+  if (V.paper) return new Set();
+  if (V.group && rows.length) return new Set(rows.flatMap((row) => row.tags || []));
+  return new Set(V.tag ? [V.tag] : []);
+}
+
+// The synthesis editor's counterpart to parking a claim editor: keep what was
+// typed, keyed by topic, and close the editor. Left open off screen it would
+// hold down the background poll, and opening another topic's editor would
+// take over the slot; opening this topic's editor again resumes the text. The
+// input listener keeps the map current, but the field is read once more here
+// so nothing rests on that.
+function parkSynthEditor() {
+  if (!V.synthEditing) return;
+  const field = document.querySelector(`textarea[data-synth="${CSS.escape(V.synthEditing)}"]`);
+  if (field) V.synthDrafts[V.synthEditing] = field.value;
+  V.synthEditing = null;
+}
+
+function cancelSynthEdit() {
+  if (V.synthEditing) delete V.synthDrafts[V.synthEditing];   // discard only this topic's draft
+  V.synthEditing = null;
+  renderContent();
 }
 
 function captureOpenEditor() {
@@ -923,22 +959,19 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'edit-synth') {
+      // Opening one topic's synthesis editor while another's is open parks
+      // that one, as opening a second claim's editor keeps the first's draft.
       captureOpenEditor();
+      parkSynthEditor();
       V.synthEditing = button.dataset.topic;
-      V.synthDraft = null;
       renderContent();
       return;
     }
-    if (act === 'cancel-synth') {
-      V.synthEditing = null;
-      V.synthDraft = null;
-      renderContent();
-      return;
-    }
+    if (act === 'cancel-synth') { cancelSynthEdit(); return; }
     if (act === 'save-synth') {
       const topic = button.dataset.topic;
       const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
-      const text = field ? field.value : (V.synthDraft || '');
+      const text = field ? field.value : (V.synthDrafts[topic] || '');
       V.error = null;
       try {
         await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
@@ -946,9 +979,9 @@ $('content').addEventListener('click', async (event) => {
           body: JSON.stringify({ text }),
         });
         V.synthEditing = null;
-        V.synthDraft = null;
+        delete V.synthDrafts[topic];
       } catch (error) {
-        V.synthDraft = text;
+        V.synthDrafts[topic] = text;   // keep what was typed so the save can be retried
         V.error = `Could not save the synthesis: ${error.message}`;
       }
       await refreshAll();
@@ -1063,14 +1096,17 @@ $('papers').addEventListener('click', (event) => {
   if (next === V.paper && V.view === 'claims') return;
   if (next === V.paper) { showView('claims'); renderAll(); return; }
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
-  // that one was never persisted and belongs to the paper being left.
+  // that one was never persisted and belongs to the paper being left. A
+  // synthesis being edited is parked too: `render` skips the list while one
+  // is open, and its topic heading is not shown under a paper anyway.
   captureOpenEditor();
   parkNewClaimForNavigation(next);
+  parkSynthEditor();
   showView('claims');
   V.paper = next;
   V.selectedId = null;
   V.editing = null;
-  render();   // the editor is closed here, so render redraws the list anyway
+  render();   // the editors are closed here, so render redraws the list anyway
 });
 
 $('tensions-nav').addEventListener('click', (event) => {
@@ -1202,7 +1238,7 @@ $('btn-export').addEventListener('click', async () => {
 $('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
 
 $('content').addEventListener('input', (e) => {
-  if (e.target.matches('textarea[data-synth]')) V.synthDraft = e.target.value;
+  if (e.target.matches('textarea[data-synth]')) V.synthDrafts[e.target.dataset.synth] = e.target.value;
 });
 
 // Each filter keeps whatever is typed in an open editor before redrawing.
@@ -1240,7 +1276,7 @@ document.addEventListener('keydown', async (event) => {
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key === 'Escape' && V.editing) cancelEdit();
-    if (event.key === 'Escape' && V.synthEditing) { V.synthEditing = null; V.synthDraft = null; renderContent(); }
+    if (event.key === 'Escape' && V.synthEditing) cancelSynthEdit();
     return;
   }
   if (V.view !== 'claims') {
