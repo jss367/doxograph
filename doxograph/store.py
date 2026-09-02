@@ -1105,6 +1105,13 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
     """
     if source not in SYNTHESIS_SOURCES:
         raise ValueError(f"source must be one of {SYNTHESIS_SOURCES}, not {source!r}")
+    # The response schema admits an empty string, so a model that answers
+    # with nothing would otherwise be written as a blank record and, on a
+    # rewrite, replace a useful synthesis. Refuse it as the hand-edit path
+    # does: the caller reports a failure and the saved text stands.
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("the model returned an empty synthesis; nothing written")
     with vocab_lock(), syntheses_lock():
         live = topic_claims(topic)
         if not live:
@@ -1114,7 +1121,7 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
             return None
         record = {
             "topic": topic,
-            "text": (text or "").strip(),
+            "text": text,
             "source": source,
             "written": now(),
             "claims": {i: claim_fingerprint(c) for i, c in claims_by_id.items()

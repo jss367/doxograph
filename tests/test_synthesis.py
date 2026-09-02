@@ -295,6 +295,17 @@ def test_synthesize_topic_leaves_a_correction_made_while_the_model_thought(monke
     assert (row["text"], row["source"]) == ("corrected by hand", "hand")
 
 
+def test_an_empty_answer_is_an_error_and_leaves_the_saved_synthesis_alone(monkeypatch):
+    import pytest
+    build_corpus()
+    store.record_synthesis("recovery-rate", "first draft", shown("recovery-rate"))
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("  \n"))
+    with pytest.raises(ValueError):
+        extract.synthesize_topic("recovery-rate")
+    [row] = store.synthesis_rows()
+    assert (row["text"], row["source"]) == ("first draft", "model")
+
+
 def test_an_unreadable_file_is_reported_and_never_written_over():
     import pytest
     build_corpus()
