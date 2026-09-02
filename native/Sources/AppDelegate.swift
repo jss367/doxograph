@@ -301,7 +301,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // the next update measures from the last commit that fully installed,
         // so whatever this one leaves behind is done over. The question is so
         // the user knows that is what they are choosing.
-        if updating, !confirmQuitWhileUpdating() { return .terminateCancel }
+        if updating, !confirmQuitWhileUpdating() {
+            relaunchAfterQuit = false
+            return .terminateCancel
+        }
         guard ready else { return .terminateNow }
         // Count the uploads on both sides of the question, because either
         // reading alone can miss work the other sees. The server answers a POST
@@ -319,8 +322,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let uploadingBefore = Uploader.uploadsInFlight
         let ownsServer = server.ownsServer
         server.probe { probe in
-            NSApp.reply(toApplicationShouldTerminate: self.mayInterrupt(
-                .quit, probe, ownsServer: ownsServer, uploadingBefore: uploadingBefore))
+            let quitting = self.mayInterrupt(
+                .quit, probe, ownsServer: ownsServer, uploadingBefore: uploadingBefore)
+            // A relaunch was only ever meant to follow this quit. If the user
+            // keeps the app open, the next quit is an ordinary one and must not
+            // bring the app back.
+            if !quitting { self.relaunchAfterQuit = false }
+            NSApp.reply(toApplicationShouldTerminate: quitting)
         }
         return .terminateLater
     }

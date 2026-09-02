@@ -137,6 +137,12 @@ enum Updater {
         progress("Checking for updates…")
         let before = git(["rev-parse", "HEAD"])
         guard before.succeeded else { return .failure(.step("git rev-parse", before.output)) }
+        // The first update has nothing recorded yet. Take where it starts as
+        // the last fully installed commit, so a pip or build failure on this
+        // run is retried on the next one instead of being read as up to date.
+        if UserDefaults.standard.string(forKey: updatedShaDefaultsKey) == nil {
+            UserDefaults.standard.set(before.output.trimmed, forKey: updatedShaDefaultsKey)
+        }
 
         let pull = git(["pull", "--ff-only"])
         guard pull.succeeded else { return .failure(.step("git pull", pull.output)) }
