@@ -167,7 +167,7 @@ def cmd_synthesize(args) -> int:
     if args.topics:
         rows = [r for r in rows if r["topic"] in set(args.topics)]
     for row in rows:
-        stale = " (claims changed since)" if row.get("stale") else ""
+        stale = " (claims or tensions changed since)" if row.get("stale") else ""
         print(f"## {row['topic']}  [{row['source']}, {row['written'][:10]}, "
               f"{row['n_claims']} claims in {row['n_papers']} papers]{stale}")
         print(row["text"])

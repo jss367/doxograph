@@ -85,10 +85,64 @@ def test_record_and_rows_carry_the_basis_and_flag_changes_as_stale():
 def test_the_basis_is_what_the_model_was_shown_not_what_is_on_disk():
     """A claim edited during the call leaves the synthesis stale rather than
     silently current: the text on file describes claims nobody can see."""
-    a, _, _ = build_corpus()
+    a, b, _ = build_corpus()
     before = shown("recovery-rate")
     store.update_claim("doe2026recovery", a, {"text": "Changed while the model thought."})
     store.record_synthesis("recovery-rate", "text", before)
+    assert store.synthesis_rows()[0]["stale"] is True
+
+    # The same for a tension confirmed while the model thought: the prompt
+    # said open, so the record says open, and the row reads stale.
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "contradiction", "note": "Doe vs Li."}],
+                          {r["id"]: r for r in store.claim_rows()})
+    tensions = store.tension_rows()
+    store.set_tension_status(tensions[0]["id"], "confirmed")
+    record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"), tensions)
+    assert record["tensions"] == {tensions[0]["id"]: ["contradiction", "open"]}
+    assert store.synthesis_rows()[0]["stale"] is True
+
+
+def test_a_tension_decided_or_found_in_the_topic_makes_the_synthesis_stale():
+    a, b, c = build_corpus()
+    d, = _paper("kim2024scale", "Scale and steering", "Ann Kim", 2024,
+                ("Recovery falls with scale.", ["scaling"]))
+    live = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "contradiction", "note": "Doe vs Li."}], live)
+    [found] = store.tension_rows()
+    record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
+    assert record["tensions"] == {found["id"]: ["contradiction", "open"]}
+    assert store.synthesis_rows()[0]["stale"] is False
+
+    # Confirming it is a judgment the synthesis was written without.
+    store.set_tension_status(found["id"], "confirmed")
+    assert store.synthesis_rows()[0]["stale"] is True
+    # A hand edit is made against the tensions as they stand now.
+    store.set_synthesis_text("recovery-rate", "by hand")
+    assert store.synthesis_rows()[0]["stale"] is False
+    # Dismissing it takes it out of the prompt, which is as much a change.
+    store.set_tension_status(found["id"], "dismissed")
+    assert store.synthesis_rows()[0]["stale"] is True
+    store.record_synthesis("recovery-rate", "again", shown("recovery-rate"))
+    assert store.synthesis_rows()[0]["stale"] is False
+
+    # A pass finding a pair in another topic changes nothing here; one finding
+    # a pair in this topic does.
+    store.record_tensions("scaling", [{"claims": [c, d], "kind": "tension", "note": "Scale."}], live)
+    assert store.synthesis_rows()[0]["stale"] is False
+    store.record_tensions("recovery-rate", [{"claims": [a, c], "kind": "tension", "note": "Doe vs Li again."}], live)
+    assert store.synthesis_rows()[0]["stale"] is True
+
+
+def test_a_record_from_before_tensions_were_in_the_basis_still_loads():
+    a, b, _ = build_corpus()
+    store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
+    data = store._read_syntheses()
+    del data["syntheses"]["recovery-rate"]["tensions"]
+    store._save_syntheses(data)
+    assert store.synthesis_rows()[0]["stale"] is False
+    # With a tension in the topic, what the model saw is not known: stale.
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "contradiction", "note": "Doe vs Li."}],
+                          {r["id"]: r for r in store.claim_rows()})
     assert store.synthesis_rows()[0]["stale"] is True
 
 
@@ -249,6 +303,10 @@ def test_synthesize_topic_shows_claims_tensions_and_review_state_and_records_the
     assert captured["output_config"]["format"]["schema"] is extract.SYNTHESIS_SCHEMA
     [row] = store.synthesis_rows()
     assert row["text"].startswith("Doe (2026) finds recovery")
+    # The basis records the tensions as the prompt showed them: the dismissed
+    # one was left out of both.
+    noted = next(t for t in store.tension_rows() if t["id"] != dismissed["id"])
+    assert row["tensions"] == {noted["id"]: ["contradiction", "open"]}
     assert row["stale"] is False
 
 
@@ -257,7 +315,7 @@ def test_synthesize_topic_with_one_paper_still_writes(monkeypatch):
     monkeypatch.setattr(extract, "client", lambda: FakeClient("Only Li (2025) speaks to scale."))
     assert extract.synthesize_topic("scaling") == {"written": True, "claims": 1, "papers": 1}
     assert "No disagreements between these claims have been noted yet." in \
-        extract._tension_block("scaling", store.claim_rows())
+        extract._tension_block("scaling", store.tension_rows())
 
 
 def test_api_state_carries_syntheses_and_they_can_be_edited_and_deleted():
@@ -331,9 +389,9 @@ def test_export_puts_the_synthesis_under_its_topic_with_citations_as_markers():
     assert ">Doe 2026</span>" in topic_section and ">Li 2025</span>" in topic_section
     assert "[Table 2]" in topic_section                   # not claim ids: left alone
     assert "written by the model" in topic_section
-    assert "claims changed since" not in html
+    assert "claims or tensions changed since" not in html
     store.update_claim("doe2026recovery", a, {"text": "Edited."})
-    assert "claims changed since" in export.render()
+    assert "claims or tensions changed since" in export.render()
 
 
 def test_export_escapes_synthesis_text():

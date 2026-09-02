@@ -144,7 +144,7 @@ def _synthesis_html(record: dict, rows_by_id: dict[str, dict]) -> str:
     )
     note = ""
     if record.get("stale"):
-        note = '<span class="rel-tag">claims changed since</span>'
+        note = '<span class="rel-tag">claims or tensions changed since</span>'
     by = "written by hand" if record.get("source") == "hand" else "written by the model"
     return (f'<div class="synth">{body}<p class="sub">{by} · {_e((record.get("written") or "")[:10])}'
             f'{note}</p></div>')

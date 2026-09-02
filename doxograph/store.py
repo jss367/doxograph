@@ -1048,9 +1048,23 @@ def topic_claims(topic: str, rows: list[dict] | None = None) -> list[dict]:
 
 
 def synthesis_basis(rows: list[dict]) -> dict[str, str]:
-    """What a synthesis rests on: the set of claims and what each said. A
-    claim added, removed, or edited (text, evidence, kind) changes it."""
+    """Half of what a synthesis rests on: the set of claims and what each
+    said. A claim added, removed, or edited (text, evidence, kind) changes it.
+    Reviewing a claim does not: the prompt marks unreviewed claims, but a
+    review pass over a corpus does not change what any claim says, and staling
+    every synthesis while it runs would leave the mark meaning nothing."""
     return {r["id"]: claim_fingerprint(r) for r in rows}
+
+
+def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list[str]]:
+    """The other half: the topic's tensions as the prompt shows them, by id,
+    with kind and status. Dismissed ones are left out of the prompt, so
+    dismissing one changes this as much as confirming one, or a pass finding
+    a new pair, does. `tensions` is `tension_rows` output, whose `topics` are
+    already filtered to what both claims still carry."""
+    return {t["id"]: [t.get("kind"), t.get("status")]
+            for t in sorted(tensions, key=lambda t: t["id"])
+            if topic in t.get("topics", []) and t.get("status") != "dismissed"}
 
 
 # `before` for a `record_synthesis` call that has no snapshot to check against:
@@ -1059,13 +1073,16 @@ UNCHECKED = object()
 
 
 def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
-                     source: str = "model", before: dict | None | object = UNCHECKED) -> dict | None:
+                     tensions: list[dict] | None = None, source: str = "model",
+                     before: dict | None | object = UNCHECKED) -> dict | None:
     """Write one topic's synthesis.
 
     `claims_by_id` is every claim the model was shown, as it stood when the
-    prompt was built; the basis is fingerprinted from that, not from disk, so
-    a claim edited during the call leaves the synthesis stale rather than
-    silently current.
+    prompt was built, and `tensions` the `tension_rows` it was shown alongside
+    them; the basis is fingerprinted from those, not from disk, so a claim
+    edited or a tension confirmed during the call leaves the synthesis stale
+    rather than silently current. With no `tensions` given the ones on file
+    now are used: a direct write, with no call in between to be overtaken.
 
     `before` is the record on file for this topic when the prompt was built,
     or None if there was none. The web app leaves edit and delete enabled
@@ -1098,6 +1115,7 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
             "written": now(),
             "claims": {i: claim_fingerprint(c) for i, c in claims_by_id.items()
                        if topic in (c.get("tags") or [])},
+            "tensions": synthesis_tensions(topic, tension_rows() if tensions is None else tensions),
         }
         data["syntheses"][topic] = record
         _save_syntheses(data)
@@ -1105,8 +1123,9 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
 
 
 def set_synthesis_text(topic: str, text: str) -> dict:
-    """Record a correction by hand. It is a judgment against the claims as they
-    read now, so the basis is refreshed and the synthesis stops being stale."""
+    """Record a correction by hand. It is a judgment against the claims and
+    tensions as they stand now, so the basis is refreshed and the synthesis
+    stops being stale."""
     text = (text or "").strip()
     if not text:
         raise ValueError("a synthesis cannot be empty; delete it instead")
@@ -1116,7 +1135,8 @@ def set_synthesis_text(topic: str, text: str) -> dict:
             raise KeyError(topic)
         record = data["syntheses"][topic]
         record.update(text=text, source="hand", written=now(),
-                      claims=synthesis_basis(topic_claims(topic)))
+                      claims=synthesis_basis(topic_claims(topic)),
+                      tensions=synthesis_tensions(topic, tension_rows()))
         _save_syntheses(data)
         return record
 
@@ -1131,11 +1151,15 @@ def delete_synthesis(topic: str) -> None:
 
 def synthesis_rows(rows: list[dict] | None = None) -> list[dict]:
     """Every synthesis whose topic still has claims, with `stale` set when a
-    claim in the topic was added, removed, or edited since it was written.
-    A stale synthesis is still shown: it may still be right, and the reader
-    decides whether to rewrite it. One whose topic has no claims left is
-    dropped from view; `_retag_all` drops it from the file when the tag goes."""
+    claim in the topic was added, removed, or edited since it was written, or
+    a tension in it was found, confirmed, dismissed, or deleted. A stale
+    synthesis is still shown: it may still be right, and the reader decides
+    whether to rewrite it. One whose topic has no claims left is dropped from
+    view; `_retag_all` drops it from the file when the tag goes. A record
+    written before tensions were part of the basis has none on file and reads
+    as stale while the topic has any: what the model saw is not known."""
     rows = rows if rows is not None else claim_rows()
+    tensions = tension_rows(rows)
     out = []
     for topic, record in sorted(load_syntheses().items()):
         live = topic_claims(topic, rows)
@@ -1143,7 +1167,8 @@ def synthesis_rows(rows: list[dict] | None = None) -> list[dict]:
             continue
         row = dict(record)
         row["topic"] = topic
-        row["stale"] = synthesis_basis(live) != (record.get("claims") or {})
+        row["stale"] = (synthesis_basis(live) != (record.get("claims") or {})
+                        or synthesis_tensions(topic, tensions) != (record.get("tensions") or {}))
         row["n_claims"] = len(live)
         row["n_papers"] = len({r["paper"] for r in live})
         out.append(row)

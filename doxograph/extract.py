@@ -720,12 +720,14 @@ SYNTHESIS_SCHEMA = {
 }
 
 
-def _tension_block(topic: str, rows: list[dict]) -> str:
+def _tension_block(topic: str, tensions: list[dict]) -> str:
     """The disagreements already on file for this topic, for the synthesis
-    prompt. Dismissed ones are left out: the reviewer has said there is
-    nothing there. The status is given so a confirmed one carries more weight
-    than one nobody has looked at."""
-    noted = [t for t in store.tension_rows(rows)
+    prompt. `tensions` is `store.tension_rows` output, read once by the caller
+    so the basis it records is the same reading the prompt was built from.
+    Dismissed ones are left out: the reviewer has said there is nothing
+    there. The status is given so a confirmed one carries more weight than
+    one nobody has looked at."""
+    noted = [t for t in tensions
              if topic in t.get("topics", []) and t.get("status") != "dismissed"]
     if not noted:
         return "No disagreements between these claims have been noted yet."
@@ -756,6 +758,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
         return {"written": False, "claims": 0, "papers": 0}
     description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
+    tensions = store.tension_rows(all_rows)
     # The record on file as the call starts, so the write can tell whether a
     # reviewer edited or deleted it while the model was thinking.
     before = store.load_syntheses().get(topic)
@@ -775,7 +778,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
                 f"My research:\n\n{context_block()}\n\n"
                 f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
                 f"Claims, by paper:\n\n{_tension_listing(rows, mark_unreviewed=True)}\n\n"
-                f"{_tension_block(topic, all_rows)}\n\n"
+                f"{_tension_block(topic, tensions)}\n\n"
                 "Write what these papers, taken together, hold on the topic."
             ),
         }],
@@ -784,5 +787,5 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
         detail = getattr(response.stop_details, "explanation", "") or ""
         raise RuntimeError(f"synthesis refused for {topic}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
-    record = store.record_synthesis(topic, payload.get("text", ""), shown, before=before)
+    record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions, before=before)
     return {"written": record is not None, "claims": len(rows), "papers": len(papers)}
