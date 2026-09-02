@@ -961,8 +961,20 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'goto-claim') {
+      // A citation is a link to its claim. A filter that hides the claim would
+      // make `renderContent` fall back to the first visible card, so any
+      // filter excluding it is cleared first; the others are kept. The paper
+      // filter never applies, since no synthesis is drawn under one.
+      const row = S.claims.find((c) => c.id === claim);
+      if (row && !visibleClaims().some((c) => c.id === claim)) {
+        if (V.paper && row.paper !== V.paper) V.paper = null;
+        if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
+        if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
+        if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
+        if (V.q.trim() && !haystack(row).includes(V.q.trim().toLowerCase())) { V.q = ''; $('q').value = ''; }
+      }
       V.selectedId = claim;
-      renderContent();
+      renderAll();   // a cleared topic or paper filter changes the sidebar too
       scrollToSelected();
       return;
     }

@@ -325,6 +325,16 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
                 await cites.nth(1).click()
                 await page.locator('.claim.sel[data-claim="paper-b-c1"]').wait_for(state="visible")
 
+                # A search that hides the cited claim gives way to the citation:
+                # without that the selection would fall back to the first
+                # visible card, Paper A's, while the link said Paper B.
+                await page.fill("#q", "Paper A")
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="hidden")
+                await page.locator('.claim.sel[data-claim="paper-a-c1"]').wait_for(state="visible")
+                await cites.nth(1).click()
+                await page.locator('.claim.sel[data-claim="paper-b-c1"]').wait_for(state="visible")
+                assert await page.input_value("#q") == ""
+
                 # Correcting it by hand clears the stale mark and records the text.
                 await synth.get_by_role("button", name="edit").click()
                 field = page.locator('textarea[data-synth="recovery"]')
