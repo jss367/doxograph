@@ -688,6 +688,7 @@ function parkSynthEditor() {
 }
 
 function cancelSynthEdit() {
+  captureOpenEditor();   // a claim editor open alongside keeps its text through the redraw
   if (V.synthEditing) delete V.synthDrafts[V.synthEditing];   // discard only this topic's draft
   V.synthEditing = null;
   renderContent();
@@ -981,6 +982,7 @@ $('content').addEventListener('click', async (event) => {
       V.error = null;
       // Freeze the editor until the answer comes back. Success redraws from
       // the server value, so anything typed meanwhile would be lost.
+      captureOpenEditor();
       V.synthSaving = topic;
       renderContent();
       try {

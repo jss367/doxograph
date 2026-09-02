@@ -420,3 +420,45 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
 
     asyncio.run(scenario())
     assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written.", "Scaling as written."]
+
+
+@pytest.mark.browser
+def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelled_or_saved():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_synthesis("recovery", "Recovery as written.", shown)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                synth = page.locator('.synth[data-topic="recovery"]')
+                synth_field = page.locator('textarea[data-synth="recovery"]')
+                claim_field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
+                await synth.wait_for(state="visible")
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Claim text typed before the synthesis editor opened.")
+
+                # Claim fields are only read back on a redraw, so a synthesis
+                # action that redraws must capture them first or the typing
+                # since the last redraw is gone.
+                await synth.get_by_role("button", name="edit").click()
+                await claim_field.fill("Claim text typed while the synthesis editor was open.")
+                await synth.get_by_role("button", name="Cancel").click()
+                await synth_field.wait_for(state="hidden")
+                assert await claim_field.input_value() == "Claim text typed while the synthesis editor was open."
+
+                await synth.get_by_role("button", name="edit").click()
+                await synth_field.fill("Recovery corrected.")
+                await claim_field.fill("Claim text typed before the synthesis was saved.")
+                await synth.get_by_role("button", name="Save").click()
+                await synth_field.wait_for(state="hidden")
+                await synth.get_by_text("Recovery corrected.").wait_for()
+                assert await claim_field.input_value() == "Claim text typed before the synthesis was saved."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [row["text"] for row in store.synthesis_rows()] == ["Recovery corrected."]
