@@ -246,6 +246,10 @@ final class ServerController {
         }
         if exited.wait(timeout: .now() + 5) == .timedOut {
             kill(process.processIdentifier, SIGKILL)
+            // A restart starts its port walk the moment this returns. Until the
+            // old process is gone the walk can still find it answering, adopt
+            // it, and hand the window a server that dies a beat later.
+            _ = exited.wait(timeout: .now() + 5)
         }
     }
 

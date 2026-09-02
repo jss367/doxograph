@@ -4,6 +4,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let server = ServerController()
     private let window = WebWindow()
     private var ready = false
+    /// The server was asked to start and did not. Updating is still allowed,
+    /// since a pull may be exactly what fixes it.
+    private var serverFailed = false
     /// PDFs dropped on the Dock icon before the server answered. A drop can
     /// even be what launched the app, so this fills up before the window exists.
     private var pendingDrops: [URL] = []
@@ -30,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func startServer() {
+        serverFailed = false
         window.showStatus("Starting Doxograph…")
         server.start(onReady: serverReady, onFailure: { [weak self] failure in self?.report(failure) })
     }
@@ -149,6 +153,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             NSApp.terminate(nil)
 
         case .success(let outcome):
+            if serverFailed {
+                // Nothing is running that the restart could interrupt, and the
+                // pull may be what the failed start was missing. Try again.
+                inform("Updated Doxograph.", outcome.changes)
+                startServer()
+                return
+            }
             guard ownsServer else {
                 if ready { window.hideStatus() }
                 inform("Updated Doxograph.", outcome.changes + Self.adoptedServerNote)
@@ -211,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // MARK: - Failure
 
     private func report(_ failure: ServerController.Failure) {
+        serverFailed = true
         switch failure {
         case .commandNotFound:
             window.showStatus("Doxograph is not installed where this app can find it.")
@@ -509,7 +521,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch menuItem.action {
         case #selector(goBack(_:)): return window.webView.canGoBack
         case #selector(reloadPage(_:)), #selector(addPapers(_:)): return ready
-        case #selector(updateDoxograph(_:)): return ready && !updating
+        // Not while the server is still coming up, since the restart after
+        // the pull needs to know whether it is owned. A start that failed is
+        // settled, and updating is then the way out.
+        case #selector(updateDoxograph(_:)): return (ready || serverFailed) && !updating
         default: return true
         }
     }
