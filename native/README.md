@@ -22,7 +22,8 @@ corpus and one copy of the code. Nothing is duplicated in Swift, and a change to
 the Python shows up in the app on its next launch.
 
 `build.sh` records the command it built against in
-`Contents/Resources/doxograph-path`. At runtime the app prefers, in order:
+`Contents/Resources/doxograph-path`, and the commit it built from in
+`Contents/Resources/doxograph-commit`. At runtime the app prefers, in order:
 `$DOXOGRAPH_CMD`, a command you picked by hand, the recorded path, a short list
 of usual locations, and finally whatever your login shell says `doxograph` is.
 If none of them exist it offers to let you choose the command, and remembers it.
@@ -36,7 +37,10 @@ and restarts the server so the new Python is what the window shows. If
 anything under `native/` changed it also runs `build.sh`, replaces the running
 bundle, and relaunches. A server the app adopted rather than started is left
 alone; the alert says so. An update that fails after the pull is picked up
-again by the next one, from the last commit that fully installed.
+again by the next one, from the last commit that fully installed. The first
+update measures from the commit recorded in the bundle at build time, so a
+checkout you pulled by hand but never rebuilt still gets its pip install and
+rebuild.
 
 The same thing by hand is `git pull --ff-only`, then `.venv/bin/pip install -e .`
 if `pyproject.toml` changed, then relaunching the app, plus
