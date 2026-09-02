@@ -132,6 +132,40 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
 
 
 @pytest.mark.browser
+def test_theme_settings_apply_immediately_and_survive_a_reload():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role("button", name="Settings").click()
+                settings = page.get_by_role("dialog", name="Appearance")
+                await settings.get_by_label("Dark").check()
+                await settings.get_by_label("Forest").check()
+
+                root = page.locator("html")
+                assert await root.get_attribute("data-appearance") == "dark"
+                assert await root.get_attribute("data-color-theme") == "forest"
+                assert await root.evaluate("el => getComputedStyle(el).getPropertyValue('--bg').trim()") == "#121914"
+
+                await page.reload()
+                assert await root.get_attribute("data-appearance") == "dark"
+                assert await root.get_attribute("data-color-theme") == "forest"
+                await page.get_by_role("button", name="Settings").click()
+                assert await settings.get_by_label("Dark").is_checked()
+                assert await settings.get_by_label("Forest").is_checked()
+
+                await settings.get_by_role("button", name="Reset").click()
+                assert await root.get_attribute("data-appearance") == "system"
+                assert await root.get_attribute("data-color-theme") == "slate"
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
     _paper("paper-a", "Paper A")
     _paper("paper-b", "Paper B")

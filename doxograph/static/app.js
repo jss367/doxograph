@@ -1,5 +1,66 @@
 'use strict';
 
+// Appearance is deliberately a browser preference rather than corpus state:
+// two people can view the same corpus without changing each other's display.
+// Each color theme is a coordinated palette in both light and dark variants,
+// so switching it cannot accidentally leave text unreadable on its background.
+const THEME_STORAGE_KEY = 'doxograph-theme-v1';
+const DEFAULT_THEME = Object.freeze({ appearance: 'system', colors: 'slate' });
+const THEME_PALETTES = {
+  slate: {
+    light: { ink: '#16181d', muted: '#5c6370', line: '#dfe2e8', bg: '#ffffff', panel: '#f6f7f9', accent: '#2f5d8a', warn: '#8a5a2f', ok: '#2f7a4f', sel: '#e8f0f8', 'accent-ink': '#ffffff' },
+    dark: { ink: '#e6e8ec', muted: '#99a0ad', line: '#343a44', bg: '#14161a', panel: '#1d2027', accent: '#7fb0e0', warn: '#d9a267', ok: '#7fc79b', sel: '#1f2a35', 'accent-ink': '#101820' },
+  },
+  forest: {
+    light: { ink: '#17231b', muted: '#59695e', line: '#d7e2da', bg: '#fbfdfb', panel: '#f1f6f2', accent: '#2b6e48', warn: '#8a6028', ok: '#287447', sel: '#e2f1e7', 'accent-ink': '#ffffff' },
+    dark: { ink: '#e4ece6', muted: '#98a99d', line: '#324239', bg: '#121914', panel: '#1a241d', accent: '#76c596', warn: '#d7aa68', ok: '#76c596', sel: '#1d3325', 'accent-ink': '#102018' },
+  },
+  plum: {
+    light: { ink: '#241a27', muted: '#6c5e70', line: '#e2dbe5', bg: '#fefcff', panel: '#f7f2f8', accent: '#765183', warn: '#96603e', ok: '#477452', sel: '#f0e5f3', 'accent-ink': '#ffffff' },
+    dark: { ink: '#eee7f0', muted: '#ad9eb1', line: '#443848', bg: '#181319', panel: '#231c25', accent: '#c29bce', warn: '#dda071', ok: '#86c392', sel: '#34263a', 'accent-ink': '#24152a' },
+  },
+  sepia: {
+    light: { ink: '#2d251d', muted: '#716556', line: '#ded3c2', bg: '#fcf8f1', panel: '#f4ecdf', accent: '#8a5138', warn: '#94621f', ok: '#52703c', sel: '#efe1d2', 'accent-ink': '#ffffff' },
+    dark: { ink: '#eee5d7', muted: '#b1a28e', line: '#493e32', bg: '#1b1713', panel: '#28211b', accent: '#d99a78', warn: '#ddb06a', ok: '#99bd7d', sel: '#3b2b22', 'accent-ink': '#27170f' },
+  },
+};
+const appearanceQuery = window.matchMedia('(prefers-color-scheme: dark)');
+let themeSettings = readThemeSettings();
+
+function readThemeSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(THEME_STORAGE_KEY) || '{}');
+    return {
+      appearance: ['system', 'light', 'dark'].includes(saved.appearance) ? saved.appearance : DEFAULT_THEME.appearance,
+      colors: Object.hasOwn(THEME_PALETTES, saved.colors) ? saved.colors : DEFAULT_THEME.colors,
+    };
+  } catch (error) {
+    return { ...DEFAULT_THEME };
+  }
+}
+
+function applyThemeSettings(settings, persist = false) {
+  themeSettings = settings;
+  const mode = settings.appearance === 'system'
+    ? (appearanceQuery.matches ? 'dark' : 'light')
+    : settings.appearance;
+  const root = document.documentElement;
+  root.dataset.appearance = settings.appearance;
+  root.dataset.colorTheme = settings.colors;
+  root.style.colorScheme = mode;
+  Object.entries(THEME_PALETTES[settings.colors][mode]).forEach(([name, value]) => {
+    root.style.setProperty(`--${name}`, value);
+  });
+  if (persist) {
+    try { localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(settings)); } catch (error) { /* preference remains for this page */ }
+  }
+}
+
+applyThemeSettings(themeSettings);
+appearanceQuery.addEventListener('change', () => {
+  if (themeSettings.appearance === 'system') applyThemeSettings(themeSettings);
+});
+
 let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 // selectedId is a claim id rather than a render position: in grouped mode a
@@ -1164,6 +1225,48 @@ $('btn-synth').addEventListener('click', async () => {
   await synthesize(null);
 });
 
+// --- appearance settings -------------------------------------------------
+
+function syncThemeControls() {
+  const appearance = document.querySelector(`input[name="appearance"][value="${themeSettings.appearance}"]`);
+  const colors = document.querySelector(`input[name="color-theme"][value="${themeSettings.colors}"]`);
+  if (appearance) appearance.checked = true;
+  if (colors) colors.checked = true;
+}
+
+function closeSettings({ restoreFocus = false } = {}) {
+  $('settings-menu').hidden = true;
+  $('btn-settings').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('btn-settings').focus();
+}
+
+function openSettings() {
+  closePaperMenu();
+  syncThemeControls();
+  $('settings-menu').hidden = false;
+  $('btn-settings').setAttribute('aria-expanded', 'true');
+}
+
+$('btn-settings').addEventListener('click', () => {
+  if ($('settings-menu').hidden) openSettings(); else closeSettings();
+});
+$('btn-close-settings').addEventListener('click', () => closeSettings({ restoreFocus: true }));
+$('settings-menu').addEventListener('change', (event) => {
+  if (event.target.name === 'appearance') {
+    applyThemeSettings({ ...themeSettings, appearance: event.target.value }, true);
+  } else if (event.target.name === 'color-theme') {
+    applyThemeSettings({ ...themeSettings, colors: event.target.value }, true);
+  }
+});
+$('btn-reset-theme').addEventListener('click', () => {
+  applyThemeSettings({ ...DEFAULT_THEME }, true);
+  syncThemeControls();
+});
+
+document.addEventListener('mousedown', (event) => {
+  if (!$('settings-menu').contains(event.target) && !$('btn-settings').contains(event.target)) closeSettings();
+});
+
 // --- paper context menu --------------------------------------------------
 
 function openPaperMenu(paper, x, y) {
@@ -1289,6 +1392,10 @@ function moveSelection(rows, step) {
 }
 
 document.addEventListener('keydown', async (event) => {
+  if (event.key === 'Escape' && !$('settings-menu').hidden) {
+    closeSettings({ restoreFocus: true });
+    return;
+  }
   // While the paper menu is open Escape belongs to it. Falling through to the
   // editor branches would also run `cancelEdit` and drop a draft the user
   // only meant to keep by dismissing the menu.

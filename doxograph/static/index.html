@@ -11,11 +11,58 @@
 <header>
   <h1>Doxograph</h1>
   <span class="stats" id="stats"></span>
-  <span class="actions">
+  <div class="actions">
     <button type="button" id="btn-retag" title="Reassign tags on every paper against the current vocabulary">Retag all</button>
     <button type="button" id="btn-bib">BibTeX</button>
     <button type="button" id="btn-export" class="primary">Export HTML</button>
-  </span>
+    <div class="settings-wrap">
+      <button type="button" id="btn-settings" aria-haspopup="dialog" aria-expanded="false"
+        aria-controls="settings-menu">Settings</button>
+      <div class="settings-menu" id="settings-menu" role="dialog" aria-labelledby="settings-title" hidden>
+        <div class="settings-head">
+          <h2 id="settings-title">Appearance</h2>
+          <button type="button" class="icon-button" id="btn-close-settings" aria-label="Close settings">×</button>
+        </div>
+        <fieldset>
+          <legend>Mode</legend>
+          <div class="choice-row">
+            <label><input type="radio" name="appearance" value="system"> System</label>
+            <label><input type="radio" name="appearance" value="light"> Light</label>
+            <label><input type="radio" name="appearance" value="dark"> Dark</label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Color theme</legend>
+          <div class="theme-grid">
+            <label class="theme-choice">
+              <input type="radio" name="color-theme" value="slate">
+              <span class="theme-preview slate" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Slate</span>
+            </label>
+            <label class="theme-choice">
+              <input type="radio" name="color-theme" value="forest">
+              <span class="theme-preview forest" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Forest</span>
+            </label>
+            <label class="theme-choice">
+              <input type="radio" name="color-theme" value="plum">
+              <span class="theme-preview plum" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Plum</span>
+            </label>
+            <label class="theme-choice">
+              <input type="radio" name="color-theme" value="sepia">
+              <span class="theme-preview sepia" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Sepia</span>
+            </label>
+          </div>
+        </fieldset>
+        <div class="settings-foot">
+          <span class="hint">Saved in this browser</span>
+          <button type="button" id="btn-reset-theme">Reset</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </header>
 
 <div id="layout">
