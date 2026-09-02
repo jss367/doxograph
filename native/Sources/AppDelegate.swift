@@ -5,7 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let window = WebWindow()
     private var ready = false
     /// The server was asked to start and did not. Updating is still allowed,
-    /// since a pull may be exactly what fixes it.
+    /// since an update may be exactly what fixes it.
     private var serverFailed = false
     /// PDFs dropped on the Dock icon before the server answered. A drop can
     /// even be what launched the app, so this fills up before the window exists.
@@ -86,13 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Updating
 
-    /// Pull the checkout the app runs from, and restart on top of it.
+    /// Update the checkout the app runs from, and restart on top of it.
     ///
     /// The app is a launcher over a checkout's venv, so an update fast-forwards
     /// that checkout from `origin/main`. Python changes are live once the server
     /// restarts; a change under `native/` means this bundle is stale too, so it
     /// is rebuilt and the app relaunched. An adopted server is not this app's to
-    /// restart: the pull still happens, and the alert says the terminal has to
+    /// restart: the update still happens, and the alert says the terminal has to
     /// do the rest.
     @objc func updateDoxograph(_ sender: Any?) {
         guard !updating else { return }
@@ -162,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .success(let outcome):
             if serverFailed {
                 // Nothing is running that the restart could interrupt, and the
-                // pull may be what the failed start was missing. Try again.
+                // update may be what the failed start was missing. Try again.
                 inform("Updated Doxograph.", outcome.changes)
                 startServer()
                 return
@@ -315,7 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// The server cannot say whose request it is, and guessing wrong the other
     /// way loses a paper, so it errs toward asking.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // An update is a pull, a pip install and a build, and none of them
+        // An update is a fast-forward, a pip install and a build, and none of them
         // likes being abandoned half-way. The children are not stopped here:
         // the next update measures from the last commit that fully installed,
         // so whatever this one leaves behind is done over. The question is so
@@ -474,7 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     ///
     /// Nothing is lost for good: the update is measured from the last commit
     /// that fully installed, so the next one does over whatever this one was
-    /// in the middle of. It is still a pull, a pip install or a build left
+    /// in the middle of. It is still a fast-forward, a pip install or a build left
     /// running with no app attached, which is worth a question.
     private func confirmQuitWhileUpdating() -> Bool {
         let alert = NSAlert()
@@ -529,7 +529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(goBack(_:)): return window.webView.canGoBack
         case #selector(reloadPage(_:)), #selector(addPapers(_:)): return ready
         // Not while the server is still coming up, since the restart after
-        // the pull needs to know whether it is owned. A start that failed is
+        // the update needs to know whether it is owned. A start that failed is
         // settled, and updating is then the way out.
         case #selector(updateDoxograph(_:)): return (ready || serverFailed) && !updating
         default: return true

@@ -13,12 +13,12 @@ import Foundation
 enum Updater {
     static let repositoryDefaultsKey = "DoxographRepository"
     /// The commit whose dependencies and bundle were last fully installed.
-    /// Written only once every step after the pull has succeeded, so a pull
-    /// whose pip or build then failed is not mistaken for an update that took.
+    /// Written only once every step after the fast-forward has succeeded, so an
+    /// update whose pip or build then failed is not mistaken for one that took.
     static let updatedShaDefaultsKey = "DoxographUpdatedSha"
 
     struct Outcome {
-        /// `git log --oneline` for what the pull brought in; empty when nothing did.
+        /// `git log --oneline` for what the update brought in; empty when nothing did.
         let changes: String
         /// True when `native/` changed and the running bundle was replaced.
         let appRebuilt: Bool
@@ -104,8 +104,8 @@ enum Updater {
 
     // MARK: - Updating
 
-    /// Pull, reinstall, and rebuild if needed. `progress` and `completion` are
-    /// called on the main thread.
+    /// Fetch, fast-forward, reinstall, and rebuild if needed. `progress` and
+    /// `completion` are called on the main thread.
     static func run(
         command: String,
         repository: URL,
@@ -159,22 +159,36 @@ enum Updater {
             UserDefaults.standard.set(baseline, forKey: Self.installedKey(for: repository))
         }
 
-        // The app updates to the released source, not to whatever branch happens
-        // to be checked out. In particular, Conductor workspaces use local
-        // branches without upstreams, for which a bare `git pull` cannot choose
-        // a branch at all. Naming main also keeps a tracked feature branch from
-        // quietly updating to that feature branch instead of the released app.
-        let pull = git(["pull", "--ff-only", "origin", "main"])
-        guard pull.succeeded else {
-            return .failure(.step("git pull origin/main", pull.output))
+        // The app updates to the released source, not to the current branch's
+        // upstream. Fetching main explicitly works for local workspace branches
+        // that have no upstream. Refuse a checkout with its own commits: merging
+        // would run unreleased code, and resetting it would discard local work.
+        let fetch = git(["fetch", "origin", "main"])
+        guard fetch.succeeded else {
+            return .failure(.step("git fetch origin/main", fetch.output))
+        }
+        let ancestry = git(["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"])
+        if ancestry.status == 1 {
+            return .failure(.step("checking origin/main", """
+                This checkout contains commits that are not in origin/main, so \
+                Doxograph cannot update it without changing or discarding local work. \
+                Build Doxograph from a checkout on main, or update this branch manually.
+                """))
+        }
+        guard ancestry.succeeded else {
+            return .failure(.step("git merge-base", ancestry.output))
+        }
+        let merge = git(["merge", "--ff-only", "FETCH_HEAD"])
+        guard merge.succeeded else {
+            return .failure(.step("git merge origin/main", merge.output))
         }
 
         let after = git(["rev-parse", "HEAD"])
         guard after.succeeded else { return .failure(.step("git rev-parse", after.output)) }
         let head = after.output.trimmed
 
-        // A pull that landed but whose pip or build then failed has already
-        // moved HEAD, so measuring from where this run started would call the
+        // A fast-forward that landed but whose pip or build then failed has
+        // already moved HEAD, so measuring from where this run started would call the
         // checkout up to date and never retry those steps. Measure instead
         // from the last commit that was fully installed, when it is behind
         // where this run started. When it is not (a rewound checkout, a first
@@ -192,7 +206,7 @@ enum Updater {
         let range = "\(base)..\(head)"
         let changes = git(["log", "--oneline", "--no-decorate", range]).output.trimmed
         // Everything below keys off this list, and a failure here would read as
-        // "nothing changed" and record the pull as installed. Refuse instead.
+        // "nothing changed" and record the update as installed. Refuse instead.
         // Without --no-renames a file moved out of native/ shows up only under
         // its new name, and the Swift it used to be would never be rebuilt.
         let diff = git(["diff", "--name-only", "--no-renames", range])
