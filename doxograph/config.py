@@ -126,9 +126,11 @@ def _read_workspace_records() -> list[dict]:
         return []
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-    return loaded if isinstance(loaded, list) else []
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"workspace registry is not valid JSON: {exc}") from exc
+    if not isinstance(loaded, list):
+        raise ValueError("workspace registry must contain a JSON list")
+    return loaded
 
 
 def list_workspaces() -> list[dict]:

@@ -3,6 +3,7 @@
 import multiprocessing
 import os
 
+import pytest
 from fastapi.testclient import TestClient
 
 from doxograph import config, server, store
@@ -141,3 +142,16 @@ def test_named_workspace_ignores_default_export_override(monkeypatch, tmp_path):
     animal = config.create_workspace("Animal locomotion")
     with config.use_workspace(animal["id"]):
         assert config.export_path() == config.data_dir() / "export" / "doxograph.html"
+
+
+def test_malformed_registry_is_not_overwritten_by_workspace_creation():
+    animal = config.create_workspace("Animal locomotion")
+    registry = config.workspaces_path()
+    registry.write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="workspace registry is not valid JSON"):
+        config.create_workspace("Consciousness")
+
+    assert registry.read_text(encoding="utf-8") == "{not valid json"
+    assert (config.base_data_dir() / "workspaces" / animal["id"]).is_dir()
+    assert not (config.base_data_dir() / "workspaces" / "consciousness").exists()
