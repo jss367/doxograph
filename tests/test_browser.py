@@ -284,6 +284,13 @@ def test_theme_settings_apply_immediately_and_survive_a_reload():
                 assert await settings.get_by_label("Dark").is_checked()
                 assert await settings.get_by_label("Forest").is_checked()
 
+                await settings.get_by_label("Dim").check()
+                await settings.get_by_label("Graphite").check()
+                assert await root.get_attribute("data-appearance") == "dim"
+                assert await root.get_attribute("data-color-theme") == "graphite"
+                assert await root.evaluate("el => getComputedStyle(el).getPropertyValue('--bg').trim()") == "#28282b"
+                assert await root.evaluate("el => el.style.colorScheme") == "dark"
+
                 await settings.get_by_role("button", name="Reset").click()
                 assert await root.get_attribute("data-appearance") == "system"
                 assert await root.get_attribute("data-color-theme") == "slate"
