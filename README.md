@@ -28,7 +28,8 @@ reads it with Claude, and records:
 - how it bears on your own claims: supports, contradicts, supplies a method
   for, refines, or is independent of them
 
-Once several papers share a topic, a second pass finds where they disagree:
+Once several papers share a topic, a second pass writes what they hold on it,
+and a third finds where they disagree:
 pairs of claims from different papers that pull against each other on the same
 question, each with a note on what the disagreement is and what might account
 for it. These are reviewed too, and the confirmed ones go into the export.
@@ -57,6 +58,8 @@ doxograph extract                     # read every paper that has no claims yet
 doxograph retag                       # reassign topics against the current vocabulary
 doxograph tensions                    # find claims from different papers that disagree
 doxograph tensions --list             # show what has been found, without calling the model
+doxograph synthesize                  # write what the papers hold on each topic
+doxograph synthesize --list           # show the syntheses on file
 doxograph list                        # what is in the corpus
 doxograph tags                        # topics and their use counts
 doxograph export --out notes.html     # one self-contained HTML file
@@ -115,6 +118,7 @@ locks/               lock files, so two processes do not write at once
 retired-keys.json    keys of removed papers, never issued again
 tags.yaml            the topic vocabulary
 tensions.json        where papers disagree, and what you decided about each
+syntheses.json       what the papers hold on each topic
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 export/              generated HTML
@@ -193,6 +197,29 @@ a later run that returns the same pair re-judges it and sets it back to open,
 and you can also confirm or dismiss it yourself against the new text. Deleting a claim
 removes its tensions. Open and confirmed tensions appear in the HTML export;
 dismissed ones do not.
+
+## What the papers hold
+
+Where tensions record the disagreements, a synthesis records the rest: for one
+topic, a short account of what the papers, taken together, hold. `doxograph
+synthesize`, or Synthesize topics in the web app, takes each topic with claims
+from at least two papers and asks the model for one to three paragraphs on
+where the papers agree, where they differ and why, and what none of them
+settles. Only the claims are sent, along with the tensions already noted for
+the topic, so the pass costs about what a retag does. Name a topic to write one
+for a topic with a single paper.
+
+Each sentence cites the claims it rests on. In the web app the citations link
+to the claim cards; in the export they show the cited claim on hover. The
+model is told to stay inside the claims, and which of them nobody has reviewed
+yet, so a synthesis is only as good as the review behind it.
+
+Syntheses live in `syntheses.json`, one per topic. Edit one in the web app to
+correct it by hand. A synthesis goes stale when a claim in its topic is added,
+removed, or edited; it stays on view marked as such until you rewrite it or
+edit it yourself, either of which is a judgment against the current claims.
+Renaming a topic carries its synthesis along; deleting the topic deletes it.
+Syntheses appear under their topic in the HTML export.
 
 ## Re-reading a paper
 

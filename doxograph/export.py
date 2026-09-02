@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from pathlib import Path
 
 from . import config, store
@@ -49,6 +50,10 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .paper .title { font-weight: 600; }
 .paper .authors, .paper .rel { font-size: .87rem; color: var(--muted); }
 .paper .summary { font-size: .92rem; margin: .4rem 0 0; }
+.synth { background: var(--panel); padding: .85rem 1rem; border-radius: 5px; margin: .5rem 0 1rem; }
+.synth p { margin: 0 0 .6rem; }
+.synth p:last-child { margin: 0; }
+.synth .cite { color: var(--accent); font-size: .85em; cursor: help; border-bottom: 1px dotted var(--accent); }
 .ledger { background: var(--panel); padding: .85rem 1rem; border-radius: 5px; margin: .85rem 0; }
 .ledger .own { font-weight: 600; margin: 0 0 .5rem; }
 .rel-tag { font-size: .74rem; text-transform: uppercase; letter-spacing: .03em;
@@ -112,6 +117,51 @@ def _authors(authors: list[str]) -> str:
     return ", ".join(authors)
 
 
+_CITE = re.compile(r"\[([^\[\]]+)\]")
+
+
+def _synthesis_html(record: dict, rows_by_id: dict[str, dict]) -> str:
+    """The synthesis with its citations turned into author-year markers that
+    show the cited claim on hover. A bracket that does not hold claim ids is
+    left as written."""
+    def cite(match):
+        ids = [i for i in re.split(r"[,\s]+", match.group(1).strip()) if i]
+        if not ids or not all(i in rows_by_id for i in ids):
+            return _e(match.group(0))
+        marks = []
+        for i in ids:
+            row = rows_by_id[i]
+            authors = row.get("paper_authors") or []
+            who = authors[0].split()[-1] if authors else row.get("paper", "")
+            marks.append(f'<span class="cite" title="{_e(row.get("text"))}">'
+                         f'{_e(who)} {_e(row.get("paper_year") or "n.d.")}</span>')
+        return "[" + ", ".join(marks) + "]"
+    paragraphs = [p.strip() for p in (record.get("text") or "").split("\n\n") if p.strip()]
+    body = "".join(
+        "<p>" + "".join(_e(piece) if n % 2 == 0 else cite(_CITE.fullmatch(piece))
+                        for n, piece in enumerate(_split_cites(p))) + "</p>"
+        for p in paragraphs
+    )
+    note = ""
+    if record.get("stale"):
+        note = '<span class="rel-tag">claims changed since</span>'
+    by = "written by hand" if record.get("source") == "hand" else "written by the model"
+    return (f'<div class="synth">{body}<p class="sub">{by} · {_e((record.get("written") or "")[:10])}'
+            f'{note}</p></div>')
+
+
+def _split_cites(text: str) -> list[str]:
+    """Alternate plain text and `[...]` runs, plain text first, so the caller
+    can escape one and turn the other into markers."""
+    out, last = [], 0
+    for match in _CITE.finditer(text):
+        out.append(text[last:match.start()])
+        out.append(match.group(0))
+        last = match.end()
+    out.append(text[last:])
+    return out
+
+
 def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
     hay = " ".join([
         row.get("text", ""), row.get("evidence", ""), row.get("quote", ""),
@@ -154,6 +204,8 @@ def render(title: str = "Doxograph") -> str:
     ledger = store.load_ledger()
     ledger_by_id = {c["id"]: c for c in ledger}
     tensions = [t for t in store.tension_rows(rows) if t.get("status") != "dismissed"]
+    syntheses = {s["topic"]: s for s in store.synthesis_rows(rows)}
+    rows_by_id = {r["id"]: r for r in rows}
 
     body = [
         f"<h1>{_e(title)}</h1>",
@@ -178,6 +230,8 @@ def render(title: str = "Doxograph") -> str:
                     f'<span class="count" data-total="{count}">{count}</span></h3>')
         if tag_descriptions.get(tag):
             body.append(f'<p class="sub">{_e(tag_descriptions[tag])}</p>')
+        if tag in syntheses:
+            body.append(_synthesis_html(syntheses[tag], rows_by_id))
         for row in rows:
             if tag in row.get("tags", []):
                 body.append(_claim_html(row, ledger_by_id))

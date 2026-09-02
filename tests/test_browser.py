@@ -291,3 +291,51 @@ def test_a_stale_confirmed_tension_can_be_confirmed_again_without_reopening():
     asyncio.run(scenario())
     [tension] = store.tension_rows()
     assert tension["status"] == "confirmed" and tension["stale"] is False
+
+
+@pytest.mark.browser
+def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_hand():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    store.record_synthesis("recovery", "Both papers report it [paper-a-c1, paper-b-c1].",
+                           {r["id"]: r for r in store.claim_rows()})
+    store.update_claim("paper-a", "paper-a-c1", {"text": "A reworded claim from Paper A."})
+    assert store.synthesis_rows()[0]["stale"] is True
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                synth = page.locator('.synth[data-topic="recovery"]')
+                await synth.wait_for(state="visible")
+                # Under the topic heading, above the claims.
+                group = page.locator(".group", has=synth)
+                assert await group.locator("h3").text_content() is not None
+                order = await group.evaluate(
+                    "g => [...g.children].map(c => c.className.split(' ')[0])")
+                assert order.index("synth") < order.index("claim")
+                assert await synth.locator(".stale").count() == 1
+
+                # The citations are two markers; clicking one selects that claim.
+                cites = synth.locator(".cite")
+                assert await cites.count() == 2
+                assert await cites.nth(1).get_attribute("title") == "A claim from Paper B."
+                await cites.nth(1).click()
+                await page.locator('.claim.sel[data-claim="paper-b-c1"]').wait_for(state="visible")
+
+                # Correcting it by hand clears the stale mark and records the text.
+                await synth.get_by_role("button", name="edit").click()
+                field = page.locator('textarea[data-synth="recovery"]')
+                await field.fill("Corrected [paper-a-c1].")
+                await page.get_by_role("button", name="Save").click()
+                synth = page.locator('.synth[data-topic="recovery"]')
+                await synth.get_by_text("written by hand", exact=False).wait_for()
+                assert await synth.locator(".stale").count() == 0
+                assert await synth.locator(".cite").count() == 1
+            await browser.close()
+
+    asyncio.run(scenario())
+    [row] = store.synthesis_rows()
+    assert row["text"] == "Corrected [paper-a-c1]." and row["source"] == "hand" and row["stale"] is False

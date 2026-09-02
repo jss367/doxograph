@@ -1,6 +1,6 @@
 'use strict';
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [],
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
@@ -17,9 +17,12 @@ const NEW_CLAIM_ID = '__new__';
 // to it closes any open one (keeping its draft) and lets the background poll run.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
+// synthEditing is the topic whose synthesis is open for correction by hand, and
+// synthDraft what has been typed into it, kept across redraws like claim drafts.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
-            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null };
+            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
+            synthEditing: null, synthDraft: null };
 
 function blankClaim(paper) {
   return {
@@ -114,7 +117,7 @@ function render() {
   renderPapers();
   renderTensionsNav();
   renderTags();
-  if (!V.editing) renderContent();
+  if (!V.editing && !V.synthEditing) renderContent();
   renderJobs();
 }
 
@@ -143,6 +146,8 @@ function renderStats() {
   if (proposed) bits.push(`${proposed} proposed topics`);
   const openTensions = (S.tensions || []).filter((t) => t.status === 'open').length;
   if (openTensions) bits.push(`${openTensions} open tensions`);
+  const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
+  if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
   if (!S.has_key) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
 }
@@ -434,6 +439,86 @@ function editForm(row) {
   </div>`;
 }
 
+// --- syntheses: what the papers hold on a topic ---------------------------
+
+function synthesisFor(tag) {
+  return (S.syntheses || []).find((s) => s.topic === tag) || null;
+}
+
+// Turns `[claim-id]` and `[id, id]` in a synthesis into author-year markers
+// that jump to the claim. A bracket holding anything else is left as written.
+// The text is escaped first; ids and brackets survive escaping unchanged.
+function citeHtml(text) {
+  const byId = new Map(S.claims.map((c) => [c.id, c]));
+  return esc(text).replace(/\[([^\[\]]+)\]/g, (whole, inner) => {
+    const ids = inner.trim().split(/[,\s]+/).filter(Boolean);
+    if (!ids.length || !ids.every((id) => byId.has(id))) return whole;
+    return '[' + ids.map((id) => {
+      const row = byId.get(id);
+      const who = (row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper;
+      return `<span class="cite" data-act="goto-claim" data-claim="${esc(id)}" title="${esc(row.text)}">${esc(who)} ${esc(row.paper_year || 'n.d.')}</span>`;
+    }).join(', ') + ']';
+  });
+}
+
+function synthesisBlock(tag) {
+  const synth = synthesisFor(tag);
+  if (V.synthEditing === tag) {
+    const text = V.synthDraft !== null ? V.synthDraft : (synth ? synth.text : '');
+    return `<div class="synth" data-topic="${esc(tag)}">
+      <textarea data-synth="${esc(tag)}">${esc(text)}</textarea>
+      <div class="smeta">
+        <span class="hint">Cite claims as [claim-id]; they become links.</span>
+        <span class="cact" style="margin-left:auto">
+          <button type="button" data-act="save-synth" data-topic="${esc(tag)}" class="primary">Save</button>
+          <button type="button" data-act="cancel-synth">Cancel</button>
+        </span>
+      </div>
+    </div>`;
+  }
+  if (!synth) return '';
+  const paragraphs = synth.text.split(/\n\s*\n/).filter((p) => p.trim());
+  return `<div class="synth" data-topic="${esc(tag)}">
+    ${paragraphs.map((p) => `<p>${citeHtml(p)}</p>`).join('')}
+    <div class="smeta">
+      <span>${synth.source === 'hand' ? 'written by hand' : 'written by the model'} · ${esc((synth.written || '').slice(0, 10))}
+        · ${synth.n_claims} claims in ${synth.n_papers} papers</span>
+      ${synth.stale ? '<span class="stale">claims have changed since</span>' : ''}
+      <span class="cact" style="margin-left:auto">
+        <button type="button" data-act="synthesize" data-topic="${esc(tag)}">Rewrite</button>
+        <button type="button" data-act="edit-synth" data-topic="${esc(tag)}">edit</button>
+        <button type="button" data-act="del-synth" data-topic="${esc(tag)}">delete</button>
+      </span>
+    </div>
+  </div>`;
+}
+
+// The button in a topic heading when no synthesis exists yet.
+function synthesizeButton(tag) {
+  if (synthesisFor(tag) || V.synthEditing === tag) return '';
+  return `<button type="button" class="mini" data-act="synthesize" data-topic="${esc(tag)}"
+    title="Ask the model what the papers hold on this topic">synthesize</button>`;
+}
+
+async function synthesize(topics) {
+  V.error = null;
+  try {
+    const result = await api('/api/syntheses', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(topics ? { topics } : {}),
+    });
+    if (!result.queued) {
+      V.error = topics
+        ? 'That topic has no claims to synthesize.'
+        : 'No topic has claims from two papers yet. Use the synthesize button on a topic to write one anyway.';
+    }
+  } catch (error) {
+    V.error = `Could not start the synthesis: ${error.message}`;
+  }
+  await refresh();
+  if (V.error) renderContent();
+}
+
 function renderContent() {
   if (V.view === 'tensions') { renderTensions(); return; }
   const main = $('main');
@@ -452,6 +537,11 @@ function renderContent() {
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
+  // Filtered to one topic without grouping, the synthesis heads the list; in
+  // grouped mode each topic's sits under its own heading below.
+  if (V.tag && !V.paper && !(V.group && rows.length)) {
+    html += `<div class="group"><h3>${esc(V.tag)} ${synthesizeButton(V.tag)}</h3>${synthesisBlock(V.tag)}</div>`;
+  }
   if (V.newClaim && V.editing === NEW_CLAIM_ID) {
     shown.add(NEW_CLAIM_ID);
     html += editForm(V.newClaim);
@@ -492,8 +582,9 @@ function renderContent() {
     const ordered = [...byTag.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
     for (const [tag, group] of ordered) {
       const description = (S.tags.find((t) => t.name === tag) || {}).description || '';
-      html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span></h3>`
+      html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span>${synthesizeButton(tag)}</h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
+        + synthesisBlock(tag)
         + group.map(card).join('') + '</div>';
     }
     if (untagged.length) {
@@ -827,6 +918,54 @@ $('content').addEventListener('click', async (event) => {
       await findTensions();
       return;
     }
+    if (act === 'synthesize') {
+      await synthesize([button.dataset.topic]);
+      return;
+    }
+    if (act === 'edit-synth') {
+      captureOpenEditor();
+      V.synthEditing = button.dataset.topic;
+      V.synthDraft = null;
+      renderContent();
+      return;
+    }
+    if (act === 'cancel-synth') {
+      V.synthEditing = null;
+      V.synthDraft = null;
+      renderContent();
+      return;
+    }
+    if (act === 'save-synth') {
+      const topic = button.dataset.topic;
+      const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
+      const text = field ? field.value : (V.synthDraft || '');
+      V.error = null;
+      try {
+        await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        V.synthEditing = null;
+        V.synthDraft = null;
+      } catch (error) {
+        V.synthDraft = text;
+        V.error = `Could not save the synthesis: ${error.message}`;
+      }
+      await refreshAll();
+      return;
+    }
+    if (act === 'del-synth') {
+      if (!confirm('Delete this synthesis?')) return;
+      await api(`/api/syntheses/${encodeURIComponent(button.dataset.topic)}`, { method: 'DELETE' });
+      await refreshAll();
+      return;
+    }
+    if (act === 'goto-claim') {
+      V.selectedId = claim;
+      renderContent();
+      scrollToSelected();
+      return;
+    }
     if (act === 'reextract') {
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
       await refresh();
@@ -949,6 +1088,14 @@ $('btn-tensions').addEventListener('click', async () => {
   await findTensions();
 });
 
+$('btn-synth').addEventListener('click', async () => {
+  showView('claims');
+  V.group = true;
+  $('group-by-tag').checked = true;
+  renderAll();
+  await synthesize(null);
+});
+
 // --- paper context menu --------------------------------------------------
 
 function openPaperMenu(paper, x, y) {
@@ -1042,6 +1189,10 @@ $('btn-export').addEventListener('click', async () => {
 
 $('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
 
+$('content').addEventListener('input', (e) => {
+  if (e.target.matches('textarea[data-synth]')) V.synthDraft = e.target.value;
+});
+
 // Each filter keeps whatever is typed in an open editor before redrawing.
 $('content').addEventListener('change', (e) => {
   if (e.target.id !== 'tension-status') return;
@@ -1077,6 +1228,7 @@ document.addEventListener('keydown', async (event) => {
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key === 'Escape' && V.editing) cancelEdit();
+    if (event.key === 'Escape' && V.synthEditing) { V.synthEditing = null; V.synthDraft = null; renderContent(); }
     return;
   }
   if (V.view !== 'claims') {
@@ -1142,6 +1294,7 @@ function stateSignature(state) {
     (state.tags || []).map((t) => t.name),
     (state.ledger || []).map((c) => c.id),
     (state.tensions || []).map((t) => [t.id, t.status, t.stale, t.found, (t.topics || []).join(',')]),
+    (state.syntheses || []).map((s) => [s.topic, s.written, s.stale, s.source]),
   ]);
 }
 
@@ -1152,7 +1305,7 @@ async function boot() {
   setInterval(async () => {
     if (document.hidden) return;
     const busy = (S.jobs || []).some((j) => ['queued', 'fetching', 'reading'].includes(j.state));
-    if (!busy && V.editing) return;
+    if (!busy && (V.editing || V.synthEditing)) return;
     try {
       const next = await api('/api/state');
       const changed = stateSignature(next) !== stateSignature(S);
@@ -1160,7 +1313,7 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       renderStats();
-      if (!V.editing) { renderPapers(); renderTensionsNav(); renderTags(); renderContent(); }
+      if (!V.editing && !V.synthEditing) { renderPapers(); renderTensionsNav(); renderTags(); renderContent(); }
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
 }

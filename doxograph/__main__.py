@@ -142,6 +142,41 @@ def cmd_tensions(args) -> int:
     return 0
 
 
+def cmd_synthesize(args) -> int:
+    """Write, or list, what the papers hold on each topic."""
+    if not args.list:
+        topics = args.topics or store.synthesis_topics()
+        if not topics:
+            print("no topic has claims from two papers yet; name a topic to synthesize it anyway",
+                  file=sys.stderr)
+        failures = 0
+        for topic in topics:
+            try:
+                result = extract.synthesize_topic(topic)
+                if result["written"]:
+                    print(f"{topic}: written from {result['claims']} claims in {result['papers']} papers")
+                else:
+                    print(f"{topic}: no claims, nothing written", file=sys.stderr)
+                    failures += 1
+            except Exception as exc:
+                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failures += 1
+        if failures:
+            return 1
+    rows = store.synthesis_rows()
+    if args.topics:
+        rows = [r for r in rows if r["topic"] in set(args.topics)]
+    for row in rows:
+        stale = " (claims changed since)" if row.get("stale") else ""
+        print(f"## {row['topic']}  [{row['source']}, {row['written'][:10]}, "
+              f"{row['n_claims']} claims in {row['n_papers']} papers]{stale}")
+        print(row["text"])
+        print()
+    stale_count = sum(1 for r in rows if r.get("stale"))
+    print(f"{len(rows)} syntheses, {stale_count} stale")
+    return 0
+
+
 def cmd_list(args) -> int:
     papers = store.all_papers()
     for paper in papers:
@@ -221,6 +256,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
     p.add_argument("--all", action="store_true", help="include dismissed tensions in the listing")
     p.set_defaults(func=cmd_tensions)
+
+    p = sub.add_parser("synthesize", help="write what the papers hold on each topic")
+    p.add_argument("topics", nargs="*", help="topics to write; default is every topic with two papers")
+    p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
+    p.set_defaults(func=cmd_synthesize)
 
     p = sub.add_parser("list", help="list the corpus")
     p.set_defaults(func=cmd_list)
