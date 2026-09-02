@@ -1,6 +1,6 @@
 'use strict';
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [],
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
@@ -13,9 +13,13 @@ const NEW_CLAIM_ID = '__new__';
 // list. Without it a re-render redraws from the unchanged server row and
 // silently discards the edit. A map rather than one slot, so opening a second
 // claim's editor does not throw away the first one's draft.
+// view is 'claims' or 'tensions'. The tensions view has no editor, so switching
+// to it closes any open one (keeping its draft) and lets the background poll run.
+// tensionFocus narrows the tensions view to those involving one claim; it is set
+// by the marker on a claim card and cleared by "show all".
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
-            drafts: {}, error: null };
+            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null };
 
 function blankClaim(paper) {
   return {
@@ -108,6 +112,7 @@ function visibleClaims() {
 function render() {
   renderStats();
   renderPapers();
+  renderTensionsNav();
   renderTags();
   if (!V.editing) renderContent();
   renderJobs();
@@ -120,6 +125,7 @@ function renderAll() {
   captureOpenEditor();
   renderStats();
   renderPapers();
+  renderTensionsNav();
   renderTags();
   renderContent();
   renderJobs();
@@ -135,20 +141,42 @@ function renderStats() {
   ];
   if (unreviewed) bits.push(`${unreviewed} unreviewed`);
   if (proposed) bits.push(`${proposed} proposed topics`);
+  const openTensions = (S.tensions || []).filter((t) => t.status === 'open').length;
+  if (openTensions) bits.push(`${openTensions} open tensions`);
   if (!S.has_key) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
 }
 
 function renderPapers() {
-  const all = `<li class="${V.paper === null ? 'active' : ''}" data-paper="">
+  const claims = V.view === 'claims';
+  const all = `<li class="${claims && V.paper === null ? 'active' : ''}" data-paper="">
     <span class="pt">All papers</span>
     <span class="pm">${S.claims.length} claims</span></li>`;
   $('papers').innerHTML = all + S.papers.map((p) => `
-    <li class="${V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
+    <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
       <span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
         ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}</span>
     </li>`).join('');
+}
+
+function renderTensionsNav() {
+  const all = S.tensions || [];
+  const count = (status) => all.filter((t) => t.status === status).length;
+  const parts = [];
+  if (count('open')) parts.push(`${count('open')} open`);
+  if (count('confirmed')) parts.push(`${count('confirmed')} confirmed`);
+  if (count('dismissed')) parts.push(`${count('dismissed')} dismissed`);
+  $('tensions-nav').innerHTML = `<li class="${V.view === 'tensions' ? 'active' : ''}" data-view="tensions">
+    <span class="pt">Where papers disagree</span>
+    <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
+}
+
+// Tensions a claim takes part in, for the marker on its card. Dismissed ones
+// are not marked: the reviewer has said there is nothing there.
+function tensionsFor(claimId) {
+  return (S.tensions || []).filter((t) => t.status !== 'dismissed'
+    && t.claims.some((c) => c.id === claimId));
 }
 
 function renderTags() {
@@ -249,6 +277,7 @@ function claimCard(row, shown) {
       ${tags}
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
+      ${tensionMarker(row.id)}
       <span class="cact">
         <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
@@ -260,6 +289,110 @@ function claimCard(row, shown) {
     ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
     ${links}
   </div>`;
+}
+
+function tensionMarker(claimId) {
+  if (V.view === 'tensions') return '';   // the card is already inside a tension
+  const involved = tensionsFor(claimId);
+  if (!involved.length) return '';
+  const confirmed = involved.every((t) => t.status === 'confirmed');
+  const label = involved.length === 1 ? 'in tension with 1 claim' : `in tension with ${involved.length} claims`;
+  return `<span class="tmark ${confirmed ? 'confirmed' : ''}" data-act="tension-focus"
+    data-claim="${esc(claimId)}" title="Show the tensions this claim is part of">⚡ ${esc(label)}</span>`;
+}
+
+// A claim as it appears inside a tension: the same card, minus the review and
+// edit controls. Editing belongs to the claims view, where the editor's
+// lifecycle is handled; a click on the citation goes there.
+function tensionClaimCard(row) {
+  const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
+    + ` ${row.paper_year || ''}`;
+  return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'}" data-tclaim="${esc(row.id)}">
+    <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
+    <div class="cmeta">
+      <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
+      ${row.locator ? '· ' + esc(row.locator) : ''}
+      ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
+    </div>
+    ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
+    ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
+  </div>`;
+}
+
+function tensionCard(t) {
+  const topics = (t.topics || []).map((x) => `<span class="tag" data-tag="${esc(x)}">#${esc(x)}</span>`).join(' ');
+  // A stale tension keeps both decisions on offer whatever its status: deciding
+  // it again against the current text is what clears the stale mark, and a
+  // reviewer who still agrees should not have to reopen it first.
+  const actions = [];
+  if (t.stale || t.status !== 'confirmed') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="confirmed">Confirm</button>`);
+  if (t.stale || t.status !== 'dismissed') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="dismissed">Dismiss</button>`);
+  if (t.status !== 'open') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="open">Reopen</button>`);
+  return `<div class="tcard ${esc(t.status)}" data-tension="${esc(t.id)}">
+    <div class="thead">
+      <span class="kind ${esc(t.kind)}">${esc(t.kind)}</span>
+      <span class="st ${esc(t.status)}">${esc(t.status)}</span>
+      ${topics}
+      <span class="cact">${actions.join('')}</span>
+    </div>
+    <div class="tpair">${t.claims.map(tensionClaimCard).join('')}</div>
+    ${t.note ? `<p class="tnote">${esc(t.note)}</p>` : ''}
+    ${t.stale ? '<p class="stale">A claim here was edited after this was found. Re-run Find tensions to re-judge it, or decide it yourself.</p>' : ''}
+  </div>`;
+}
+
+function visibleTensions() {
+  return (S.tensions || []).filter((t) =>
+    (!V.tensionStatus || t.status === V.tensionStatus)
+    && (!V.tag || (t.topics || []).includes(V.tag))
+    && (!V.tensionFocus || t.claims.some((c) => c.id === V.tensionFocus)));
+}
+
+function renderTensions() {
+  const main = $('main');
+  const scrollTop = main ? main.scrollTop : 0;
+  const rows = visibleTensions();
+  const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+  const focus = V.tensionFocus ? S.claims.find((c) => c.id === V.tensionFocus) : null;
+  let html = `<div class="paperhead">
+    <h2>Where papers disagree</h2>
+    <p class="ps">Pairs of claims from different papers that pull against each other on one
+      question. A <span class="kind contradiction">contradiction</span> cannot have both sides
+      true; a <span class="kind tension">tension</span> might be explained by a difference in
+      setup. Confirm the ones that hold up, dismiss the rest.</p>
+    <div class="row">
+      <select id="tension-status">
+        <option value="" ${V.tensionStatus ? '' : 'selected'}>every status</option>
+        ${statuses.map((st) => `<option value="${esc(st)}" ${V.tensionStatus === st ? 'selected' : ''}>${esc(st)}</option>`).join('')}
+      </select>
+      ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
+      ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
+                 <button type="button" data-act="tension-unfocus">show all</button>` : ''}
+      <button type="button" data-act="find-tensions" style="margin-left:auto">Find tensions</button>
+    </div>
+  </div>`;
+  if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
+  if (!rows.length) {
+    html += (S.tensions || []).length
+      ? '<p class="empty">No tensions match these filters.</p>'
+      : '<p class="empty">Nothing found yet. Find tensions asks the model, topic by topic, which claims from different papers disagree.</p>';
+  } else {
+    html += rows.map(tensionCard).join('');
+  }
+  $('content').innerHTML = html;
+  if (main) main.scrollTop = scrollTop;
+}
+
+function showView(view) {
+  if (view === V.view) return;
+  // The tensions view has no editor. Park any open one rather than leaving
+  // `V.editing` set on a form that is no longer on screen, which would also
+  // stop the background poll.
+  captureOpenEditor();
+  V.editing = null;
+  V.error = null;
+  V.view = view;
+  if (view !== 'tensions') V.tensionFocus = null;
 }
 
 function editForm(row) {
@@ -302,6 +435,7 @@ function editForm(row) {
 }
 
 function renderContent() {
+  if (V.view === 'tensions') { renderTensions(); return; }
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const shown = new Set();
@@ -585,6 +719,36 @@ async function saveClaim(wrap, patch) {
   }
 }
 
+// Shared by the Remove button in the paper header and the right-click menu in
+// the paper list, so the menu can remove a paper that is not the one on screen.
+async function removePaper(paper) {
+  const p = S.papers.find((x) => x.key === paper);
+  if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
+  await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
+  // Close an editor that belonged to the deleted paper, so its form is not
+  // captured as a draft for a claim that no longer exists. An editor on some
+  // other paper's claim stays open, which is why this ends in `refreshAll`:
+  // `refresh` would leave the claim list alone while an editor is open and
+  // the deleted paper's cards would stay on screen with buttons that 404.
+  S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
+  if (V.editing && V.editing !== NEW_CLAIM_ID) {
+    const row = S.claims.find((c) => c.id === V.editing);
+    if (!row || row.paper === paper) V.editing = null;
+  }
+  if (V.newClaim && V.newClaim.paper === paper) {
+    V.newClaim = null;
+    if (V.editing === NEW_CLAIM_ID) V.editing = null;
+  }
+  delete V.failedNewClaims[paper];
+  // Removing a paper from the list while reading another one keeps that one
+  // open; only a paper that was itself on screen falls back to "All papers".
+  if (V.paper === paper) V.paper = null;
+  const selected = S.claims.find((c) => c.id === V.selectedId);
+  if (!selected || selected.paper === paper) V.selectedId = null;
+  V.error = null;
+  await refreshAll();
+}
+
 $('content').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
   if (button) {
@@ -629,8 +793,38 @@ $('content').addEventListener('click', async (event) => {
     if (act === 'open-paper') {
       captureOpenEditor();
       closeEditorsNotBelongingTo(paper);
+      showView('claims');
       V.paper = paper; V.tag = null; V.selectedId = null;
       renderAll();
+      return;
+    }
+    if (act === 'tension-focus') {
+      showView('tensions');
+      V.tensionFocus = claim;
+      V.tensionStatus = '';
+      renderAll();
+      return;
+    }
+    if (act === 'tension-unfocus') {
+      V.tensionFocus = null;
+      renderContent();
+      return;
+    }
+    if (act === 'tension-status') {
+      V.error = null;
+      try {
+        await api(`/api/tensions/${encodeURIComponent(button.dataset.tension)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: button.dataset.status }),
+        });
+      } catch (error) {
+        V.error = `Could not update the tension: ${error.message}`;
+      }
+      await refreshAll();
+      return;
+    }
+    if (act === 'find-tensions') {
+      await findTensions();
       return;
     }
     if (act === 'reextract') {
@@ -672,26 +866,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'del-paper') {
-      const p = S.papers.find((x) => x.key === paper);
-      if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
-      await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
-      // Clear the editor before refreshing. `render()` skips the content while
-      // `V.editing` is set, so the deleted paper's header and form would stay
-      // on screen and saving would only 404 and redraw the same stale editor.
-      S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
-      if (V.editing && V.editing !== NEW_CLAIM_ID) {
-        const row = S.claims.find((c) => c.id === V.editing);
-        if (!row || row.paper === paper) V.editing = null;
-      }
-      if (V.newClaim && V.newClaim.paper === paper) {
-        V.newClaim = null;
-        if (V.editing === NEW_CLAIM_ID) V.editing = null;
-      }
-      delete V.failedNewClaims[paper];
-      V.paper = null;
-      V.selectedId = null;
-      V.error = null;
-      await refresh();
+      await removePaper(paper);
       return;
     }
     if (act === 'accept-tag' || act === 'reject-tag') {
@@ -733,16 +908,89 @@ $('papers').addEventListener('click', (event) => {
   const next = li.dataset.paper || null;
   // Clicking the paper already selected is not navigation. It used to run the
   // whole abandon path anyway, which threw away a new claim being written.
-  if (next === V.paper) return;
+  // From the tensions view it is navigation: back to that paper's claims.
+  if (next === V.paper && V.view === 'claims') return;
+  if (next === V.paper) { showView('claims'); renderAll(); return; }
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
   // that one was never persisted and belongs to the paper being left.
   captureOpenEditor();
   parkNewClaimForNavigation(next);
+  showView('claims');
   V.paper = next;
   V.selectedId = null;
   V.editing = null;
   render();   // the editor is closed here, so render redraws the list anyway
 });
+
+$('tensions-nav').addEventListener('click', (event) => {
+  if (!event.target.closest('[data-view]')) return;
+  showView('tensions');
+  renderAll();
+});
+
+async function findTensions() {
+  V.error = null;
+  try {
+    const result = await api('/api/tensions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    if (!result.queued) {
+      V.error = 'No topic has claims from two papers yet, so there is nothing to compare.';
+    }
+  } catch (error) {
+    V.error = `Could not start the pass: ${error.message}`;
+  }
+  await refresh();
+}
+
+$('btn-tensions').addEventListener('click', async () => {
+  showView('tensions');
+  renderAll();
+  await findTensions();
+});
+
+// --- paper context menu --------------------------------------------------
+
+function openPaperMenu(paper, x, y) {
+  const p = S.papers.find((row) => row.key === paper);
+  const menu = $('ctxmenu');
+  menu.innerHTML = `
+    <li class="mh">${esc(p ? p.title || paper : paper)}</li>
+    <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
+  menu.hidden = false;
+  // Measure after showing, then keep the whole menu inside the window.
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 4))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 4))}px`;
+}
+
+function closePaperMenu() {
+  $('ctxmenu').hidden = true;
+}
+
+$('papers').addEventListener('contextmenu', (event) => {
+  const li = event.target.closest('[data-paper]');
+  if (!li || !li.dataset.paper) return;   // "All papers" has nothing to remove
+  event.preventDefault();
+  openPaperMenu(li.dataset.paper, event.clientX, event.clientY);
+});
+
+$('ctxmenu').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-act]');
+  if (!button) return;
+  closePaperMenu();
+  if (button.dataset.act === 'del-paper') await removePaper(button.dataset.paper);
+});
+
+// A press anywhere outside the menu dismisses it. Right-clicking another paper
+// also lands here first, then the contextmenu handler above reopens it there.
+document.addEventListener('mousedown', (event) => {
+  if (!$('ctxmenu').contains(event.target)) closePaperMenu();
+});
+// Escape is handled in the keyboard section below, ahead of the editor keys,
+// so closing the menu does not also cancel an open editor.
+$('side').addEventListener('scroll', closePaperMenu);
+window.addEventListener('resize', closePaperMenu);
 
 $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
@@ -795,6 +1043,11 @@ $('btn-export').addEventListener('click', async () => {
 $('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
 
 // Each filter keeps whatever is typed in an open editor before redrawing.
+$('content').addEventListener('change', (e) => {
+  if (e.target.id !== 'tension-status') return;
+  V.tensionStatus = e.target.value;
+  renderContent();
+});
 $('q').addEventListener('input', (e) => { captureOpenEditor(); V.q = e.target.value; renderContent(); });
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
 $('only-unreviewed').addEventListener('change', (e) => { captureOpenEditor(); V.unreviewed = e.target.checked; renderContent(); });
@@ -817,9 +1070,17 @@ function moveSelection(rows, step) {
 }
 
 document.addEventListener('keydown', async (event) => {
+  // While the paper menu is open Escape belongs to it. Falling through to the
+  // editor branches would also run `cancelEdit` and drop a draft the user
+  // only meant to keep by dismissing the menu.
+  if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key === 'Escape' && V.editing) cancelEdit();
+    return;
+  }
+  if (V.view !== 'claims') {
+    if (event.key === 'Escape') { showView('claims'); renderAll(); }
     return;
   }
   const rows = visibleClaims();
@@ -880,6 +1141,7 @@ function stateSignature(state) {
     (state.claims || []).map((c) => [c.id, c.reviewed, c.updated || c.added, (c.tags || []).join(',')]),
     (state.tags || []).map((t) => t.name),
     (state.ledger || []).map((c) => c.id),
+    (state.tensions || []).map((t) => [t.id, t.status, t.stale, t.found, (t.topics || []).join(',')]),
   ]);
 }
 
@@ -898,7 +1160,7 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       renderStats();
-      if (!V.editing) { renderPapers(); renderTags(); renderContent(); }
+      if (!V.editing) { renderPapers(); renderTensionsNav(); renderTags(); renderContent(); }
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
 }

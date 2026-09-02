@@ -105,6 +105,43 @@ def cmd_retag(args) -> int:
     return 1 if failures else 0
 
 
+def cmd_tensions(args) -> int:
+    """Find, or list, claims from different papers that disagree."""
+    if not args.list:
+        topics = args.topics or store.tension_topics()
+        if not topics:
+            print("no topic has claims from two papers yet", file=sys.stderr)
+        failures = 0
+        for topic in topics:
+            try:
+                result = extract.find_tensions(topic)
+                print(f"{topic}: {result['returned']} returned, {result['added']} new"
+                      + (f", {result['reopened']} reopened" if result["reopened"] else ""))
+            except Exception as exc:
+                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failures += 1
+        if failures:
+            return 1
+    rows = store.tension_rows()
+    if args.topics:
+        rows = [t for t in rows if set(t.get("topics", [])) & set(args.topics)]
+    if not args.all:
+        rows = [t for t in rows if t["status"] != "dismissed"]
+    for tension in rows:
+        a, b = tension["claims"]
+        stale = " (a claim changed since)" if tension.get("stale") else ""
+        print(f"{tension['id']:<5} {tension['status']:<9} {tension['kind']:<13} "
+              f"#{' #'.join(tension.get('topics', []))}{stale}")
+        for claim in (a, b):
+            cite = (claim.get("paper_authors") or [claim["paper"]])[0].split()[-1]
+            print(f"      [{cite} {claim.get('paper_year') or 'n.d.'}] {claim.get('text', '')}")
+        if tension.get("note"):
+            print(f"      {tension['note']}")
+    open_count = sum(1 for t in rows if t["status"] == "open")
+    print(f"\n{len(rows)} tensions, {open_count} open")
+    return 0
+
+
 def cmd_list(args) -> int:
     papers = store.all_papers()
     for paper in papers:
@@ -178,6 +215,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("retag", help="reassign topics against the current vocabulary")
     p.add_argument("keys", nargs="*")
     p.set_defaults(func=cmd_retag)
+
+    p = sub.add_parser("tensions", help="find claims from different papers that disagree")
+    p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")
+    p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
+    p.add_argument("--all", action="store_true", help="include dismissed tensions in the listing")
+    p.set_defaults(func=cmd_tensions)
 
     p = sub.add_parser("list", help="list the corpus")
     p.set_defaults(func=cmd_list)
