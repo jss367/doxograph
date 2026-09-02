@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import threading
 import time
 
@@ -2762,6 +2763,21 @@ def test_a_replaced_pdf_is_uploaded_again(monkeypatch, paper_with_pdf):
     assert len(api.files.uploads) == 2
     assert api.blocks[-1]["source"]["file_id"] == "file_2"
     assert store.load_paper(paper_with_pdf)["pdf_upload"]["file_id"] == "file_2"
+
+
+def test_same_size_and_mtime_with_different_bytes_is_uploaded_again(monkeypatch, paper_with_pdf):
+    api = FilesClient()
+    monkeypatch.setattr(extract, "client", lambda: api)
+    extract.extract_paper(paper_with_pdf)
+
+    pdf = store.pdf_path(paper_with_pdf)
+    original = pdf.stat()
+    pdf.write_bytes(b"%PDF-1.4 new!")
+    os.utime(pdf, ns=(original.st_atime_ns, original.st_mtime_ns))
+    extract.extract_paper(paper_with_pdf)
+
+    assert len(api.files.uploads) == 2
+    assert api.blocks[-1]["source"]["file_id"] == "file_2"
 
 
 def test_an_upload_the_server_forgot_is_redone_once(monkeypatch, paper_with_pdf):

@@ -10,6 +10,7 @@ it again.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -198,16 +199,18 @@ def context_block() -> str:
 def _pdf_fingerprint(pdf: Path) -> dict:
     """What identifies the bytes an upload was made from."""
     st = pdf.stat()
-    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    with pdf.open("rb") as contents:
+        digest = hashlib.file_digest(contents, "sha256").hexdigest()
+    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": digest}
 
 
 def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = False) -> str:
     """The Files API id of the paper's PDF, uploading it if none is current.
 
-    The id is kept on the paper with the size and mtime of the file it came
-    from. A re-downloaded or replaced PDF then gets a fresh upload; the same
-    file is never uploaded twice. `force` discards the stored id, for when the
-    server no longer has the file.
+    The id is kept on the paper with a fingerprint of the file it came from.
+    A re-downloaded or replaced PDF then gets a fresh upload; the same file is
+    never uploaded twice. `force` discards the stored id, for when the server
+    no longer has the file.
     """
     pdf = store.pdf_path(key)
     if not pdf.exists():
