@@ -605,20 +605,13 @@ def rename_tag(old: str, new: str) -> None:
 def _retag_all(old: str, new: str | None) -> None:
     """Rewrite or drop a tag across every paper and every tension's topics.
     Called holding `vocab_lock`; takes `tensions_lock` inside it, which is the
-    only order those two are ever held in."""
-    with tensions_lock():
-        data = _read_tensions()
-        touched = False
-        for tension in data["tensions"]:
-            if old not in tension.get("topics", []):
-                continue
-            kept = {t for t in tension["topics"] if t != old}
-            if new:
-                kept.add(new)
-            tension["topics"] = sorted(kept)   # a tension with no topics left is still a tension
-            touched = True
-        if touched:
-            _save_tensions(data)
+    only order those two are ever held in.
+
+    Papers first, tensions last. `record_tensions` attaches a topic only if
+    the claims still carry it, so a pass result that lands before the tension
+    rewrite is corrected by it, and one that lands after already sees the new
+    tags. The other order leaves a gap between the two writes where a result
+    sees the old tag on the claims and puts the old name back."""
     for key in paper_keys():
         with paper_lock(key):
             try:
@@ -636,6 +629,19 @@ def _retag_all(old: str, new: str | None) -> None:
                 touched = True
             if touched:
                 save_paper(paper)
+    with tensions_lock():
+        data = _read_tensions()
+        touched = False
+        for tension in data["tensions"]:
+            if old not in tension.get("topics", []):
+                continue
+            kept = {t for t in tension["topics"] if t != old}
+            if new:
+                kept.add(new)
+            tension["topics"] = sorted(kept)   # a tension with no topics left is still a tension
+            touched = True
+        if touched:
+            _save_tensions(data)
 
 
 def delete_tag(name: str) -> None:
