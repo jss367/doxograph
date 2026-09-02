@@ -133,6 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .success(let outcome) where outcome.changes.isEmpty:
             if ready { window.hideStatus() }
             inform("Doxograph is up to date.", "")
+            // Nothing new to run, but a start that failed may have failed for
+            // a passing reason, and this is the one button left to press.
+            if serverFailed { startServer() }
 
         case .success(let outcome) where outcome.appRebuilt:
             // The new bundle is in place; only a fresh process can run it. The
