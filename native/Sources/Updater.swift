@@ -186,7 +186,9 @@ enum Updater {
         let changes = git(["log", "--oneline", "--no-decorate", range]).output.trimmed
         // Everything below keys off this list, and a failure here would read as
         // "nothing changed" and record the pull as installed. Refuse instead.
-        let diff = git(["diff", "--name-only", range])
+        // Without --no-renames a file moved out of native/ shows up only under
+        // its new name, and the Swift it used to be would never be rebuilt.
+        let diff = git(["diff", "--name-only", "--no-renames", range])
         guard diff.succeeded else { return .failure(.step("git diff", diff.output)) }
         let changed = diff.output.split(separator: "\n").map(String.init)
 
