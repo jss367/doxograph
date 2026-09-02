@@ -306,17 +306,22 @@ enum Updater {
         if exited.wait(timeout: .now() + timeout) == .timedOut {
             // Coming back with the process still alive would let a pip or a
             // build that ignored the deadline keep changing the checkout under
-            // the next update. Ask it to stop, then make it, and do not return
-            // until it is gone.
-            if process.isRunning { process.terminate() }
+            // the next update. `Process` starts the child as the leader of
+            // its own process group, so signalling the group reaches what
+            // the child started as well: build.sh's swiftc, pip's compilers.
+            // Signalling the shell alone would leave those writing into
+            // native/build. Ask the group to stop, then make it, and do not
+            // return until the child is gone.
+            let group = -process.processIdentifier
+            kill(group, SIGTERM)
             if exited.wait(timeout: .now() + 5) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
+                kill(group, SIGKILL)
                 exited.wait()
             }
-            // The pipe closes when its last writer does, and a grandchild the
-            // signal never reached (build.sh's swiftc, say) can hold it open
-            // after the child is dead. Nothing it prints is wanted now, so
-            // give the drain a moment and otherwise leave it to finish alone.
+            // The pipe closes when its last writer does, which is how the
+            // grandchildren report that they are gone too. That is normally
+            // immediate; a moment covers one still on its way out, and
+            // nothing it prints is wanted now.
             _ = drained.wait(timeout: .now() + 5)
             let name = ([executable] + arguments).joined(separator: " ")
             return Step(status: -1, output: "Gave up on `\(name)` after \(Int(timeout)) seconds.")
