@@ -1,6 +1,6 @@
 'use strict';
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [],
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
@@ -17,9 +17,17 @@ const NEW_CLAIM_ID = '__new__';
 // to it closes any open one (keeping its draft) and lets the background poll run.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
+// synthEditing is the topic whose synthesis is open for correction by hand, and
+// synthDrafts what has been typed into each, by topic, kept across redraws and
+// navigation like claim drafts. A map for the same reason `drafts` is: opening
+// a second topic's editor, or leaving the page the first is on, must not throw
+// away the first one's text. synthSaving is the topic whose hand save is in
+// flight: its editor is frozen, as a claim form is while it saves, because
+// success redraws from the server value and typing meanwhile would be lost.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
-            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null };
+            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
+            synthEditing: null, synthDrafts: {}, synthSaving: null };
 
 function blankClaim(paper) {
   return {
@@ -114,7 +122,7 @@ function render() {
   renderPapers();
   renderTensionsNav();
   renderTags();
-  if (!V.editing) renderContent();
+  if (!V.editing && !V.synthEditing) renderContent();
   renderJobs();
 }
 
@@ -143,6 +151,8 @@ function renderStats() {
   if (proposed) bits.push(`${proposed} proposed topics`);
   const openTensions = (S.tensions || []).filter((t) => t.status === 'open').length;
   if (openTensions) bits.push(`${openTensions} open tensions`);
+  const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
+  if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
   if (!S.has_key) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
 }
@@ -387,9 +397,10 @@ function showView(view) {
   if (view === V.view) return;
   // The tensions view has no editor. Park any open one rather than leaving
   // `V.editing` set on a form that is no longer on screen, which would also
-  // stop the background poll.
+  // stop the background poll. The same for a synthesis editor.
   captureOpenEditor();
   V.editing = null;
+  parkSynthEditor();
   V.error = null;
   V.view = view;
   if (view !== 'tensions') V.tensionFocus = null;
@@ -434,6 +445,90 @@ function editForm(row) {
   </div>`;
 }
 
+// --- syntheses: what the papers hold on a topic ---------------------------
+
+function synthesisFor(tag) {
+  return (S.syntheses || []).find((s) => s.topic === tag) || null;
+}
+
+// Turns `[claim-id]` and `[id, id]` in a synthesis into author-year markers
+// that jump to the claim. A bracket holding anything else is left as written.
+// The text is escaped first; ids and brackets survive escaping unchanged.
+function citeHtml(text) {
+  const byId = new Map(S.claims.map((c) => [c.id, c]));
+  return esc(text).replace(/\[([^\[\]]+)\]/g, (whole, inner) => {
+    const ids = inner.trim().split(/[,\s]+/).filter(Boolean);
+    if (!ids.length || !ids.every((id) => byId.has(id))) return whole;
+    return '[' + ids.map((id) => {
+      const row = byId.get(id);
+      const who = (row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper;
+      return `<span class="cite" data-act="goto-claim" data-claim="${esc(id)}" title="${esc(row.text)}">${esc(who)} ${esc(row.paper_year || 'n.d.')}</span>`;
+    }).join(', ') + ']';
+  });
+}
+
+function synthesisBlock(tag) {
+  const synth = synthesisFor(tag);
+  if (V.synthEditing === tag) {
+    const draft = V.synthDrafts[tag];
+    const text = draft !== undefined ? draft : (synth ? synth.text : '');
+    // Drawn from state rather than toggled on the elements, so a redraw during
+    // the request keeps the editor frozen.
+    const busy = V.synthSaving === tag ? ' disabled' : '';
+    return `<div class="synth${busy ? ' saving' : ''}" data-topic="${esc(tag)}">
+      <textarea data-synth="${esc(tag)}"${busy}>${esc(text)}</textarea>
+      <div class="smeta">
+        <span class="hint">Cite claims as [claim-id]; they become links.</span>
+        <span class="cact" style="margin-left:auto">
+          <button type="button" data-act="save-synth" data-topic="${esc(tag)}" class="primary"${busy}>Save</button>
+          <button type="button" data-act="cancel-synth" data-topic="${esc(tag)}"${busy}>Cancel</button>
+        </span>
+      </div>
+    </div>`;
+  }
+  if (!synth) return '';
+  const paragraphs = synth.text.split(/\n\s*\n/).filter((p) => p.trim());
+  return `<div class="synth" data-topic="${esc(tag)}">
+    ${paragraphs.map((p) => `<p>${citeHtml(p)}</p>`).join('')}
+    <div class="smeta">
+      <span>${synth.source === 'hand' ? 'written by hand' : 'written by the model'} · ${esc((synth.written || '').slice(0, 10))}
+        · ${synth.n_claims} claims in ${synth.n_papers} papers</span>
+      ${synth.stale ? '<span class="stale">claims or tensions have changed since</span>' : ''}
+      <span class="cact" style="margin-left:auto">
+        <button type="button" data-act="synthesize" data-topic="${esc(tag)}">Rewrite</button>
+        <button type="button" data-act="edit-synth" data-topic="${esc(tag)}">edit</button>
+        <button type="button" data-act="del-synth" data-topic="${esc(tag)}">delete</button>
+      </span>
+    </div>
+  </div>`;
+}
+
+// The button in a topic heading when no synthesis exists yet.
+function synthesizeButton(tag) {
+  if (synthesisFor(tag) || V.synthEditing === tag) return '';
+  return `<button type="button" class="mini" data-act="synthesize" data-topic="${esc(tag)}"
+    title="Ask the model what the papers hold on this topic">synthesize</button>`;
+}
+
+async function synthesize(topics) {
+  V.error = null;
+  try {
+    const result = await api('/api/syntheses', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(topics ? { topics } : {}),
+    });
+    if (!result.queued) {
+      V.error = topics
+        ? 'That topic has no claims to synthesize.'
+        : 'No topic has claims from two papers yet. Use the synthesize button on a topic to write one anyway.';
+    }
+  } catch (error) {
+    V.error = `Could not start the synthesis: ${error.message}`;
+  }
+  await refresh();
+  if (V.error) renderContent();
+}
+
 function renderContent() {
   if (V.view === 'tensions') { renderTensions(); return; }
   const main = $('main');
@@ -449,9 +544,17 @@ function renderContent() {
     captureOpenEditor();
     V.editing = null;
   }
+  // Likewise a synthesis editor whose topic heading is not about to be drawn:
+  // under a paper there are no topic headings, and a filter can empty a group.
+  if (V.synthEditing && !synthesisTopicsOnScreen(rows).has(V.synthEditing)) parkSynthEditor();
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
+  // Filtered to one topic without grouping, the synthesis heads the list; in
+  // grouped mode each topic's sits under its own heading below.
+  if (V.tag && !V.paper && !(V.group && rows.length)) {
+    html += `<div class="group"><h3>${esc(V.tag)} ${synthesizeButton(V.tag)}</h3>${synthesisBlock(V.tag)}</div>`;
+  }
   if (V.newClaim && V.editing === NEW_CLAIM_ID) {
     shown.add(NEW_CLAIM_ID);
     html += editForm(V.newClaim);
@@ -492,8 +595,9 @@ function renderContent() {
     const ordered = [...byTag.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
     for (const [tag, group] of ordered) {
       const description = (S.tags.find((t) => t.name === tag) || {}).description || '';
-      html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span></h3>`
+      html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span>${synthesizeButton(tag)}</h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
+        + synthesisBlock(tag)
         + group.map(card).join('') + '</div>';
     }
     if (untagged.length) {
@@ -559,6 +663,35 @@ function parkNewClaimForNavigation(paper) {
     V.newClaim = V.failedNewClaims[paper];
     delete V.failedNewClaims[paper];
   }
+}
+
+// The topics whose heading, and so whose synthesis, `renderContent` is about
+// to draw: every tag in grouped mode, the one filtered to otherwise, none
+// while reading a paper.
+function synthesisTopicsOnScreen(rows) {
+  if (V.paper) return new Set();
+  if (V.group && rows.length) return new Set(rows.flatMap((row) => row.tags || []));
+  return new Set(V.tag ? [V.tag] : []);
+}
+
+// The synthesis editor's counterpart to parking a claim editor: keep what was
+// typed, keyed by topic, and close the editor. Left open off screen it would
+// hold down the background poll, and opening another topic's editor would
+// take over the slot; opening this topic's editor again resumes the text. The
+// input listener keeps the map current, but the field is read once more here
+// so nothing rests on that.
+function parkSynthEditor() {
+  if (!V.synthEditing) return;
+  const field = document.querySelector(`textarea[data-synth="${CSS.escape(V.synthEditing)}"]`);
+  if (field) V.synthDrafts[V.synthEditing] = field.value;
+  V.synthEditing = null;
+}
+
+function cancelSynthEdit() {
+  captureOpenEditor();   // a claim editor open alongside keeps its text through the redraw
+  if (V.synthEditing) delete V.synthDrafts[V.synthEditing];   // discard only this topic's draft
+  V.synthEditing = null;
+  renderContent();
 }
 
 function captureOpenEditor() {
@@ -697,6 +830,12 @@ async function saveClaim(wrap, patch) {
   try {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
     delete V.drafts[wrap.dataset.claim];
+    // `render` leaves the content alone while a synthesis editor is open, so
+    // the saved claim's form would stay on screen with nothing tracking it.
+    // The synthesis draft is in V.synthDrafts, kept current by the input
+    // listener, so redrawing here loses nothing; a claim editor opened while
+    // the request ran has already redrawn the form away, so leave it be.
+    if (V.synthEditing && !V.editing) renderContent();
   } catch (error) {
     // Only this form was frozen during the request, so the open editor may now
     // belong to a different claim, holding text that exists only in the DOM.
@@ -827,6 +966,71 @@ $('content').addEventListener('click', async (event) => {
       await findTensions();
       return;
     }
+    if (act === 'synthesize') {
+      await synthesize([button.dataset.topic]);
+      return;
+    }
+    if (act === 'edit-synth') {
+      // Opening one topic's synthesis editor while another's is open parks
+      // that one, as opening a second claim's editor keeps the first's draft.
+      captureOpenEditor();
+      parkSynthEditor();
+      V.synthEditing = button.dataset.topic;
+      renderContent();
+      return;
+    }
+    if (act === 'cancel-synth') { cancelSynthEdit(); return; }
+    if (act === 'save-synth') {
+      if (V.synthSaving) return;   // a save is in flight
+      const topic = button.dataset.topic;
+      const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
+      const text = field ? field.value : (V.synthDrafts[topic] || '');
+      V.error = null;
+      // Freeze the editor until the answer comes back. Success redraws from
+      // the server value, so anything typed meanwhile would be lost.
+      captureOpenEditor();
+      V.synthSaving = topic;
+      renderContent();
+      try {
+        await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        V.synthEditing = null;
+        delete V.synthDrafts[topic];
+      } catch (error) {
+        V.synthDrafts[topic] = text;   // keep what was typed so the save can be retried
+        V.error = `Could not save the synthesis: ${error.message}`;
+      } finally {
+        V.synthSaving = null;
+      }
+      await refreshAll();
+      return;
+    }
+    if (act === 'del-synth') {
+      if (!confirm('Delete this synthesis?')) return;
+      await api(`/api/syntheses/${encodeURIComponent(button.dataset.topic)}`, { method: 'DELETE' });
+      await refreshAll();
+      return;
+    }
+    if (act === 'goto-claim') {
+      // A citation is a link to its claim. A filter that hides the claim would
+      // make `renderContent` fall back to the first visible card, so any
+      // filter excluding it is cleared first; the others are kept. The paper
+      // filter never applies, since no synthesis is drawn under one.
+      const row = S.claims.find((c) => c.id === claim);
+      if (row && !visibleClaims().some((c) => c.id === claim)) {
+        if (V.paper && row.paper !== V.paper) V.paper = null;
+        if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
+        if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
+        if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
+        if (V.q.trim() && !haystack(row).includes(V.q.trim().toLowerCase())) { V.q = ''; $('q').value = ''; }
+      }
+      V.selectedId = claim;
+      renderAll();   // a cleared topic or paper filter changes the sidebar too
+      scrollToSelected();
+      return;
+    }
     if (act === 'reextract') {
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
       await refresh();
@@ -912,14 +1116,17 @@ $('papers').addEventListener('click', (event) => {
   if (next === V.paper && V.view === 'claims') return;
   if (next === V.paper) { showView('claims'); renderAll(); return; }
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
-  // that one was never persisted and belongs to the paper being left.
+  // that one was never persisted and belongs to the paper being left. A
+  // synthesis being edited is parked too: `render` skips the list while one
+  // is open, and its topic heading is not shown under a paper anyway.
   captureOpenEditor();
   parkNewClaimForNavigation(next);
+  parkSynthEditor();
   showView('claims');
   V.paper = next;
   V.selectedId = null;
   V.editing = null;
-  render();   // the editor is closed here, so render redraws the list anyway
+  render();   // the editors are closed here, so render redraws the list anyway
 });
 
 $('tensions-nav').addEventListener('click', (event) => {
@@ -947,6 +1154,14 @@ $('btn-tensions').addEventListener('click', async () => {
   showView('tensions');
   renderAll();
   await findTensions();
+});
+
+$('btn-synth').addEventListener('click', async () => {
+  showView('claims');
+  V.group = true;
+  $('group-by-tag').checked = true;
+  renderAll();
+  await synthesize(null);
 });
 
 // --- paper context menu --------------------------------------------------
@@ -1042,6 +1257,10 @@ $('btn-export').addEventListener('click', async () => {
 
 $('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
 
+$('content').addEventListener('input', (e) => {
+  if (e.target.matches('textarea[data-synth]')) V.synthDrafts[e.target.dataset.synth] = e.target.value;
+});
+
 // Each filter keeps whatever is typed in an open editor before redrawing.
 $('content').addEventListener('change', (e) => {
   if (e.target.id !== 'tension-status') return;
@@ -1076,7 +1295,15 @@ document.addEventListener('keydown', async (event) => {
   if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
-    if (event.key === 'Escape' && V.editing) cancelEdit();
+    if (event.key !== 'Escape') return;
+    // Only the editor holding the cursor is cancelled. With a claim editor and
+    // a synthesis editor open together, cancelling both would drop a draft
+    // the user never meant to give up.
+    if (event.target.closest('.synth')) {
+      if (V.synthEditing && !V.synthSaving) cancelSynthEdit();
+    } else if (V.editing) {
+      cancelEdit();
+    }
     return;
   }
   if (V.view !== 'claims') {
@@ -1142,6 +1369,7 @@ function stateSignature(state) {
     (state.tags || []).map((t) => t.name),
     (state.ledger || []).map((c) => c.id),
     (state.tensions || []).map((t) => [t.id, t.status, t.stale, t.found, (t.topics || []).join(',')]),
+    (state.syntheses || []).map((s) => [s.topic, s.written, s.stale, s.source]),
   ]);
 }
 
@@ -1152,7 +1380,7 @@ async function boot() {
   setInterval(async () => {
     if (document.hidden) return;
     const busy = (S.jobs || []).some((j) => ['queued', 'fetching', 'reading'].includes(j.state));
-    if (!busy && V.editing) return;
+    if (!busy && (V.editing || V.synthEditing)) return;
     try {
       const next = await api('/api/state');
       const changed = stateSignature(next) !== stateSignature(S);
@@ -1160,7 +1388,7 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       renderStats();
-      if (!V.editing) { renderPapers(); renderTensionsNav(); renderTags(); renderContent(); }
+      if (!V.editing && !V.synthEditing) { renderPapers(); renderTensionsNav(); renderTags(); renderContent(); }
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
 }

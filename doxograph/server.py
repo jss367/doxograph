@@ -211,6 +211,34 @@ def _run_tensions(job: dict, topics: list[str]) -> None:
         _prune_jobs()
 
 
+def _run_syntheses(job: dict, topics: list[str]) -> None:
+    try:
+        written = failed = 0
+        last_failure = ""
+        for index, topic in enumerate(topics, 1):
+            _set(job, state="reading", detail=f"{index} of {len(topics)}: {topic}")
+            # As with tensions: one topic's failure must not cost the topics
+            # after it. Go on, and say how many did not finish.
+            try:
+                result = extract.synthesize_topic(topic)
+            except Exception as exc:
+                failed += 1
+                last_failure = f"{topic}: {type(exc).__name__}: {exc}"
+                traceback.print_exc()
+                continue
+            written += 1 if result["written"] else 0
+        if failed:
+            _set(job, state="error",
+                 detail=f"{failed} of {len(topics)} topics failed, {written} written; {last_failure}")
+        else:
+            _set(job, state="done", detail=f"{written} of {len(topics)} topics written")
+    except Exception as exc:
+        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+    finally:
+        _prune_jobs()
+
+
 def _run_retag(job: dict, keys: list[str]) -> None:
     try:
         for index, key in enumerate(keys, 1):
@@ -255,6 +283,14 @@ class TensionsBody(BaseModel):
 
 class TensionStatusBody(BaseModel):
     status: str
+
+
+class SynthesesBody(BaseModel):
+    topics: list[str] | None = None
+
+
+class SynthesisTextBody(BaseModel):
+    text: str
 
 
 class ExportBody(BaseModel):
@@ -358,6 +394,7 @@ def state() -> dict:
         "tag_counts": store.tag_counts(rows),
         "ledger": store.load_ledger(),
         "tensions": store.tension_rows(rows),
+        "syntheses": store.synthesis_rows(rows),
         "tension_kinds": store.TENSION_KINDS,
         "tension_statuses": store.TENSION_STATUSES,
         "kinds": config.CLAIM_KINDS,
@@ -557,6 +594,45 @@ def remove_tension(tension_id: str) -> dict:
     except KeyError:
         raise HTTPException(404, f"no tension {tension_id}")
     return {"deleted": tension_id}
+
+
+@app.post("/api/syntheses")
+def synthesize(body: SynthesesBody) -> dict:
+    """Queue a synthesis for each topic.
+
+    Named topics are deduplicated and kept only where they have a claim; with
+    none named, every topic with claims from two papers is written, since one
+    paper's claims add up to little on their own.
+    """
+    if body.topics:
+        rows = store.claim_rows()
+        topics = sorted({t for t in body.topics if store.topic_claims(t, rows)})
+    else:
+        topics = store.synthesis_topics()
+    if not topics:
+        return {"queued": 0}
+    job = _new_job(f"synthesis of {len(topics)} topics")
+    _pool.submit(_run_syntheses, job, topics)
+    return {"queued": len(topics)}
+
+
+@app.patch("/api/syntheses/{topic}")
+def patch_synthesis(topic: str, body: SynthesisTextBody) -> dict:
+    try:
+        return store.set_synthesis_text(topic, body.text)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except KeyError:
+        raise HTTPException(404, f"no synthesis for {topic}")
+
+
+@app.delete("/api/syntheses/{topic}")
+def remove_synthesis(topic: str) -> dict:
+    try:
+        store.delete_synthesis(topic)
+    except KeyError:
+        raise HTTPException(404, f"no synthesis for {topic}")
+    return {"deleted": topic}
 
 
 @app.post("/api/export")

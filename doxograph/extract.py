@@ -608,7 +608,11 @@ TENSION_SCHEMA = {
 }
 
 
-def _tension_listing(rows: list[dict]) -> str:
+def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
+    """Claims grouped by paper, as the cross-paper passes show them. With
+    `mark_unreviewed`, a claim nobody has checked is labelled so the model can
+    weigh it accordingly; the fingerprint the merges compare does not include
+    that flag, so reviewing a claim does not make a tension stale."""
     by_paper: dict[str, list[dict]] = {}
     for row in rows:
         by_paper.setdefault(row["paper"], []).append(row)
@@ -623,6 +627,8 @@ def _tension_listing(rows: list[dict]) -> str:
         lines = [f"## {head}"]
         for claim in claims:
             line = f"- {claim['id']} [{claim.get('kind', 'finding')}]: {claim.get('text', '')}"
+            if mark_unreviewed and not claim.get("reviewed"):
+                line += " (unreviewed extraction)"
             if claim.get("evidence"):
                 line += f"\n  evidence: {claim['evidence']}"
             lines.append(line)
@@ -674,3 +680,115 @@ def find_tensions(topic: str, rows: list[dict] | None = None) -> dict:
     result = store.record_tensions(topic, found, shown)
     result["returned"] = len(found)
     return result
+
+
+# --- what the papers hold, by topic ---------------------------------------
+
+SYNTHESIS_SYSTEM = """\
+You write the state of one question from research claims drawn from several
+papers.
+
+You are given every claim in one topic, grouped by paper, and any disagreements
+between them that have already been noted. Write what the papers, taken
+together, hold on the topic: where they agree, where they differ and what might
+account for that, and what none of them settles. Say what the evidence is, not
+merely that some exists: name the models, scales, metrics and effect sizes that
+carry the weight.
+
+Stay inside the claims you are given. Do not add findings from your own
+knowledge, do not soften or sharpen a claim beyond how it is written, and do not
+present a claim marked as an unreviewed extraction as settled. Refer to papers
+by author and year in the prose, and cite the claims each sentence rests on by
+putting their ids in square brackets at the end of the sentence, like
+[doe2026recovery-c3] or [doe2026recovery-c3, li2025steer-c1]. Every sentence
+that states a finding carries at least one citation.
+
+One to three short paragraphs, in plain language, with no headings and no
+bullet points. Where the papers are few or thin, say less."""
+
+SYNTHESIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {
+            "type": "string",
+            "description": "The synthesis, one to three paragraphs separated by blank lines, "
+                           "with claim ids in square brackets as citations.",
+        },
+    },
+    "required": ["text"],
+    "additionalProperties": False,
+}
+
+
+def _tension_block(topic: str, tensions: list[dict]) -> str:
+    """The disagreements already on file for this topic, for the synthesis
+    prompt. `tensions` is `store.tension_rows` output, read once by the caller
+    so the basis it records is the same reading the prompt was built from.
+    Dismissed ones are left out: the reviewer has said there is nothing
+    there. The status is given so a confirmed one carries more weight than
+    one nobody has looked at. A stale one, where a claim was edited after the
+    tension was found or judged, says so, since its status and note speak to
+    text the model is not being shown."""
+    noted = [t for t in tensions
+             if topic in t.get("topics", []) and t.get("status") != "dismissed"]
+    if not noted:
+        return "No disagreements between these claims have been noted yet."
+    lines = ["Disagreements already noted, with whether a reviewer has confirmed them:"]
+    for t in noted:
+        a, b = t["claims"]
+        label = t["status"] + (", a claim changed since" if t.get("stale") else "")
+        lines.append(f"- [{label}] {t['kind']} between {a['id']} and {b['id']}: {t.get('note', '')}")
+    return "\n".join(lines)
+
+
+def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
+    """Ask the model what the papers hold on `topic`, and record the answer.
+
+    Cheap in the way the tensions pass is cheap: one call per topic, claim
+    text rather than PDFs. Any topic with a claim can be synthesized; the
+    default set, `store.synthesis_topics`, is those with two papers or more,
+    since one paper's claims add up to little.
+
+    Returns `{"written": bool, "claims": n, "papers": n}`. `written` is False
+    when the topic had no claims, or when it lost them all (or its name) while
+    the model was thinking, or when its synthesis was corrected by hand or
+    deleted meanwhile: that decision is newer than the answer and stands.
+    """
+    all_rows = rows if rows is not None else store.claim_rows()
+    rows = store.topic_claims(topic, all_rows)
+    papers = {r["paper"] for r in rows}
+    if not rows:
+        return {"written": False, "claims": 0, "papers": 0}
+    description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
+    shown = {r["id"]: r for r in rows}
+    tensions = store.tension_rows(all_rows)
+    # The record on file as the call starts, so the write can tell whether a
+    # reviewer edited or deleted it while the model was thinking.
+    before = store.load_syntheses().get(topic)
+    api = client()
+    response = api.messages.create(
+        model=config.MODEL,
+        max_tokens=8000,
+        system=SYNTHESIS_SYSTEM,
+        thinking={"type": "adaptive"},
+        output_config={
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": SYNTHESIS_SCHEMA},
+        },
+        messages=[{
+            "role": "user",
+            "content": (
+                f"My research:\n\n{context_block()}\n\n"
+                f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
+                f"Claims, by paper:\n\n{_tension_listing(rows, mark_unreviewed=True)}\n\n"
+                f"{_tension_block(topic, tensions)}\n\n"
+                "Write what these papers, taken together, hold on the topic."
+            ),
+        }],
+    )
+    if response.stop_reason == "refusal":
+        detail = getattr(response.stop_details, "explanation", "") or ""
+        raise RuntimeError(f"synthesis refused for {topic}: {detail}")
+    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions, before=before)
+    return {"written": record is not None, "claims": len(rows), "papers": len(papers)}

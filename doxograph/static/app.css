@@ -152,3 +152,16 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 
 /* A form whose save is in flight: read-only until the request settles. */
 form[data-form].saving { opacity: .6; }
+.synth.saving { opacity: .6; }
+
+/* A topic's synthesis: what the papers, taken together, hold. */
+.synth { background: var(--panel); border-radius: 6px; padding: .6rem .8rem; margin: .3rem 0 .6rem; }
+.synth p { margin: 0 0 .5rem; font-size: .92rem; }
+.synth p:last-of-type { margin-bottom: 0; }
+.synth .cite { color: var(--accent); font-size: .82em; cursor: pointer; white-space: nowrap; }
+.synth .cite:hover { text-decoration: underline; }
+.synth .smeta { font-size: .78rem; color: var(--muted); margin-top: .4rem;
+  display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+.synth .smeta .stale { color: var(--warn); }
+.synth textarea { width: 100%; min-height: 8rem; font: inherit; font-size: .92rem; }
+.group h3 .mini { font-size: .72rem; font-weight: 400; margin-left: .4rem; }

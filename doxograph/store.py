@@ -603,9 +603,10 @@ def rename_tag(old: str, new: str) -> None:
 
 
 def _retag_all(old: str, new: str | None) -> None:
-    """Rewrite or drop a tag across every paper and every tension's topics.
-    Called holding `vocab_lock`; takes `tensions_lock` inside it, which is the
-    only order those two are ever held in.
+    """Rewrite or drop a tag across every paper, every tension's topics, and
+    the syntheses. Called holding `vocab_lock`; takes `tensions_lock` and then
+    `syntheses_lock` inside it, one after the other, which is the only order
+    those are ever held in.
 
     Papers first, tensions last, and `record_tensions` waits on `vocab_lock`
     for the whole of it: between the two writes the claims carry the new name
@@ -643,6 +644,18 @@ def _retag_all(old: str, new: str | None) -> None:
             touched = True
         if touched:
             _save_tensions(data)
+    with syntheses_lock():
+        data = _read_syntheses()
+        record = data["syntheses"].pop(old, None)
+        if record is not None:
+            # A synthesis is about the topic under whichever name; it moves
+            # with a rename and goes with a deletion. Merging into a name that
+            # already has one would put two answers to one question on file, so
+            # the existing record wins there.
+            if new and new not in data["syntheses"]:
+                record["topic"] = new
+                data["syntheses"][new] = record
+            _save_syntheses(data)
 
 
 def delete_tag(name: str) -> None:
@@ -977,3 +990,203 @@ def tension_topics(rows: list[dict] | None = None) -> list[str]:
         for tag in row.get("tags", []):
             papers_by_tag.setdefault(tag, set()).add(row["paper"])
     return sorted(tag for tag, papers in papers_by_tag.items() if len(papers) >= 2)
+
+
+# --- what the papers hold, by topic ---------------------------------------
+#
+# A synthesis is one topic's state of the question, written from its claims.
+# They live in one file rather than on the papers, since each one draws on
+# every paper in the topic. Written by the model, corrected by hand.
+
+SYNTHESIS_SOURCES = ["model", "hand"]
+
+_syntheses = threading.RLock()
+
+
+def syntheses_path() -> Path:
+    return config.data_dir() / "syntheses.json"
+
+
+@contextlib.contextmanager
+def syntheses_lock():
+    """Guard `syntheses.json`. Nothing else nests inside it. It nests inside
+    `vocab_lock` alone: a tag rename rewrites topics here, and a write from
+    the model takes both so it cannot land halfway through a rename. It is
+    never held together with `tensions_lock`."""
+    with _syntheses, _reentrant_file_lock("syntheses", config.locks_dir() / "syntheses.lock"):
+        yield
+
+
+def _read_syntheses() -> dict:
+    """Read the file, reporting where it is malformed rather than reading it
+    as empty: every writer starts here and would write the empty reading back
+    over it. Only a missing file is empty."""
+    path = syntheses_path()
+    if not path.exists():
+        return {"syntheses": {}}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(loaded, dict) or not isinstance(loaded.get("syntheses", {}), dict):
+        raise ValueError(f"{path} should hold an object with a 'syntheses' object")
+    loaded.setdefault("syntheses", {})
+    return loaded
+
+
+def load_syntheses() -> dict[str, dict]:
+    return dict(_read_syntheses()["syntheses"])
+
+
+def _save_syntheses(data: dict) -> None:
+    """Caller holds `syntheses_lock`."""
+    write_json(syntheses_path(), data)
+
+
+def topic_claims(topic: str, rows: list[dict] | None = None) -> list[dict]:
+    return [r for r in (rows if rows is not None else claim_rows()) if topic in (r.get("tags") or [])]
+
+
+def synthesis_basis(rows: list[dict]) -> dict[str, str]:
+    """Half of what a synthesis rests on: the set of claims and what each
+    said. A claim added, removed, or edited (text, evidence, kind) changes it.
+    Reviewing a claim does not: the prompt marks unreviewed claims, but a
+    review pass over a corpus does not change what any claim says, and staling
+    every synthesis while it runs would leave the mark meaning nothing."""
+    return {r["id"]: claim_fingerprint(r) for r in rows}
+
+
+def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
+    """The other half: the topic's tensions as the prompt shows them, by id,
+    with kind, status, and whether the prompt said a claim had changed since
+    it was judged. Dismissed ones are left out of the prompt, so dismissing
+    one changes this as much as confirming one, or a pass finding a new pair,
+    does; so does re-judging a stale one against the current text. `tensions`
+    is `tension_rows` output, whose `topics` are already filtered to what both
+    claims still carry. A record from before the stale flag was kept holds
+    two-element lists, which never compare equal to these, so it reads as
+    stale until rewritten: what the model was told is not known."""
+    return {t["id"]: [t.get("kind"), t.get("status"), bool(t.get("stale"))]
+            for t in sorted(tensions, key=lambda t: t["id"])
+            if topic in t.get("topics", []) and t.get("status") != "dismissed"}
+
+
+# `before` for a `record_synthesis` call that has no snapshot to check against:
+# a direct write, with no model call in between to be overtaken.
+UNCHECKED = object()
+
+
+def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
+                     tensions: list[dict] | None = None, source: str = "model",
+                     before: dict | None | object = UNCHECKED) -> dict | None:
+    """Write one topic's synthesis.
+
+    `claims_by_id` is every claim the model was shown, as it stood when the
+    prompt was built, and `tensions` the `tension_rows` it was shown alongside
+    them; the basis is fingerprinted from those, not from disk, so a claim
+    edited or a tension confirmed during the call leaves the synthesis stale
+    rather than silently current. With no `tensions` given the ones on file
+    now are used: a direct write, with no call in between to be overtaken.
+
+    `before` is the record on file for this topic when the prompt was built,
+    or None if there was none. The web app leaves edit and delete enabled
+    while a synthesis job runs, so a reviewer can correct or delete the text
+    while the model is thinking. That decision is newer than this answer and
+    must not be written over, as extraction leaves a claim edited during its
+    call alone: if the record on file no longer matches `before`, whether it
+    was edited, deleted, or created meanwhile, nothing is written. A record
+    found exactly as the call left it is not a change, so a repeat run writes
+    as usual.
+
+    Holds `vocab_lock` so a rename cannot interleave: `_retag_all` moves the
+    record to the new name under that lock, and a result arriving after sees
+    that no live claim carries the old name and is dropped rather than
+    recreating the topic. Returns the record, or None when it was dropped.
+    """
+    if source not in SYNTHESIS_SOURCES:
+        raise ValueError(f"source must be one of {SYNTHESIS_SOURCES}, not {source!r}")
+    # The response schema admits an empty string, so a model that answers
+    # with nothing would otherwise be written as a blank record and, on a
+    # rewrite, replace a useful synthesis. Refuse it as the hand-edit path
+    # does: the caller reports a failure and the saved text stands.
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("the model returned an empty synthesis; nothing written")
+    with vocab_lock(), syntheses_lock():
+        live = topic_claims(topic)
+        if not live:
+            return None
+        data = _read_syntheses()
+        if before is not UNCHECKED and data["syntheses"].get(topic) != before:
+            return None
+        record = {
+            "topic": topic,
+            "text": text,
+            "source": source,
+            "written": now(),
+            "claims": {i: claim_fingerprint(c) for i, c in claims_by_id.items()
+                       if topic in (c.get("tags") or [])},
+            "tensions": synthesis_tensions(topic, tension_rows() if tensions is None else tensions),
+        }
+        data["syntheses"][topic] = record
+        _save_syntheses(data)
+        return record
+
+
+def set_synthesis_text(topic: str, text: str) -> dict:
+    """Record a correction by hand. It is a judgment against the claims and
+    tensions as they stand now, so the basis is refreshed and the synthesis
+    stops being stale."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("a synthesis cannot be empty; delete it instead")
+    with vocab_lock(), syntheses_lock():
+        data = _read_syntheses()
+        if topic not in data["syntheses"]:
+            raise KeyError(topic)
+        record = data["syntheses"][topic]
+        record.update(text=text, source="hand", written=now(),
+                      claims=synthesis_basis(topic_claims(topic)),
+                      tensions=synthesis_tensions(topic, tension_rows()))
+        _save_syntheses(data)
+        return record
+
+
+def delete_synthesis(topic: str) -> None:
+    with syntheses_lock():
+        data = _read_syntheses()
+        if data["syntheses"].pop(topic, None) is None:
+            raise KeyError(topic)
+        _save_syntheses(data)
+
+
+def synthesis_rows(rows: list[dict] | None = None) -> list[dict]:
+    """Every synthesis whose topic still has claims, with `stale` set when a
+    claim in the topic was added, removed, or edited since it was written, or
+    a tension in it was found, confirmed, dismissed, or deleted. A stale
+    synthesis is still shown: it may still be right, and the reader decides
+    whether to rewrite it. One whose topic has no claims left is dropped from
+    view; `_retag_all` drops it from the file when the tag goes. A record
+    written before tensions were part of the basis has none on file and reads
+    as stale while the topic has any: what the model saw is not known."""
+    rows = rows if rows is not None else claim_rows()
+    tensions = tension_rows(rows)
+    out = []
+    for topic, record in sorted(load_syntheses().items()):
+        live = topic_claims(topic, rows)
+        if not live:
+            continue
+        row = dict(record)
+        row["topic"] = topic
+        row["stale"] = (synthesis_basis(live) != (record.get("claims") or {})
+                        or synthesis_tensions(topic, tensions) != (record.get("tensions") or {}))
+        row["n_claims"] = len(live)
+        row["n_papers"] = len({r["paper"] for r in live})
+        out.append(row)
+    return out
+
+
+def synthesis_topics(rows: list[dict] | None = None) -> list[str]:
+    """Topics worth a synthesis by default: claims from at least two papers.
+    One paper's claims can be synthesized too, by naming the topic."""
+    return tension_topics(rows)
