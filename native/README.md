@@ -35,9 +35,11 @@ for once and remembered), reinstalls with pip when `pyproject.toml` changed,
 and restarts the server so the new Python is what the window shows. If
 anything under `native/` changed it also runs `build.sh`, replaces the running
 bundle, and relaunches. A server the app adopted rather than started is left
-alone; the alert says so.
+alone; the alert says so. An update that fails after the pull is picked up
+again by the next one, from the last commit that fully installed.
 
-The same thing by hand is `git pull` and relaunching the app, plus
+The same thing by hand is `git pull --ff-only`, then `.venv/bin/pip install -e .`
+if `pyproject.toml` changed, then relaunching the app, plus
 `native/build.sh --install` when the Swift changed.
 
 ## What it adds
