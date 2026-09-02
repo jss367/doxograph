@@ -324,3 +324,10 @@ def test_cli_lists_tensions_without_calling_the_model(capsys):
     out = capsys.readouterr().out
     assert "t1" in out and "open" in out and "The note." in out
     assert "1 tensions, 1 open" in out
+
+    store.set_tension_status("t1", "dismissed")
+    assert __main__.main(["tensions", "--list"]) == 0
+    assert "0 tensions, 0 open" in capsys.readouterr().out    # the total counts what was listed
+    assert __main__.main(["tensions", "--list", "--all"]) == 0
+    out = capsys.readouterr().out
+    assert "dismissed" in out and "1 tensions, 0 open" in out

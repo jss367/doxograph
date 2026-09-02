@@ -125,9 +125,9 @@ def cmd_tensions(args) -> int:
     rows = store.tension_rows()
     if args.topics:
         rows = [t for t in rows if set(t.get("topics", [])) & set(args.topics)]
+    if not args.all:
+        rows = [t for t in rows if t["status"] != "dismissed"]
     for tension in rows:
-        if tension["status"] == "dismissed" and not args.all:
-            continue
         a, b = tension["claims"]
         stale = " (a claim changed since)" if tension.get("stale") else ""
         print(f"{tension['id']:<5} {tension['status']:<9} {tension['kind']:<13} "
