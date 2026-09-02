@@ -321,9 +321,12 @@ function tensionClaimCard(row) {
 
 function tensionCard(t) {
   const topics = (t.topics || []).map((x) => `<span class="tag" data-tag="${esc(x)}">#${esc(x)}</span>`).join(' ');
+  // A stale tension keeps both decisions on offer whatever its status: deciding
+  // it again against the current text is what clears the stale mark, and a
+  // reviewer who still agrees should not have to reopen it first.
   const actions = [];
-  if (t.status !== 'confirmed') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="confirmed">Confirm</button>`);
-  if (t.status !== 'dismissed') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="dismissed">Dismiss</button>`);
+  if (t.stale || t.status !== 'confirmed') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="confirmed">Confirm</button>`);
+  if (t.stale || t.status !== 'dismissed') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="dismissed">Dismiss</button>`);
   if (t.status !== 'open') actions.push(`<button type="button" data-act="tension-status" data-tension="${esc(t.id)}" data-status="open">Reopen</button>`);
   return `<div class="tcard ${esc(t.status)}" data-tension="${esc(t.id)}">
     <div class="thead">
