@@ -154,9 +154,15 @@ def _set(job: dict, **fields) -> None:
 
 def _prune_jobs() -> None:
     with _jobs_lock:
-        done = [j for j in _jobs.values() if j["state"] in ("done", "error")]
-        for job in sorted(done, key=lambda j: j["id"])[:-40]:
-            _jobs.pop(job["id"], None)
+        by_workspace: dict[str, list[dict]] = {}
+        for job in _jobs.values():
+            if job["state"] not in ("done", "error"):
+                continue
+            workspace = job.get("workspace", config.DEFAULT_WORKSPACE_ID)
+            by_workspace.setdefault(workspace, []).append(job)
+        for done in by_workspace.values():
+            for job in sorted(done, key=lambda item: item["id"])[:-40]:
+                _jobs.pop(job["id"], None)
 
 
 def _workspace_job(function):

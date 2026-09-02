@@ -62,6 +62,30 @@ def test_background_job_keeps_the_workspace_where_it_was_queued():
     assert store.all_papers() == []
     with config.use_workspace(animal["id"]):
         assert [paper["key"] for paper in store.all_papers()] == ["queued"]
+    server._jobs.pop(job["id"], None)
+
+
+def test_completed_job_retention_is_applied_per_workspace():
+    animal = config.create_workspace("Animal locomotion")
+    server._jobs.clear()
+    try:
+        default_job = server._new_job("default result")
+        server._set(default_job, state="done")
+
+        animal_jobs = []
+        with config.use_workspace(animal["id"]):
+            for index in range(41):
+                job = server._new_job(f"animal result {index}")
+                server._set(job, state="done")
+                animal_jobs.append(job)
+
+        server._prune_jobs()
+
+        assert default_job["id"] in server._jobs
+        assert animal_jobs[0]["id"] not in server._jobs
+        assert all(job["id"] in server._jobs for job in animal_jobs[1:])
+    finally:
+        server._jobs.clear()
 
 
 def test_duplicate_workspace_names_receive_distinct_stable_ids():
