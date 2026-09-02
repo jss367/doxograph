@@ -180,12 +180,14 @@ enum Updater {
         let changed = git(["diff", "--name-only", range]).output
             .split(separator: "\n").map(String.init)
 
-        // Editable installs pick up code changes on their own, but not a new
-        // dependency or a new console script, so reinstall when the metadata
-        // moved. It is cheap, and the failure mode of skipping it is a server
-        // that dies on import.
-        if changed.contains("pyproject.toml") {
-            progress("Installing dependencies…")
+        // An editable install picks up code changes on its own, but not a new
+        // dependency or a new console script; a plain install picks up neither.
+        // Reinstalling in editable mode whenever the package or its metadata
+        // moved covers both, and converts a plain install into the editable one
+        // the README describes. It is cheap, and the failure mode of skipping
+        // it is a server that dies on import or quietly runs the old code.
+        if changed.contains(where: { $0 == "pyproject.toml" || $0.hasPrefix("doxograph/") }) {
+            progress("Reinstalling doxograph…")
             guard let python = interpreter(for: command) else {
                 return .failure(.step("pip install", """
                     Could not tell which Python runs \(command): its first line \
