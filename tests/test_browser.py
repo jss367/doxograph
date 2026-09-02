@@ -462,3 +462,54 @@ def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelle
 
     asyncio.run(scenario())
     assert [row["text"] for row in store.synthesis_rows()] == ["Recovery corrected."]
+
+
+def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redraws_its_form_away():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_synthesis("recovery", "Recovery as written.", shown)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                synth = page.locator('.synth[data-topic="recovery"]')
+                synth_field = page.locator('textarea[data-synth="recovery"]')
+                claim_form = page.locator('form[data-form="paper-a-c1"]')
+                claim_field = claim_form.locator('textarea[name="text"]')
+                await synth.wait_for(state="visible")
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Claim draft that Escape in the synthesis must keep.")
+                await synth.get_by_role("button", name="edit").click()
+                await synth_field.fill("Synthesis draft that Escape in the claim must keep.")
+
+                # Escape in the claim textarea closes only the claim editor.
+                await claim_field.press("Escape")
+                await claim_form.wait_for(state="hidden")
+                assert await synth_field.input_value() == "Synthesis draft that Escape in the claim must keep."
+
+                # And Escape in the synthesis textarea closes only the synthesis editor.
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Claim draft that Escape in the synthesis must keep.")
+                await synth_field.press("Escape")
+                await synth_field.wait_for(state="hidden")
+                assert await claim_field.input_value() == "Claim draft that Escape in the synthesis must keep."
+
+                # Saving the claim while the synthesis editor is open takes the
+                # claim's form off the screen and leaves the synthesis draft.
+                await synth.get_by_role("button", name="edit").click()
+                await synth_field.fill("Synthesis draft kept across a claim save.")
+                await claim_field.fill("Claim saved while the synthesis editor was open.")
+                await claim_form.get_by_role("button", name="Save").click()
+                await claim_form.wait_for(state="hidden")
+                await page.get_by_text("Claim saved while the synthesis editor was open.").wait_for()
+                assert await synth_field.input_value() == "Synthesis draft kept across a claim save."
+            await browser.close()
+
+    asyncio.run(scenario())
+    saved = {r["id"]: r for r in store.claim_rows()}
+    assert saved["paper-a-c1"]["text"] == "Claim saved while the synthesis editor was open."
+    assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written."]

@@ -830,6 +830,12 @@ async function saveClaim(wrap, patch) {
   try {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
     delete V.drafts[wrap.dataset.claim];
+    // `render` leaves the content alone while a synthesis editor is open, so
+    // the saved claim's form would stay on screen with nothing tracking it.
+    // The synthesis draft is in V.synthDrafts, kept current by the input
+    // listener, so redrawing here loses nothing; a claim editor opened while
+    // the request ran has already redrawn the form away, so leave it be.
+    if (V.synthEditing && !V.editing) renderContent();
   } catch (error) {
     // Only this form was frozen during the request, so the open editor may now
     // belong to a different claim, holding text that exists only in the DOM.
@@ -1289,8 +1295,15 @@ document.addEventListener('keydown', async (event) => {
   if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
-    if (event.key === 'Escape' && V.editing) cancelEdit();
-    if (event.key === 'Escape' && V.synthEditing && !V.synthSaving) cancelSynthEdit();
+    if (event.key !== 'Escape') return;
+    // Only the editor holding the cursor is cancelled. With a claim editor and
+    // a synthesis editor open together, cancelling both would drop a draft
+    // the user never meant to give up.
+    if (event.target.closest('.synth')) {
+      if (V.synthEditing && !V.synthSaving) cancelSynthEdit();
+    } else if (V.editing) {
+      cancelEdit();
+    }
     return;
   }
   if (V.view !== 'claims') {
