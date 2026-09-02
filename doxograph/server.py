@@ -103,6 +103,14 @@ class SelectWorkspace:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+        # These routes either do not read a corpus or are themselves how the
+        # workspace registry is inspected. In particular, the native launcher
+        # must be able to reach health and load the app shell even when a broken
+        # registry needs to be reported in the UI.
+        if scope.get("path") in {
+            "/", "/app.css", "/app.js", "/favicon.png", "/api/health", "/api/workspaces",
+        }:
+            return await self.app(scope, receive, send)
         headers = dict(scope.get("headers") or [])
         selected = headers.get(b"x-doxograph-workspace", b"").decode("utf-8", "replace")
         if not selected:

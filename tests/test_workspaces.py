@@ -155,3 +155,15 @@ def test_malformed_registry_is_not_overwritten_by_workspace_creation():
     assert registry.read_text(encoding="utf-8") == "{not valid json"
     assert (config.base_data_dir() / "workspaces" / animal["id"]).is_dir()
     assert not (config.base_data_dir() / "workspaces" / "consciousness").exists()
+
+
+def test_malformed_registry_does_not_block_health_or_app_shell():
+    config.workspaces_path().write_text("{not valid json", encoding="utf-8")
+    client = TestClient(server.app)
+
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/").status_code == 200
+    assert client.get("/app.js").status_code == 200
+    response = client.post("/api/workspaces", json={"name": "Consciousness"})
+    assert response.status_code == 422
+    assert "workspace registry is not valid JSON" in response.json()["detail"]
