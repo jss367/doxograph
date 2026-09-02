@@ -45,6 +45,10 @@ swiftc \
 
 cp "$here/Info.plist" "$app/Contents/Info.plist"
 printf '%s' "$command_path" > "$app/Contents/Resources/doxograph-path"
+# The commit this bundle was built from. The in-app updater measures its first
+# update from here, so a checkout that was pulled by hand but never rebuilt
+# still gets its pip install and rebuild.
+git -C "$repo" rev-parse HEAD 2>/dev/null > "$app/Contents/Resources/doxograph-commit" || true
 
 if [[ ! -f "$here/Doxograph.icns" ]]; then
   echo "drawing the icon"

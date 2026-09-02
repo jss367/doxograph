@@ -137,11 +137,19 @@ enum Updater {
         progress("Checking for updates…")
         let before = git(["rev-parse", "HEAD"])
         guard before.succeeded else { return .failure(.step("git rev-parse", before.output)) }
-        // The first update has nothing recorded yet. Take where it starts as
-        // the last fully installed commit, so a pip or build failure on this
-        // run is retried on the next one instead of being read as up to date.
+        // The first update has nothing recorded yet. The commit this bundle
+        // was built from is the last one known to be fully installed: a
+        // checkout pulled by hand since then has its Python live already, but
+        // not a new dependency or a Swift change. Failing that, take where this
+        // run starts, so at least a pip or build failure on this run is retried
+        // on the next one instead of being read as up to date.
         if UserDefaults.standard.string(forKey: updatedShaDefaultsKey) == nil {
-            UserDefaults.standard.set(before.output.trimmed, forKey: updatedShaDefaultsKey)
+            var baseline = before.output.trimmed
+            if let built = builtCommit(), built != baseline,
+               git(["merge-base", "--is-ancestor", built, baseline]).succeeded {
+                baseline = built
+            }
+            UserDefaults.standard.set(baseline, forKey: updatedShaDefaultsKey)
         }
 
         let pull = git(["pull", "--ff-only"])
@@ -244,6 +252,15 @@ enum Updater {
             throw error
         }
         try? files.removeItem(at: retired)
+    }
+
+    /// The commit `build.sh` recorded into this bundle, if it was built from a
+    /// checkout.
+    private static func builtCommit() -> String? {
+        guard let url = Bundle.main.url(forResource: "doxograph-commit", withExtension: nil),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmed
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     // MARK: - Running things
