@@ -82,5 +82,6 @@ Sources/WebWindow.swift         the window, link handling, page dialogs
 Sources/Uploader.swift          posting dropped PDFs to /api/upload
 Sources/Locate.swift            finding the doxograph command
 Sources/Menu.swift              the menu bar
-tools/make-icon.swift           draws Doxograph.icns
+icon.png                        the logo, source art for the icon
+tools/make-icon.swift           renders icon.png as Doxograph.icns
 ```
