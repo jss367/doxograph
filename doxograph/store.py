@@ -787,6 +787,16 @@ def _pair(ids) -> tuple[str, str]:
     return (a, b)
 
 
+def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
+    """The stored topics both claims still carry. A topic removed from either
+    claim in the editor leaves the tension with it: a pass under that topic
+    can no longer return the pair, since the edited claim is no longer in the
+    prompt, and nothing else would ever take the name off. A tension left
+    with no topics is still a tension."""
+    tags = [set(live[i].get("tags") or []) for i in tension.get("claims", [])]
+    return sorted(t for t in tension.get("topics", []) if all(t in s for s in tags))
+
+
 def claim_fingerprint(claim: dict) -> str:
     """What a tension's judgment rests on. If either claim's text or evidence
     changes, the judgment was made about a claim that no longer exists."""
@@ -815,6 +825,10 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
       has already rewritten the tensions on file by then, and this late result
       must not put the old name back. The pair itself is still recorded, and
       the next pass under the new name attaches that.
+    - Stored topics that either claim no longer carries are dropped from every
+      tension on file, whether or not the model returned it this time. A claim
+      edit does not touch this file, so `tension_rows` applies the same filter
+      at read time; this write is where the file catches up.
 
     Returns `{"added": n, "reopened": n, "kept": n}`.
     """
@@ -825,6 +839,8 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
         live = {c["id"]: c for c in claim_rows()}
         existing = [t for t in data["tensions"]
                     if len(t.get("claims", [])) == 2 and all(i in live for i in t["claims"])]
+        for tension in existing:
+            tension["topics"] = _shared_topics(tension, live)
         by_pair = {_pair(t["claims"]): t for t in existing}
         added = reopened = kept = 0
         for item in found:
@@ -915,6 +931,9 @@ def tension_rows(rows: list[dict] | None = None) -> list[dict]:
     Each row carries `claims` as the two claim rows (not ids), plus `stale`,
     true when either claim has been edited since the tension was found. A stale
     tension is still shown: the reviewer decides whether the edit settled it.
+    `topics` is the stored list filtered to what both claims still carry, so a
+    topic taken off a claim in the editor disappears here at once even though
+    the file is only rewritten by the next `record_tensions`.
     """
     live = {c["id"]: c for c in (rows if rows is not None else claim_rows())}
     out = []
@@ -925,6 +944,7 @@ def tension_rows(rows: list[dict] | None = None) -> list[dict]:
         fingerprints = tension.get("fingerprints") or {}
         row = dict(tension)
         row["claims"] = [live[i] for i in ids]
+        row["topics"] = _shared_topics(tension, live)
         row["stale"] = any(fingerprints.get(i) != claim_fingerprint(live[i]) for i in ids)
         out.append(row)
     order = {s: n for n, s in enumerate(TENSION_STATUSES)}

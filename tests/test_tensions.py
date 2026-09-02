@@ -167,6 +167,28 @@ def test_a_topic_renamed_during_the_model_call_is_not_written_back():
     assert store.tension_rows()[0]["topics"] == ["recovery"]
 
 
+def test_a_topic_taken_off_a_claim_leaves_the_tension_on_read_and_on_the_next_write():
+    a, b, _ = build_corpus()
+    store.update_claim("doe2026recovery", a, {"tags": ["recovery-rate", "scaling"]})
+    store.update_claim("li2025steer", b, {"tags": ["recovery-rate", "scaling"]})
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    store.record_tensions("scaling", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+
+    store.update_claim("doe2026recovery", a, {"tags": ["recovery-rate"]})
+    [tension] = store.tension_rows()
+    assert tension["topics"] == ["recovery-rate"]           # gone from view at once
+    assert tension["stale"] is False                        # retagging is not an edit to the judgment
+    assert store.load_tensions()[0]["topics"] == ["recovery-rate", "scaling"]   # a claim edit does not touch the file
+
+    store.record_tensions("recovery-rate", [], shown())     # the next write, under any topic, catches up
+    assert store.load_tensions()[0]["topics"] == ["recovery-rate"]
+
+    store.update_claim("li2025steer", b, {"tags": []})
+    [tension] = store.tension_rows()                        # a tension without a topic is still a tension
+    assert tension["topics"] == []
+    assert {r["id"] for r in tension["claims"]} == {a, b}
+
+
 def test_deleting_a_claim_removes_its_tensions_from_view_and_from_the_next_write():
     a, b, c = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
