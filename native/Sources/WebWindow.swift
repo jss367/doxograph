@@ -82,6 +82,22 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         status.isHidden = true
     }
 
+    /// Read the workspace chosen by the page so Finder and Dock drops land in
+    /// the same corpus as drops handled inside the web view.
+    func currentWorkspace(_ completion: @escaping (String) -> Void) {
+        // A file can launch the app. In that case `load` and this lookup happen
+        // back-to-back; wait until app.js has restored its local selection.
+        guard !webView.isLoading else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.currentWorkspace(completion)
+            }
+            return
+        }
+        webView.evaluateJavaScript("window.doxographWorkspaceId || 'default'") { value, _ in
+            completion((value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "default")
+        }
+    }
+
     // MARK: - Navigation
 
     private func isLocal(_ url: URL) -> Bool {

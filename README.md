@@ -78,7 +78,14 @@ cited paper instead of the one you pasted. When nothing identifies the page,
 paste the arXiv ID, the DOI, or a direct PDF link.
 
 In the web app: drop PDFs anywhere on the page, or paste references into the
-box. The Tensions entry in the sidebar shows where papers disagree; `Escape`
+box. Use the workspace picker in the header to keep unrelated research
+separate. The existing corpus is the Default workspace; creating a workspace
+makes an empty, independent corpus with its own papers, topics, research
+context, ledger, tensions, syntheses, and exports. The last selected workspace
+is restored when the page is reopened. Papers dropped on the Mac app's Dock
+icon go to the workspace currently shown in its window.
+
+The Tensions entry in the sidebar shows where papers disagree; `Escape`
 returns to the claims. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
 reviewed, `Escape` cancels. Clicking a topic filters to it.
 
@@ -111,7 +118,14 @@ Everything lives in `~/doxograph-data` by default; set `DOXOGRAPH_DATA` to move
 it. The corpus is deliberately outside this repository, since it holds
 downloaded PDFs and in-progress notes.
 
-```
+For compatibility, the Default workspace uses the data-directory root shown
+below. Named workspaces repeat that same structure under
+`workspaces/<workspace-id>/`; `workspaces.json` records their display names.
+Command-line commands operate on the Default workspace.
+
+```text
+workspaces.json       named workspace registry
+workspaces/<id>/      an independent named corpus
 papers/<key>.json    one paper and its claims
 pdfs/<key>.pdf       the paper itself
 locks/               lock files, so two processes do not write at once

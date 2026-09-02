@@ -52,23 +52,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         take(urls.filter(Uploader.isPDF))
     }
 
-    private func take(_ urls: [URL]) {
+    private func take(_ urls: [URL], alreadyReserved: Bool = false) {
         guard !urls.isEmpty else { return }
+        if !alreadyReserved { Uploader.reserveForUpload(urls) }
         guard ready else {
             pendingDrops.append(contentsOf: urls)
             return
         }
         NSApp.activate(ignoringOtherApps: true)
         window.show()
-        Uploader.upload(urls, to: server.baseURL, extractNow: true) { [weak self] result in
-            if case .failure(let error) = result { self?.warn("Upload failed", error.localizedDescription) }
+        window.currentWorkspace { [weak self] workspace in
+            guard let self else { return }
+            Uploader.upload(
+                urls, to: self.server.baseURL, extractNow: true, workspace: workspace,
+                alreadyReserved: true
+            ) {
+                [weak self] result in
+                if case .failure(let error) = result {
+                    self?.warn("Upload failed", error.localizedDescription)
+                }
+            }
         }
     }
 
     private func flushPendingDrops() {
         let waiting = pendingDrops
         pendingDrops = []
-        take(waiting)
+        take(waiting, alreadyReserved: true)
     }
 
     @objc func addPapers(_ sender: Any?) {
@@ -323,7 +333,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             relaunchAfterQuit = false
             return .terminateCancel
         }
-        guard ready else { return .terminateNow }
+        guard ready else {
+            let uploading = Uploader.uploadsInFlight
+            guard uploading > 0 else { return .terminateNow }
+            relaunchAfterQuit = false
+            return confirmInterruption(.quit, uploading: uploading, reading: 0)
+                ? .terminateNow : .terminateCancel
+        }
         // Count the uploads on both sides of the question, because either
         // reading alone can miss work the other sees. The server answers a POST
         // only once it has staged the file and made the job, so an upload that

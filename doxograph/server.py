@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import functools
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from fastapi import Body, FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -87,7 +89,42 @@ class CountArrivingRequests:
                 _requests_arriving -= 1
 
 
+class SelectWorkspace:
+    """Bind each request to one corpus without changing any process-global path.
+
+    The page uses a header for API requests. Downloads opened in a new browser
+    tab cannot add a custom header, so PDF and BibTeX links carry the same value
+    as a query parameter instead.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        # These routes either do not read a corpus or are themselves how the
+        # workspace registry is inspected. In particular, the native launcher
+        # must be able to reach health and load the app shell even when a broken
+        # registry needs to be reported in the UI.
+        if scope.get("path") in {
+            "/", "/app.css", "/app.js", "/favicon.png", "/api/health", "/api/workspaces",
+        }:
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        selected = headers.get(b"x-doxograph-workspace", b"").decode("utf-8", "replace")
+        if not selected:
+            query = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace"))
+            selected = (query.get("workspace") or [config.DEFAULT_WORKSPACE_ID])[0]
+        if config.get_workspace(selected) is None:
+            response = JSONResponse({"detail": f"no workspace {selected}"}, status_code=404)
+            return await response(scope, receive, send)
+        with config.use_workspace(selected):
+            return await self.app(scope, receive, send)
+
+
 app.add_middleware(CountArrivingRequests)
+app.add_middleware(SelectWorkspace)
 
 
 def _finish(job: dict, key: str) -> None:
@@ -113,6 +150,7 @@ def _new_job(label: str) -> dict:
         _job_counter += 1
         job = {"id": _job_counter, "label": label, "state": "queued",
                "detail": "", "key": None, "started": store.now()}
+        job["workspace"] = config.workspace_id()
         _jobs[job["id"]] = job
         return job
 
@@ -124,13 +162,29 @@ def _set(job: dict, **fields) -> None:
 
 def _prune_jobs() -> None:
     with _jobs_lock:
-        done = [j for j in _jobs.values() if j["state"] in ("done", "error")]
-        for job in sorted(done, key=lambda j: j["id"])[:-40]:
-            _jobs.pop(job["id"], None)
+        by_workspace: dict[str, list[dict]] = {}
+        for job in _jobs.values():
+            if job["state"] not in ("done", "error"):
+                continue
+            workspace = job.get("workspace", config.DEFAULT_WORKSPACE_ID)
+            by_workspace.setdefault(workspace, []).append(job)
+        for done in by_workspace.values():
+            for job in sorted(done, key=lambda item: item["id"])[:-40]:
+                _jobs.pop(job["id"], None)
+
+
+def _workspace_job(function):
+    """Keep a queued job in the corpus from which it was submitted."""
+    @functools.wraps(function)
+    def wrapped(job: dict, *args, **kwargs):
+        with config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)):
+            return function(job, *args, **kwargs)
+    return wrapped
 
 
 # --- background work ------------------------------------------------------
 
+@_workspace_job
 def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
     try:
         _set(job, state="fetching")
@@ -151,6 +205,7 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
         _prune_jobs()
 
 
+@_workspace_job
 def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> None:
     try:
         _set(job, state="fetching")
@@ -167,6 +222,7 @@ def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> Non
         _prune_jobs()
 
 
+@_workspace_job
 def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
     try:
         _set(job, state="reading", key=key)
@@ -179,6 +235,7 @@ def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
         _prune_jobs()
 
 
+@_workspace_job
 def _run_tensions(job: dict, topics: list[str]) -> None:
     try:
         added = reopened = failed = 0
@@ -211,6 +268,7 @@ def _run_tensions(job: dict, topics: list[str]) -> None:
         _prune_jobs()
 
 
+@_workspace_job
 def _run_syntheses(job: dict, topics: list[str]) -> None:
     try:
         written = failed = 0
@@ -239,6 +297,7 @@ def _run_syntheses(job: dict, topics: list[str]) -> None:
         _prune_jobs()
 
 
+@_workspace_job
 def _run_retag(job: dict, keys: list[str]) -> None:
     try:
         for index, key in enumerate(keys, 1):
@@ -296,6 +355,10 @@ class SynthesisTextBody(BaseModel):
 class ExportBody(BaseModel):
     path: str | None = None
     title: str = "Doxograph"
+
+
+class WorkspaceBody(BaseModel):
+    name: str
 
 
 # --- routes ---------------------------------------------------------------
@@ -386,8 +449,12 @@ def state() -> dict:
     papers = store.all_papers()
     rows = store.claim_rows(papers)
     with _jobs_lock:
-        jobs = sorted(_jobs.values(), key=lambda j: j["id"], reverse=True)[:20]
+        jobs = sorted(
+            (job for job in _jobs.values() if job.get("workspace") == config.workspace_id()),
+            key=lambda j: j["id"], reverse=True,
+        )[:20]
     return {
+        "workspace": config.get_workspace(),
         "papers": [store.summarize(p) for p in papers],
         "claims": rows,
         "tags": store.load_tags(),
@@ -405,6 +472,20 @@ def state() -> dict:
         "model": config.MODEL,
         "has_key": config.api_key() is not None,
     }
+
+
+@app.get("/api/workspaces")
+def workspaces() -> dict:
+    return {"workspaces": config.list_workspaces()}
+
+
+@app.post("/api/workspaces", status_code=201)
+def create_workspace(body: WorkspaceBody) -> dict:
+    try:
+        workspace = config.create_workspace(body.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"workspace": workspace, "workspaces": config.list_workspaces()}
 
 
 @app.post("/api/ingest")
