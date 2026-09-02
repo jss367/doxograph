@@ -79,6 +79,14 @@ function apply() {
       && (!tag || node.dataset.tags.split(' ').includes(tag));
     node.hidden = !ok;
   });
+  // A tension is one comparison, not two claims: it shows both sides or
+  // neither, and it shows when either side matches.
+  document.querySelectorAll('[data-tension]').forEach(pair => {
+    const sides = pair.querySelectorAll('[data-claim]');
+    const shown = Array.from(sides).some(side => !side.hidden);
+    sides.forEach(side => { side.hidden = !shown; });
+    pair.hidden = !shown;
+  });
   document.querySelectorAll('[data-group]').forEach(group => {
     const shown = group.querySelectorAll('[data-claim]:not([hidden])').length;
     group.hidden = shown === 0;
@@ -193,7 +201,7 @@ def render(title: str = "Doxograph") -> str:
             status = "" if tension.get("status") == "confirmed" else \
                 '<span class="rel-tag">open</span>'
             stale = '<span class="rel-tag">judged against earlier text</span>' if tension.get("stale") else ""
-            body.append('<div class="ledger">')
+            body.append('<div class="ledger" data-tension>')
             body.append(f'<p class="own"><span class="kind {_e(tension.get("kind"))}">'
                         f'{_e(tension.get("kind"))}</span>{status}{stale}{topics}</p>')
             body.extend(_claim_html(r, ledger_by_id) for r in tension["claims"])

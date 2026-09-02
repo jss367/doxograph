@@ -398,6 +398,17 @@ def test_export_marks_a_confirmed_tension_whose_claim_was_edited_since():
     assert "judged against earlier text</span>" in export.render()
 
 
+def test_export_filters_a_tension_as_a_pair():
+    """The filter script hides claim cards one by one. A tension's two cards
+    sit in a wrapper the script treats as a unit, so a topic or search that
+    matches one side cannot leave the note standing over a single claim."""
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    html = export.render()
+    assert html.count('<div class="ledger" data-tension>') == 1
+    assert "querySelectorAll('[data-tension]')" in export.SCRIPT
+
+
 def test_cli_lists_tensions_without_calling_the_model(capsys):
     a, b, _ = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "The note."}], shown())
