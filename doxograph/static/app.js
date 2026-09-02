@@ -2,26 +2,52 @@
 
 // Appearance is deliberately a browser preference rather than corpus state:
 // two people can view the same corpus without changing each other's display.
-// Each color theme is a coordinated palette in both light and dark variants,
+// Each color theme is a coordinated palette in light, dim, and dark variants,
 // so switching it cannot accidentally leave text unreadable on its background.
+// Dim is a softer dark mode: charcoal surfaces instead of near-black ones.
 const THEME_STORAGE_KEY = 'doxograph-theme-v1';
+const APPEARANCES = ['system', 'light', 'dim', 'dark'];
 const DEFAULT_THEME = Object.freeze({ appearance: 'system', colors: 'slate' });
 const THEME_PALETTES = {
   slate: {
     light: { ink: '#16181d', muted: '#5c6370', line: '#dfe2e8', bg: '#ffffff', panel: '#f6f7f9', accent: '#2f5d8a', warn: '#8a5a2f', ok: '#2f7a4f', sel: '#e8f0f8', 'accent-ink': '#ffffff' },
+    dim: { ink: '#e3e5e9', muted: '#a2a8b3', line: '#454b56', bg: '#262931', panel: '#2e323b', accent: '#8db9e4', warn: '#dcab72', ok: '#8ccda5', sel: '#324152', 'accent-ink': '#121a24' },
     dark: { ink: '#e6e8ec', muted: '#99a0ad', line: '#343a44', bg: '#14161a', panel: '#1d2027', accent: '#7fb0e0', warn: '#d9a267', ok: '#7fc79b', sel: '#1f2a35', 'accent-ink': '#101820' },
   },
   forest: {
     light: { ink: '#17231b', muted: '#59695e', line: '#d7e2da', bg: '#fbfdfb', panel: '#f1f6f2', accent: '#2b6e48', warn: '#8a6028', ok: '#287447', sel: '#e2f1e7', 'accent-ink': '#ffffff' },
+    dim: { ink: '#e2e9e4', muted: '#a1b0a5', line: '#43524a', bg: '#242c27', panel: '#2c352f', accent: '#82cc9f', warn: '#d9b074', ok: '#82cc9f', sel: '#2f4438', 'accent-ink': '#12241a' },
     dark: { ink: '#e4ece6', muted: '#98a99d', line: '#324239', bg: '#121914', panel: '#1a241d', accent: '#76c596', warn: '#d7aa68', ok: '#76c596', sel: '#1d3325', 'accent-ink': '#102018' },
   },
   plum: {
     light: { ink: '#241a27', muted: '#6c5e70', line: '#e2dbe5', bg: '#fefcff', panel: '#f7f2f8', accent: '#765183', warn: '#96603e', ok: '#477452', sel: '#f0e5f3', 'accent-ink': '#ffffff' },
+    dim: { ink: '#ece6ee', muted: '#b3a6b7', line: '#55485a', bg: '#2b242e', panel: '#342c37', accent: '#c9a6d4', warn: '#dfa87d', ok: '#90c99b', sel: '#43354a', 'accent-ink': '#28182e' },
     dark: { ink: '#eee7f0', muted: '#ad9eb1', line: '#443848', bg: '#181319', panel: '#231c25', accent: '#c29bce', warn: '#dda071', ok: '#86c392', sel: '#34263a', 'accent-ink': '#24152a' },
   },
   sepia: {
     light: { ink: '#2d251d', muted: '#716556', line: '#ded3c2', bg: '#fcf8f1', panel: '#f4ecdf', accent: '#8a5138', warn: '#94621f', ok: '#52703c', sel: '#efe1d2', 'accent-ink': '#ffffff' },
+    dim: { ink: '#ece4d7', muted: '#b6a893', line: '#5a4e41', bg: '#2e2822', panel: '#37302a', accent: '#dca383', warn: '#dfb676', ok: '#a2c388', sel: '#4a3a2f', 'accent-ink': '#2a1a11' },
     dark: { ink: '#eee5d7', muted: '#b1a28e', line: '#493e32', bg: '#1b1713', panel: '#28211b', accent: '#d99a78', warn: '#ddb06a', ok: '#99bd7d', sel: '#3b2b22', 'accent-ink': '#27170f' },
+  },
+  ocean: {
+    light: { ink: '#132029', muted: '#556873', line: '#d3e0e6', bg: '#fafdfe', panel: '#eef5f8', accent: '#1f6f8b', warn: '#8d5f2a', ok: '#2f7a5f', sel: '#dfeff5', 'accent-ink': '#ffffff' },
+    dim: { ink: '#e0e8ec', muted: '#9fb0b8', line: '#3e505a', bg: '#212b31', panel: '#293439', accent: '#6fc0dc', warn: '#d9ac70', ok: '#7fcbb0', sel: '#2c4250', 'accent-ink': '#0f2028' },
+    dark: { ink: '#e2eaee', muted: '#94a7b0', line: '#2f414a', bg: '#0f181d', panel: '#172228', accent: '#63b6d3', warn: '#d6a565', ok: '#77c4a8', sel: '#193039', 'accent-ink': '#0b1a20' },
+  },
+  indigo: {
+    light: { ink: '#181a2f', muted: '#5e627f', line: '#dddfeb', bg: '#fdfdff', panel: '#f3f4fa', accent: '#4a55a8', warn: '#8d5d2f', ok: '#3a7756', sel: '#e6e8f8', 'accent-ink': '#ffffff' },
+    dim: { ink: '#e5e6ee', muted: '#a5a8bd', line: '#474b64', bg: '#262838', panel: '#2e3142', accent: '#9ea8ee', warn: '#dcab72', ok: '#8bcaa4', sel: '#353a5a', 'accent-ink': '#121530' },
+    dark: { ink: '#e7e8f0', muted: '#9a9db4', line: '#35384f', bg: '#14151f', panel: '#1c1e2a', accent: '#939ee9', warn: '#d9a267', ok: '#7fc79b', sel: '#262a45', 'accent-ink': '#0f1128' },
+  },
+  rose: {
+    light: { ink: '#2a1a1f', muted: '#726068', line: '#e8d9de', bg: '#fffbfc', panel: '#faf1f4', accent: '#a34a63', warn: '#95622a', ok: '#4b7a55', sel: '#f7e4ea', 'accent-ink': '#ffffff' },
+    dim: { ink: '#efe6e9', muted: '#b5a3aa', line: '#584750', bg: '#2d2429', panel: '#372c32', accent: '#e397ad', warn: '#dfae76', ok: '#93c99a', sel: '#4a353f', 'accent-ink': '#2a141c' },
+    dark: { ink: '#f0e6ea', muted: '#ad9aa2', line: '#47363d', bg: '#1a1316', panel: '#251c20', accent: '#dd8ba3', warn: '#dba46c', ok: '#8cc394', sel: '#3a2730', 'accent-ink': '#28121a' },
+  },
+  graphite: {
+    light: { ink: '#1c1c1e', muted: '#66666b', line: '#e0e0e3', bg: '#ffffff', panel: '#f4f4f5', accent: '#9a5f10', warn: '#8a5a2f', ok: '#3d7a4a', sel: '#f5ebdc', 'accent-ink': '#ffffff' },
+    dim: { ink: '#e6e6e8', muted: '#a6a6ab', line: '#4a4a4f', bg: '#28282b', panel: '#303034', accent: '#e0b060', warn: '#d9a267', ok: '#8fc79b', sel: '#3d3830', 'accent-ink': '#1e1608' },
+    dark: { ink: '#e8e8ea', muted: '#9b9ba0', line: '#38383d', bg: '#161618', panel: '#1f1f22', accent: '#d8a852', warn: '#d9a267', ok: '#7fc79b', sel: '#332d22', 'accent-ink': '#1b1405' },
   },
 };
 const appearanceQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -31,7 +57,7 @@ function readThemeSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(THEME_STORAGE_KEY) || '{}');
     return {
-      appearance: ['system', 'light', 'dark'].includes(saved.appearance) ? saved.appearance : DEFAULT_THEME.appearance,
+      appearance: APPEARANCES.includes(saved.appearance) ? saved.appearance : DEFAULT_THEME.appearance,
       colors: Object.hasOwn(THEME_PALETTES, saved.colors) ? saved.colors : DEFAULT_THEME.colors,
     };
   } catch (error) {
@@ -47,7 +73,7 @@ function applyThemeSettings(settings, persist = false) {
   const root = document.documentElement;
   root.dataset.appearance = settings.appearance;
   root.dataset.colorTheme = settings.colors;
-  root.style.colorScheme = mode;
+  root.style.colorScheme = mode === 'light' ? 'light' : 'dark';
   Object.entries(THEME_PALETTES[settings.colors][mode]).forEach(([name, value]) => {
     root.style.setProperty(`--${name}`, value);
   });
