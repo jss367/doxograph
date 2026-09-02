@@ -798,9 +798,10 @@ def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
 
 
 def claim_fingerprint(claim: dict) -> str:
-    """What a tension's judgment rests on. If either claim's text or evidence
-    changes, the judgment was made about a claim that no longer exists."""
-    return json.dumps([claim.get("text", ""), claim.get("evidence", "")])
+    """What a tension's judgment rests on: everything `_tension_listing` shows
+    the model about a claim. If the text, evidence or kind changes, the
+    judgment was made about a claim that no longer exists."""
+    return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("kind", "finding")])
 
 
 def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]) -> dict:

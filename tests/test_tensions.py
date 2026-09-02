@@ -124,6 +124,14 @@ def test_a_claim_edited_during_the_model_call_leaves_the_tension_stale():
     assert store.tension_rows()[0]["stale"] is False
 
 
+def test_changing_a_claims_kind_marks_the_tension_stale():
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
+    assert store.tension_rows()[0]["stale"] is False
+    store.update_claim("doe2026recovery", a, {"kind": "conjecture"})    # the model was shown [finding]
+    assert store.tension_rows()[0]["stale"] is True
+
+
 def test_a_pair_found_under_two_topics_is_one_tension():
     a, b, _ = build_corpus()
     store.update_claim("doe2026recovery", a, {"tags": ["recovery-rate", "scaling"]})
