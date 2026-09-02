@@ -213,6 +213,7 @@ final class ServerController {
     ///
     /// The cancel is one-way, which is what the one caller wants: the app calls
     /// this from `applicationWillTerminate` and never starts a server again.
+    /// `restart()` is the way to stop a server and start another.
     func stop() {
         lock.lock()
         cancelled = true
@@ -220,6 +221,19 @@ final class ServerController {
         lock.unlock()
         guard let started else { return }
         shutDown(started)
+    }
+
+    /// Stop the server this app started so a fresh one can take its place, as
+    /// after an update has changed the code under it. An adopted server is left
+    /// alone, since this app did not start it. Unlike `stop()` this leaves the
+    /// controller usable: the next `start()` walks the ports and spawns again.
+    func restart(onReady: @escaping (URL) -> Void, onFailure: @escaping (Failure) -> Void) {
+        lock.lock()
+        let started = process
+        process = nil
+        lock.unlock()
+        if let started { shutDown(started) }
+        start(onReady: onReady, onFailure: onFailure)
     }
 
     private func shutDown(_ process: Process) {

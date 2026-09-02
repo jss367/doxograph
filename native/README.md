@@ -27,6 +27,19 @@ the Python shows up in the app on its next launch.
 of usual locations, and finally whatever your login shell says `doxograph` is.
 If none of them exist it offers to let you choose the command, and remembers it.
 
+## Updating
+
+**Doxograph → Update Doxograph…** runs `git pull --ff-only` in the checkout
+the command came from (found by walking up from the recorded path, or asked
+for once and remembered), reinstalls with pip when `pyproject.toml` changed,
+and restarts the server so the new Python is what the window shows. If
+anything under `native/` changed it also runs `build.sh`, replaces the running
+bundle, and relaunches. A server the app adopted rather than started is left
+alone; the alert says so.
+
+The same thing by hand is `git pull` and relaunching the app, plus
+`native/build.sh --install` when the Swift changed.
+
 ## What it adds
 
 - **Dock drops.** PDFs dropped on the icon, or opened with Doxograph from
@@ -81,6 +94,7 @@ Sources/ServerController.swift  starting, adopting and stopping the server
 Sources/WebWindow.swift         the window, link handling, page dialogs
 Sources/Uploader.swift          posting dropped PDFs to /api/upload
 Sources/Locate.swift            finding the doxograph command
+Sources/Updater.swift           pulling the checkout and rebuilding
 Sources/Menu.swift              the menu bar
 tools/make-icon.swift           draws Doxograph.icns
 ```

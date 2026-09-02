@@ -7,6 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// PDFs dropped on the Dock icon before the server answered. A drop can
     /// even be what launched the app, so this fills up before the window exists.
     private var pendingDrops: [URL] = []
+    /// An update is in progress; a second one must wait for it.
+    private var updating = false
+    /// The bundle was replaced by an update, and the quit under way should be
+    /// followed by a launch of the new one.
+    private var relaunchAfterQuit = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = buildMenu()
@@ -17,14 +22,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func startServer() {
         window.showStatus("Starting Doxograph…")
-        server.start(
-            onReady: { [weak self] url in
-                guard let self else { return }
-                self.ready = true
-                self.window.load(url)
-                self.flushPendingDrops()
-            },
-            onFailure: { [weak self] failure in self?.report(failure) })
+        server.start(onReady: serverReady, onFailure: { [weak self] failure in self?.report(failure) })
+    }
+
+    private func serverReady(_ url: URL) {
+        ready = true
+        window.load(url)
+        flushPendingDrops()
     }
 
     // MARK: - Files
@@ -65,6 +69,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard response == .OK else { return }
             self?.take(panel.urls)
         }
+    }
+
+    // MARK: - Updating
+
+    /// Pull the checkout the app runs from, and restart on top of it.
+    ///
+    /// The app is a launcher over a checkout's venv, so an update is a `git
+    /// pull` there. Python changes are live once the server restarts; a change
+    /// under `native/` means this bundle is stale too, so it is rebuilt and the
+    /// app relaunched. An adopted server is not this app's to restart: the pull
+    /// still happens, and the alert says the terminal has to do the rest.
+    @objc func updateDoxograph(_ sender: Any?) {
+        guard !updating else { return }
+        updating = true
+        window.showStatus("Checking for updates…")
+        // Finding the command can fall back to a login shell, which is slow.
+        DispatchQueue.global().async { [weak self] in
+            let command = Locate.doxographCommand()
+            DispatchQueue.main.async { self?.update(with: command) }
+        }
+    }
+
+    private func update(with command: String?) {
+        guard let command else {
+            updating = false
+            return report(.commandNotFound)
+        }
+        guard let repository = Updater.repository(near: command)
+            ?? Updater.rememberedRepository()
+            ?? chooseRepository() else {
+            updating = false
+            if ready { window.hideStatus() }
+            return
+        }
+        Updater.remember(repository)
+        let ownsServer = server.ownsServer
+        Updater.run(command: command, repository: repository,
+                    progress: { [weak self] text in self?.window.showStatus(text) },
+                    completion: { [weak self] result in self?.finishUpdate(result, ownsServer: ownsServer) })
+    }
+
+    private func finishUpdate(_ result: Result<Updater.Outcome, Updater.Failure>, ownsServer: Bool) {
+        updating = false
+        switch result {
+        case .failure(.step(let name, let output)):
+            if ready { window.hideStatus() }
+            warn("Update failed at \(name)", output.isEmpty ? "It printed nothing." : output)
+
+        case .success(let outcome) where outcome.changes.isEmpty:
+            if ready { window.hideStatus() }
+            inform("Doxograph is up to date.", "")
+
+        case .success(let outcome) where outcome.appRebuilt:
+            // The new bundle is in place; only a fresh process can run it. The
+            // quit below goes through the usual questions about work in flight,
+            // and the relaunch is spawned only once the quit is actually happening.
+            let alert = NSAlert()
+            alert.messageText = "Updated Doxograph. Relaunch to run the new version."
+            alert.informativeText = outcome.changes
+            alert.addButton(withTitle: "Relaunch")
+            alert.addButton(withTitle: "Later")
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                if ready { window.hideStatus() }
+                return
+            }
+            relaunchAfterQuit = true
+            NSApp.terminate(nil)
+
+        case .success(let outcome):
+            guard ownsServer else {
+                if ready { window.hideStatus() }
+                inform("Updated Doxograph.", outcome.changes + """
+
+
+                    This app is using a server started elsewhere, so the changes \
+                    take effect when that `doxograph serve` is restarted.
+                    """)
+                return
+            }
+            ready = false
+            window.showStatus("Restarting Doxograph…")
+            server.restart(
+                onReady: { [weak self] url in
+                    self?.serverReady(url)
+                    self?.inform("Updated Doxograph.", outcome.changes)
+                },
+                onFailure: { [weak self] failure in self?.report(failure) })
+        }
+    }
+
+    /// Ask where the checkout is, when the command was not installed from one
+    /// the app can recognise.
+    private func chooseRepository() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the doxograph checkout to update (the folder with pyproject.toml)."
+        panel.prompt = "Update"
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        while panel.runModal() == .OK, let url = panel.url {
+            if Updater.isRepository(url) { return url }
+            warn("That is not a doxograph checkout",
+                 "\(url.path) has no pyproject.toml, native/build.sh, or .git.")
+        }
+        return nil
+    }
+
+    private func inform(_ message: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window.window, completionHandler: nil)
     }
 
     // MARK: - Failure
@@ -284,6 +402,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationWillTerminate(_ notification: Notification) {
         server.stop()
+        if relaunchAfterQuit { relaunch() }
+    }
+
+    /// Open this bundle again once this process is gone. `open` on a bundle
+    /// that is still running only brings it forward, so a shell waits for the
+    /// pid to disappear first.
+    private func relaunch() {
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = [
+            "-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; open \"$2\"", "relaunch",
+            String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundlePath,
+        ]
+        try? helper.run()
     }
 
     // MARK: - View menu
@@ -306,6 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch menuItem.action {
         case #selector(goBack(_:)): return window.webView.canGoBack
         case #selector(reloadPage(_:)), #selector(addPapers(_:)): return ready
+        case #selector(updateDoxograph(_:)): return ready && !updating
         default: return true
         }
     }
