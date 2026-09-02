@@ -188,8 +188,9 @@ the tensions it is part of, and clicking the mark shows them.
 
 Tensions live in `tensions.json`. A repeat run leaves a decision alone: a pair
 you dismissed stays dismissed however many times the model proposes it. If you
-edit either claim afterwards, the tension is marked as judged against old text,
-and the next run re-judges it and sets it back to open. Deleting a claim
+edit either claim afterward, the tension is marked as judged against old text;
+a later run that returns the same pair re-judges it and sets it back to open,
+and you can also confirm or dismiss it yourself against the new text. Deleting a claim
 removes its tensions. Open and confirmed tensions appear in the HTML export;
 dismissed ones do not.
 
