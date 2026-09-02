@@ -313,13 +313,20 @@ function paperHeader(key) {
   </div>`;
 }
 
+function paperCache() {
+  window.__paperCache = window.__paperCache || {};
+  const workspace = currentWorkspaceId || 'default';
+  window.__paperCache[workspace] = window.__paperCache[workspace] || {};
+  return window.__paperCache[workspace];
+}
+
 function proposedPanel(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper || !paper.n_proposed_tags) return '';
   // Keyed by the paper's updated timestamp, so a re-read that replaces the
   // proposals invalidates the cache instead of showing names the server will
   // no longer accept.
-  const entry = (window.__paperCache || {})[key];
+  const entry = paperCache()[key];
   const fresh = entry && entry !== 'loading' && entry.updated === paper.updated;
   const proposed = fresh ? entry.proposed_tags : null;
   if (!proposed) {
@@ -339,15 +346,15 @@ function proposedPanel(key) {
 }
 
 async function loadProposed(key, wanted) {
-  window.__paperCache = window.__paperCache || {};
-  if (window.__paperCache[key] === 'loading') return;
-  window.__paperCache[key] = 'loading';
+  const cache = paperCache();
+  if (cache[key] === 'loading') return;
+  cache[key] = 'loading';
   try {
     const paper = await api(`/api/papers/${encodeURIComponent(key)}`);
-    window.__paperCache[key] = { updated: paper.updated, proposed_tags: paper.proposed_tags || [] };
-    if (wanted && paper.updated !== wanted) delete window.__paperCache[key];  // changed again mid-flight
+    cache[key] = { updated: paper.updated, proposed_tags: paper.proposed_tags || [] };
+    if (wanted && paper.updated !== wanted) delete cache[key];  // changed again mid-flight
     if (!V.editing) renderContent();
-  } catch (e) { delete window.__paperCache[key]; }
+  } catch (e) { delete cache[key]; }
 }
 
 // `shown` carries the claim ids already drawn as an editor this pass. In grouped
@@ -1167,7 +1174,7 @@ $('content').addEventListener('click', async (event) => {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [field]: [button.dataset.tag] }),
       });
-      delete (window.__paperCache || {})[paper];
+      delete paperCache()[paper];
       await refreshAll();
       return;
     }

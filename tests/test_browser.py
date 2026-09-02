@@ -85,6 +85,42 @@ def _paper(key: str, title: str, *tags: str) -> None:
     store.save_paper(paper)
 
 
+def _paper_with_proposal(key: str, title: str, proposal: str, updated: str) -> None:
+    paper = store.new_paper(key, title=title)
+    paper["proposed_tags"] = [{"name": proposal, "description": f"About {proposal}."}]
+    paper["updated"] = updated
+    store.write_json(store.paper_path(key), paper)
+
+
+@pytest.mark.browser
+def test_proposed_topic_cache_is_isolated_between_workspaces():
+    from doxograph import config
+
+    timestamp = "2026-09-02T12:00:00+00:00"
+    _paper_with_proposal("shared", "Default paper", "consciousness", timestamp)
+    animal = config.create_workspace("Animal locomotion")
+    with config.use_workspace(animal["id"]):
+        _paper_with_proposal("shared", "Animal paper", "gait-control", timestamp)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator('.proposed .pn', has_text="consciousness").wait_for()
+
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator('.proposed .pn', has_text="gait-control").wait_for()
+                assert await page.locator('.proposed .pn', has_text="consciousness").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.browser
 def test_switching_workspaces_hides_other_research_and_survives_reload():
     _paper("mind", "A consciousness paper")
