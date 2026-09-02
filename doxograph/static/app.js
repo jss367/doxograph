@@ -4,6 +4,7 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 let workspaces = [];
 let currentWorkspaceId = null;
+let pendingMutations = 0;
 // The native app can receive a Finder/Dock drop while the first state request
 // is still loading. Publish the remembered choice synchronously so that drop
 // does not fall back to the default workspace during startup.
@@ -85,13 +86,20 @@ async function api(path, options = {}) {
   const headers = new Headers(request.headers || {});
   if (currentWorkspaceId) headers.set('X-Doxograph-Workspace', currentWorkspaceId);
   request.headers = headers;
-  const response = await fetch(path, request);
-  if (!response.ok) {
-    let detail = response.statusText;
-    try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
-    throw new Error(detail);
+  const method = (request.method || 'GET').toUpperCase();
+  const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+  if (mutating) pendingMutations += 1;
+  try {
+    const response = await fetch(path, request);
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
+      throw new Error(detail);
+    }
+    return response.status === 204 ? null : await response.json();
+  } finally {
+    if (mutating) pendingMutations -= 1;
   }
-  return response.status === 204 ? null : response.json();
 }
 
 async function refresh() {
@@ -151,8 +159,8 @@ function resetWorkspaceView() {
 
 async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId) return;
-  if (savingClaims.size || V.synthSaving) {
-    alert('Wait for the current save to finish before switching workspaces.');
+  if (pendingMutations || savingClaims.size || V.synthSaving) {
+    alert('Wait for the current change to finish before switching workspaces.');
     renderWorkspacePicker();
     return;
   }
