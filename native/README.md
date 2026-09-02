@@ -30,22 +30,23 @@ If none of them exist it offers to let you choose the command, and remembers it.
 
 ## Updating
 
-**Doxograph → Update Doxograph…** runs `git pull --ff-only` in the checkout
-the command came from (found by walking up from the recorded path, or asked
-for once and remembered), reinstalls with pip when `pyproject.toml` changed,
-and restarts the server so the new Python is what the window shows. If
-anything under `native/` changed it also runs `build.sh`, replaces the running
-bundle, and relaunches. A server the app adopted rather than started is left
-alone; the alert says so. An update that fails after the pull is picked up
-again by the next one, from the last commit that fully installed. The first
-update measures from the commit recorded in the bundle at build time, so a
-checkout you pulled by hand but never rebuilt still gets its pip install and
-rebuild.
+**Doxograph → Update Doxograph…** runs `git pull --ff-only origin main` in the
+checkout the command came from (found by walking up from the recorded path, or
+asked for once and remembered). Naming `origin/main` explicitly makes the app
+update correctly even when that checkout is on a local workspace branch with
+no upstream. It reinstalls with pip when `pyproject.toml` changed, and restarts
+the server so the new Python is what the window shows. If anything under
+`native/` changed it also runs `build.sh`, replaces the running bundle, and
+relaunches. A server the app adopted rather than started is left alone; the
+alert says so. An update that fails after the pull is picked up again by the
+next one, from the last commit that fully installed. The first update measures
+from the commit recorded in the bundle at build time, so a checkout you pulled
+by hand but never rebuilt still gets its pip install and rebuild.
 
-The same thing by hand is `git pull --ff-only`, then `.venv/bin/pip install -e .`
-if `pyproject.toml` or anything under `doxograph/` changed, then
-`native/build.sh --install` if anything under `native/` changed, and then
-relaunching the app.
+The same thing by hand is `git pull --ff-only origin main`, then
+`.venv/bin/pip install -e .` if `pyproject.toml` or anything under `doxograph/`
+changed, then `native/build.sh --install` if anything under `native/` changed,
+and then relaunching the app.
 
 ## What it adds
 

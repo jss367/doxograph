@@ -88,11 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Pull the checkout the app runs from, and restart on top of it.
     ///
-    /// The app is a launcher over a checkout's venv, so an update is a `git
-    /// pull` there. Python changes are live once the server restarts; a change
-    /// under `native/` means this bundle is stale too, so it is rebuilt and the
-    /// app relaunched. An adopted server is not this app's to restart: the pull
-    /// still happens, and the alert says the terminal has to do the rest.
+    /// The app is a launcher over a checkout's venv, so an update fast-forwards
+    /// that checkout from `origin/main`. Python changes are live once the server
+    /// restarts; a change under `native/` means this bundle is stale too, so it
+    /// is rebuilt and the app relaunched. An adopted server is not this app's to
+    /// restart: the pull still happens, and the alert says the terminal has to
+    /// do the rest.
     @objc func updateDoxograph(_ sender: Any?) {
         guard !updating else { return }
         updating = true

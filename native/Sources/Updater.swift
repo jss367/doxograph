@@ -5,11 +5,11 @@ import Foundation
 /// Brings the checkout the app runs from up to date.
 ///
 /// The app is a launcher over the `doxograph` installed in a checkout's venv,
-/// so updating it means updating the checkout: `git pull`, then `pip install
-/// -e .` so a new dependency lands in the venv, then a rebuild of this bundle
-/// when anything under `native/` moved. Python changes need only a server
-/// restart to show up; Swift changes need the relaunch the caller does after a
-/// rebuild.
+/// so updating it means fast-forwarding the checkout from `origin/main`, then
+/// `pip install -e .` so a new dependency lands in the venv, then a rebuild of
+/// this bundle when anything under `native/` moved. Python changes need only a
+/// server restart to show up; Swift changes need the relaunch the caller does
+/// after a rebuild.
 enum Updater {
     static let repositoryDefaultsKey = "DoxographRepository"
     /// The commit whose dependencies and bundle were last fully installed.
@@ -159,8 +159,15 @@ enum Updater {
             UserDefaults.standard.set(baseline, forKey: Self.installedKey(for: repository))
         }
 
-        let pull = git(["pull", "--ff-only"])
-        guard pull.succeeded else { return .failure(.step("git pull", pull.output)) }
+        // The app updates to the released source, not to whatever branch happens
+        // to be checked out. In particular, Conductor workspaces use local
+        // branches without upstreams, for which a bare `git pull` cannot choose
+        // a branch at all. Naming main also keeps a tracked feature branch from
+        // quietly updating to that feature branch instead of the released app.
+        let pull = git(["pull", "--ff-only", "origin", "main"])
+        guard pull.succeeded else {
+            return .failure(.step("git pull origin/main", pull.output))
+        }
 
         let after = git(["rev-parse", "HEAD"])
         guard after.succeeded else { return .failure(.step("git rev-parse", after.output)) }
