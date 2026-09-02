@@ -21,11 +21,13 @@ const NEW_CLAIM_ID = '__new__';
 // synthDrafts what has been typed into each, by topic, kept across redraws and
 // navigation like claim drafts. A map for the same reason `drafts` is: opening
 // a second topic's editor, or leaving the page the first is on, must not throw
-// away the first one's text.
+// away the first one's text. synthSaving is the topic whose hand save is in
+// flight: its editor is frozen, as a claim form is while it saves, because
+// success redraws from the server value and typing meanwhile would be lost.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
-            synthEditing: null, synthDrafts: {} };
+            synthEditing: null, synthDrafts: {}, synthSaving: null };
 
 function blankClaim(paper) {
   return {
@@ -470,13 +472,16 @@ function synthesisBlock(tag) {
   if (V.synthEditing === tag) {
     const draft = V.synthDrafts[tag];
     const text = draft !== undefined ? draft : (synth ? synth.text : '');
-    return `<div class="synth" data-topic="${esc(tag)}">
-      <textarea data-synth="${esc(tag)}">${esc(text)}</textarea>
+    // Drawn from state rather than toggled on the elements, so a redraw during
+    // the request keeps the editor frozen.
+    const busy = V.synthSaving === tag ? ' disabled' : '';
+    return `<div class="synth${busy ? ' saving' : ''}" data-topic="${esc(tag)}">
+      <textarea data-synth="${esc(tag)}"${busy}>${esc(text)}</textarea>
       <div class="smeta">
         <span class="hint">Cite claims as [claim-id]; they become links.</span>
         <span class="cact" style="margin-left:auto">
-          <button type="button" data-act="save-synth" data-topic="${esc(tag)}" class="primary">Save</button>
-          <button type="button" data-act="cancel-synth" data-topic="${esc(tag)}">Cancel</button>
+          <button type="button" data-act="save-synth" data-topic="${esc(tag)}" class="primary"${busy}>Save</button>
+          <button type="button" data-act="cancel-synth" data-topic="${esc(tag)}"${busy}>Cancel</button>
         </span>
       </div>
     </div>`;
@@ -969,10 +974,15 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'cancel-synth') { cancelSynthEdit(); return; }
     if (act === 'save-synth') {
+      if (V.synthSaving) return;   // a save is in flight
       const topic = button.dataset.topic;
       const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
       const text = field ? field.value : (V.synthDrafts[topic] || '');
       V.error = null;
+      // Freeze the editor until the answer comes back. Success redraws from
+      // the server value, so anything typed meanwhile would be lost.
+      V.synthSaving = topic;
+      renderContent();
       try {
         await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -983,6 +993,8 @@ $('content').addEventListener('click', async (event) => {
       } catch (error) {
         V.synthDrafts[topic] = text;   // keep what was typed so the save can be retried
         V.error = `Could not save the synthesis: ${error.message}`;
+      } finally {
+        V.synthSaving = null;
       }
       await refreshAll();
       return;
@@ -1276,7 +1288,7 @@ document.addEventListener('keydown', async (event) => {
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key === 'Escape' && V.editing) cancelEdit();
-    if (event.key === 'Escape' && V.synthEditing) cancelSynthEdit();
+    if (event.key === 'Escape' && V.synthEditing && !V.synthSaving) cancelSynthEdit();
     return;
   }
   if (V.view !== 'claims') {

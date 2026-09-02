@@ -336,10 +336,23 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
                 assert await page.input_value("#q") == ""
 
                 # Correcting it by hand clears the stale mark and records the text.
+                # While the save is in flight the editor is frozen, as a claim
+                # form is, so nothing typed meanwhile is lost to the redraw.
+                release_save = asyncio.Event()
+
+                async def hold_save(route):
+                    await release_save.wait()
+                    await route.continue_()
+
+                await page.route("**/api/syntheses/recovery", hold_save)
                 await synth.get_by_role("button", name="edit").click()
                 field = page.locator('textarea[data-synth="recovery"]')
                 await field.fill("Corrected [paper-a-c1].")
                 await page.get_by_role("button", name="Save").click()
+                await page.locator('textarea[data-synth="recovery"]:disabled').wait_for()
+                assert await page.get_by_role("button", name="Cancel").is_disabled()
+                assert await page.get_by_role("button", name="Save").is_disabled()
+                release_save.set()
                 synth = page.locator('.synth[data-topic="recovery"]')
                 await synth.get_by_text("written by hand", exact=False).wait_for()
                 assert await synth.locator(".stale").count() == 0
