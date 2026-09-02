@@ -86,6 +86,48 @@ def _paper(key: str, title: str, *tags: str) -> None:
 
 
 @pytest.mark.browser
+def test_switching_workspaces_hides_other_research_and_survives_reload():
+    _paper("mind", "A consciousness paper")
+    from doxograph import config
+
+    animal = config.create_workspace("Animal locomotion")
+    with config.use_workspace(animal["id"]):
+        _paper("gait", "An animal locomotion paper")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                papers = page.locator("#papers")
+                assert "A consciousness paper" in await papers.inner_text()
+                assert "An animal locomotion paper" not in await papers.inner_text()
+
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await page.get_by_text("An animal locomotion paper", exact=True).wait_for()
+                assert "A consciousness paper" not in await papers.inner_text()
+
+                await page.reload()
+                await page.get_by_text("An animal locomotion paper", exact=True).wait_for()
+                assert await page.locator("#workspace").input_value() == animal["id"]
+                assert "A consciousness paper" not in await papers.inner_text()
+
+                async def name_workspace(dialog):
+                    await dialog.accept("Embodied cognition")
+
+                page.once("dialog", name_workspace)
+                await page.locator("#btn-workspace-add").click()
+                await page.locator("#workspace").select_option(label="Embodied cognition")
+                await page.get_by_text("Nothing here yet", exact=False).wait_for()
+                assert "An animal locomotion paper" not in await papers.inner_text()
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_failed_new_claim_survives_navigation_back_to_its_paper():
     _paper("paper-a", "Paper A")
     _paper("paper-b", "Paper B")

@@ -2,6 +2,16 @@
 
 let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
+let workspaces = [];
+let currentWorkspaceId = null;
+// The native app can receive a Finder/Dock drop while the first state request
+// is still loading. Publish the remembered choice synchronously so that drop
+// does not fall back to the default workspace during startup.
+try {
+  window.doxographWorkspaceId = localStorage.getItem('doxograph-workspace') || 'default';
+} catch (e) {
+  window.doxographWorkspaceId = 'default';
+}
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
 // onto claims one-to-one. newClaim holds a claim being written by hand; it lives
@@ -70,8 +80,12 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-async function api(path, options) {
-  const response = await fetch(path, options);
+async function api(path, options = {}) {
+  const request = { ...options };
+  const headers = new Headers(request.headers || {});
+  if (currentWorkspaceId) headers.set('X-Doxograph-Workspace', currentWorkspaceId);
+  request.headers = headers;
+  const response = await fetch(path, request);
   if (!response.ok) {
     let detail = response.statusText;
     try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
@@ -81,7 +95,10 @@ async function api(path, options) {
 }
 
 async function refresh() {
-  S = await api('/api/state');
+  const requestedWorkspace = currentWorkspaceId;
+  const next = await api('/api/state');
+  if (requestedWorkspace !== currentWorkspaceId) return;
+  S = next;
   render();
 }
 
@@ -91,8 +108,79 @@ async function refresh() {
 // screen and stays clickable. This keeps the open editor's draft across it.
 async function refreshAll() {
   captureOpenEditor();
-  S = await api('/api/state');
+  const requestedWorkspace = currentWorkspaceId;
+  const next = await api('/api/state');
+  if (requestedWorkspace !== currentWorkspaceId) return;
+  S = next;
   renderAll();
+}
+
+function currentWorkspace() {
+  return workspaces.find((workspace) => workspace.id === currentWorkspaceId) || null;
+}
+
+function workspaceQuery() {
+  return `workspace=${encodeURIComponent(currentWorkspaceId || 'default')}`;
+}
+
+function renderWorkspacePicker() {
+  $('workspace').innerHTML = workspaces.map((workspace) =>
+    `<option value="${esc(workspace.id)}">${esc(workspace.name)}</option>`).join('');
+  $('workspace').value = currentWorkspaceId || 'default';
+  const selected = currentWorkspace();
+  document.title = selected ? `${selected.name} — Doxograph` : 'Doxograph';
+  window.doxographWorkspaceId = currentWorkspaceId || 'default';
+}
+
+function resetWorkspaceView() {
+  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
+        kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
+  Object.assign(V, {
+    paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
+    editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
+    error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
+    synthEditing: null, synthDrafts: {}, synthSaving: null,
+  });
+  savingClaims.clear();
+  $('q').value = '';
+  $('kind').value = '';
+  $('only-unreviewed').checked = false;
+  $('group-by-tag').checked = true;
+  closePaperMenu();
+}
+
+async function switchWorkspace(workspaceId) {
+  if (workspaceId === currentWorkspaceId) return;
+  if (savingClaims.size || V.synthSaving) {
+    alert('Wait for the current save to finish before switching workspaces.');
+    renderWorkspacePicker();
+    return;
+  }
+  const hasDraft = V.editing || V.synthEditing || V.newClaim
+    || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
+    || Object.keys(V.synthDrafts).length;
+  if (hasDraft && !confirm('Switch workspaces and discard unsaved edits in this workspace?')) {
+    renderWorkspacePicker();
+    return;
+  }
+  currentWorkspaceId = workspaceId;
+  try { localStorage.setItem('doxograph-workspace', workspaceId); } catch (e) { /* optional */ }
+  resetWorkspaceView();
+  renderWorkspacePicker();
+  await refresh();
+  $('kind').innerHTML = '<option value="">every kind</option>'
+    + S.kinds.map((kind) => `<option value="${esc(kind)}">${esc(kind)}</option>`).join('');
+}
+
+async function loadWorkspaces() {
+  const response = await fetch('/api/workspaces');
+  if (!response.ok) throw new Error('Could not load workspaces');
+  workspaces = (await response.json()).workspaces || [];
+  let remembered = null;
+  try { remembered = localStorage.getItem('doxograph-workspace'); } catch (e) { /* optional */ }
+  currentWorkspaceId = workspaces.some((workspace) => workspace.id === remembered)
+    ? remembered : 'default';
+  renderWorkspacePicker();
 }
 
 // --- filtering ------------------------------------------------------------
@@ -212,7 +300,7 @@ function paperHeader(key) {
     <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')}
       ${p.year ? '· ' + esc(p.year) : ''} ${p.venue ? '· ' + esc(p.venue) : ''}
       · <code>${esc(key)}</code>
-      ${p.has_pdf ? `· <a href="/pdf/${esc(key)}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
+      ${p.has_pdf ? `· <a href="/pdf/${esc(key)}?${workspaceQuery()}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
     <div class="row">
@@ -1214,6 +1302,24 @@ $('tags').addEventListener('click', (event) => {
   renderAll();
 });
 
+$('workspace').addEventListener('change', (event) => switchWorkspace(event.target.value));
+
+$('btn-workspace-add').addEventListener('click', async () => {
+  const name = prompt('Name this workspace (for example, Consciousness or Animal locomotion):');
+  if (!name || !name.trim()) return;
+  try {
+    const result = await api('/api/workspaces', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    workspaces = result.workspaces || workspaces;
+    renderWorkspacePicker();
+    await switchWorkspace(result.workspace.id);
+  } catch (error) {
+    alert(`Could not create workspace: ${error.message}`);
+  }
+});
+
 $('btn-add').addEventListener('click', async () => {
   const text = $('refs').value.trim();
   if (!text) return;
@@ -1248,14 +1354,15 @@ $('btn-retag').addEventListener('click', async () => {
 });
 
 $('btn-export').addEventListener('click', async () => {
+  const selected = currentWorkspace();
   const result = await api('/api/export', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: 'Doxograph' }),
+    body: JSON.stringify({ title: selected ? selected.name : 'Doxograph' }),
   });
   alert(`Written to ${result.path}`);
 });
 
-$('btn-bib').addEventListener('click', () => window.open('/api/bibtex', '_blank'));
+$('btn-bib').addEventListener('click', () => window.open(`/api/bibtex?${workspaceQuery()}`, '_blank'));
 
 $('content').addEventListener('input', (e) => {
   if (e.target.matches('textarea[data-synth]')) V.synthDrafts[e.target.dataset.synth] = e.target.value;
@@ -1374,6 +1481,7 @@ function stateSignature(state) {
 }
 
 async function boot() {
+  await loadWorkspaces();
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
@@ -1382,7 +1490,9 @@ async function boot() {
     const busy = (S.jobs || []).some((j) => ['queued', 'fetching', 'reading'].includes(j.state));
     if (!busy && (V.editing || V.synthEditing)) return;
     try {
+      const requestedWorkspace = currentWorkspaceId;
       const next = await api('/api/state');
+      if (requestedWorkspace !== currentWorkspaceId) return;
       const changed = stateSignature(next) !== stateSignature(S);
       S = next;
       renderJobs();

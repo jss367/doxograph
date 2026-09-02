@@ -46,6 +46,7 @@ enum Uploader {
         _ urls: [URL],
         to baseURL: URL,
         extractNow: Bool,
+        workspace: String = "default",
         completion: @escaping (Result<Int, Error>) -> Void
     ) {
         // Counted from here rather than from the first byte on the wire: the
@@ -77,6 +78,7 @@ enum Uploader {
         request.httpMethod = "POST"
         let boundary = "doxograph-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(workspace, forHTTPHeaderField: "X-Doxograph-Workspace")
 
         // Assembling the body copies every dropped PDF, and drops arrive on the
         // main thread. Doing that here would freeze the window for the length

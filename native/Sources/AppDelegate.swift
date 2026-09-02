@@ -60,8 +60,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         NSApp.activate(ignoringOtherApps: true)
         window.show()
-        Uploader.upload(urls, to: server.baseURL, extractNow: true) { [weak self] result in
-            if case .failure(let error) = result { self?.warn("Upload failed", error.localizedDescription) }
+        window.currentWorkspace { [weak self] workspace in
+            guard let self else { return }
+            Uploader.upload(urls, to: self.server.baseURL, extractNow: true, workspace: workspace) {
+                [weak self] result in
+                if case .failure(let error) = result {
+                    self?.warn("Upload failed", error.localizedDescription)
+                }
+            }
         }
     }
 
