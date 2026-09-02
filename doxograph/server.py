@@ -507,11 +507,12 @@ def remove_tag(name: str) -> dict:
 def find_tensions(body: TensionsBody) -> dict:
     """Queue a pass over every topic where two papers could disagree.
 
-    Topics named in the body are taken as given, even ones with a single paper:
-    the pass returns nothing for them, cheaply, and a client that asks for a
-    topic by name should get an answer about that topic.
+    Topics named in the body are deduplicated and kept only where a tension is
+    possible; a topic with claims from one paper has nothing to find, so it
+    would cost a model call to learn nothing.
     """
-    topics = list(dict.fromkeys(body.topics)) if body.topics else store.tension_topics()
+    possible = store.tension_topics()
+    topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
     if not topics:
         return {"queued": 0}
     job = _new_job(f"tensions in {len(topics)} topics")
