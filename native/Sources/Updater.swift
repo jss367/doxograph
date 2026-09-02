@@ -31,6 +31,13 @@ enum Updater {
 
     private static let queue = DispatchQueue(label: "com.jss367.doxograph.updater")
 
+    /// Where the last fully installed commit of a checkout is remembered. Keyed
+    /// by the checkout, since the command the app runs can be pointed at a
+    /// different one and its commits say nothing about this one's.
+    private static func installedKey(for repository: URL) -> String {
+        "\(updatedShaDefaultsKey):\(repository.resolvingSymlinksInPath().path)"
+    }
+
     // MARK: - Finding the checkout
 
     /// The checkout a `doxograph` command was installed from, judged by
@@ -143,13 +150,13 @@ enum Updater {
         // not a new dependency or a Swift change. Failing that, take where this
         // run starts, so at least a pip or build failure on this run is retried
         // on the next one instead of being read as up to date.
-        if UserDefaults.standard.string(forKey: updatedShaDefaultsKey) == nil {
+        if UserDefaults.standard.string(forKey: Self.installedKey(for: repository)) == nil {
             var baseline = before.output.trimmed
             if let built = builtCommit(), built != baseline,
                git(["merge-base", "--is-ancestor", built, baseline]).succeeded {
                 baseline = built
             }
-            UserDefaults.standard.set(baseline, forKey: updatedShaDefaultsKey)
+            UserDefaults.standard.set(baseline, forKey: Self.installedKey(for: repository))
         }
 
         let pull = git(["pull", "--ff-only"])
@@ -166,13 +173,13 @@ enum Updater {
         // where this run started. When it is not (a rewound checkout, a first
         // update) the recorded commit says nothing about this history.
         var base = before.output.trimmed
-        if let completed = UserDefaults.standard.string(forKey: updatedShaDefaultsKey),
+        if let completed = UserDefaults.standard.string(forKey: Self.installedKey(for: repository)),
            completed != base,
            git(["merge-base", "--is-ancestor", completed, base]).succeeded {
             base = completed
         }
         guard base != head else {
-            UserDefaults.standard.set(head, forKey: updatedShaDefaultsKey)
+            UserDefaults.standard.set(head, forKey: Self.installedKey(for: repository))
             return .success(Outcome(changes: "", appRebuilt: false))
         }
         let range = "\(base)..\(head)"
@@ -216,7 +223,7 @@ enum Updater {
             appRebuilt = true
         }
 
-        UserDefaults.standard.set(head, forKey: updatedShaDefaultsKey)
+        UserDefaults.standard.set(head, forKey: Self.installedKey(for: repository))
         return .success(Outcome(changes: changes, appRebuilt: appRebuilt))
     }
 
