@@ -150,6 +150,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.addButton(withTitle: "Later")
             guard alert.runModal() == .alertFirstButtonReturn else {
                 if ready { window.hideStatus() }
+                // The old bundle keeps running, but the Python is new, and a
+                // server that failed to start may start now.
+                if serverFailed { startServer() }
                 return
             }
             relaunchAfterQuit = true
