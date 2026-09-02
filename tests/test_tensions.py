@@ -124,6 +124,24 @@ def test_a_claim_edited_during_the_model_call_leaves_the_tension_stale():
     assert store.tension_rows()[0]["stale"] is False
 
 
+def test_a_decision_made_during_the_model_call_survives_the_pass():
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "first"}], shown())
+    tid = store.tension_rows()[0]["id"]
+
+    snapshot = shown()                          # a second pass builds its prompt
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 4.6% of rollouts."})
+    store.set_tension_status(tid, "dismissed")  # the reviewer reads the new card and decides
+    result = store.record_tensions("recovery-rate", [
+        {"claims": [a, b], "kind": "contradiction", "note": "about the old text"},
+    ], snapshot)
+    assert result == {"added": 0, "reopened": 0, "kept": 1}
+    [tension] = store.tension_rows()
+    assert tension["status"] == "dismissed"     # the decision is newer than the answer
+    assert tension["note"] == "first"
+    assert tension["stale"] is False
+
+
 def test_changing_a_claims_kind_marks_the_tension_stale():
     a, b, _ = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())

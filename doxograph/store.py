@@ -817,6 +817,12 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
       remake it. A repeat run costs the reviewer nothing.
     - A pair already on file whose claims have changed is refreshed and set
       back to open: the old verdict was about different text.
+    - Unless the change landed while the call was in flight. Then the answer
+      describes text nobody can see any more, and the record on file is left
+      alone, as extraction leaves a claim edited during its call alone: a
+      decision the reviewer made meanwhile against the new text is newer than
+      this answer and must not be reopened by it. `tension_rows` says stale if
+      nobody has re-judged the pair.
     - A new pair is added as open.
     - A pair the model did not return this time is kept. The pass is per topic
       and a claim can carry several topics, so absence from one topic's answer
@@ -865,6 +871,9 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
                     current["topics"].sort()
                 if current.get("fingerprints") == fingerprints:
                     kept += 1
+                    continue
+                if any(fingerprints[i] != claim_fingerprint(live[i]) for i in (a, b)):
+                    kept += 1   # changed during the call: see the docstring
                     continue
                 current.update(kind=kind, note=note, fingerprints=fingerprints,
                                status="open", found=now())
