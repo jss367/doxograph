@@ -40,6 +40,14 @@ enum Uploader {
         return inFlight
     }
 
+    /// Count files before an asynchronous workspace lookup hands them here.
+    /// The matching reserved upload keeps this count held until it settles.
+    static func reserveForUpload(_ urls: [URL]) {
+        counter.lock()
+        inFlight += urls.count
+        counter.unlock()
+    }
+
     /// Uploads the given PDFs. Callable from the main thread — the disk work
     /// happens off it — and `completion` comes back on the main queue.
     static func upload(
@@ -47,6 +55,7 @@ enum Uploader {
         to baseURL: URL,
         extractNow: Bool,
         workspace: String = "default",
+        alreadyReserved: Bool = false,
         completion: @escaping (Result<Int, Error>) -> Void
     ) {
         // Counted from here rather than from the first byte on the wire: the
@@ -54,9 +63,11 @@ enum Uploader {
         // concerned. Every exit below runs `finish` exactly once, and `settled`
         // makes a second call harmless, so the count cannot be left standing.
         let papers = urls.count
-        counter.lock()
-        inFlight += papers
-        counter.unlock()
+        if !alreadyReserved {
+            counter.lock()
+            inFlight += papers
+            counter.unlock()
+        }
         var settled = false
         let finish = { (result: Result<Int, Error>) in
             counter.lock()
