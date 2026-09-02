@@ -293,6 +293,16 @@ def test_api_find_tensions_queues_nothing_without_two_papers_on_a_topic():
         assert client.post("/api/tensions", json={}).json() == {"queued": 0}
 
 
+def test_api_find_tensions_runs_a_topic_named_twice_once(monkeypatch):
+    build_corpus()
+    submitted = []
+    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics: submitted.append(topics))
+    with TestClient(server.app) as client:
+        body = {"topics": ["recovery-rate", "scaling", "recovery-rate"]}
+        assert client.post("/api/tensions", json=body).json() == {"queued": 2}
+    assert submitted == [["recovery-rate", "scaling"]]
+
+
 def test_export_lists_open_and_confirmed_tensions_but_not_dismissed():
     a, b, c = build_corpus()
     store.update_claim("li2025steer", c, {"tags": ["recovery-rate"]})

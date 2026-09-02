@@ -511,7 +511,7 @@ def find_tensions(body: TensionsBody) -> dict:
     the pass returns nothing for them, cheaply, and a client that asks for a
     topic by name should get an answer about that topic.
     """
-    topics = body.topics if body.topics else store.tension_topics()
+    topics = list(dict.fromkeys(body.topics)) if body.topics else store.tension_topics()
     if not topics:
         return {"queued": 0}
     job = _new_job(f"tensions in {len(topics)} topics")
