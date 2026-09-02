@@ -48,15 +48,18 @@ final class ServerController {
 
     func start(onReady: @escaping (URL) -> Void, onFailure: @escaping (Failure) -> Void) {
         queue.async {
-            let result = self.bringUp()
-            DispatchQueue.main.async {
-                switch result {
-                case .success: onReady(self.baseURL)
-                case .failure(let failure): onFailure(failure)
-                // The app is on its way out. Nobody is left to show a window to
-                // or an alert about.
-                case .cancelled: break
-                }
+            self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+        }
+    }
+
+    private func deliver(_ result: Outcome, onReady: @escaping (URL) -> Void, onFailure: @escaping (Failure) -> Void) {
+        DispatchQueue.main.async {
+            switch result {
+            case .success: onReady(self.baseURL)
+            case .failure(let failure): onFailure(failure)
+            // The app is on its way out. Nobody is left to show a window to
+            // or an alert about.
+            case .cancelled: break
             }
         }
     }
@@ -213,6 +216,7 @@ final class ServerController {
     ///
     /// The cancel is one-way, which is what the one caller wants: the app calls
     /// this from `applicationWillTerminate` and never starts a server again.
+    /// `restart()` is the way to stop a server and start another.
     func stop() {
         lock.lock()
         cancelled = true
@@ -220,6 +224,24 @@ final class ServerController {
         lock.unlock()
         guard let started else { return }
         shutDown(started)
+    }
+
+    /// Stop the server this app started so a fresh one can take its place, as
+    /// after an update has changed the code under it. An adopted server is left
+    /// alone, since this app did not start it. Unlike `stop()` this leaves the
+    /// controller usable: the next `start()` walks the ports and spawns again.
+    func restart(onReady: @escaping (URL) -> Void, onFailure: @escaping (Failure) -> Void) {
+        lock.lock()
+        let started = process
+        process = nil
+        lock.unlock()
+        // The shutdown can wait up to ten seconds on a server that is slow to
+        // die, which is too long to hold the main thread. It happens on the
+        // startup queue, in front of the start it makes room for.
+        queue.async {
+            if let started { self.shutDown(started) }
+            self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+        }
     }
 
     private func shutDown(_ process: Process) {
@@ -232,6 +254,10 @@ final class ServerController {
         }
         if exited.wait(timeout: .now() + 5) == .timedOut {
             kill(process.processIdentifier, SIGKILL)
+            // A restart starts its port walk the moment this returns. Until the
+            // old process is gone the walk can still find it answering, adopt
+            // it, and hand the window a server that dies a beat later.
+            _ = exited.wait(timeout: .now() + 5)
         }
     }
 

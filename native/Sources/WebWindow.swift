@@ -77,6 +77,11 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         status.isHidden = false
     }
 
+    /// Take a status message down again without touching the page under it.
+    func hideStatus() {
+        status.isHidden = true
+    }
+
     // MARK: - Navigation
 
     private func isLocal(_ url: URL) -> Bool {

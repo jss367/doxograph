@@ -37,6 +37,7 @@ extension AppDelegate {
     private func appMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(item("About Doxograph", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        menu.addItem(item("Update Doxograph…", #selector(updateDoxograph(_:)), target: self))
         menu.addItem(.separator())
         menu.addItem(item("Hide Doxograph", #selector(NSApplication.hide(_:)), "h"))
         menu.addItem(item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h",

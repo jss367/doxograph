@@ -4,9 +4,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let server = ServerController()
     private let window = WebWindow()
     private var ready = false
+    /// The server was asked to start and did not. Updating is still allowed,
+    /// since a pull may be exactly what fixes it.
+    private var serverFailed = false
     /// PDFs dropped on the Dock icon before the server answered. A drop can
     /// even be what launched the app, so this fills up before the window exists.
     private var pendingDrops: [URL] = []
+    /// An update is in progress; a second one must wait for it.
+    private var updating = false
+    /// The bundle was replaced by an update, and the quit under way should be
+    /// followed by a launch of the new one.
+    private var relaunchAfterQuit = false
+
+    /// Appended to an update's report when the server is not this app's to
+    /// restart, so the new Python is not mistaken for live.
+    private static let adoptedServerNote = """
+
+
+        This app is using a server started elsewhere, so the changes \
+        take effect when that `doxograph serve` is restarted.
+        """
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = buildMenu()
@@ -16,15 +33,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func startServer() {
+        serverFailed = false
         window.showStatus("Starting Doxograph…")
-        server.start(
-            onReady: { [weak self] url in
-                guard let self else { return }
-                self.ready = true
-                self.window.load(url)
-                self.flushPendingDrops()
-            },
-            onFailure: { [weak self] failure in self?.report(failure) })
+        server.start(onReady: serverReady, onFailure: { [weak self] failure in self?.report(failure) })
+    }
+
+    private func serverReady(_ url: URL) {
+        ready = true
+        window.load(url)
+        flushPendingDrops()
     }
 
     // MARK: - Files
@@ -67,9 +84,151 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    // MARK: - Updating
+
+    /// Pull the checkout the app runs from, and restart on top of it.
+    ///
+    /// The app is a launcher over a checkout's venv, so an update is a `git
+    /// pull` there. Python changes are live once the server restarts; a change
+    /// under `native/` means this bundle is stale too, so it is rebuilt and the
+    /// app relaunched. An adopted server is not this app's to restart: the pull
+    /// still happens, and the alert says the terminal has to do the rest.
+    @objc func updateDoxograph(_ sender: Any?) {
+        guard !updating else { return }
+        updating = true
+        window.showStatus("Checking for updates…")
+        // Finding the command can fall back to a login shell, which is slow.
+        DispatchQueue.global().async { [weak self] in
+            let command = Locate.doxographCommand()
+            DispatchQueue.main.async { self?.update(with: command) }
+        }
+    }
+
+    private func update(with command: String?) {
+        guard let command else {
+            updating = false
+            return report(.commandNotFound)
+        }
+        guard let repository = Updater.repository(near: command)
+            ?? Updater.rememberedRepository()
+            ?? chooseRepository() else {
+            updating = false
+            if ready { window.hideStatus() }
+            return
+        }
+        Updater.remember(repository)
+        let ownsServer = server.ownsServer
+        Updater.run(command: command, repository: repository,
+                    progress: { [weak self] text in self?.window.showStatus(text) },
+                    completion: { [weak self] result in self?.finishUpdate(result, ownsServer: ownsServer) })
+    }
+
+    private func finishUpdate(_ result: Result<Updater.Outcome, Updater.Failure>, ownsServer: Bool) {
+        updating = false
+        switch result {
+        case .failure(.step(let name, let output)):
+            if ready { window.hideStatus() }
+            warn("Update failed at \(name)", output.isEmpty ? "It printed nothing." : output)
+
+        case .success(let outcome) where outcome.changes.isEmpty:
+            if ready { window.hideStatus() }
+            inform("Doxograph is up to date.", "")
+            // Nothing new to run, but a start that failed may have failed for
+            // a passing reason, and this is the one button left to press.
+            if serverFailed { startServer() }
+
+        case .success(let outcome) where outcome.appRebuilt:
+            // The new bundle is in place; only a fresh process can run it. The
+            // quit below goes through the usual questions about work in flight,
+            // and the relaunch is spawned only once the quit is actually happening.
+            // Relaunching over an adopted server adopts it again, old Python and
+            // all, so that case carries the same note as a Python-only update.
+            let alert = NSAlert()
+            alert.messageText = "Updated Doxograph. Relaunch to run the new version."
+            alert.informativeText = ownsServer ? outcome.changes : outcome.changes + Self.adoptedServerNote
+            alert.addButton(withTitle: "Relaunch")
+            alert.addButton(withTitle: "Later")
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                if ready { window.hideStatus() }
+                // The old bundle keeps running, but the Python is new, and a
+                // server that failed to start may start now.
+                if serverFailed { startServer() }
+                return
+            }
+            relaunchAfterQuit = true
+            NSApp.terminate(nil)
+
+        case .success(let outcome):
+            if serverFailed {
+                // Nothing is running that the restart could interrupt, and the
+                // pull may be what the failed start was missing. Try again.
+                inform("Updated Doxograph.", outcome.changes)
+                startServer()
+                return
+            }
+            guard ownsServer else {
+                if ready { window.hideStatus() }
+                inform("Updated Doxograph.", outcome.changes + Self.adoptedServerNote)
+                return
+            }
+            // Restarting the server ends whatever it is doing, exactly as
+            // quitting would, so it gets the same question first, with the same
+            // two readings of the upload count for the same reasons.
+            let uploadingBefore = Uploader.uploadsInFlight
+            server.probe { [weak self] probe in
+                guard let self else { return }
+                guard self.mayInterrupt(.restart, probe, ownsServer: true, uploadingBefore: uploadingBefore) else {
+                    if self.ready { self.window.hideStatus() }
+                    self.inform("Updated Doxograph.", outcome.changes + """
+
+
+                        The server is still running the old code. Quit and reopen \
+                        Doxograph to run the new version.
+                        """)
+                    return
+                }
+                self.ready = false
+                self.window.showStatus("Restarting Doxograph…")
+                self.server.restart(
+                    onReady: { [weak self] url in
+                        self?.serverReady(url)
+                        self?.inform("Updated Doxograph.", outcome.changes)
+                    },
+                    onFailure: { [weak self] failure in self?.report(failure) })
+            }
+        }
+    }
+
+    /// Ask where the checkout is, when the command was not installed from one
+    /// the app can recognise.
+    private func chooseRepository() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the doxograph checkout to update (the folder with pyproject.toml)."
+        panel.prompt = "Update"
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        while panel.runModal() == .OK, let url = panel.url {
+            if Updater.isRepository(url) { return url }
+            warn("That is not a doxograph checkout",
+                 "\(url.path) has no pyproject.toml, native/build.sh, or .git.")
+        }
+        return nil
+    }
+
+    private func inform(_ message: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window.window, completionHandler: nil)
+    }
+
     // MARK: - Failure
 
     private func report(_ failure: ServerController.Failure) {
+        serverFailed = true
         switch failure {
         case .commandNotFound:
             window.showStatus("Doxograph is not installed where this app can find it.")
@@ -155,6 +314,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// The server cannot say whose request it is, and guessing wrong the other
     /// way loses a paper, so it errs toward asking.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // An update is a pull, a pip install and a build, and none of them
+        // likes being abandoned half-way. The children are not stopped here:
+        // the next update measures from the last commit that fully installed,
+        // so whatever this one leaves behind is done over. The question is so
+        // the user knows that is what they are choosing.
+        if updating, !confirmQuitWhileUpdating() {
+            relaunchAfterQuit = false
+            return .terminateCancel
+        }
         guard ready else { return .terminateNow }
         // Count the uploads on both sides of the question, because either
         // reading alone can miss work the other sees. The server answers a POST
@@ -172,13 +340,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let uploadingBefore = Uploader.uploadsInFlight
         let ownsServer = server.ownsServer
         server.probe { probe in
-            NSApp.reply(toApplicationShouldTerminate: self.mayQuit(
-                probe, ownsServer: ownsServer, uploadingBefore: uploadingBefore))
+            let quitting = self.mayInterrupt(
+                .quit, probe, ownsServer: ownsServer, uploadingBefore: uploadingBefore)
+            // A relaunch was only ever meant to follow this quit. If the user
+            // keeps the app open, the next quit is an ordinary one and must not
+            // bring the app back.
+            if !quitting { self.relaunchAfterQuit = false }
+            NSApp.reply(toApplicationShouldTerminate: quitting)
         }
         return .terminateLater
     }
 
-    /// Whether to go, given what the server said — or did not say.
+    /// What is about to cut the server's work short. Quitting and restarting
+    /// the server after an update lose the same work, so they ask the same
+    /// question; this only changes the words on it.
+    private enum Interruption {
+        case quit, restart
+
+        var gerund: String { self == .quit ? "Quitting" : "Restarting" }
+        var anyway: String { self == .quit ? "Quit Anyway" : "Restart Anyway" }
+        /// The button that backs out: "Keep Reading" makes sense of a quit,
+        /// while a restart deferred is simply done later.
+        func keep(_ doing: String) -> String { self == .quit ? "Keep \(doing)" : "Later" }
+    }
+
+    /// Whether to go ahead, given what the server said — or did not say.
     ///
     /// A probe that fails is the case this used to get backwards. Reading a
     /// missing answer as a job count of zero turns "I could not find out" into
@@ -192,7 +378,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// connection means nothing is listening, while a timeout means something is
     /// listening and not answering, which is exactly what a server in the middle
     /// of a paper can look like. So a refusal quits, and a silence asks.
-    private func mayQuit(_ probe: ServerController.Probe, ownsServer: Bool, uploadingBefore: Int) -> Bool {
+    private func mayInterrupt(
+        _ action: Interruption, _ probe: ServerController.Probe, ownsServer: Bool, uploadingBefore: Int
+    ) -> Bool {
         let uploadingHere = max(uploadingBefore, Uploader.uploadsInFlight)
         switch probe {
         case .answered(let health):
@@ -201,23 +389,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // does not die with this app.
             let reading = ownsServer ? health.jobs : 0
             guard uploading > 0 || reading > 0 else { return true }
-            return confirmQuit(uploading: uploading, reading: reading)
+            return confirmInterruption(action, uploading: uploading, reading: reading)
         case .unreachable:
             // Nothing is listening, so the server has no work to lose. This
             // app's own upload still might be in flight, and it is about to
             // fail, but it is the one thing here that is known rather than
             // guessed — so it is still worth saying.
             guard uploadingHere > 0 else { return true }
-            return confirmQuit(uploading: uploadingHere, reading: 0)
+            return confirmInterruption(action, uploading: uploadingHere, reading: 0)
         case .unresponsive:
             // Something is on the port and would not say what it is doing. Any
             // count in hand is a floor on work that cannot be seen the rest of,
             // so the honest thing to say is that it is not known — not a number.
-            return confirmQuitNotKnowing()
+            return confirmInterruptionNotKnowing(action)
         }
     }
 
-    /// Asks whether to quit on top of work in progress. True means quit.
+    /// Asks whether to go ahead on top of work in progress. True means go.
     ///
     /// Takes the counts its caller measured instead of measuring again: an
     /// upload that finished a moment ago handed its paper to the server, and
@@ -228,7 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     ///
     /// Always offers the quit, so a count that somehow refuses to fall — a
     /// request that never returns, say — cannot trap the user in their own app.
-    private func confirmQuit(uploading: Int, reading: Int) -> Bool {
+    private func confirmInterruption(_ action: Interruption, uploading: Int, reading: Int) -> Bool {
         guard uploading > 0 || reading > 0 else { return true }
         let alert = NSAlert()
         switch (uploading, reading) {
@@ -236,29 +424,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.messageText = reading == 1
                 ? "Doxograph is still reading a paper."
                 : "Doxograph is still reading \(reading) papers."
-            alert.informativeText = "Quitting now stops the extraction, and the papers stay unread."
-            alert.addButton(withTitle: "Quit Anyway")
-            alert.addButton(withTitle: "Keep Reading")
+            alert.informativeText = "\(action.gerund) now stops the extraction, and the papers stay unread."
+            alert.addButton(withTitle: action.anyway)
+            alert.addButton(withTitle: action.keep("Reading"))
         case (_, 0):
             alert.messageText = uploading == 1
                 ? "Doxograph is still adding a paper."
                 : "Doxograph is still adding \(uploading) papers."
-            alert.informativeText = "Quitting now cancels the upload, and nothing is added."
-            alert.addButton(withTitle: "Quit Anyway")
-            alert.addButton(withTitle: "Keep Adding")
+            alert.informativeText = "\(action.gerund) now cancels the upload, and nothing is added."
+            alert.addButton(withTitle: action.anyway)
+            alert.addButton(withTitle: action.keep("Adding"))
         default:
             alert.messageText = "Doxograph is still adding and reading papers."
             alert.informativeText = """
-                Quitting now cancels the upload and stops the extraction, and \
+                \(action.gerund) now cancels the upload and stops the extraction, and \
                 the papers stay unread.
                 """
-            alert.addButton(withTitle: "Quit Anyway")
-            alert.addButton(withTitle: "Keep Going")
+            alert.addButton(withTitle: action.anyway)
+            alert.addButton(withTitle: action.keep("Going"))
         }
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// Asks whether to quit when the server would not say what it is doing.
+    /// Asks whether to go ahead when the server would not say what it is doing.
     ///
     /// Its own question, not a count of zero or a guess dressed up as one. The
     /// other prompt names what is at stake — a paper being added, two being read
@@ -266,17 +454,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// why the question is being asked at all, so the user can decide with the
     /// same information the app has.
     ///
-    /// Quit Anyway is offered here too, and it is the default button: a server
+    /// Going ahead is offered here too, and it is the default button: a server
     /// that has wedged must not be able to trap someone in the app.
-    private func confirmQuitNotKnowing() -> Bool {
+    private func confirmInterruptionNotKnowing(_ action: Interruption) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Doxograph can’t tell whether it is still working."
         alert.informativeText = """
             The server did not answer. It may be part-way through reading a \
-            paper, and quitting now would stop it and leave the paper unread.
+            paper, and \(action.gerund.lowercased()) now would stop it and leave \
+            the paper unread.
+            """
+        alert.addButton(withTitle: action.anyway)
+        alert.addButton(withTitle: action == .quit ? "Don’t Quit" : "Later")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Asks whether to quit out from under a running update. True means quit.
+    ///
+    /// Nothing is lost for good: the update is measured from the last commit
+    /// that fully installed, so the next one does over whatever this one was
+    /// in the middle of. It is still a pull, a pip install or a build left
+    /// running with no app attached, which is worth a question.
+    private func confirmQuitWhileUpdating() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Doxograph is updating."
+        alert.informativeText = """
+            Quitting now leaves the update unfinished. The next Update \
+            Doxograph… does it over.
             """
         alert.addButton(withTitle: "Quit Anyway")
-        alert.addButton(withTitle: "Don’t Quit")
+        alert.addButton(withTitle: "Keep Updating")
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -284,6 +491,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationWillTerminate(_ notification: Notification) {
         server.stop()
+        if relaunchAfterQuit { relaunch() }
+    }
+
+    /// Open this bundle again once this process is gone. `open` on a bundle
+    /// that is still running only brings it forward, so a shell waits for the
+    /// pid to disappear first.
+    private func relaunch() {
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = [
+            "-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; open \"$2\"", "relaunch",
+            String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundlePath,
+        ]
+        try? helper.run()
     }
 
     // MARK: - View menu
@@ -306,6 +527,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch menuItem.action {
         case #selector(goBack(_:)): return window.webView.canGoBack
         case #selector(reloadPage(_:)), #selector(addPapers(_:)): return ready
+        // Not while the server is still coming up, since the restart after
+        // the pull needs to know whether it is owned. A start that failed is
+        // settled, and updating is then the way out.
+        case #selector(updateDoxograph(_:)): return (ready || serverFailed) && !updating
         default: return true
         }
     }
