@@ -281,6 +281,11 @@ def app_js() -> PlainTextResponse:
     )
 
 
+@app.get("/favicon.png")
+def favicon() -> FileResponse:
+    return FileResponse(STATIC / "favicon.png", media_type="image/png")
+
+
 ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
 
 

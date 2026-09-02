@@ -46,7 +46,8 @@ swiftc \
 cp "$here/Info.plist" "$app/Contents/Info.plist"
 printf '%s' "$command_path" > "$app/Contents/Resources/doxograph-path"
 
-if [[ ! -f "$here/Doxograph.icns" ]]; then
+if [[ ! -f "$here/Doxograph.icns" || "$here/icon.png" -nt "$here/Doxograph.icns" ||
+      "$here/tools/make-icon.swift" -nt "$here/Doxograph.icns" ]]; then
   echo "drawing the icon"
   swift "$here/tools/make-icon.swift" "$here/Doxograph.icns"
 fi
