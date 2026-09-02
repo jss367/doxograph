@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,15 @@ _workspace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "doxograph_workspace", default=DEFAULT_WORKSPACE_ID
 )
 _workspaces_lock = threading.RLock()
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - not on POSIX
+    fcntl = None
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 MODEL = os.environ.get("DOXOGRAPH_MODEL", "claude-opus-5")
 
@@ -71,6 +81,37 @@ def data_dir() -> Path:
 
 def workspaces_path() -> Path:
     return base_data_dir() / "workspaces.json"
+
+
+@contextlib.contextmanager
+def _workspace_file_lock():
+    """Serialize registry read-create-write sequences across processes."""
+    path = base_data_dir() / "locks" / "workspaces.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if fcntl is not None:
+        with path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:  # pragma: no cover - Windows only
+        with path.open("a+") as handle:
+            handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    raise RuntimeError("no file-locking primitive available for the workspace registry")
 
 
 def _workspace_slug(name: str) -> str:
@@ -147,13 +188,20 @@ def create_workspace(name: str) -> dict:
         raise ValueError("workspace name cannot be empty")
     if len(clean) > 80:
         raise ValueError("workspace name must be 80 characters or fewer")
-    with _workspaces_lock:
+    with _workspaces_lock, _workspace_file_lock():
         records = _read_workspace_records()
         used = {item["id"] for item in list_workspaces()}
         base = _workspace_slug(clean)
         key = base
         suffix = 2
-        while key in used:
+        while True:
+            workspace_dir = base_data_dir() / "workspaces" / key
+            if key not in used:
+                try:
+                    workspace_dir.mkdir(parents=True, exist_ok=False)
+                    break
+                except FileExistsError:
+                    pass
             key = f"{base}-{suffix}"
             suffix += 1
         record = {
@@ -161,14 +209,13 @@ def create_workspace(name: str) -> dict:
             "name": clean,
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        (base_data_dir() / "workspaces" / key).mkdir(parents=True, exist_ok=False)
         try:
             records.append(record)
             _write_workspace_records(records)
         except BaseException:
             # The directory is new and still empty here; avoid leaving an
             # unregistered workspace when writing the small registry fails.
-            (base_data_dir() / "workspaces" / key).rmdir()
+            workspace_dir.rmdir()
             raise
     with use_workspace(key):
         ensure_dirs()
@@ -196,7 +243,10 @@ def locks_dir() -> Path:
 
 
 def export_path() -> Path:
-    return Path(os.environ.get("DOXOGRAPH_EXPORT", data_dir() / "export" / "doxograph.html")).expanduser()
+    override = os.environ.get("DOXOGRAPH_EXPORT")
+    if override and workspace_id() == DEFAULT_WORKSPACE_ID:
+        return Path(override).expanduser()
+    return data_dir() / "export" / "doxograph.html"
 
 
 def ensure_dirs() -> None:

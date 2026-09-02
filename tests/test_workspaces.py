@@ -1,8 +1,20 @@
 """Workspace isolation across storage, requests, and queued work."""
 
+import multiprocessing
+import os
+
 from fastapi.testclient import TestClient
 
 from doxograph import config, server, store
+
+
+def _create_workspace_in_process(data_dir: str, start, results) -> None:
+    os.environ["DOXOGRAPH_DATA"] = data_dir
+    start.wait()
+    try:
+        results.put(("ok", config.create_workspace("Consciousness")["id"]))
+    except BaseException as exc:
+        results.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
 def test_existing_corpus_is_the_default_and_new_workspaces_are_isolated():
@@ -94,3 +106,38 @@ def test_duplicate_workspace_names_receive_distinct_stable_ids():
 
     assert first["id"] == "consciousness"
     assert second["id"] == "consciousness-2"
+
+
+def test_concurrent_processes_cannot_overwrite_workspace_registry():
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_create_workspace_in_process,
+            args=(str(config.base_data_dir()), start, results),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    outcomes = [results.get(timeout=10) for _ in processes]
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    assert sorted(outcomes) == [("ok", "consciousness"), ("ok", "consciousness-2")]
+    assert [workspace["id"] for workspace in config.list_workspaces()] == [
+        "default", "consciousness", "consciousness-2",
+    ]
+
+
+def test_named_workspace_ignores_default_export_override(monkeypatch, tmp_path):
+    override = tmp_path / "configured.html"
+    monkeypatch.setenv("DOXOGRAPH_EXPORT", str(override))
+    assert config.export_path() == override
+
+    animal = config.create_workspace("Animal locomotion")
+    with config.use_workspace(animal["id"]):
+        assert config.export_path() == config.data_dir() / "export" / "doxograph.html"

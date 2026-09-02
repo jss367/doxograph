@@ -123,7 +123,7 @@ below. Named workspaces repeat that same structure under
 `workspaces/<workspace-id>/`; `workspaces.json` records their display names.
 Command-line commands operate on the Default workspace.
 
-```
+```text
 workspaces.json       named workspace registry
 workspaces/<id>/      an independent named corpus
 papers/<key>.json    one paper and its claims
