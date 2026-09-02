@@ -181,14 +181,29 @@ def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
 
 def _run_tensions(job: dict, topics: list[str]) -> None:
     try:
-        added = reopened = 0
+        added = reopened = failed = 0
+        last_failure = ""
         for index, topic in enumerate(topics, 1):
             _set(job, state="reading", detail=f"{index} of {len(topics)}: {topic}")
-            result = extract.find_tensions(topic)
+            # One topic's refusal or bad answer must not cost the topics after
+            # it: they run in a fixed order, so an early topic that always
+            # fails would keep the later ones from ever being read. Go on, as
+            # the command line does, and say how many did not finish.
+            try:
+                result = extract.find_tensions(topic)
+            except Exception as exc:
+                failed += 1
+                last_failure = f"{topic}: {type(exc).__name__}: {exc}"
+                traceback.print_exc()
+                continue
             added += result["added"]
             reopened += result["reopened"]
         summary = f"{added} new" + (f", {reopened} reopened" if reopened else "")
-        _set(job, state="done", detail=f"{len(topics)} topics, {summary}")
+        if failed:
+            _set(job, state="error",
+                 detail=f"{failed} of {len(topics)} topics failed, {summary}; {last_failure}")
+        else:
+            _set(job, state="done", detail=f"{len(topics)} topics, {summary}")
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()

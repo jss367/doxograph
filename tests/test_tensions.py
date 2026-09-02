@@ -356,6 +356,24 @@ def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_top
     assert submitted == [["recovery-rate"]]
 
 
+def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
+    asked = []
+
+    def find(topic):
+        asked.append(topic)
+        if topic == "recovery-rate":
+            raise RuntimeError("tension pass refused for recovery-rate: no")
+        return {"added": 2, "reopened": 1, "kept": 0, "returned": 3}
+
+    monkeypatch.setattr(extract, "find_tensions", find)
+    job = server._new_job("tensions in 2 topics")
+    server._run_tensions(job, ["recovery-rate", "scaling"])
+    assert asked == ["recovery-rate", "scaling"]          # the failure did not end the pass
+    assert job["state"] == "error"
+    assert job["detail"] == ("1 of 2 topics failed, 2 new, 1 reopened; "
+                             "recovery-rate: RuntimeError: tension pass refused for recovery-rate: no")
+
+
 def test_export_lists_open_and_confirmed_tensions_but_not_dismissed():
     a, b, c = build_corpus()
     store.update_claim("li2025steer", c, {"tags": ["recovery-rate"]})
