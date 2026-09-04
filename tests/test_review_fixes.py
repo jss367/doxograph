@@ -3079,3 +3079,88 @@ def test_a_cross_site_read_is_left_alone():
     with TestClient(server.app) as client:
         assert client.get("/api/health",
                           headers={"Origin": "https://evil.example.com"}).status_code == 200
+
+
+# --- the same-origin test cannot be made of the request's own headers -----
+#
+# Comparing `Origin` against `Host` only asks a caller to agree with itself. A
+# page on a hostname whose DNS is rebound to 127.0.0.1 reaches this server with
+# both headers set to that hostname, so the comparison passes and the check
+# that exists to stop it waves it through. Trust comes from where the server
+# listens instead, which the caller cannot influence.
+
+@pytest.fixture
+def bound_nowhere_in_particular(monkeypatch):
+    """The default: nothing published beyond the loopback interface."""
+    monkeypatch.setattr(server, "_published_origins", frozenset())
+    monkeypatch.setattr(server, "_bound_to_every_address", False)
+
+
+def test_a_rebound_hostname_cannot_pose_as_the_page(queued_jobs, bound_nowhere_in_particular):
+    """`Host` says what the attacker wants it to say, so it cannot be evidence."""
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/upload",
+            files={"files": ("paper.pdf", b"%PDF-1.4 ...", "application/pdf")},
+            headers={"Origin": "http://evil.example.com", "Host": "evil.example.com"},
+        )
+    assert response.status_code == 403
+    assert queued_jobs == [], "a rebound hostname queued an upload"
+
+
+def test_a_rebound_hostname_cannot_delete_a_paper(bound_nowhere_in_particular):
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app) as client:
+        response = client.request(
+            "DELETE", "/api/papers/doe2026study",
+            headers={"Origin": "http://evil.example.com", "Host": "evil.example.com"},
+        )
+    assert response.status_code == 403
+    assert store.load_paper("doe2026study")["title"] == "A Study"
+
+
+def test_every_spelling_of_the_loopback_page_is_allowed(bound_nowhere_in_particular):
+    """The browser may have been pointed at any of these; all are this machine."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    for origin in ("http://127.0.0.1:8765", "http://localhost:8765", "http://[::1]:8765"):
+        with TestClient(server.app) as client:
+            response = client.patch("/api/papers/doe2026study", json={"notes": origin},
+                                    headers={"Origin": origin})
+        assert response.status_code == 200, origin
+
+
+def test_a_hostname_that_merely_contains_localhost_is_refused(bound_nowhere_in_particular):
+    """`localhost.evil.example.com` is a name the attacker owns, not this machine."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app) as client:
+        response = client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                                headers={"Origin": "http://localhost.evil.example.com"})
+    assert response.status_code == 403
+
+
+def test_the_address_serve_published_is_trusted(bound_nowhere_in_particular):
+    """`serve --host` is documented, so the page it serves has to keep working."""
+    server.trust_bind("192.168.1.5", 8765)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app) as client:
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "http://192.168.1.5:8765"}).status_code == 200
+        # Neither another address on the same network nor the same address on
+        # another port is where this page came from.
+        for origin in ("http://192.168.1.6:8765", "http://192.168.1.5:9999"):
+            assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                                headers={"Origin": origin}).status_code == 403, origin
+
+
+def test_a_wildcard_bind_still_refuses_a_mismatched_origin(bound_nowhere_in_particular):
+    """Every address is in play, so this falls back to the weaker comparison --
+    but only because the operator asked to be reachable from anywhere."""
+    server.trust_bind("0.0.0.0", 8765)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app) as client:
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "http://192.168.1.5:8765",
+                                     "Host": "192.168.1.5:8765"}).status_code == 200
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "http://evil.example.com",
+                                     "Host": "192.168.1.5:8765"}).status_code == 403

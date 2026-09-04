@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import functools
+import os
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import Body, FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
@@ -89,6 +91,86 @@ class CountArrivingRequests:
                 _requests_arriving -= 1
 
 
+#: Carries the address `serve()` bound to into a `--reload` subprocess, which
+#: re-imports this module instead of calling `serve()` again and would otherwise
+#: fall back to loopback-only and refuse the page's own writes.
+BIND_ENV = "DOXOGRAPH_BIND"
+
+#: Origins a page this server sent can legitimately carry beyond the loopback
+#: ones, filled in when `serve()` was told to bind somewhere else. Empty under
+#: `uvicorn doxograph.server:app`, which binds the loopback interface anyway.
+_published_origins: frozenset[str] = frozenset()
+
+#: True when the bind was a wildcard address, where the set above cannot be
+#: written down. See `_origin_is_our_own`.
+_bound_to_every_address = False
+
+
+def _is_loopback(hostname: str) -> bool:
+    """Whether a URL's host part names this machine's loopback interface."""
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def trust_bind(host: str, port: int) -> None:
+    """Record where the server is listening, so its own page is recognised.
+
+    Loopback needs no recording; it is trusted always, because it is where the
+    app runs unless someone deliberately says otherwise.
+    """
+    global _published_origins, _bound_to_every_address
+    host = host.strip("[]")
+    # `0.0.0.0` and `::` are the whole point of `--host`: publish on every
+    # address this machine has. Which of them the browser then typed is not
+    # knowable here, so the set cannot be built.
+    _bound_to_every_address = host in {"0.0.0.0", "::", ""}
+    if _bound_to_every_address or _is_loopback(host):
+        _published_origins = frozenset()
+        return
+    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    _published_origins = frozenset({f"http://{authority}", f"https://{authority}"})
+
+
+def _trust_bind_from_environment() -> None:
+    bind = os.environ.get(BIND_ENV, "")
+    host, _, port = bind.rpartition(":")
+    if host and port.isdigit():
+        trust_bind(host, int(port))
+
+
+_trust_bind_from_environment()
+
+
+def _origin_is_our_own(origin: str, host: str) -> bool:
+    """Whether `origin` is an origin this server could itself have served from.
+
+    The test cannot be "does `Origin` match `Host`", however natural that reads.
+    Both headers come from the request, so the comparison only asks the caller
+    to agree with itself: a page on `evil.example.com` whose name has been
+    rebound to `127.0.0.1` reaches this server with both set to
+    `evil.example.com`, and sails through a check that is supposed to stop it.
+
+    So trust is derived from where this server listens instead. That is the
+    loopback interface, and a page the browser fetched from it has a loopback
+    origin whatever DNS was told; the rebound page carries its own name and is
+    refused. `serve --host` can publish elsewhere, and `trust_bind` records that
+    address so the page served from it is recognised too.
+    """
+    if origin in _published_origins:
+        return True
+    if _is_loopback(urlsplit(origin).hostname or ""):
+        return True
+    # A wildcard bind answers on every address this machine has, and none of
+    # them are written down, so this falls back to comparing the two
+    # request-supplied headers -- weak, for the reason above, but it is the
+    # operator who asked to be reachable from anywhere.
+    return _bound_to_every_address and origin in (f"http://{host}", f"https://{host}")
+
+
 class RejectCrossSiteRequests:
     """Refuse a mutating request that a page on another site sent.
 
@@ -98,8 +180,9 @@ class RejectCrossSiteRequests:
     and is held back by the preflight it cannot answer. Any page open in any
     tab could therefore drop a PDF into the corpus of a running server.
 
-    A browser sets `Origin` on every cross-origin request, so an origin that is
-    not this server's own is the whole test. A request with no `Origin` is left
+    A browser sets `Origin` on every request that is not a plain read, so an
+    origin that is not one this server could have served from is the whole test;
+    `_origin_is_our_own` says which those are. A request with no `Origin` is left
     alone: curl, the CLI and the macOS app's uploader are not a browser acting
     for somebody else's page, which is the only thing this is here for.
 
@@ -116,7 +199,7 @@ class RejectCrossSiteRequests:
         headers = dict(scope.get("headers") or [])
         origin = headers.get(b"origin", b"").decode("utf-8", "replace")
         host = headers.get(b"host", b"").decode("utf-8", "replace")
-        if origin and origin not in (f"http://{host}", f"https://{host}"):
+        if origin and not _origin_is_our_own(origin, host):
             response = JSONResponse(
                 {"detail": f"cross-site request from {origin} refused"}, status_code=403
             )
@@ -827,4 +910,6 @@ def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> No
     import uvicorn
 
     config.ensure_dirs()
+    trust_bind(host, port)
+    os.environ[BIND_ENV] = f"{host}:{port}"
     uvicorn.run("doxograph.server:app" if reload else app, host=host, port=port, reload=reload)
