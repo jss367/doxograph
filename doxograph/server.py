@@ -161,15 +161,24 @@ def _is_our_own(authority: tuple[str, int | None], bound_port: int | None) -> bo
     The scheme is deliberately not part of the comparison. A `Host` header does
     not carry one, and the same server behind a TLS terminator is still the same
     server; the port is what distinguishes it from its neighbours.
+
+    An authority the operator published is consulted first, before the loopback
+    rule, so that a name like `https://localhost` in front of a backend on
+    another port is answered for rather than silently dropped for failing the
+    bound-port comparison. That ordering costs nothing in safety:
+    `_published_authorities` is written only from the operator's own
+    environment and the host `serve()` was given, never from a request.
     """
     hostname, port = authority
     if not hostname:
         return False
+    if authority in _published_authorities:
+        return True
     if _is_loopback(hostname):
         # No `server` in the scope -- a Unix socket, say -- leaves no port to
         # compare against, and then being loopback is all there is to go on.
         return bound_port is None or port == bound_port
-    return authority in _published_authorities
+    return False
 
 
 def _authorities_from_environment() -> set[tuple[str, int | None]]:

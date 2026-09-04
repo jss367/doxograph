@@ -3258,3 +3258,41 @@ def test_a_wildcard_bind_trusts_the_name_the_operator_published(monkeypatch,
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
                             headers={"Origin": "http://192.168.1.6:8765",
                                      "Host": "192.168.1.6:8765"}).status_code == 403
+
+
+def test_a_published_loopback_name_beats_the_bound_port_rule(monkeypatch,
+                                                             bound_nowhere_in_particular):
+    """A TLS terminator on `localhost:443` in front of a backend on 8765.
+
+    The loopback rule compares against the port the socket reports, which is
+    the backend's, so the published name fails it -- and the operator's own
+    `PUBLISHED_ORIGINS_ENV` has to be consulted first, or it is accepted at
+    startup and then quietly ignored on every request.
+    """
+    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV, "https://localhost, http://localhost")
+    server.trust_bind("127.0.0.1", 8765)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "https://localhost"}).status_code == 200
+        # And the same name as the `Host` the proxy passed along, which carries
+        # no scheme and so is read against the request's own.
+        assert client.get("/api/state", headers={"Host": "localhost"}).status_code == 200
+
+
+def test_an_unpublished_loopback_port_is_still_refused(monkeypatch,
+                                                       bound_nowhere_in_particular):
+    """Consulting the published names first must not widen loopback generally.
+
+    `localhost:3000` is another program on this machine and another origin; it
+    is trusted only if the operator named it, which is what pins the published
+    check to going *before* the bound-port rule rather than instead of it.
+    """
+    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV, "https://localhost")
+    server.trust_bind("127.0.0.1", 8765)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "http://localhost:3000"}).status_code == 403
+        assert client.get("/api/state", headers={"Host": "localhost:3000"}).status_code == 403
+    assert store.load_paper("doe2026study").get("notes") != "n"
