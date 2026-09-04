@@ -42,7 +42,7 @@ def test_workspace_api_scopes_state_and_downloads():
         store.save_paper(store.new_paper("gait", title="Gait"))
         store.pdf_path("gait").write_bytes(b"%PDF-1.4\n")
 
-    client = TestClient(server.app)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
     listed = client.get("/api/workspaces").json()["workspaces"]
     assert [(item["id"], item["name"]) for item in listed] == [
         ("default", "Default workspace"),
@@ -159,7 +159,7 @@ def test_malformed_registry_is_not_overwritten_by_workspace_creation():
 
 def test_malformed_registry_does_not_block_health_or_app_shell():
     config.workspaces_path().write_text("{not valid json", encoding="utf-8")
-    client = TestClient(server.app)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
 
     assert client.get("/api/health").status_code == 200
     assert client.get("/").status_code == 200

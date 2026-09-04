@@ -96,13 +96,24 @@ class CountArrivingRequests:
 #: fall back to loopback-only and refuse the page's own writes.
 BIND_ENV = "DOXOGRAPH_BIND"
 
-#: Origins a page this server sent can legitimately carry beyond the loopback
-#: ones, filled in when `serve()` was told to bind somewhere else. Empty under
-#: `uvicorn doxograph.server:app`, which binds the loopback interface anyway.
-_published_origins: frozenset[str] = frozenset()
+#: Where an operator who published this server has said its page really lives:
+#: a comma-separated list of origins, or bare `host:port` authorities. Needed
+#: only for a wildcard bind, where the name the browser typed cannot be read off
+#: the socket and must not be taken from the request. See `trust_bind`.
+PUBLISHED_ORIGINS_ENV = "DOXOGRAPH_PUBLISHED_ORIGINS"
 
-#: True when the bind was a wildcard address, where the set above cannot be
-#: written down. See `_origin_is_our_own`.
+#: The port a scheme means when an authority does not spell one out. A `Host`
+#: header carries no scheme of its own, so the request's scheme does that work.
+DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+
+#: `(hostname, port)` pairs this server answers for besides the loopback ones,
+#: filled in from where `serve()` bound and from `PUBLISHED_ORIGINS_ENV`. Empty
+#: under `uvicorn doxograph.server:app`, which binds the loopback interface.
+_published_authorities: frozenset[tuple[str, int | None]] = frozenset()
+
+#: True when the bind was a wildcard address. Nothing is trusted on account of
+#: it; it only decides whether `serve()` warns that the server has been
+#: published without anyone saying under what name.
 _bound_to_every_address = False
 
 
@@ -116,75 +127,126 @@ def _is_loopback(hostname: str) -> bool:
         return False
 
 
+def _origin_authority(origin: str) -> tuple[str, int | None]:
+    """An origin as the `(hostname, port)` pair it names, the port made explicit.
+
+    `urlsplit` does the fiddly parts: lowercasing the name, unwrapping the
+    brackets around an IPv6 literal, and raising rather than guessing when the
+    port is not a number. A port the origin leaves out is the one its scheme
+    implies, so `http://localhost` and `http://localhost:80` are the same place.
+    """
+    split = urlsplit(origin)
+    try:
+        hostname, port = split.hostname or "", split.port
+    except ValueError:
+        return "", None
+    return hostname, port if port is not None else DEFAULT_PORTS.get(split.scheme)
+
+
+def _host_authority(host: str, scheme: str) -> tuple[str, int | None]:
+    """A `Host` header as the same pair. It has no scheme, so it is lent one."""
+    return _origin_authority(f"{scheme}://{host}")
+
+
+def _is_our_own(authority: tuple[str, int | None], bound_port: int | None) -> bool:
+    """Whether an authority is one this server could itself be answering for.
+
+    Trust is derived from where this server listens, never from what a request
+    says about itself. Loopback is where the app runs unless someone
+    deliberately says otherwise, and `bound_port` -- read off the listening
+    socket, so no client can influence it -- stops that trust from spreading to
+    every other program on this machine: `http://localhost:3000` is a different
+    origin, and a page served from it is a different site.
+
+    The scheme is deliberately not part of the comparison. A `Host` header does
+    not carry one, and the same server behind a TLS terminator is still the same
+    server; the port is what distinguishes it from its neighbours.
+    """
+    hostname, port = authority
+    if not hostname:
+        return False
+    if _is_loopback(hostname):
+        # No `server` in the scope -- a Unix socket, say -- leaves no port to
+        # compare against, and then being loopback is all there is to go on.
+        return bound_port is None or port == bound_port
+    return authority in _published_authorities
+
+
+def _authorities_from_environment() -> set[tuple[str, int | None]]:
+    """The authorities `PUBLISHED_ORIGINS_ENV` names, ignoring the unparseable."""
+    published = set()
+    for item in os.environ.get(PUBLISHED_ORIGINS_ENV, "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        authority = _origin_authority(item) if "//" in item else _host_authority(item, "http")
+        if authority[0]:
+            published.add(authority)
+    return published
+
+
 def trust_bind(host: str, port: int) -> None:
     """Record where the server is listening, so its own page is recognised.
 
-    Loopback needs no recording; it is trusted always, because it is where the
-    app runs unless someone deliberately says otherwise.
+    Loopback needs no recording; it is trusted always, against whatever port the
+    socket reports. A wildcard bind cannot be recorded either: `0.0.0.0` and
+    `::` are the whole point of `--host`, publishing on every address this
+    machine has, and which of them the browser then typed is not knowable from
+    the socket. It is emphatically not knowable from the request's own headers,
+    which is where a rebound page would like it to be read from, so nothing is
+    inferred and the operator says it themselves via `PUBLISHED_ORIGINS_ENV`.
     """
-    global _published_origins, _bound_to_every_address
+    global _published_authorities, _bound_to_every_address
     host = host.strip("[]")
-    # `0.0.0.0` and `::` are the whole point of `--host`: publish on every
-    # address this machine has. Which of them the browser then typed is not
-    # knowable here, so the set cannot be built.
     _bound_to_every_address = host in {"0.0.0.0", "::", ""}
-    if _bound_to_every_address or _is_loopback(host):
-        _published_origins = frozenset()
-        return
-    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-    _published_origins = frozenset({f"http://{authority}", f"https://{authority}"})
+    published = _authorities_from_environment()
+    if not _bound_to_every_address and not _is_loopback(host):
+        published.add((host.lower(), port))
+    _published_authorities = frozenset(published)
 
 
 def _trust_bind_from_environment() -> None:
+    global _published_authorities
     bind = os.environ.get(BIND_ENV, "")
     host, _, port = bind.rpartition(":")
     if host and port.isdigit():
         trust_bind(host, int(port))
+    else:
+        _published_authorities = frozenset(_authorities_from_environment())
 
 
 _trust_bind_from_environment()
 
 
-def _origin_is_our_own(origin: str, host: str) -> bool:
-    """Whether `origin` is an origin this server could itself have served from.
-
-    The test cannot be "does `Origin` match `Host`", however natural that reads.
-    Both headers come from the request, so the comparison only asks the caller
-    to agree with itself: a page on `evil.example.com` whose name has been
-    rebound to `127.0.0.1` reaches this server with both set to
-    `evil.example.com`, and sails through a check that is supposed to stop it.
-
-    So trust is derived from where this server listens instead. That is the
-    loopback interface, and a page the browser fetched from it has a loopback
-    origin whatever DNS was told; the rebound page carries its own name and is
-    refused. `serve --host` can publish elsewhere, and `trust_bind` records that
-    address so the page served from it is recognised too.
-    """
-    if origin in _published_origins:
-        return True
-    if _is_loopback(urlsplit(origin).hostname or ""):
-        return True
-    # A wildcard bind answers on every address this machine has, and none of
-    # them are written down, so this falls back to comparing the two
-    # request-supplied headers -- weak, for the reason above, but it is the
-    # operator who asked to be reachable from anywhere.
-    return _bound_to_every_address and origin in (f"http://{host}", f"https://{host}")
-
-
 class RejectCrossSiteRequests:
-    """Refuse a mutating request that a page on another site sent.
+    """Refuse a request another site sent, or one addressed to another name.
 
-    `/api/upload` is the one route reachable this way. A multipart POST is a
-    "simple" request, so a browser sends it across origins without asking
-    permission first, while every other mutating route here takes a JSON body
-    and is held back by the preflight it cannot answer. Any page open in any
-    tab could therefore drop a PDF into the corpus of a running server.
+    Two checks, and the first is the one that carries the weight. A page on
+    `evil.example.com` whose name has been rebound to `127.0.0.1` reaches this
+    server over a connection the browser itself considers same-origin -- that is
+    precisely what DNS rebinding buys, and it means the same-origin policy does
+    not save us: the page can read every reply, so `/api/state` hands it the
+    corpus and `/pdf/{key}` hands it the papers. Nor can it be caught by
+    comparing `Origin` against `Host`, since both come from the request and the
+    rebound page sets both to its own name; that comparison only asks a caller
+    to agree with itself.
 
-    A browser sets `Origin` on every request that is not a plain read, so an
-    origin that is not one this server could have served from is the whole test;
-    `_origin_is_our_own` says which those are. A request with no `Origin` is left
-    alone: curl, the CLI and the macOS app's uploader are not a browser acting
-    for somebody else's page, which is the only thing this is here for.
+    What gives the page away is the one thing it cannot change: the name it
+    asked for. The browser puts that in `Host`, so every request, reads
+    included, has to be addressed to an authority this server actually answers
+    for -- and `_is_our_own` works that out from the listening socket rather
+    than from the request.
+
+    The second check is the ordinary cross-site one, for a page that is honest
+    about who it is. `/api/upload` is the route reachable that way: a multipart
+    POST is a "simple" request, so a browser sends it across origins without
+    asking permission first, while every other mutating route here takes a JSON
+    body and is held back by the preflight it cannot answer. A browser sets
+    `Origin` on every request that is not a plain read, and an origin is a
+    scheme, a host and a port, so a page on another loopback port is another
+    site however local it is. A request with no `Origin` is left alone: curl,
+    the CLI and the macOS app's uploader are not a browser acting for somebody
+    else's page, which is the only thing that check is for.
 
     Outermost of the middlewares, so a refused request is never counted as work
     in flight and never selects a workspace.
@@ -194,17 +256,35 @@ class RejectCrossSiteRequests:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("method", "GET") in SAFE_METHODS:
+        if scope["type"] != "http":
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers") or [])
-        origin = headers.get(b"origin", b"").decode("utf-8", "replace")
+        scheme = scope.get("scheme") or "http"
+        bound_port = (scope.get("server") or (None, None))[1]
         host = headers.get(b"host", b"").decode("utf-8", "replace")
-        if origin and not _origin_is_our_own(origin, host):
-            response = JSONResponse(
-                {"detail": f"cross-site request from {origin} refused"}, status_code=403
+        if not _is_our_own(_host_authority(host, scheme), bound_port):
+            return await self._refuse(
+                f"request addressed to {host!r} refused: not a name this server answers for",
+                scope, receive, send,
             )
-            return await response(scope, receive, send)
+        if scope.get("method", "GET") in SAFE_METHODS:
+            return await self.app(scope, receive, send)
+        origin = headers.get(b"origin", b"").decode("utf-8", "replace")
+        if origin and not _is_our_own(_origin_authority(origin), bound_port):
+            return await self._refuse(
+                f"cross-site request from {origin} refused", scope, receive, send
+            )
         return await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _refuse(detail: str, scope, receive, send):
+        # 403 rather than 421 Misdirected Request, which fits the wording but
+        # invites an HTTP/2 client to retry on a fresh connection -- reaching
+        # the same refusal, since the objection is to the request, not to the
+        # route it took. Both refusals here say the same thing anyway: this came
+        # from somewhere this server does not serve.
+        response = JSONResponse({"detail": detail}, status_code=403)
+        return await response(scope, receive, send)
 
 
 class SelectWorkspace:
@@ -912,4 +992,14 @@ def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> No
     config.ensure_dirs()
     trust_bind(host, port)
     os.environ[BIND_ENV] = f"{host}:{port}"
+    if _bound_to_every_address and not _published_authorities:
+        # Silence here would be the wrong kind: the operator asked to be
+        # reachable from anywhere, and writes from anywhere but this machine
+        # will be refused until they say what name the page is served under.
+        print(
+            f"warning: --host {host} publishes on every address, but the name a browser\n"
+            f"         will use cannot be read off the socket and is not taken from the\n"
+            f"         request. Only loopback is trusted until you set, for example,\n"
+            f"         {PUBLISHED_ORIGINS_ENV}=http://this-machine.local:{port}"
+        )
     uvicorn.run("doxograph.server:app" if reload else app, host=host, port=port, reload=reload)

@@ -33,7 +33,7 @@ def paper_with_proposals() -> None:
 
 def test_discarding_a_proposal_keeps_it_out_of_the_vocabulary():
     paper_with_proposals()
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/papers/doe2026study/proposed-tags", json={"discard": ["unwanted"]}
         )
@@ -45,7 +45,7 @@ def test_discarding_a_proposal_keeps_it_out_of_the_vocabulary():
 
 def test_accepting_a_proposal_adds_it_with_its_description():
     paper_with_proposals()
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/papers/doe2026study/proposed-tags", json={"accept": ["wanted"]}
         )
@@ -56,7 +56,7 @@ def test_accepting_a_proposal_adds_it_with_its_description():
 
 def test_accept_and_discard_in_one_request():
     paper_with_proposals()
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.post(
             "/api/papers/doe2026study/proposed-tags",
             json={"accept": ["wanted"], "discard": ["unwanted"]},
@@ -67,7 +67,7 @@ def test_accept_and_discard_in_one_request():
 
 def test_unknown_proposal_names_are_ignored():
     paper_with_proposals()
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/papers/doe2026study/proposed-tags", json={"accept": ["never-proposed"]}
         )
@@ -261,7 +261,7 @@ def test_add_claim_honors_an_explicit_reviewed_flag():
 def test_creating_a_claim_through_the_api_stores_the_whole_patch():
     store.save_paper(store.new_paper("doe2026study"))
     store.add_tag("alpha")
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/papers/doe2026study/claims", json={
             "text": "A holds for B.", "kind": "method", "strength": "headline",
             "tags": ["alpha"], "evidence": "n = 10", "quote": "verbatim", "locator": "p. 1",
@@ -668,7 +668,7 @@ def test_concurrent_tag_accepts_both_land():
     start = threading.Barrier(2)
     errors = []
 
-    client = TestClient(server.app)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
 
     def accept(key, tag):
         try:
@@ -771,7 +771,7 @@ def test_rename_and_accept_do_not_deadlock():
 
     def accept():
         try:
-            with TestClient(server.app) as client:
+            with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
                 client.post("/api/papers/doe2026study/proposed-tags", json={"accept": ["fresh"]})
         except Exception as exc:
             errors.append(exc)
@@ -2154,7 +2154,7 @@ def test_a_paper_deleted_mid_listing_does_not_fail_the_listing(monkeypatch):
     monkeypatch.setattr(store, "paper_keys", lambda: real_keys() + ["gone2026missing"])
     assert [p["key"] for p in store.all_papers()] == ["doe2026study"]
 
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/state").status_code == 200
 
 
@@ -2304,7 +2304,7 @@ def test_an_upload_is_staged_on_disk_not_held_in_memory(monkeypatch):
                         lambda fn, job, staged, name, extract_now: handed.append((staged, name)))
 
     body = b"%PDF-1.4\n" + b"x" * 200_000
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/upload?extract_now=false",
                                files={"files": ("big.pdf", body, "application/pdf")})
 
@@ -2416,7 +2416,7 @@ def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
     monkeypatch.setattr(server._pool, "submit",
                         lambda fn, job, staged, name, extract_now: staged.unlink(missing_ok=True))
 
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/upload?extract_now=false",
                                files={"files": ("big.pdf", b"%PDF-1.4\n" + b"x" * 100_000)})
 
@@ -2818,7 +2818,7 @@ def test_removing_a_paper_deletes_all_of_its_remote_uploads(monkeypatch, paper_w
     api = FilesClient()
     monkeypatch.setattr(extract, "client", lambda: api)
 
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.delete(f"/api/papers/{paper_with_pdf}")
 
     assert response.status_code == 200
@@ -2946,7 +2946,7 @@ def test_an_institutional_author_keeps_its_name():
 def test_a_paper_patch_refuses_a_year_that_is_not_a_number():
     """A string year sorted against every other paper's number and broke export."""
     store.save_paper(store.new_paper("doe2026study", title="A Study", year=2026))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"year": "not a year"}).status_code == 422
         assert client.patch("/api/papers/doe2026study", json={"authors": "Jane Roe"}).status_code == 422
 
@@ -2957,7 +2957,7 @@ def test_a_paper_patch_refuses_a_year_that_is_not_a_number():
 def test_a_paper_patch_leaves_the_fields_it_does_not_name_alone():
     store.save_paper(store.new_paper("doe2026study", title="A Study", year=2026,
                                      venue="A Journal", notes="a note"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.patch("/api/papers/doe2026study", json={"title": "A Better Study"})
 
     assert response.status_code == 200
@@ -2969,14 +2969,14 @@ def test_a_paper_patch_leaves_the_fields_it_does_not_name_alone():
 def test_a_paper_patch_can_clear_a_year():
     """`None` is a value to write; only an absent field is left alone."""
     store.save_paper(store.new_paper("doe2026study", title="A Study", year=2026))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"year": None}).status_code == 200
     assert store.load_paper("doe2026study")["year"] is None
 
 
 def test_a_paper_patch_ignores_a_field_that_is_not_the_users_to_set():
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.patch("/api/papers/doe2026study", json={"title": "A Study", "claims": ["nonsense"]})
     assert store.load_paper("doe2026study")["claims"] == []
 
@@ -3038,7 +3038,7 @@ def queued_jobs(monkeypatch):
 
 
 def test_a_cross_site_upload_is_refused(queued_jobs):
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/upload",
             files={"files": ("paper.pdf", b"%PDF-1.4 ...", "application/pdf")},
@@ -3050,7 +3050,7 @@ def test_a_cross_site_upload_is_refused(queued_jobs):
 
 
 def test_a_cross_site_json_post_is_refused(queued_jobs):
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/ingest", json={"text": "2501.00001"},
                                headers={"Origin": "https://evil.example.com"})
     assert response.status_code == 403
@@ -3070,13 +3070,19 @@ def test_a_request_with_no_origin_is_allowed():
     """curl, the CLI and the macOS app's uploader are not a browser acting for
     somebody else's page, which is the only thing the check is for."""
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"}).status_code == 200
 
 
-def test_a_cross_site_read_is_left_alone():
-    """Reads make no work, and a browser cannot see the answer to one anyway."""
-    with TestClient(server.app) as client:
+def test_a_cross_site_read_with_an_honest_host_is_left_alone():
+    """A page that asked for this server by its real name cannot read the reply.
+
+    `Origin` says another site sent this, but `Host` says the browser resolved
+    `127.0.0.1` itself, which is the same-origin policy's own case: the response
+    goes nowhere the sender can see it. Only a rebound `Host` escapes that, and
+    the check below is what catches it.
+    """
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/health",
                           headers={"Origin": "https://evil.example.com"}).status_code == 200
 
@@ -3088,17 +3094,22 @@ def test_a_cross_site_read_is_left_alone():
 # both headers set to that hostname, so the comparison passes and the check
 # that exists to stop it waves it through. Trust comes from where the server
 # listens instead, which the caller cannot influence.
+#
+# And rebinding is not stopped by the same-origin policy either -- defeating it
+# is the whole trick. The browser believes `evil.example.com` and this server
+# are one origin, so the page reads every reply it gets. That is why `Host` is
+# checked on reads too, and not only on the writes.
 
 @pytest.fixture
 def bound_nowhere_in_particular(monkeypatch):
     """The default: nothing published beyond the loopback interface."""
-    monkeypatch.setattr(server, "_published_origins", frozenset())
+    monkeypatch.setattr(server, "_published_authorities", frozenset())
     monkeypatch.setattr(server, "_bound_to_every_address", False)
 
 
 def test_a_rebound_hostname_cannot_pose_as_the_page(queued_jobs, bound_nowhere_in_particular):
     """`Host` says what the attacker wants it to say, so it cannot be evidence."""
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/upload",
             files={"files": ("paper.pdf", b"%PDF-1.4 ...", "application/pdf")},
@@ -3110,7 +3121,7 @@ def test_a_rebound_hostname_cannot_pose_as_the_page(queued_jobs, bound_nowhere_i
 
 def test_a_rebound_hostname_cannot_delete_a_paper(bound_nowhere_in_particular):
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.request(
             "DELETE", "/api/papers/doe2026study",
             headers={"Origin": "http://evil.example.com", "Host": "evil.example.com"},
@@ -3119,11 +3130,36 @@ def test_a_rebound_hostname_cannot_delete_a_paper(bound_nowhere_in_particular):
     assert store.load_paper("doe2026study")["title"] == "A Study"
 
 
+def test_a_rebound_hostname_cannot_read_the_corpus(bound_nowhere_in_particular):
+    """The rebound page is same-origin to the browser, so it reads the answer.
+
+    Which is the whole reason a read has to be checked: refusing only the writes
+    leaves every title, tag and note in the corpus readable by any page whose
+    DNS points here. The request carries no `Origin` -- a plain `GET` never does
+    -- so `Host` is the only thing there is to go on.
+    """
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.get("/api/state", headers={"Host": "evil.example.com"})
+    assert response.status_code == 403
+    assert "A Study" not in response.text
+
+
+def test_a_rebound_hostname_cannot_read_a_pdf(bound_nowhere_in_particular):
+    """The papers themselves, not just what the corpus says about them."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4 the paper itself")
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.get("/pdf/doe2026study", headers={"Host": "evil.example.com"})
+    assert response.status_code == 403
+    assert b"the paper itself" not in response.content
+
+
 def test_every_spelling_of_the_loopback_page_is_allowed(bound_nowhere_in_particular):
     """The browser may have been pointed at any of these; all are this machine."""
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     for origin in ("http://127.0.0.1:8765", "http://localhost:8765", "http://[::1]:8765"):
-        with TestClient(server.app) as client:
+        with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
             response = client.patch("/api/papers/doe2026study", json={"notes": origin},
                                     headers={"Origin": origin})
         assert response.status_code == 200, origin
@@ -3132,35 +3168,93 @@ def test_every_spelling_of_the_loopback_page_is_allowed(bound_nowhere_in_particu
 def test_a_hostname_that_merely_contains_localhost_is_refused(bound_nowhere_in_particular):
     """`localhost.evil.example.com` is a name the attacker owns, not this machine."""
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.patch("/api/papers/doe2026study", json={"notes": "n"},
                                 headers={"Origin": "http://localhost.evil.example.com"})
     assert response.status_code == 403
+
+
+def test_another_page_on_this_machine_is_still_another_site(queued_jobs,
+                                                            bound_nowhere_in_particular):
+    """An origin is a scheme, a host *and a port*.
+
+    Whatever else is running on this machine -- a dev server on 3000, something
+    a package script started -- is not this app, and a page it serves can post a
+    multipart form here without a preflight to stop it. It cannot read the
+    reply, but enqueueing an upload needs no reply.
+    """
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/api/upload",
+            files={"files": ("paper.pdf", b"%PDF-1.4 ...", "application/pdf")},
+            headers={"Origin": "http://localhost:3000"},
+        )
+    assert response.status_code == 403
+    assert queued_jobs == [], "a page on another loopback port queued an upload"
+
+
+def test_a_request_addressed_to_another_port_is_refused(bound_nowhere_in_particular):
+    """The port comes off the listening socket, so `Host` cannot talk it round."""
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/health", headers={"Host": "127.0.0.1:9999"}).status_code == 403
 
 
 def test_the_address_serve_published_is_trusted(bound_nowhere_in_particular):
     """`serve --host` is documented, so the page it serves has to keep working."""
     server.trust_bind("192.168.1.5", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
-                            headers={"Origin": "http://192.168.1.5:8765"}).status_code == 200
+                            headers={"Origin": "http://192.168.1.5:8765",
+                                     "Host": "192.168.1.5:8765"}).status_code == 200
         # Neither another address on the same network nor the same address on
         # another port is where this page came from.
         for origin in ("http://192.168.1.6:8765", "http://192.168.1.5:9999"):
             assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
                                 headers={"Origin": origin}).status_code == 403, origin
+        # And a name that is not published is refused before the origin is even
+        # looked at, whatever the page claims about itself.
+        assert client.get("/api/state", headers={"Host": "192.168.1.6:8765"}).status_code == 403
 
 
-def test_a_wildcard_bind_still_refuses_a_mismatched_origin(bound_nowhere_in_particular):
-    """Every address is in play, so this falls back to the weaker comparison --
-    but only because the operator asked to be reachable from anywhere."""
+def test_a_wildcard_bind_trusts_nothing_the_request_says(bound_nowhere_in_particular):
+    """`--host 0.0.0.0` answers on every address, and names none of them.
+
+    The address the browser typed cannot be read off the socket, and the one
+    place it is written down -- the request -- is the one place a rebound page
+    controls. So matching `Origin` against `Host` is not a fallback here; it is
+    the very comparison this whole check exists to refuse.
+    """
     server.trust_bind("0.0.0.0", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                                headers={"Origin": "http://evil.example.com",
+                                         "Host": "evil.example.com"})
+    assert response.status_code == 403
+    assert store.load_paper("doe2026study").get("notes") != "n"
+
+
+def test_a_wildcard_bind_still_serves_the_operators_own_machine(bound_nowhere_in_particular):
+    """Loopback keeps working, so the app on the host itself is unaffected."""
+    server.trust_bind("0.0.0.0", 8765)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "http://127.0.0.1:8765"}).status_code == 200
+
+
+def test_a_wildcard_bind_trusts_the_name_the_operator_published(monkeypatch,
+                                                                bound_nowhere_in_particular):
+    """Someone has to say what the page is served as; only the operator can."""
+    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV, "http://192.168.1.5:8765")
+    server.trust_bind("0.0.0.0", 8765)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
                             headers={"Origin": "http://192.168.1.5:8765",
                                      "Host": "192.168.1.5:8765"}).status_code == 200
+        # Everything else on that network is still somebody else.
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
-                            headers={"Origin": "http://evil.example.com",
-                                     "Host": "192.168.1.5:8765"}).status_code == 403
+                            headers={"Origin": "http://192.168.1.6:8765",
+                                     "Host": "192.168.1.6:8765"}).status_code == 403

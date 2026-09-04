@@ -230,7 +230,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("serve", help="run the web app")
-    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="address to bind; a wildcard (0.0.0.0) also needs "
+                        "DOXOGRAPH_PUBLISHED_ORIGINS set to the origin the page is "
+                        "served under, which cannot be read off the socket")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--reload", action="store_true")
     p.set_defaults(func=cmd_serve)
