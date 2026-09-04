@@ -3296,3 +3296,98 @@ def test_an_unpublished_loopback_port_is_still_refused(monkeypatch,
                             headers={"Origin": "http://localhost:3000"}).status_code == 403
         assert client.get("/api/state", headers={"Host": "localhost:3000"}).status_code == 403
     assert store.load_paper("doe2026study").get("notes") != "n"
+
+
+def test_another_loopback_address_is_another_origin(queued_jobs,
+                                                    bound_nowhere_in_particular):
+    """`127.0.0.0/8` is all loopback, but it is not all one origin.
+
+    A page served from `http://127.0.0.2:8765` is a separate browser origin from
+    the app's own, so its simple multipart POST is a cross-site upload even
+    though the port matches and the address is local. It presupposes something
+    already listening on that address, which is why this is a cheap fence rather
+    than a likely attack -- but keeping the origin rule to the names a browser
+    really produces costs nothing.
+    """
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/api/upload",
+            files={"files": ("paper.pdf", b"%PDF-1.4 ...", "application/pdf")},
+            headers={"Origin": "http://127.0.0.2:8765"},
+        )
+    assert response.status_code == 403
+    assert queued_jobs == [], "a page on another loopback address queued an upload"
+
+
+def test_the_loopback_spellings_of_this_machine_stay_interchangeable(
+        bound_nowhere_in_particular):
+    """Narrowing the origin rule must not separate `::1` from `127.0.0.1`.
+
+    The socket reports one of them and the user typed whichever they typed; both
+    genuinely name this machine and the browser chooses between them unasked, so
+    comparing the origin against the bound address would lock the app out of its
+    own page. The long spelling of `::1` counts too.
+    """
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    spellings = ("http://127.0.0.1:8765", "http://localhost:8765", "http://[::1]:8765",
+                 "http://[0:0:0:0:0:0:0:1]:8765")
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        for origin in spellings:
+            assert client.patch("/api/papers/doe2026study", json={"notes": origin},
+                                headers={"Origin": origin}).status_code == 200, origin
+
+
+def test_serving_on_an_alternate_loopback_address_still_trusts_its_own_page(
+        bound_nowhere_in_particular):
+    """`serve --host 127.0.0.2` has to keep serving the page it just published.
+
+    The narrow origin rule does not cover that address, so `trust_bind` records
+    it explicitly -- from the host `serve()` was given, never from a request.
+    """
+    server.trust_bind("127.0.0.2", 8765)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "http://127.0.0.2:8765",
+                                     "Host": "127.0.0.2:8765"}).status_code == 200
+        # Its neighbour on the same interface is still somebody else.
+        assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
+                            headers={"Origin": "http://127.0.0.3:8765"}).status_code == 403
+
+
+def test_a_request_may_still_be_addressed_to_any_loopback_address(
+        bound_nowhere_in_particular):
+    """The `Host` check asks what reaches this server, not what page sent this.
+
+    `curl http://127.0.0.5:8765` is an ordinary way to arrive, so narrowing the
+    origin rule must not narrow the address rule along with it.
+    """
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/health",
+                          headers={"Host": "127.0.0.5:8765"}).status_code == 200
+
+
+def test_a_malformed_published_origin_is_skipped_rather_than_fatal(monkeypatch):
+    """A typo in `PUBLISHED_ORIGINS_ENV` must not stop the server from starting.
+
+    `urlsplit("http://[::1")` raises `ValueError: Invalid IPv6 URL` on its own,
+    outside the parse's own `try`, and this list is read at import time -- so an
+    unclosed bracket used to abort the import with a traceback naming neither
+    the variable nor the offending entry. The good entry beside it still counts.
+    """
+    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV,
+                       "http://[::1, http://192.168.1.5:8765")
+    assert server._authorities_from_environment() == {("192.168.1.5", 8765)}
+
+
+def test_a_malformed_origin_header_is_refused_rather_than_a_500(
+        queued_jobs, bound_nowhere_in_particular):
+    """The same parse runs on every request, so a bad `Origin` is a refusal."""
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/api/upload",
+            files={"files": ("paper.pdf", b"%PDF-1.4 ...", "application/pdf")},
+            headers={"Origin": "http://[::1"},
+        )
+    assert response.status_code == 403
+    assert queued_jobs == []

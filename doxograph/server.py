@@ -127,6 +127,27 @@ def _is_loopback(hostname: str) -> bool:
         return False
 
 
+#: The spellings a browser actually produces for this machine. `127.0.0.0/8` is
+#: loopback all the way up, but a page served from `http://127.0.0.2:8765` is a
+#: *different browser origin* from the one this app is served on, so it is
+#: another site however local it is. `localhost`, `127.0.0.1` and `::1` stay
+#: interchangeable: they all genuinely name here, and the browser picks between
+#: them on the user's behalf.
+_CANONICAL_LOOPBACK = frozenset({ipaddress.ip_address("127.0.0.1"),
+                                 ipaddress.ip_address("::1")})
+
+
+def _is_canonical_loopback(hostname: str) -> bool:
+    """Whether a host part is one of the names a browser gives this machine."""
+    if hostname == "localhost":
+        return True
+    try:
+        # Via `ip_address` so the long spellings of `::1` are recognised too.
+        return ipaddress.ip_address(hostname) in _CANONICAL_LOOPBACK
+    except ValueError:
+        return False
+
+
 def _origin_authority(origin: str) -> tuple[str, int | None]:
     """An origin as the `(hostname, port)` pair it names, the port made explicit.
 
@@ -134,9 +155,16 @@ def _origin_authority(origin: str) -> tuple[str, int | None]:
     brackets around an IPv6 literal, and raising rather than guessing when the
     port is not a number. A port the origin leaves out is the one its scheme
     implies, so `http://localhost` and `http://localhost:80` are the same place.
+
+    `urlsplit` itself raises on a half-written IPv6 literal such as `http://[::1`
+    -- before any attribute is touched -- so it is inside the `try` as well.
+    Anything unparseable comes back as the empty authority, which is trusted by
+    nobody: a typo in an environment variable is skipped rather than being left
+    to abort the import, and a malformed `Origin` header is refused rather than
+    raising a 500 out of the middleware.
     """
-    split = urlsplit(origin)
     try:
+        split = urlsplit(origin)
         hostname, port = split.hostname or "", split.port
     except ValueError:
         return "", None
@@ -148,7 +176,12 @@ def _host_authority(host: str, scheme: str) -> tuple[str, int | None]:
     return _origin_authority(f"{scheme}://{host}")
 
 
-def _is_our_own(authority: tuple[str, int | None], bound_port: int | None) -> bool:
+def _is_our_own(
+    authority: tuple[str, int | None],
+    bound_port: int | None,
+    *,
+    as_a_browser_origin: bool = False,
+) -> bool:
     """Whether an authority is one this server could itself be answering for.
 
     Trust is derived from where this server listens, never from what a request
@@ -168,13 +201,24 @@ def _is_our_own(authority: tuple[str, int | None], bound_port: int | None) -> bo
     bound-port comparison. That ordering costs nothing in safety:
     `_published_authorities` is written only from the operator's own
     environment and the host `serve()` was given, never from a request.
+
+    `as_a_browser_origin` narrows the loopback rule to the names a browser
+    actually gives this machine. An `Origin` is judged that way: the whole of
+    `127.0.0.0/8` answers here, but `http://127.0.0.2:8765` is a separate
+    browser origin from the page this app is served on, so a page bound there
+    is another site and its uploads are somebody else's. A `Host` keeps the
+    broad rule -- it is asking which addresses reach this server rather than
+    which page sent the request, and `curl http://127.0.0.5:8765` against a
+    wildcard bind is a perfectly ordinary way to arrive. An alternate loopback
+    address that `serve()` was actually given is recorded by `trust_bind`, so
+    its own page keeps working under the narrow rule too.
     """
     hostname, port = authority
     if not hostname:
         return False
     if authority in _published_authorities:
         return True
-    if _is_loopback(hostname):
+    if (_is_canonical_loopback if as_a_browser_origin else _is_loopback)(hostname):
         # No `server` in the scope -- a Unix socket, say -- leaves no port to
         # compare against, and then being loopback is all there is to go on.
         return bound_port is None or port == bound_port
@@ -197,8 +241,11 @@ def _authorities_from_environment() -> set[tuple[str, int | None]]:
 def trust_bind(host: str, port: int) -> None:
     """Record where the server is listening, so its own page is recognised.
 
-    Loopback needs no recording; it is trusted always, against whatever port the
-    socket reports. A wildcard bind cannot be recorded either: `0.0.0.0` and
+    The loopback names a browser uses -- `localhost`, `127.0.0.1`, `::1` -- need
+    no recording; they are trusted always, against whatever port the socket
+    reports. Anywhere else in `127.0.0.0/8` does get recorded, because an origin
+    is judged on the narrow list and `serve --host 127.0.0.2` would otherwise
+    lock its own page out. A wildcard bind cannot be recorded either: `0.0.0.0` and
     `::` are the whole point of `--host`, publishing on every address this
     machine has, and which of them the browser then typed is not knowable from
     the socket. It is emphatically not knowable from the request's own headers,
@@ -206,11 +253,11 @@ def trust_bind(host: str, port: int) -> None:
     inferred and the operator says it themselves via `PUBLISHED_ORIGINS_ENV`.
     """
     global _published_authorities, _bound_to_every_address
-    host = host.strip("[]")
+    host = host.strip("[]").lower()
     _bound_to_every_address = host in {"0.0.0.0", "::", ""}
     published = _authorities_from_environment()
-    if not _bound_to_every_address and not _is_loopback(host):
-        published.add((host.lower(), port))
+    if not _bound_to_every_address and not _is_canonical_loopback(host):
+        published.add((host, port))
     _published_authorities = frozenset(published)
 
 
@@ -252,8 +299,9 @@ class RejectCrossSiteRequests:
     asking permission first, while every other mutating route here takes a JSON
     body and is held back by the preflight it cannot answer. A browser sets
     `Origin` on every request that is not a plain read, and an origin is a
-    scheme, a host and a port, so a page on another loopback port is another
-    site however local it is. A request with no `Origin` is left alone: curl,
+    scheme, a host and a port, so a page on another loopback port -- or on
+    another loopback address, such as `http://127.0.0.2:8765` -- is another site
+    however local it is. A request with no `Origin` is left alone: curl,
     the CLI and the macOS app's uploader are not a browser acting for somebody
     else's page, which is the only thing that check is for.
 
@@ -279,7 +327,8 @@ class RejectCrossSiteRequests:
         if scope.get("method", "GET") in SAFE_METHODS:
             return await self.app(scope, receive, send)
         origin = headers.get(b"origin", b"").decode("utf-8", "replace")
-        if origin and not _is_our_own(_origin_authority(origin), bound_port):
+        if origin and not _is_our_own(_origin_authority(origin), bound_port,
+                                      as_a_browser_origin=True):
             return await self._refuse(
                 f"cross-site request from {origin} refused", scope, receive, send
             )
