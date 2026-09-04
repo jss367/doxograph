@@ -89,6 +89,41 @@ class CountArrivingRequests:
                 _requests_arriving -= 1
 
 
+class RejectCrossSiteRequests:
+    """Refuse a mutating request that a page on another site sent.
+
+    `/api/upload` is the one route reachable this way. A multipart POST is a
+    "simple" request, so a browser sends it across origins without asking
+    permission first, while every other mutating route here takes a JSON body
+    and is held back by the preflight it cannot answer. Any page open in any
+    tab could therefore drop a PDF into the corpus of a running server.
+
+    A browser sets `Origin` on every cross-origin request, so an origin that is
+    not this server's own is the whole test. A request with no `Origin` is left
+    alone: curl, the CLI and the macOS app's uploader are not a browser acting
+    for somebody else's page, which is the only thing this is here for.
+
+    Outermost of the middlewares, so a refused request is never counted as work
+    in flight and never selects a workspace.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method", "GET") in SAFE_METHODS:
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        origin = headers.get(b"origin", b"").decode("utf-8", "replace")
+        host = headers.get(b"host", b"").decode("utf-8", "replace")
+        if origin and origin not in (f"http://{host}", f"https://{host}"):
+            response = JSONResponse(
+                {"detail": f"cross-site request from {origin} refused"}, status_code=403
+            )
+            return await response(scope, receive, send)
+        return await self.app(scope, receive, send)
+
+
 class SelectWorkspace:
     """Bind each request to one corpus without changing any process-global path.
 
@@ -125,6 +160,9 @@ class SelectWorkspace:
 
 app.add_middleware(CountArrivingRequests)
 app.add_middleware(SelectWorkspace)
+# Added last, so it wraps the other two and turns a cross-site request away
+# before either of them sees it.
+app.add_middleware(RejectCrossSiteRequests)
 
 
 def _finish(job: dict, key: str) -> None:
@@ -300,10 +338,26 @@ def _run_syntheses(job: dict, topics: list[str]) -> None:
 @_workspace_job
 def _run_retag(job: dict, keys: list[str]) -> None:
     try:
+        failed = 0
+        last_failure = ""
         for index, key in enumerate(keys, 1):
             _set(job, state="reading", key=key, detail=f"{index} of {len(keys)}")
-            extract.retag_paper(key)
-        _set(job, state="done", detail=f"{len(keys)} papers")
+            # As with tensions and syntheses, and as the command line does: one
+            # paper's refusal or bad answer must not cost the papers after it.
+            # Retag all runs the whole corpus in a fixed order, so a single
+            # early failure used to leave every later paper unretagged.
+            try:
+                extract.retag_paper(key)
+            except Exception as exc:
+                failed += 1
+                last_failure = f"{key}: {type(exc).__name__}: {exc}"
+                traceback.print_exc()
+                continue
+        if failed:
+            _set(job, state="error",
+                 detail=f"{failed} of {len(keys)} papers failed; {last_failure}")
+        else:
+            _set(job, state="done", detail=f"{len(keys)} papers")
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -350,6 +404,30 @@ class SynthesesBody(BaseModel):
 
 class SynthesisTextBody(BaseModel):
     text: str
+
+
+class PaperPatch(BaseModel):
+    """The paper fields a person may correct, and the types they must hold.
+
+    Every other write here goes through a model; this route took a bare dict
+    and wrote whatever was in it. A year of `"2020"` was accepted as a string
+    and then broke the export, which sorts papers by year and cannot compare a
+    string with the numbers every other paper carries — a corpus wedged by one
+    request, with no way back except editing the JSON by hand.
+
+    Every field is optional and the caller's own fields are the only ones
+    applied, so a patch stays a patch: `None` is a value to write (clearing a
+    year), and an absent field is left alone.
+    """
+
+    title: str | None = None
+    authors: list[str] | None = None
+    year: int | None = None
+    venue: str | None = None
+    doi: str | None = None
+    summary: str | None = None
+    relevance: str | None = None
+    notes: str | None = None
 
 
 class ExportBody(BaseModel):
@@ -529,19 +607,17 @@ def get_paper(key: str) -> dict:
         raise HTTPException(404, f"no paper {key}")
 
 
-PAPER_FIELDS = {"title", "authors", "year", "venue", "doi", "summary", "relevance", "notes"}
-
-
 @app.patch("/api/papers/{key}")
-def patch_paper(key: str, patch: dict = Body(...)) -> dict:
+def patch_paper(key: str, patch: PaperPatch) -> dict:
+    # Only the fields the caller sent: an unset field is not a field set to
+    # None, and writing the whole model would blank everything left out.
+    fields = patch.model_dump(exclude_unset=True)
     with store.paper_lock(key):
         try:
             paper = store.load_paper(key)
         except KeyError:
             raise HTTPException(404, f"no paper {key}")
-        for field, value in patch.items():
-            if field in PAPER_FIELDS:
-                paper[field] = value
+        paper.update(fields)
         store.save_paper(paper)
     return paper
 

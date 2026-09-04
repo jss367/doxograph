@@ -131,8 +131,7 @@ def _synthesis_html(record: dict, rows_by_id: dict[str, dict]) -> str:
         marks = []
         for i in ids:
             row = rows_by_id[i]
-            authors = row.get("paper_authors") or []
-            who = authors[0].split()[-1] if authors else row.get("paper", "")
+            who = store.cite_surname(row.get("paper_authors"), row.get("paper", ""))
             marks.append(f'<span class="cite" title="{_e(row.get("text"))}">'
                          f'{_e(who)} {_e(row.get("paper_year") or "n.d.")}</span>')
         return "[" + ", ".join(marks) + "]"

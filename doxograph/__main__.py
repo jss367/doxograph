@@ -133,7 +133,7 @@ def cmd_tensions(args) -> int:
         print(f"{tension['id']:<5} {tension['status']:<9} {tension['kind']:<13} "
               f"#{' #'.join(tension.get('topics', []))}{stale}")
         for claim in (a, b):
-            cite = (claim.get("paper_authors") or [claim["paper"]])[0].split()[-1]
+            cite = store.cite_surname(claim.get("paper_authors"), claim["paper"])
             print(f"      [{cite} {claim.get('paper_year') or 'n.d.'}] {claim.get('text', '')}")
         if tension.get("note"):
             print(f"      {tension['note']}")

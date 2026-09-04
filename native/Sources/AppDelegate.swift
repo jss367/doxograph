@@ -52,13 +52,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         take(urls.filter(Uploader.isPDF))
     }
 
-    private func take(_ urls: [URL], alreadyReserved: Bool = false) {
+    private func take(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
-        if !alreadyReserved { Uploader.reserveForUpload(urls) }
+        // Parked drops are counted by nobody, and that is right: nothing has
+        // been copied and nothing is on the wire, so there is no upload for a
+        // quit to cut short. Reserving before this guard left the count
+        // standing for good whenever the server never became ready — the drop
+        // was never sent, never released, and every later quit asked about
+        // papers that had gone nowhere.
         guard ready else {
             pendingDrops.append(contentsOf: urls)
             return
         }
+        // From here the paper is this app's to lose: the workspace lookup below
+        // is asynchronous and the copy into a multipart body follows it.
+        Uploader.reserveForUpload(urls)
         NSApp.activate(ignoringOtherApps: true)
         window.show()
         window.currentWorkspace { [weak self] workspace in
@@ -78,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func flushPendingDrops() {
         let waiting = pendingDrops
         pendingDrops = []
-        take(waiting, alreadyReserved: true)
+        take(waiting)
     }
 
     @objc func addPapers(_ sender: Any?) {
