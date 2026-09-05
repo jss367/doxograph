@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -3391,3 +3392,111 @@ def test_a_malformed_origin_header_is_refused_rather_than_a_500(
         )
     assert response.status_code == 403
     assert queued_jobs == []
+
+
+# --- a socket with no port, and a port nobody chose -----------------------
+
+def _over_a_unix_socket(headers: dict[str, str]) -> int:
+    """The status one POST gets when `scope["server"]` carries no port.
+
+    Uvicorn's `--uds` mode reports `(socket_path, None)`: a path where the port
+    would be. Nothing this project starts produces that -- `serve()` calls
+    `uvicorn.run(host=..., port=...)` and there is no `--uds` option -- so the
+    scope is built here rather than by standing a server up over a socket.
+    """
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/upload",
+        "raw_path": b"/api/upload",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("/run/doxograph.sock", None),
+        "client": None,
+        "headers": [(name.lower().encode(), value.encode())
+                    for name, value in headers.items()],
+    }
+    statuses: list[int] = []
+
+    async def reached(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            statuses.append(message["status"])
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    asyncio.run(server.RejectCrossSiteRequests(reached)(scope, receive, send))
+    return statuses[0]
+
+
+def test_a_socket_with_no_port_does_not_widen_the_origin_rule(
+        bound_nowhere_in_particular):
+    """Without a port, nothing tells the app's own page from its neighbours.
+
+    The loopback rule leans on the bound port to say that `localhost:3000` is a
+    different origin from `localhost:8765`. Take the port away and the rule
+    would accept every canonical-loopback origin there is, so a page on any
+    other local port could post a multipart form here. An origin arriving that
+    way has to be one the operator published instead.
+    """
+    assert _over_a_unix_socket({"Host": "localhost",
+                                "Origin": "http://localhost:3000"}) == 403
+    # Not even the bare name the `Host` used: it is unverifiable for the same
+    # reason, and a socket cannot say which local page it belongs to.
+    assert _over_a_unix_socket({"Host": "localhost",
+                                "Origin": "http://localhost"}) == 403
+
+
+def test_a_socket_with_no_port_still_answers_for_its_own_name(
+        bound_nowhere_in_particular):
+    """The `Host` check asks which addresses reach here, which a socket can answer.
+
+    So `curl --unix-socket` keeps working, and a request with no `Origin` -- no
+    browser acting for somebody else's page -- is not the thing being refused.
+    """
+    assert _over_a_unix_socket({"Host": "localhost"}) == 200
+
+
+def test_a_socket_with_no_port_trusts_the_name_the_operator_published(
+        monkeypatch, bound_nowhere_in_particular):
+    """The proxy in front of the socket knows the name; the socket does not.
+
+    Which is exactly what `PUBLISHED_ORIGINS_ENV` is for, so the deployment is
+    narrowed rather than shut off. Both spellings are published because the
+    proxy terminates the TLS: the browser's `Origin` says `https`, while the
+    `Host` it forwards over the socket is read against the scope's own `http`.
+    """
+    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV,
+                       "https://papers.example.com, http://papers.example.com")
+    monkeypatch.setattr(server, "_published_authorities",
+                        frozenset(server._authorities_from_environment()))
+    assert _over_a_unix_socket({"Host": "papers.example.com",
+                                "Origin": "https://papers.example.com"}) == 200
+    assert _over_a_unix_socket({"Host": "papers.example.com",
+                                "Origin": "http://localhost:3000"}) == 403
+
+
+def test_an_ordinary_request_always_carries_the_port_the_rule_needs():
+    """The narrowing above must not reach anything this project can produce.
+
+    Uvicorn fills `scope["server"]` with `(host, port)` on a TCP bind and
+    Starlette's `TestClient` reports a port too, so `bound_port` is `None` only
+    on a socket opened by hand outside the CLI.
+    """
+    seen = []
+
+    async def recording(scope, receive, send):
+        if scope["type"] == "http":
+            seen.append(scope.get("server"))
+        await server.app(scope, receive, send)
+
+    with TestClient(recording, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/health").status_code == 200
+    assert seen and all(pair is not None and pair[1] is not None for pair in seen), seen

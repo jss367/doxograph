@@ -212,6 +212,16 @@ def _is_our_own(
     wildcard bind is a perfectly ordinary way to arrive. An alternate loopback
     address that `serve()` was actually given is recorded by `trust_bind`, so
     its own page keeps working under the narrow rule too.
+
+    A scope carrying no port -- a Unix socket, which uvicorn reports as
+    `(socket_path, None)` -- leaves nothing to compare against. A `Host` can
+    still be judged on the name alone, since it only asks which addresses reach
+    here. A browser origin cannot: with the port gone there is nothing left to
+    separate this server's own page from `http://localhost:3000`, and the
+    loopback rule would wave through every program on the machine. So an origin
+    arriving that way has to be one the operator published. Nothing this CLI
+    starts lands here -- `serve()` binds a TCP port and there is no `--uds`
+    option -- but `uvicorn doxograph.server:app --uds ...` run by hand does.
     """
     hostname, port = authority
     if not hostname:
@@ -219,9 +229,9 @@ def _is_our_own(
     if authority in _published_authorities:
         return True
     if (_is_canonical_loopback if as_a_browser_origin else _is_loopback)(hostname):
-        # No `server` in the scope -- a Unix socket, say -- leaves no port to
-        # compare against, and then being loopback is all there is to go on.
-        return bound_port is None or port == bound_port
+        if bound_port is None:
+            return not as_a_browser_origin
+        return port == bound_port
     return False
 
 
