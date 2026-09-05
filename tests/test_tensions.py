@@ -323,7 +323,7 @@ def test_find_tensions_records_what_the_model_returns(monkeypatch):
 def test_api_state_carries_tensions_and_status_can_be_changed():
     a, b, _ = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         state = client.get("/api/state").json()
         [tension] = state["tensions"]
         assert tension["status"] == "open"
@@ -340,7 +340,7 @@ def test_api_state_carries_tensions_and_status_can_be_changed():
 
 def test_api_find_tensions_queues_nothing_without_two_papers_on_a_topic():
     _paper("solo2026", "Alone", "Ann Solo", 2026, ("Only claim.", ["recovery-rate"]))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/tensions", json={}).json() == {"queued": 0}
 
 
@@ -348,7 +348,7 @@ def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_top
     build_corpus()   # recovery-rate has two papers; scaling has one
     submitted = []
     monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics: submitted.append(topics))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/tensions", json={"topics": ["scaling", "nonesuch"]}).json() == {"queued": 0}
         body = {"topics": ["recovery-rate", "scaling", "recovery-rate", "nonesuch"]}
         assert client.post("/api/tensions", json=body).json() == {"queued": 1}

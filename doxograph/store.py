@@ -204,6 +204,24 @@ def _surname(author: str) -> str:
     return parts[-1] if parts else "anon"
 
 
+def cite_surname(authors: list[str] | None, fallback: str = "") -> str:
+    """The surname a citation marker shows, or `fallback` when there is none.
+
+    An author can be a blank string. Crossref records an institutional author
+    under `name` rather than `given`/`family`, and anything arriving with
+    neither reads as "". Guarding on the list being non-empty is not enough:
+    `"".split()` is empty, and indexing it raised, which took out the tension
+    pass, the synthesis pass, the HTML export and `tensions --list` for the
+    whole corpus. Blank entries are skipped rather than shown, so a paper whose
+    first author was lost still cites the next one who has a name.
+    """
+    for author in authors or []:
+        parts = author.split()
+        if parts:
+            return parts[-1]
+    return fallback
+
+
 def citekey(title: str, authors: list[str], year: int | str | None) -> str:
     """Build a BibTeX-style key: surname + year + first significant title word."""
     surname = slugify(_surname(authors[0]), keep="") if authors else "anon"

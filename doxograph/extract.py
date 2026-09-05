@@ -620,7 +620,7 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
     for key, claims in by_paper.items():
         first = claims[0]
         authors = first.get("paper_authors") or []
-        head = f"{authors[0].split()[-1] if authors else key}"
+        head = store.cite_surname(authors, key)
         if len(authors) > 1:
             head += " et al."
         head += f" ({first.get('paper_year') or 'n.d.'}): {first.get('paper_title') or key}"

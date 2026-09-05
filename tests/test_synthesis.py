@@ -365,7 +365,7 @@ def test_synthesize_topic_with_one_paper_still_writes(monkeypatch):
 def test_api_state_carries_syntheses_and_they_can_be_edited_and_deleted():
     a, _, _ = build_corpus()
     store.record_synthesis("recovery-rate", "text [%s]" % a, shown("recovery-rate"))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         [row] = client.get("/api/state").json()["syntheses"]
         assert row["topic"] == "recovery-rate" and row["stale"] is False
 
@@ -383,7 +383,7 @@ def test_api_synthesize_defaults_to_two_paper_topics_and_accepts_any_named_topic
     build_corpus()
     submitted = []
     monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics: submitted.append(topics))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/syntheses", json={}).json() == {"queued": 1}
         assert client.post("/api/syntheses", json={"topics": ["nonesuch"]}).json() == {"queued": 0}
         body = {"topics": ["scaling", "recovery-rate", "scaling", "nonesuch"]}
@@ -394,7 +394,7 @@ def test_api_synthesize_defaults_to_two_paper_topics_and_accepts_any_named_topic
 
 def test_api_synthesize_queues_nothing_for_a_corpus_of_one_paper():
     _paper("solo2026", "Alone", "Ann Solo", 2026, ("Only claim.", ["recovery-rate"]))
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/syntheses", json={}).json() == {"queued": 0}
 
 

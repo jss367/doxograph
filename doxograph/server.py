@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import functools
+import os
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import Body, FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
@@ -89,6 +91,275 @@ class CountArrivingRequests:
                 _requests_arriving -= 1
 
 
+#: Carries the address `serve()` bound to into a `--reload` subprocess, which
+#: re-imports this module instead of calling `serve()` again and would otherwise
+#: fall back to loopback-only and refuse the page's own writes.
+BIND_ENV = "DOXOGRAPH_BIND"
+
+#: Where an operator who published this server has said its page really lives:
+#: a comma-separated list of origins, or bare `host:port` authorities. Needed
+#: wherever the name the browser typed cannot be read off the socket and must
+#: not be taken from the request: a wildcard bind, and a Unix socket, which
+#: reports no port for the origin rule to compare against. Behind a TLS
+#: terminator, publish both spellings -- `https://name` for the browser's
+#: `Origin`, and `http://name` for the `Host` it forwards over a plain-scheme
+#: scope -- since an authority is matched on its port and the scheme is what
+#: supplies the implicit one. See `trust_bind`.
+PUBLISHED_ORIGINS_ENV = "DOXOGRAPH_PUBLISHED_ORIGINS"
+
+#: The port a scheme means when an authority does not spell one out. A `Host`
+#: header carries no scheme of its own, so the request's scheme does that work.
+DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+
+#: `(hostname, port)` pairs this server answers for besides the loopback ones,
+#: filled in from where `serve()` bound and from `PUBLISHED_ORIGINS_ENV`. Empty
+#: under `uvicorn doxograph.server:app`, which binds the loopback interface.
+_published_authorities: frozenset[tuple[str, int | None]] = frozenset()
+
+#: True when the bind was a wildcard address. Nothing is trusted on account of
+#: it; it only decides whether `serve()` warns that the server has been
+#: published without anyone saying under what name.
+_bound_to_every_address = False
+
+
+def _is_loopback(hostname: str) -> bool:
+    """Whether a URL's host part names this machine's loopback interface."""
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+#: The spellings a browser actually produces for this machine. `127.0.0.0/8` is
+#: loopback all the way up, but a page served from `http://127.0.0.2:8765` is a
+#: *different browser origin* from the one this app is served on, so it is
+#: another site however local it is. `localhost`, `127.0.0.1` and `::1` stay
+#: interchangeable: they all genuinely name here, and the browser picks between
+#: them on the user's behalf.
+_CANONICAL_LOOPBACK = frozenset({ipaddress.ip_address("127.0.0.1"),
+                                 ipaddress.ip_address("::1")})
+
+
+def _is_canonical_loopback(hostname: str) -> bool:
+    """Whether a host part is one of the names a browser gives this machine."""
+    if hostname == "localhost":
+        return True
+    try:
+        # Via `ip_address` so the long spellings of `::1` are recognised too.
+        return ipaddress.ip_address(hostname) in _CANONICAL_LOOPBACK
+    except ValueError:
+        return False
+
+
+def _origin_authority(origin: str) -> tuple[str, int | None]:
+    """An origin as the `(hostname, port)` pair it names, the port made explicit.
+
+    `urlsplit` does the fiddly parts: lowercasing the name, unwrapping the
+    brackets around an IPv6 literal, and raising rather than guessing when the
+    port is not a number. A port the origin leaves out is the one its scheme
+    implies, so `http://localhost` and `http://localhost:80` are the same place.
+
+    `urlsplit` itself raises on a half-written IPv6 literal such as `http://[::1`
+    -- before any attribute is touched -- so it is inside the `try` as well.
+    Anything unparseable comes back as the empty authority, which is trusted by
+    nobody: a typo in an environment variable is skipped rather than being left
+    to abort the import, and a malformed `Origin` header is refused rather than
+    raising a 500 out of the middleware.
+    """
+    try:
+        split = urlsplit(origin)
+        hostname, port = split.hostname or "", split.port
+    except ValueError:
+        return "", None
+    return hostname, port if port is not None else DEFAULT_PORTS.get(split.scheme)
+
+
+def _host_authority(host: str, scheme: str) -> tuple[str, int | None]:
+    """A `Host` header as the same pair. It has no scheme, so it is lent one."""
+    return _origin_authority(f"{scheme}://{host}")
+
+
+def _is_our_own(
+    authority: tuple[str, int | None],
+    bound_port: int | None,
+    *,
+    as_a_browser_origin: bool = False,
+) -> bool:
+    """Whether an authority is one this server could itself be answering for.
+
+    Trust is derived from where this server listens, never from what a request
+    says about itself. Loopback is where the app runs unless someone
+    deliberately says otherwise, and `bound_port` -- read off the listening
+    socket, so no client can influence it -- stops that trust from spreading to
+    every other program on this machine: `http://localhost:3000` is a different
+    origin, and a page served from it is a different site.
+
+    The scheme is deliberately not part of the comparison. A `Host` header does
+    not carry one, and the same server behind a TLS terminator is still the same
+    server; the port is what distinguishes it from its neighbours.
+
+    An authority the operator published is consulted first, before the loopback
+    rule, so that a name like `https://localhost` in front of a backend on
+    another port is answered for rather than silently dropped for failing the
+    bound-port comparison. That ordering costs nothing in safety:
+    `_published_authorities` is written only from the operator's own
+    environment and the host `serve()` was given, never from a request.
+
+    `as_a_browser_origin` narrows the loopback rule to the names a browser
+    actually gives this machine. An `Origin` is judged that way: the whole of
+    `127.0.0.0/8` answers here, but `http://127.0.0.2:8765` is a separate
+    browser origin from the page this app is served on, so a page bound there
+    is another site and its uploads are somebody else's. A `Host` keeps the
+    broad rule -- it is asking which addresses reach this server rather than
+    which page sent the request, and `curl http://127.0.0.5:8765` against a
+    wildcard bind is a perfectly ordinary way to arrive. An alternate loopback
+    address that `serve()` was actually given is recorded by `trust_bind`, so
+    its own page keeps working under the narrow rule too.
+
+    A scope carrying no port -- a Unix socket, which uvicorn reports as
+    `(socket_path, None)` -- leaves nothing to compare against. A `Host` can
+    still be judged on the name alone, since it only asks which addresses reach
+    here. A browser origin cannot: with the port gone there is nothing left to
+    separate this server's own page from `http://localhost:3000`, and the
+    loopback rule would wave through every program on the machine. So an origin
+    arriving that way has to be one the operator published. Nothing this CLI
+    starts lands here -- `serve()` binds a TCP port and there is no `--uds`
+    option -- but `uvicorn doxograph.server:app --uds ...` run by hand does.
+    """
+    hostname, port = authority
+    if not hostname:
+        return False
+    if authority in _published_authorities:
+        return True
+    if (_is_canonical_loopback if as_a_browser_origin else _is_loopback)(hostname):
+        if bound_port is None:
+            return not as_a_browser_origin
+        return port == bound_port
+    return False
+
+
+def _authorities_from_environment() -> set[tuple[str, int | None]]:
+    """The authorities `PUBLISHED_ORIGINS_ENV` names, ignoring the unparseable."""
+    published = set()
+    for item in os.environ.get(PUBLISHED_ORIGINS_ENV, "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        authority = _origin_authority(item) if "//" in item else _host_authority(item, "http")
+        if authority[0]:
+            published.add(authority)
+    return published
+
+
+def trust_bind(host: str, port: int) -> None:
+    """Record where the server is listening, so its own page is recognised.
+
+    The loopback names a browser uses -- `localhost`, `127.0.0.1`, `::1` -- need
+    no recording; they are trusted always, against whatever port the socket
+    reports. Anywhere else in `127.0.0.0/8` does get recorded, because an origin
+    is judged on the narrow list and `serve --host 127.0.0.2` would otherwise
+    lock its own page out. A wildcard bind cannot be recorded either: `0.0.0.0` and
+    `::` are the whole point of `--host`, publishing on every address this
+    machine has, and which of them the browser then typed is not knowable from
+    the socket. It is emphatically not knowable from the request's own headers,
+    which is where a rebound page would like it to be read from, so nothing is
+    inferred and the operator says it themselves via `PUBLISHED_ORIGINS_ENV`.
+    """
+    global _published_authorities, _bound_to_every_address
+    host = host.strip("[]").lower()
+    _bound_to_every_address = host in {"0.0.0.0", "::", ""}
+    published = _authorities_from_environment()
+    if not _bound_to_every_address and not _is_canonical_loopback(host):
+        published.add((host, port))
+    _published_authorities = frozenset(published)
+
+
+def _trust_bind_from_environment() -> None:
+    global _published_authorities
+    bind = os.environ.get(BIND_ENV, "")
+    host, _, port = bind.rpartition(":")
+    if host and port.isdigit():
+        trust_bind(host, int(port))
+    else:
+        _published_authorities = frozenset(_authorities_from_environment())
+
+
+_trust_bind_from_environment()
+
+
+class RejectCrossSiteRequests:
+    """Refuse a request another site sent, or one addressed to another name.
+
+    Two checks, and the first is the one that carries the weight. A page on
+    `evil.example.com` whose name has been rebound to `127.0.0.1` reaches this
+    server over a connection the browser itself considers same-origin -- that is
+    precisely what DNS rebinding buys, and it means the same-origin policy does
+    not save us: the page can read every reply, so `/api/state` hands it the
+    corpus and `/pdf/{key}` hands it the papers. Nor can it be caught by
+    comparing `Origin` against `Host`, since both come from the request and the
+    rebound page sets both to its own name; that comparison only asks a caller
+    to agree with itself.
+
+    What gives the page away is the one thing it cannot change: the name it
+    asked for. The browser puts that in `Host`, so every request, reads
+    included, has to be addressed to an authority this server actually answers
+    for -- and `_is_our_own` works that out from the listening socket rather
+    than from the request.
+
+    The second check is the ordinary cross-site one, for a page that is honest
+    about who it is. `/api/upload` is the route reachable that way: a multipart
+    POST is a "simple" request, so a browser sends it across origins without
+    asking permission first, while every other mutating route here takes a JSON
+    body and is held back by the preflight it cannot answer. A browser sets
+    `Origin` on every request that is not a plain read, and an origin is a
+    scheme, a host and a port, so a page on another loopback port -- or on
+    another loopback address, such as `http://127.0.0.2:8765` -- is another site
+    however local it is. A request with no `Origin` is left alone: curl,
+    the CLI and the macOS app's uploader are not a browser acting for somebody
+    else's page, which is the only thing that check is for.
+
+    Outermost of the middlewares, so a refused request is never counted as work
+    in flight and never selects a workspace.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        scheme = scope.get("scheme") or "http"
+        bound_port = (scope.get("server") or (None, None))[1]
+        host = headers.get(b"host", b"").decode("utf-8", "replace")
+        if not _is_our_own(_host_authority(host, scheme), bound_port):
+            return await self._refuse(
+                f"request addressed to {host!r} refused: not a name this server answers for",
+                scope, receive, send,
+            )
+        if scope.get("method", "GET") in SAFE_METHODS:
+            return await self.app(scope, receive, send)
+        origin = headers.get(b"origin", b"").decode("utf-8", "replace")
+        if origin and not _is_our_own(_origin_authority(origin), bound_port,
+                                      as_a_browser_origin=True):
+            return await self._refuse(
+                f"cross-site request from {origin} refused", scope, receive, send
+            )
+        return await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _refuse(detail: str, scope, receive, send):
+        # 403 rather than 421 Misdirected Request, which fits the wording but
+        # invites an HTTP/2 client to retry on a fresh connection -- reaching
+        # the same refusal, since the objection is to the request, not to the
+        # route it took. Both refusals here say the same thing anyway: this came
+        # from somewhere this server does not serve.
+        response = JSONResponse({"detail": detail}, status_code=403)
+        return await response(scope, receive, send)
+
+
 class SelectWorkspace:
     """Bind each request to one corpus without changing any process-global path.
 
@@ -125,6 +396,9 @@ class SelectWorkspace:
 
 app.add_middleware(CountArrivingRequests)
 app.add_middleware(SelectWorkspace)
+# Added last, so it wraps the other two and turns a cross-site request away
+# before either of them sees it.
+app.add_middleware(RejectCrossSiteRequests)
 
 
 def _finish(job: dict, key: str) -> None:
@@ -300,10 +574,26 @@ def _run_syntheses(job: dict, topics: list[str]) -> None:
 @_workspace_job
 def _run_retag(job: dict, keys: list[str]) -> None:
     try:
+        failed = 0
+        last_failure = ""
         for index, key in enumerate(keys, 1):
             _set(job, state="reading", key=key, detail=f"{index} of {len(keys)}")
-            extract.retag_paper(key)
-        _set(job, state="done", detail=f"{len(keys)} papers")
+            # As with tensions and syntheses, and as the command line does: one
+            # paper's refusal or bad answer must not cost the papers after it.
+            # Retag all runs the whole corpus in a fixed order, so a single
+            # early failure used to leave every later paper unretagged.
+            try:
+                extract.retag_paper(key)
+            except Exception as exc:
+                failed += 1
+                last_failure = f"{key}: {type(exc).__name__}: {exc}"
+                traceback.print_exc()
+                continue
+        if failed:
+            _set(job, state="error",
+                 detail=f"{failed} of {len(keys)} papers failed; {last_failure}")
+        else:
+            _set(job, state="done", detail=f"{len(keys)} papers")
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -350,6 +640,30 @@ class SynthesesBody(BaseModel):
 
 class SynthesisTextBody(BaseModel):
     text: str
+
+
+class PaperPatch(BaseModel):
+    """The paper fields a person may correct, and the types they must hold.
+
+    Every other write here goes through a model; this route took a bare dict
+    and wrote whatever was in it. A year of `"2020"` was accepted as a string
+    and then broke the export, which sorts papers by year and cannot compare a
+    string with the numbers every other paper carries — a corpus wedged by one
+    request, with no way back except editing the JSON by hand.
+
+    Every field is optional and the caller's own fields are the only ones
+    applied, so a patch stays a patch: `None` is a value to write (clearing a
+    year), and an absent field is left alone.
+    """
+
+    title: str | None = None
+    authors: list[str] | None = None
+    year: int | None = None
+    venue: str | None = None
+    doi: str | None = None
+    summary: str | None = None
+    relevance: str | None = None
+    notes: str | None = None
 
 
 class ExportBody(BaseModel):
@@ -529,19 +843,17 @@ def get_paper(key: str) -> dict:
         raise HTTPException(404, f"no paper {key}")
 
 
-PAPER_FIELDS = {"title", "authors", "year", "venue", "doi", "summary", "relevance", "notes"}
-
-
 @app.patch("/api/papers/{key}")
-def patch_paper(key: str, patch: dict = Body(...)) -> dict:
+def patch_paper(key: str, patch: PaperPatch) -> dict:
+    # Only the fields the caller sent: an unset field is not a field set to
+    # None, and writing the whole model would blank everything left out.
+    fields = patch.model_dump(exclude_unset=True)
     with store.paper_lock(key):
         try:
             paper = store.load_paper(key)
         except KeyError:
             raise HTTPException(404, f"no paper {key}")
-        for field, value in patch.items():
-            if field in PAPER_FIELDS:
-                paper[field] = value
+        paper.update(fields)
         store.save_paper(paper)
     return paper
 
@@ -750,5 +1062,31 @@ def serve_pdf(key: str, inline: bool = False) -> FileResponse:
 def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> None:
     import uvicorn
 
+    # The CLI turns this away first, with a usage message; this catches the
+    # direct caller. Port 0 means "any free port" to uvicorn, which picks one
+    # after `trust_bind` has already written the authority down -- so the
+    # server would answer on a port nobody named while trusting a port nobody
+    # is listening on, and every request from off this machine would be refused
+    # with no way to work out why. Nor can the trust be repaired once the socket
+    # exists: with a published `--host`, the operator has to know the port in
+    # advance to reach the page at all.
+    if not 1 <= port <= 65535:
+        raise ValueError(
+            f"cannot serve on port {port}: ports run 1-65535, and 0 asks the "
+            "kernel for whichever happens to be free, leaving nobody -- this "
+            "server included -- able to say where the page is"
+        )
     config.ensure_dirs()
+    trust_bind(host, port)
+    os.environ[BIND_ENV] = f"{host}:{port}"
+    if _bound_to_every_address and not _published_authorities:
+        # Silence here would be the wrong kind: the operator asked to be
+        # reachable from anywhere, and writes from anywhere but this machine
+        # will be refused until they say what name the page is served under.
+        print(
+            f"warning: --host {host} publishes on every address, but the name a browser\n"
+            f"         will use cannot be read off the socket and is not taken from the\n"
+            f"         request. Only loopback is trusted until you set, for example,\n"
+            f"         {PUBLISHED_ORIGINS_ENV}=http://this-machine.local:{port}"
+        )
     uvicorn.run("doxograph.server:app" if reload else app, host=host, port=port, reload=reload)

@@ -173,8 +173,13 @@ def fetch_crossref(doi: str, client: httpx.Client) -> dict:
     titles = work.get("title") or [""]
     return {
         "title": re.sub(r"\s+", " ", titles[0]).strip(),
+        # An institutional author — a collaboration, a working group — is
+        # recorded under `name` with no given or family part, and reading only
+        # those two left it as a blank author that every citation marker then
+        # had to survive.
         "authors": [
             " ".join(p for p in [a.get("given", ""), a.get("family", "")] if p).strip()
+            or (a.get("name") or "").strip()
             for a in work.get("author", [])
         ],
         "year": parts[0][0] if parts and parts[0] else None,

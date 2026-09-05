@@ -17,7 +17,7 @@ def no_stray_jobs():
 
 
 def test_health_identifies_the_app_and_is_idle_by_default():
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         body = client.get("/api/health").json()
     assert body["app"] == "doxograph"
     assert body["version"] == __version__
@@ -36,7 +36,7 @@ def test_health_counts_only_unfinished_jobs():
     failed = server._new_job("failed.pdf")
     server._set(failed, state="error")
     try:
-        with TestClient(server.app) as client:
+        with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
             assert client.get("/api/health").json()["busy"] == 1
     finally:
         for job in (running, done, failed):
@@ -49,7 +49,7 @@ def test_health_does_not_read_the_corpus(monkeypatch):
         raise AssertionError("health loaded papers")
 
     monkeypatch.setattr(server.store, "all_papers", fail)
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/health").status_code == 200
 
 
@@ -78,7 +78,7 @@ def test_health_counts_an_upload_whose_body_is_still_arriving(monkeypatch):
         seen.append(server.health()["busy"])
         yield _multipart(b"%PDF-1.4\n" + b"x" * 50_000)
 
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/upload?extract_now=false", content=body(),
             headers={"content-type": "multipart/form-data; boundary=b0undary"})
@@ -112,7 +112,7 @@ def test_health_reports_reading_and_arriving_apart(monkeypatch):
         yield _multipart(b"%PDF-1.4\n" + b"x" * 50_000)
 
     try:
-        with TestClient(server.app) as client:
+        with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
             client.post(
                 "/api/upload?extract_now=false", content=body(),
                 headers={"content-type": "multipart/form-data; boundary=b0undary"})
@@ -192,7 +192,7 @@ def test_health_counts_an_upload_that_is_staged_but_not_yet_a_job(monkeypatch):
     monkeypatch.setattr(server.ingest, "stage_upload", watched)
     monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
 
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.post("/api/upload?extract_now=false",
                     files={"files": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")})
 
@@ -204,7 +204,7 @@ def test_health_counts_an_upload_that_is_staged_but_not_yet_a_job(monkeypatch):
 def test_a_finished_upload_stops_being_counted(monkeypatch):
     """Otherwise the launcher would warn about a paper forever after."""
     monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.post("/api/upload?extract_now=false",
                     files={"files": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")})
         # The job it made outlives the request, so settle that separately: what
@@ -222,7 +222,7 @@ def test_a_failed_upload_stops_being_counted(monkeypatch):
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(server.ingest, "stage_upload", explode)
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         with pytest.raises(RuntimeError):
             client.post("/api/upload?extract_now=false",
                         files={"files": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")})
@@ -248,7 +248,7 @@ def test_health_counts_an_ingest_that_is_still_being_handled(monkeypatch):
 
     monkeypatch.setattr(server.ingest, "parse_refs", watched)
 
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/ingest", json={"text": "arxiv.org/abs/2401.00001", "extract": False})
 
@@ -288,13 +288,13 @@ def test_only_reads_escape_the_arrival_count():
 
 def test_health_does_not_count_itself():
     """It is a GET, and it reports the count from inside its own request."""
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/health").json()["busy"] == 0
 
 
 def test_a_finished_mutating_request_stops_being_counted():
     """A count that did not fall would have the app warning about work forever."""
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/ingest", json={"text": "", "extract": False}).status_code == 200
         assert client.get("/api/health").json()["busy"] == 0
         assert server._requests_arriving == 0
@@ -303,7 +303,7 @@ def test_a_finished_mutating_request_stops_being_counted():
 def test_pdf_is_an_attachment_by_default():
     """What a browser has always been handed, unchanged."""
     store.pdf_path("smith2024recovery").write_bytes(b"%PDF-1.4\n")
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.get("/pdf/smith2024recovery")
     assert response.status_code == 200
     assert response.headers["content-disposition"].startswith("attachment")
@@ -313,7 +313,7 @@ def test_pdf_can_be_asked_for_inline():
     """The Mac app opens the paper in a web view, which downloads an attachment
     instead of rendering it."""
     store.pdf_path("smith2024recovery").write_bytes(b"%PDF-1.4\n")
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.get("/pdf/smith2024recovery?inline=1")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/pdf"
@@ -322,5 +322,5 @@ def test_pdf_can_be_asked_for_inline():
 
 
 def test_missing_pdf_is_still_a_404_when_asked_for_inline():
-    with TestClient(server.app) as client:
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/pdf/nobody?inline=1").status_code == 404

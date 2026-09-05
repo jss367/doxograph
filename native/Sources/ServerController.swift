@@ -145,7 +145,14 @@ final class ServerController {
         let log = self.log
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else {
+                // End of the pipe: the server has gone. A handler left
+                // installed keeps being called on a descriptor that will never
+                // have anything on it again, which spins for the rest of the
+                // session after a restart has left the old server's pipe here.
+                handle.readabilityHandler = nil
+                return
+            }
             log.append(String(decoding: data, as: UTF8.self))
         }
 
