@@ -98,8 +98,13 @@ BIND_ENV = "DOXOGRAPH_BIND"
 
 #: Where an operator who published this server has said its page really lives:
 #: a comma-separated list of origins, or bare `host:port` authorities. Needed
-#: only for a wildcard bind, where the name the browser typed cannot be read off
-#: the socket and must not be taken from the request. See `trust_bind`.
+#: wherever the name the browser typed cannot be read off the socket and must
+#: not be taken from the request: a wildcard bind, and a Unix socket, which
+#: reports no port for the origin rule to compare against. Behind a TLS
+#: terminator, publish both spellings -- `https://name` for the browser's
+#: `Origin`, and `http://name` for the `Host` it forwards over a plain-scheme
+#: scope -- since an authority is matched on its port and the scheme is what
+#: supplies the implicit one. See `trust_bind`.
 PUBLISHED_ORIGINS_ENV = "DOXOGRAPH_PUBLISHED_ORIGINS"
 
 #: The port a scheme means when an authority does not spell one out. A `Host`
