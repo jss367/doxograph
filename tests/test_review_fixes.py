@@ -3500,3 +3500,33 @@ def test_an_ordinary_request_always_carries_the_port_the_rule_needs():
     with TestClient(recording, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/health").status_code == 200
     assert seen and all(pair is not None and pair[1] is not None for pair in seen), seen
+
+
+def test_serve_refuses_port_zero_at_the_command_line(capsys):
+    """`--port 0` and a published `--host` cannot both be honoured.
+
+    Uvicorn reads 0 as "any free port" and picks one after the trusted authority
+    has been written down, so the server would answer on a port nobody named
+    while trusting a port nobody is listening on -- and every request from off
+    this machine would be refused with nothing to explain it. Reading the port
+    back off the socket afterwards would not help: the operator has to know it
+    in advance to reach the page at all. So it is a usage error, said at the
+    point the operator can still fix it.
+    """
+    for bad in ("0", "-1", "65536"):
+        with pytest.raises(SystemExit) as raised:
+            __main__.build_parser().parse_args(["serve", "--host", "192.168.1.5",
+                                                "--port", bad])
+        assert raised.value.code == 2, bad
+    assert "1-65535" in capsys.readouterr().err
+    # An ordinary port is untouched.
+    assert __main__.build_parser().parse_args(["serve", "--port", "8765"]).port == 8765
+
+
+def test_serve_refuses_port_zero_before_recording_the_authority(
+        bound_nowhere_in_particular):
+    """The same guard for a caller that skips the parser: a script, or a test."""
+    with pytest.raises(ValueError, match="cannot serve on port 0"):
+        server.serve(host="192.168.1.5", port=0)
+    assert server._published_authorities == frozenset(), \
+        "a port that cannot be served was recorded as trusted anyway"

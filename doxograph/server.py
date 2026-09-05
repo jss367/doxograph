@@ -1057,6 +1057,20 @@ def serve_pdf(key: str, inline: bool = False) -> FileResponse:
 def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> None:
     import uvicorn
 
+    # The CLI turns this away first, with a usage message; this catches the
+    # direct caller. Port 0 means "any free port" to uvicorn, which picks one
+    # after `trust_bind` has already written the authority down -- so the
+    # server would answer on a port nobody named while trusting a port nobody
+    # is listening on, and every request from off this machine would be refused
+    # with no way to work out why. Nor can the trust be repaired once the socket
+    # exists: with a published `--host`, the operator has to know the port in
+    # advance to reach the page at all.
+    if not 1 <= port <= 65535:
+        raise ValueError(
+            f"cannot serve on port {port}: ports run 1-65535, and 0 asks the "
+            "kernel for whichever happens to be free, leaving nobody -- this "
+            "server included -- able to say where the page is"
+        )
     config.ensure_dirs()
     trust_bind(host, port)
     os.environ[BIND_ENV] = f"{host}:{port}"

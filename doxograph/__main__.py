@@ -225,6 +225,30 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def _listening_port(value: str) -> int:
+    """A `--port` argument, refused here rather than an hour into a session.
+
+    Port 0 is the one worth naming. `bind` reads it as "give me any free port",
+    and uvicorn honours it -- but the server records where it was told to listen
+    before the socket exists, so a published `--host` would answer for `:0`
+    while listening somewhere else entirely, and every request from another
+    machine would come back 403 with nothing to explain it. It cannot be
+    repaired by reading the port back off the socket either: with no port agreed
+    in advance, nobody can be told where the page is. The native launcher
+    already leaves 0 out of its port walk for the same reason.
+    """
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number") from None
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(
+            f"{port} is not a port to serve on: ports run 1-65535, and 0 asks "
+            "for whichever is free, which leaves no address to hand out"
+        )
+    return port
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="doxograph", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -234,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="address to bind; a wildcard (0.0.0.0) also needs "
                         "DOXOGRAPH_PUBLISHED_ORIGINS set to the origin the page is "
                         "served under, which cannot be read off the socket")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=_listening_port, default=8765)
     p.add_argument("--reload", action="store_true")
     p.set_defaults(func=cmd_serve)
 
