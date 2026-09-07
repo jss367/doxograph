@@ -144,6 +144,9 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .claim .cev { font-size: .86rem; margin: .3rem 0 0; }
 .claim blockquote { margin: .3rem 0 0; padding-left: .6rem; border-left: 2px solid var(--line);
   color: var(--muted); font-size: .84rem; }
+.qflag { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid var(--warn); border-radius: 3px; padding: 0 .3rem; color: var(--warn);
+  margin-right: .3rem; cursor: help; }
 .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
   border: 1px solid var(--line); border-radius: 3px; padding: 0 .3rem; color: var(--muted); }
 .kind.negative, .kind.conjecture, .kind.contradiction { color: var(--warn); border-color: var(--warn); }

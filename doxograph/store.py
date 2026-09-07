@@ -25,7 +25,7 @@ from typing import Any
 
 import yaml
 
-from . import config
+from . import config, quotes
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for",
@@ -475,10 +475,30 @@ def new_claim(paper: dict, **fields) -> dict:
         "locator": "",
         "ledger_links": [],
         "reviewed": False,
+        # True when the quote was found in the PDF, False when it was not, None
+        # when there was nothing to check (no quote, or no readable PDF).
+        "quote_verified": None,
         "added": now(),
     }
     claim.update(fields)
     return claim
+
+
+def check_quote(key: str, claim: dict) -> bool | None:
+    """Set and return `quote_verified` for one claim against the paper's PDF."""
+    claim["quote_verified"] = quotes.verify(pdf_path(key), claim.get("quote") or "")
+    return claim["quote_verified"]
+
+
+@_locked
+def verify_quotes(key: str) -> dict:
+    """Re-check every quote on a paper. For corpora extracted before quotes
+    were checked, and for a PDF that arrived after its claims did."""
+    paper = load_paper(key)
+    for claim in paper.get("claims", []):
+        check_quote(key, claim)
+    save_paper(paper)
+    return paper
 
 
 def clean_ledger_links(links: Any) -> list[dict]:
@@ -518,6 +538,8 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
             for field, value in patch.items():
                 if field in CLAIM_FIELDS:
                     claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
+            if "quote" in patch:
+                check_quote(key, claim)
             claim["updated"] = now()
             refresh_status(paper)
             save_paper(paper)
@@ -536,6 +558,8 @@ def add_claim(key: str, patch: dict) -> dict:
     # An explicit `reviewed` in the patch still wins.
     if "reviewed" not in patch:
         claim["reviewed"] = bool(claim["text"].strip())
+    if claim.get("quote"):
+        check_quote(key, claim)
     paper.setdefault("claims", []).append(claim)
     refresh_status(paper)
     save_paper(paper)
@@ -752,6 +776,7 @@ def summarize(paper: dict) -> dict:
         "updated": paper.get("updated"),
         "n_claims": len(claims),
         "n_unreviewed": sum(1 for c in claims if not c.get("reviewed")),
+        "n_unverified": sum(1 for c in claims if c.get("quote_verified") is False),
         "n_proposed_tags": len(paper.get("proposed_tags", [])),
         "schema_version": (paper.get("extraction") or {}).get("schema_version"),
         "has_pdf": pdf_path(paper["key"]).exists(),

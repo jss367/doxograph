@@ -34,6 +34,7 @@ packages = ["doxograph"]
 doxograph = ["static/*"]
 
 [tool.pytest.ini_options]
+pythonpath = ["tests"]
 markers = [
     "browser: localhost browser smoke tests",
 ]

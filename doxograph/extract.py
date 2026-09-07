@@ -434,6 +434,8 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
         )
         if not claim["text"]:
             continue
+        # The prompt asks for a verbatim quote; this is where that is checked.
+        store.check_quote(key, claim)
         fresh.append(claim)
         working["claims"] = kept + fresh
 

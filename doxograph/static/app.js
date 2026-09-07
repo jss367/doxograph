@@ -122,7 +122,7 @@ const NEW_CLAIM_ID = '__new__';
 // away the first one's text. synthSaving is the topic whose hand save is in
 // flight: its editor is frozen, as a claim form is while it saves, because
 // success redraws from the server value and typing meanwhile would be lost.
-const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
+const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null };
@@ -231,7 +231,7 @@ function resetWorkspaceView() {
   S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
         kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
   Object.assign(V, {
-    paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
+    paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null,
@@ -240,6 +240,7 @@ function resetWorkspaceView() {
   $('q').value = '';
   $('kind').value = '';
   $('only-unreviewed').checked = false;
+  $('only-unverified').checked = false;
   $('group-by-tag').checked = true;
   closePaperMenu();
 }
@@ -293,6 +294,7 @@ function visibleClaims() {
     && (!V.tag || (row.tags || []).includes(V.tag))
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
+    && (!V.unverified || row.quote_verified === false)
     && (!needle || haystack(row).includes(needle)));
 }
 
@@ -331,6 +333,8 @@ function renderStats() {
     `${Object.keys(S.tag_counts).length} topics`,
   ];
   if (unreviewed) bits.push(`${unreviewed} unreviewed`);
+  const unverified = S.claims.filter((c) => c.quote_verified === false).length;
+  if (unverified) bits.push(`${unverified} quotes not found`);
   if (proposed) bits.push(`${proposed} proposed topics`);
   const openTensions = (S.tensions || []).filter((t) => t.status === 'open').length;
   if (openTensions) bits.push(`${openTensions} open tensions`);
@@ -401,6 +405,7 @@ function paperHeader(key) {
     <div class="row">
       <button type="button" data-act="reextract" data-paper="${esc(key)}">Re-read paper</button>
       <button type="button" data-act="retag-one" data-paper="${esc(key)}">Retag claims</button>
+      ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
@@ -486,9 +491,20 @@ function claimCard(row, shown) {
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
+    ${quoteHtml(row)}
     ${links}
   </div>`;
+}
+
+// The quote, flagged when it was not found in the paper's text. A quote the
+// model paraphrased or invented is the commonest extraction error, and this is
+// the one error the machine can catch on its own.
+function quoteHtml(row) {
+  if (!row.quote) return '';
+  const flag = row.quote_verified === false
+    ? '<span class="qflag" title="This quote was not found in the PDF text. Check it against the paper.">not found in PDF</span> '
+    : '';
+  return `<blockquote>${flag}${esc(row.quote)}</blockquote>`;
 }
 
 function tensionMarker(claimId) {
@@ -515,7 +531,7 @@ function tensionClaimCard(row) {
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
+    ${quoteHtml(row)}
   </div>`;
 }
 
@@ -1214,6 +1230,7 @@ $('content').addEventListener('click', async (event) => {
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
+        if (V.unverified && row.quote_verified !== false) { V.unverified = false; $('only-unverified').checked = false; }
         if (V.q.trim() && !haystack(row).includes(V.q.trim().toLowerCase())) { V.q = ''; $('q').value = ''; }
       }
       V.selectedId = claim;
@@ -1224,6 +1241,16 @@ $('content').addEventListener('click', async (event) => {
     if (act === 'reextract') {
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
       await refresh();
+      return;
+    }
+    if (act === 'verify') {
+      V.error = null;
+      try {
+        await api(`/api/papers/${encodeURIComponent(paper)}/verify`, { method: 'POST' });
+      } catch (error) {
+        V.error = `Could not check the quotes: ${error.message}`;
+      }
+      await refreshAll();
       return;
     }
     if (act === 'retag-one') {
@@ -1521,6 +1548,7 @@ $('content').addEventListener('change', (e) => {
 $('q').addEventListener('input', (e) => { captureOpenEditor(); V.q = e.target.value; renderContent(); });
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
 $('only-unreviewed').addEventListener('change', (e) => { captureOpenEditor(); V.unreviewed = e.target.checked; renderContent(); });
+$('only-unverified').addEventListener('change', (e) => { captureOpenEditor(); V.unverified = e.target.checked; renderContent(); });
 $('group-by-tag').addEventListener('change', (e) => { captureOpenEditor(); V.group = e.target.checked; renderContent(); });
 
 // --- keyboard -------------------------------------------------------------

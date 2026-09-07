@@ -105,6 +105,29 @@ def cmd_retag(args) -> int:
     return 1 if failures else 0
 
 
+def cmd_verify(args) -> int:
+    """Check every claim's quote against its paper's PDF."""
+    keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
+    missing = 0
+    for key in keys:
+        try:
+            paper = store.verify_quotes(key)
+        except KeyError:
+            print(f"{key}: no such paper", file=sys.stderr)
+            continue
+        claims = paper.get("claims", [])
+        not_found = [c for c in claims if c.get("quote_verified") is False]
+        unchecked = [c for c in claims if c.get("quote_verified") is None and c.get("quote")]
+        line = f"{key}: {len(claims) - len(not_found) - len(unchecked)} of {len(claims)} quotes found"
+        if not_found:
+            line += f", {len(not_found)} not in the PDF"
+        if unchecked:
+            line += f", {len(unchecked)} unchecked (no readable PDF)"
+        print(line)
+        missing += len(not_found)
+    return 1 if missing else 0
+
+
 def cmd_tensions(args) -> int:
     """Find, or list, claims from different papers that disagree."""
     if not args.list:
@@ -277,6 +300,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("retag", help="reassign topics against the current vocabulary")
     p.add_argument("keys", nargs="*")
     p.set_defaults(func=cmd_retag)
+
+    p = sub.add_parser("verify", help="check that each claim's quote is in its paper's PDF")
+    p.add_argument("keys", nargs="*", help="paper keys; default is every paper with claims")
+    p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("tensions", help="find claims from different papers that disagree")
     p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")

@@ -58,6 +58,7 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .ledger .own { font-weight: 600; margin: 0 0 .5rem; }
 .rel-tag { font-size: .74rem; text-transform: uppercase; letter-spacing: .03em;
   color: var(--muted); margin-right: .35rem; }
+.rel-tag.warn { color: var(--warn); }
 .count { color: var(--muted); font-weight: 400; font-size: .85rem; }
 .empty { color: var(--muted); font-style: italic; }
 @media print { .controls { display: none; } }
@@ -182,7 +183,9 @@ def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
     if row.get("evidence"):
         parts.append(f'<p class="evidence">{_e(row["evidence"])}</p>')
     if row.get("quote"):
-        parts.append(f"<blockquote>{_e(row['quote'])}</blockquote>")
+        flag = ('<span class="rel-tag warn">not found in the PDF</span>'
+                if row.get("quote_verified") is False else "")
+        parts.append(f"<blockquote>{flag}{_e(row['quote'])}</blockquote>")
     for link in row.get("ledger_links", []):
         own = ledger_by_id.get(link.get("claim", ""), {})
         label = own.get("text") or link.get("claim", "")

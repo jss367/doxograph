@@ -873,6 +873,17 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
     return {"queued": job["id"]}
 
 
+@app.post("/api/papers/{key}/verify")
+def verify_quotes(key: str) -> dict:
+    """Re-check every quote on a paper against its PDF. Fast enough to run
+    inline: the PDF text is read once and cached."""
+    try:
+        paper = store.verify_quotes(key)
+    except KeyError:
+        raise HTTPException(404, f"no paper {key}")
+    return {"key": key, "n_unverified": store.summarize(paper)["n_unverified"]}
+
+
 @app.post("/api/retag")
 def retag(body: RetagBody) -> dict:
     keys = body.keys or [p["key"] for p in store.all_papers() if p.get("claims")]

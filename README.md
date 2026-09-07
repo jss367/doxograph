@@ -38,6 +38,12 @@ Then you review. Extraction gets claims subtly wrong — wording that is too
 strong, a result attributed to the wrong condition, a missing caveat — so every
 claim starts unreviewed and the web app is built for correcting them quickly.
 
+One error the machine can catch on its own: a quote that is not in the paper.
+Every quote is checked against the PDF's text when it is extracted or edited,
+on letters and digits alone so line breaks and hyphenation do not count against
+it, and a quote that is not found is flagged on the claim. `doxograph verify`
+runs the check over a corpus extracted before it existed.
+
 ## Install
 
 ```
@@ -56,6 +62,7 @@ doxograph add 2602.06941              # arXiv ID, arXiv URL, DOI, PDF URL, or a 
 doxograph add --no-extract paper.pdf  # fetch now, read later
 doxograph extract                     # read every paper that has no claims yet
 doxograph retag                       # reassign topics against the current vocabulary
+doxograph verify                      # check that every quote is in its paper's PDF
 doxograph tensions                    # find claims from different papers that disagree
 doxograph tensions --list             # show what has been found, without calling the model
 doxograph synthesize                  # write what the papers hold on each topic
