@@ -87,7 +87,7 @@ appearanceQuery.addEventListener('change', () => {
   if (themeSettings.appearance === 'system') applyThemeSettings(themeSettings);
 });
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 let workspaces = [];
 let currentWorkspaceId = null;
@@ -262,7 +262,7 @@ function renderWorkspacePicker() {
 }
 
 function resetWorkspaceView() {
-  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
+  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], syntheses: [],
         kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
   Object.assign(V, {
     paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
@@ -341,8 +341,10 @@ function render() {
   renderStats();
   renderPapers();
   renderTensionsNav();
+  renderResearchNav();
   renderTags();
-  if (!V.editing && !V.synthEditing) renderContent();
+  // The research form is an editor too: a poll must not redraw it under the cursor.
+  if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
   renderJobs();
 }
 
@@ -354,6 +356,7 @@ function renderAll() {
   renderStats();
   renderPapers();
   renderTensionsNav();
+  renderResearchNav();
   renderTags();
   renderContent();
   renderJobs();
@@ -402,6 +405,16 @@ function renderTensionsNav() {
   $('tensions-nav').innerHTML = `<li class="${V.view === 'tensions' ? 'active' : ''}" data-view="tensions">
     <span class="pt">Where papers disagree</span>
     <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
+}
+
+function renderResearchNav() {
+  const n = (S.ledger || []).length;
+  const bits = [];
+  bits.push(S.context ? 'context written' : 'no context yet');
+  bits.push(n ? `${n} claims of my own` : 'no claims of my own');
+  $('research-nav').innerHTML = `<li class="${V.view === 'research' ? 'active' : ''}" data-view="research">
+    <span class="pt">What I am studying</span>
+    <span class="pm">${esc(bits.join(' · '))}</span></li>`;
 }
 
 // Tensions a claim takes part in, for the marker on its card. Dismissed ones
@@ -634,6 +647,81 @@ function renderTensions() {
   if (main) main.scrollTop = scrollTop;
 }
 
+// --- research: the context and the ledger, edited in place -----------------
+//
+// context.md and ledger.yaml are the two inputs that most shape what
+// extraction returns, and both used to need a text editor outside the app.
+// One form edits both; Save writes both.
+
+function ledgerRow(claim, i) {
+  return `<div class="linkrow" data-ledger-row="${i}">
+    <input name="ledger-id" value="${esc(claim.id || '')}" placeholder="L${i + 1}" size="6" aria-label="Claim id">
+    <input name="ledger-text" value="${esc(claim.text || '')}" placeholder="One of my own claims, as a sentence" aria-label="Claim text">
+    <button type="button" data-act="drop-ledger" title="Remove this claim">×</button>
+  </div>`;
+}
+
+function renderResearch() {
+  const main = $('main');
+  const scrollTop = main ? main.scrollTop : 0;
+  const ledger = S.ledger || [];
+  let html = `<div class="paperhead">
+    <h2>What I am studying</h2>
+    <p class="ps">The context goes into every model pass and is the main lever on the
+      <em>why it is here</em> line. Your own claims are what a paper's claims are linked
+      against: supports, contradicts, supplies a method for, refines.</p>
+  </div>`;
+  if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
+  html += `<form class="edit research" id="research-form">
+    <div><label for="research-context">Research context</label>
+      <textarea id="research-context" name="context" rows="8"
+        placeholder="What the research is about, and what makes a paper relevant to it.">${esc(S.context || '')}</textarea></div>
+    <div><label>My own claims</label>
+      <div class="links" id="ledger-rows">${ledger.map(ledgerRow).join('')}</div>
+      <div class="row"><button type="button" data-act="add-ledger">Add a claim</button></div></div>
+    <div class="row right">
+      <button type="button" data-act="cancel-research">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>`;
+  $('content').innerHTML = html;
+  if (main) main.scrollTop = scrollTop;
+}
+
+function readResearchForm() {
+  const form = $('research-form');
+  const claims = [...form.querySelectorAll('[data-ledger-row]')].map((row) => ({
+    id: row.querySelector('[name="ledger-id"]').value.trim(),
+    text: row.querySelector('[name="ledger-text"]').value.trim(),
+  })).filter((c) => c.id || c.text);
+  return { context: form.querySelector('[name="context"]').value, claims };
+}
+
+async function saveResearch() {
+  const { context, claims } = readResearchForm();
+  V.error = null;
+  try {
+    await api('/api/context', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: context }),
+    });
+    await api('/api/ledger', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ claims }),
+    });
+  } catch (error) {
+    V.error = `Could not save: ${error.message}`;
+    renderResearch();
+    return;
+  }
+  showView('claims');
+  await refreshAll();
+}
+
+$('content').addEventListener('submit', async (event) => {
+  if (event.target.id !== 'research-form') return;
+  event.preventDefault();
+  await saveResearch();
+});
+
 function showView(view) {
   if (view === V.view) return;
   // The tensions view has no editor. Park any open one rather than leaving
@@ -772,6 +860,7 @@ async function synthesize(topics) {
 
 function renderContent() {
   if (V.view === 'tensions') { renderTensions(); return; }
+  if (V.view === 'research') { renderResearch(); return; }
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const shown = new Set();
@@ -1144,6 +1233,15 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'cancel') { cancelEdit(); return; }
+    if (act === 'add-ledger') {
+      const rows = $('ledger-rows');
+      const count = rows.querySelectorAll('[data-ledger-row]').length;
+      rows.insertAdjacentHTML('beforeend', ledgerRow({ id: `L${count + 1}`, text: '' }, count));
+      rows.lastElementChild.querySelector('[name="ledger-text"]').focus();
+      return;
+    }
+    if (act === 'drop-ledger') { button.closest('[data-ledger-row]').remove(); return; }
+    if (act === 'cancel-research') { V.error = null; showView('claims'); renderAll(); return; }
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
       button.closest('.linkrow').style.display = 'none';
@@ -1340,7 +1438,7 @@ $('content').addEventListener('click', async (event) => {
   // fields bubbles down to the card-selection branch below. Re-rendering there
   // replaces the form, drops focus, and redraws from the stored row, which
   // makes the editor unusable with a mouse.
-  if (event.target.closest('form[data-form]')) return;
+  if (event.target.closest('form[data-form], #research-form')) return;
 
   const tagEl = event.target.closest('[data-tag]');
   if (tagEl && !tagEl.dataset.act) {
@@ -1384,6 +1482,12 @@ $('papers').addEventListener('click', (event) => {
 $('tensions-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('tensions');
+  renderAll();
+});
+
+$('research-nav').addEventListener('click', (event) => {
+  if (!event.target.closest('[data-view]')) return;
+  showView('research');
   renderAll();
 });
 
@@ -1694,7 +1798,8 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       renderStats();
-      if (!V.editing && !V.synthEditing) { renderPapers(); renderTensionsNav(); renderTags(); renderContent(); }
+      renderPapers(); renderTensionsNav(); renderResearchNav(); renderTags();
+      if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
 }

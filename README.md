@@ -189,7 +189,9 @@ claims:
 
 These are your own claims. Extraction links a paper's claims to them, which is
 what turns the corpus into an answer to "what external evidence do I have for
-this" rather than a pile of notes.
+this" rather than a pile of notes. The file can be edited by hand or from the
+web app, under *What I am studying* in the sidebar, which edits the research
+context in the same form.
 
 ### context.md
 

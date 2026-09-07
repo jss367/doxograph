@@ -666,6 +666,19 @@ class PaperPatch(BaseModel):
     notes: str | None = None
 
 
+class LedgerClaim(BaseModel):
+    id: str
+    text: str = ""
+
+
+class LedgerBody(BaseModel):
+    claims: list[LedgerClaim]
+
+
+class ContextBody(BaseModel):
+    text: str
+
+
 class ExportBody(BaseModel):
     path: str | None = None
     title: str = "Doxograph"
@@ -1074,6 +1087,35 @@ def remove_synthesis(topic: str) -> dict:
     except KeyError:
         raise HTTPException(404, f"no synthesis for {topic}")
     return {"deleted": topic}
+
+
+@app.put("/api/ledger")
+def put_ledger(body: LedgerBody) -> dict:
+    """Replace the ledger: the user's own claims, which extraction links to.
+
+    Ids must be present and unique, since a link names a claim by id alone.
+    Links on paper claims that name a removed id are left in place; the card
+    shows the bare id, and the user can take the link off or restore the claim.
+    """
+    claims = []
+    seen = set()
+    for item in body.claims:
+        claim_id = item.id.strip()
+        if not claim_id:
+            raise HTTPException(422, "every ledger claim needs an id")
+        if claim_id in seen:
+            raise HTTPException(422, f"ledger id {claim_id!r} is used twice")
+        seen.add(claim_id)
+        claims.append({"id": claim_id, "text": item.text.strip()})
+    store.save_ledger(claims)
+    return {"ledger": store.load_ledger()}
+
+
+@app.put("/api/context")
+def put_context(body: ContextBody) -> dict:
+    """Replace the research context given to every model pass."""
+    store.save_context(body.text)
+    return {"context": store.load_context()}
 
 
 @app.post("/api/export")

@@ -229,3 +229,7 @@ form[data-form].saving { opacity: .6; }
 .synth .smeta .stale { color: var(--warn); }
 .synth textarea { width: 100%; min-height: 8rem; font: inherit; font-size: .92rem; }
 .group h3 .mini { font-size: .72rem; font-weight: 400; margin-left: .4rem; }
+
+/* The research form: context and the ledger of my own claims. */
+.edit.research .linkrow input[name="ledger-id"] { flex: 0 0 5rem; font-family: ui-monospace, Menlo, monospace; }
+.edit.research .linkrow input[name="ledger-text"] { flex: 1; }

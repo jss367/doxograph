@@ -682,3 +682,50 @@ def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redr
     saved = {r["id"]: r for r in store.claim_rows()}
     assert saved["paper-a-c1"]["text"] == "Claim saved while the synthesis editor was open."
     assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written."]
+
+
+@pytest.mark.browser
+def test_the_research_context_and_ledger_are_edited_in_the_app():
+    _paper("paper-a", "Paper A", "recovery")
+    store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                nav = page.locator('#research-nav [data-view="research"]')
+                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                assert await form.locator('[name="ledger-text"]').input_value() == "Recovery is path-dependent."
+
+                await form.locator('[name="context"]').fill("Steering vectors and what recovers from them.")
+                await form.get_by_role("button", name="Add a claim").click()
+                rows = form.locator("[data-ledger-row]")
+                assert await rows.count() == 2
+                assert await rows.nth(1).locator('[name="ledger-id"]').input_value() == "L2"
+                await rows.nth(1).locator('[name="ledger-text"]').fill("Steering is reversible.")
+                # A poll while the form is open must not redraw it: wait past
+                # one tick and check the typed text is still there.
+                await page.wait_for_timeout(3000)
+                assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
+                await form.get_by_role("button", name="Save").click()
+
+                # Back on the claims, and the sidebar counts the new state.
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                await nav.get_by_text("context written · 2 claims of my own").wait_for()
+                # The editor offers the new ledger claim as a link target.
+                await page.locator('.claim[data-claim="paper-a-c1"] button[data-act="edit"]').click()
+                options = page.locator('form[data-form] select[name="link-claim"] option')
+                assert "L2" in " ".join(await options.all_text_contents())
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_context() == "Steering vectors and what recovers from them."
+    assert store.load_ledger() == [
+        {"id": "L1", "text": "Recovery is path-dependent."},
+        {"id": "L2", "text": "Steering is reversible."},
+    ]
