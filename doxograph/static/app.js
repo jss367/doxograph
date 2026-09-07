@@ -189,11 +189,46 @@ async function api(path, options = {}) {
   }
 }
 
+// The corpus is fetched with the ETag of the last answer, so a poll that finds
+// nothing changed costs the server a directory listing and costs the page
+// nothing at all: `fetchState` returns null on a 304 and `S` is left alone.
+let stateEtag = null;
+
+async function fetchState() {
+  const headers = new Headers();
+  if (currentWorkspaceId) headers.set('X-Doxograph-Workspace', currentWorkspaceId);
+  if (stateEtag) headers.set('If-None-Match', stateEtag);
+  const response = await fetch('/api/state', { headers });
+  if (response.status === 304) return null;
+  if (!response.ok) {
+    let detail = response.statusText;
+    try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
+    throw new Error(detail);
+  }
+  stateEtag = response.headers.get('ETag');
+  return response.json();
+}
+
+async function fetchJobs() {
+  const result = await api('/api/jobs');
+  return result.jobs || [];
+}
+
+// Pulls the corpus and the jobs, keeping `S.jobs` across a state answer that
+// did not change. Returns whether the corpus changed.
+async function pull() {
+  const requestedWorkspace = currentWorkspaceId;
+  const [next, jobs] = await Promise.all([fetchState(), fetchJobs()]);
+  if (requestedWorkspace !== currentWorkspaceId) return false;
+  if (next) S = { ...next, jobs };
+  else S.jobs = jobs;
+  return Boolean(next);
+}
+
 async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
-  const next = await api('/api/state');
+  await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  S = next;
   render();
 }
 
@@ -204,9 +239,8 @@ async function refresh() {
 async function refreshAll() {
   captureOpenEditor();
   const requestedWorkspace = currentWorkspaceId;
-  const next = await api('/api/state');
+  await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  S = next;
   renderAll();
 }
 
@@ -260,6 +294,7 @@ async function switchWorkspace(workspaceId) {
     return;
   }
   currentWorkspaceId = workspaceId;
+  stateEtag = null;   // the tag belongs to the other workspace's corpus
   try { localStorage.setItem('doxograph-workspace', workspaceId); } catch (e) { /* optional */ }
   resetWorkspaceView();
   renderWorkspacePicker();
@@ -1645,17 +1680,6 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
-function stateSignature(state) {
-  return JSON.stringify([
-    (state.papers || []).map((p) => [p.key, p.status, p.n_claims, p.n_proposed_tags, p.updated]),
-    (state.claims || []).map((c) => [c.id, c.reviewed, c.updated || c.added, (c.tags || []).join(',')]),
-    (state.tags || []).map((t) => t.name),
-    (state.ledger || []).map((c) => c.id),
-    (state.tensions || []).map((t) => [t.id, t.status, t.stale, t.found, (t.topics || []).join(',')]),
-    (state.syntheses || []).map((s) => [s.topic, s.written, s.stale, s.source]),
-  ]);
-}
-
 async function boot() {
   await loadWorkspaces();
   await refresh();
@@ -1666,11 +1690,7 @@ async function boot() {
     const busy = (S.jobs || []).some((j) => ['queued', 'fetching', 'reading'].includes(j.state));
     if (!busy && (V.editing || V.synthEditing)) return;
     try {
-      const requestedWorkspace = currentWorkspaceId;
-      const next = await api('/api/state');
-      if (requestedWorkspace !== currentWorkspaceId) return;
-      const changed = stateSignature(next) !== stateSignature(S);
-      S = next;
+      const changed = await pull();
       renderJobs();
       if (!changed) return;
       renderStats();

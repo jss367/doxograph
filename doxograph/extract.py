@@ -190,10 +190,7 @@ def ledger_block() -> str:
 
 
 def context_block() -> str:
-    path = config.data_dir() / "context.md"
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip()
-    return "No research context has been recorded, so judge relevance broadly."
+    return store.load_context() or "No research context has been recorded, so judge relevance broadly."
 
 
 def _pdf_fingerprint(pdf: Path) -> dict:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import itertools
 import json
 import os
@@ -706,7 +707,21 @@ def delete_tag(name: str) -> None:
         _retag_all(name, None)
 
 
-# --- your own claims ------------------------------------------------------
+# --- your own claims, and what the research is about ----------------------
+
+def context_path() -> Path:
+    return config.data_dir() / "context.md"
+
+
+def load_context() -> str:
+    """The free-text description of the research, given to every model pass."""
+    path = context_path()
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
+def save_context(text: str) -> None:
+    write_atomic(context_path(), (text or "").strip() + "\n")
+
 
 def load_ledger() -> list[dict]:
     path = config.ledger_path()
@@ -724,6 +739,36 @@ def save_ledger(claims: list[dict]) -> None:
 
 
 # --- cross-paper views ----------------------------------------------------
+
+def corpus_signature() -> str:
+    """A string that changes whenever anything `/api/state` shows would.
+
+    Built from directory listings and file stats rather than file contents:
+    a few hundred stats cost a millisecond or two, where reading every paper
+    costs a good fraction of a second, and the page asks twice a second. The
+    writes are all atomic replaces, so a changed file has a new inode and
+    mtime; a CLI process writing the corpus is seen the same way as this one.
+    """
+    parts: list[tuple] = []
+    for directory, suffix in ((config.papers_dir(), ".json"), (config.pdfs_dir(), ".pdf")):
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.name.endswith(suffix) and not entry.name.startswith("."):
+                        st = entry.stat()
+                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino))
+        except FileNotFoundError:
+            pass
+    for path in (config.tags_path(), config.ledger_path(), tensions_path(), syntheses_path(),
+                 context_path()):
+        try:
+            st = path.stat()
+            parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino))
+        except FileNotFoundError:
+            parts.append((path.name,))
+    parts.sort()
+    return hashlib.sha1(repr(parts).encode()).hexdigest()
+
 
 def claim_rows(papers: list[dict] | None = None) -> list[dict]:
     """Flatten every claim with the paper fields needed to display it."""

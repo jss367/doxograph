@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from fastapi import Body, FastAPI, HTTPException, UploadFile
+from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -758,15 +758,17 @@ def health() -> dict:
     }
 
 
-@app.get("/api/state")
-def state() -> dict:
+#: The last `/api/state` answer per workspace, with the corpus signature it
+#: was built from. The page polls twice a second and the corpus changes far
+#: less often than that; the signature is a directory listing, the answer is
+#: every paper file read and joined.
+_state_cache: dict[str, tuple[str, dict]] = {}
+_state_cache_lock = threading.Lock()
+
+
+def _build_state() -> dict:
     papers = store.all_papers()
     rows = store.claim_rows(papers)
-    with _jobs_lock:
-        jobs = sorted(
-            (job for job in _jobs.values() if job.get("workspace") == config.workspace_id()),
-            key=lambda j: j["id"], reverse=True,
-        )[:20]
     return {
         "workspace": config.get_workspace(),
         "papers": [store.summarize(p) for p in papers],
@@ -774,6 +776,7 @@ def state() -> dict:
         "tags": store.load_tags(),
         "tag_counts": store.tag_counts(rows),
         "ledger": store.load_ledger(),
+        "context": store.load_context(),
         "tensions": store.tension_rows(rows),
         "syntheses": store.synthesis_rows(rows),
         "tension_kinds": store.TENSION_KINDS,
@@ -781,11 +784,45 @@ def state() -> dict:
         "kinds": config.CLAIM_KINDS,
         "strengths": config.CLAIM_STRENGTHS,
         "relations": config.LEDGER_RELATIONS,
-        "jobs": jobs,
         "data_dir": str(config.data_dir()),
         "model": config.MODEL,
         "has_key": config.api_key() is not None,
     }
+
+
+@app.get("/api/state")
+def state(request: Request) -> Response:
+    """The corpus as the page shows it. Jobs are not in here; they change
+    every second while a paper is read and have their own route.
+
+    The answer carries the corpus signature as its ETag, and a request that
+    presents the same one back gets a 304 with no body.
+    """
+    workspace = config.workspace_id()
+    signature = store.corpus_signature()
+    etag = f'"{signature}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    with _state_cache_lock:
+        cached = _state_cache.get(workspace)
+    if cached is None or cached[0] != signature:
+        payload = _build_state()
+        with _state_cache_lock:
+            _state_cache[workspace] = (signature, payload)
+    else:
+        payload = cached[1]
+    return JSONResponse(payload, headers={"ETag": etag})
+
+
+@app.get("/api/jobs")
+def jobs() -> dict:
+    """The recent background jobs in this workspace, newest first."""
+    with _jobs_lock:
+        recent = sorted(
+            (job for job in _jobs.values() if job.get("workspace") == config.workspace_id()),
+            key=lambda j: j["id"], reverse=True,
+        )[:20]
+    return {"jobs": recent}
 
 
 @app.get("/api/workspaces")
