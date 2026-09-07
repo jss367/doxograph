@@ -791,3 +791,92 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
     record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions, before=before)
     return {"written": record is not None, "claims": len(rows), "papers": len(papers)}
+
+
+# --- where the papers agree -----------------------------------------------
+
+AGREEMENT_SYSTEM = """\
+You look for findings that several research papers share.
+
+You are given every claim in one topic, grouped by paper. Return the groups of
+claims, drawn from at least two different papers, that assert the same finding:
+the same question, answered the same way. A group may have members from many
+papers; put every claim that makes the finding into it, one group per finding.
+
+Claims that merely share a topic are not an agreement. Two papers measuring
+different quantities, or the same quantity under conditions that change the
+answer, are not in agreement; nor are a claim and one that refines or qualifies
+it. A result and its replication are. When in doubt, leave the group out: an
+empty list is a good answer for a topic where every paper says something
+different.
+
+Each note is one sentence, in plain language, stating the shared finding in the
+scope the papers actually share. Refer to papers by author and year, not by
+claim id."""
+
+AGREEMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "agreements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claims": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "description": "The ids of the claims, from at least two different papers.",
+                    },
+                    "note": {"type": "string", "description": "The finding they share, in one sentence."},
+                },
+                "required": ["claims", "note"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["agreements"],
+    "additionalProperties": False,
+}
+
+
+def find_agreements(topic: str, rows: list[dict] | None = None,
+                    tags: list[dict] | None = None) -> dict:
+    """Ask the model which claims in `topic` assert the same finding, and
+    record the answer. One call per topic, claim text rather than PDFs, as the
+    tensions pass; `store.tension_topics` lists the topics worth a call."""
+    rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
+    papers = {r["paper"] for r in rows}
+    if len(papers) < 2:
+        return {"added": 0, "grown": 0, "reopened": 0, "kept": 0, "returned": 0}
+    tags = store.load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
+    shown = {r["id"]: r for r in rows}
+    api = client()
+    response = api.messages.create(
+        model=config.MODEL,
+        max_tokens=8000,
+        system=AGREEMENT_SYSTEM,
+        thinking={"type": "adaptive"},
+        output_config={
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": AGREEMENT_SCHEMA},
+        },
+        messages=[{
+            "role": "user",
+            "content": (
+                f"My research:\n\n{context_block()}\n\n"
+                f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
+                f"Claims, by paper:\n\n{_tension_listing(rows)}\n\n"
+                "Return the groups of claims from different papers that assert the same finding."
+            ),
+        }],
+    )
+    if response.stop_reason == "refusal":
+        detail = getattr(response.stop_details, "explanation", "") or ""
+        raise RuntimeError(f"agreement pass refused for {topic}: {detail}")
+    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    found = payload.get("agreements", [])
+    result = store.record_agreements(topic, found, shown)
+    result["returned"] = len(found)
+    return result

@@ -543,6 +543,35 @@ def _run_tensions(job: dict, topics: list[str]) -> None:
 
 
 @_workspace_job
+def _run_agreements(job: dict, topics: list[str]) -> None:
+    try:
+        added = grown = failed = 0
+        last_failure = ""
+        for index, topic in enumerate(topics, 1):
+            _set(job, state="reading", detail=f"{index} of {len(topics)}: {topic}")
+            try:
+                result = extract.find_agreements(topic)
+            except Exception as exc:
+                failed += 1
+                last_failure = f"{topic}: {type(exc).__name__}: {exc}"
+                traceback.print_exc()
+                continue
+            added += result["added"]
+            grown += result["grown"]
+        summary = f"{added} new" + (f", {grown} grown" if grown else "")
+        if failed:
+            _set(job, state="error",
+                 detail=f"{failed} of {len(topics)} topics failed, {summary}; {last_failure}")
+        else:
+            _set(job, state="done", detail=f"{len(topics)} topics, {summary}")
+    except Exception as exc:
+        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+    finally:
+        _prune_jobs()
+
+
+@_workspace_job
 def _run_syntheses(job: dict, topics: list[str]) -> None:
     try:
         written = failed = 0
@@ -631,6 +660,14 @@ class TensionsBody(BaseModel):
 
 
 class TensionStatusBody(BaseModel):
+    status: str
+
+
+class AgreementsBody(BaseModel):
+    topics: list[str] | None = None
+
+
+class AgreementStatusBody(BaseModel):
     status: str
 
 
@@ -791,6 +828,7 @@ def _build_state() -> dict:
         "ledger": store.load_ledger(),
         "context": store.load_context(),
         "tensions": store.tension_rows(rows),
+        "agreements": store.agreement_rows(rows),
         "syntheses": store.synthesis_rows(rows),
         "tension_kinds": store.TENSION_KINDS,
         "tension_statuses": store.TENSION_STATUSES,
@@ -1048,6 +1086,38 @@ def remove_tension(tension_id: str) -> dict:
     except KeyError:
         raise HTTPException(404, f"no tension {tension_id}")
     return {"deleted": tension_id}
+
+
+@app.post("/api/agreements")
+def find_agreements(body: AgreementsBody) -> dict:
+    """Queue a pass over every topic where two papers could agree: the same
+    topics a tension is possible in."""
+    possible = store.tension_topics()
+    topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
+    if not topics:
+        return {"queued": 0}
+    job = _new_job(f"agreements in {len(topics)} topics")
+    _pool.submit(_run_agreements, job, topics)
+    return {"queued": len(topics)}
+
+
+@app.patch("/api/agreements/{agreement_id}")
+def patch_agreement(agreement_id: str, body: AgreementStatusBody) -> dict:
+    try:
+        return store.set_agreement_status(agreement_id, body.status)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except KeyError:
+        raise HTTPException(404, f"no agreement {agreement_id}")
+
+
+@app.delete("/api/agreements/{agreement_id}")
+def remove_agreement(agreement_id: str) -> dict:
+    try:
+        store.delete_agreement(agreement_id)
+    except KeyError:
+        raise HTTPException(404, f"no agreement {agreement_id}")
+    return {"deleted": agreement_id}
 
 
 @app.post("/api/syntheses")

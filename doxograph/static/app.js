@@ -87,7 +87,7 @@ appearanceQuery.addEventListener('change', () => {
   if (themeSettings.appearance === 'system') applyThemeSettings(themeSettings);
 });
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], syntheses: [],
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 let workspaces = [];
 let currentWorkspaceId = null;
@@ -124,7 +124,7 @@ const NEW_CLAIM_ID = '__new__';
 // success redraws from the server value and typing meanwhile would be lost.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
-            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
+            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null };
 
 function blankClaim(paper) {
@@ -262,12 +262,12 @@ function renderWorkspacePicker() {
 }
 
 function resetWorkspaceView() {
-  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], syntheses: [],
+  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
         kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
   Object.assign(V, {
     paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
-    error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
+    error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null,
   });
   savingClaims.clear();
@@ -341,6 +341,7 @@ function render() {
   renderStats();
   renderPapers();
   renderTensionsNav();
+  renderAgreementsNav();
   renderResearchNav();
   renderTags();
   // The research form is an editor too: a poll must not redraw it under the cursor.
@@ -356,6 +357,7 @@ function renderAll() {
   renderStats();
   renderPapers();
   renderTensionsNav();
+  renderAgreementsNav();
   renderResearchNav();
   renderTags();
   renderContent();
@@ -376,6 +378,8 @@ function renderStats() {
   if (proposed) bits.push(`${proposed} proposed topics`);
   const openTensions = (S.tensions || []).filter((t) => t.status === 'open').length;
   if (openTensions) bits.push(`${openTensions} open tensions`);
+  const openAgreements = (S.agreements || []).filter((a) => a.status === 'open').length;
+  if (openAgreements) bits.push(`${openAgreements} open agreements`);
   const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
   if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
   if (!S.has_key) bits.push('no API key found');
@@ -405,6 +409,24 @@ function renderTensionsNav() {
   $('tensions-nav').innerHTML = `<li class="${V.view === 'tensions' ? 'active' : ''}" data-view="tensions">
     <span class="pt">Where papers disagree</span>
     <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
+}
+
+function renderAgreementsNav() {
+  const all = S.agreements || [];
+  const count = (status) => all.filter((a) => a.status === status).length;
+  const parts = [];
+  if (count('open')) parts.push(`${count('open')} open`);
+  if (count('confirmed')) parts.push(`${count('confirmed')} confirmed`);
+  if (count('dismissed')) parts.push(`${count('dismissed')} dismissed`);
+  $('agreements-nav').innerHTML = `<li class="${V.view === 'agreements' ? 'active' : ''}" data-view="agreements">
+    <span class="pt">Where papers agree</span>
+    <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
+}
+
+// Agreements a claim is part of, for the marker on its card.
+function agreementsFor(claimId) {
+  return (S.agreements || []).filter((a) => a.status !== 'dismissed'
+    && a.claims.some((c) => c.id === claimId));
 }
 
 function renderResearchNav() {
@@ -531,6 +553,7 @@ function claimCard(row, shown) {
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
       ${tensionMarker(row.id)}
+      ${agreementMarker(row.id)}
       <span class="cact">
         <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
@@ -563,6 +586,94 @@ function tensionMarker(claimId) {
   const label = involved.length === 1 ? 'in tension with 1 claim' : `in tension with ${involved.length} claims`;
   return `<span class="tmark ${confirmed ? 'confirmed' : ''}" data-act="tension-focus"
     data-claim="${esc(claimId)}" title="Show the tensions this claim is part of">⚡ ${esc(label)}</span>`;
+}
+
+function agreementMarker(claimId) {
+  if (V.view === 'agreements') return '';
+  const involved = agreementsFor(claimId);
+  if (!involved.length) return '';
+  const papers = new Set(involved.flatMap((a) => a.claims.map((c) => c.paper)));
+  papers.delete((S.claims.find((c) => c.id === claimId) || {}).paper);
+  const confirmed = involved.every((a) => a.status === 'confirmed');
+  const label = `${papers.size} other ${papers.size === 1 ? 'paper agrees' : 'papers agree'}`;
+  return `<span class="amark ${confirmed ? 'confirmed' : ''}" data-act="agreement-focus"
+    data-claim="${esc(claimId)}" title="Show the agreements this claim is part of">≈ ${esc(label)}</span>`;
+}
+
+function agreementCard(a) {
+  const topics = (a.topics || []).map((x) => `<span class="tag" data-tag="${esc(x)}">#${esc(x)}</span>`).join(' ');
+  const actions = [];
+  if (a.stale || a.status !== 'confirmed') actions.push(`<button type="button" data-act="agreement-status" data-agreement="${esc(a.id)}" data-status="confirmed">Confirm</button>`);
+  if (a.stale || a.status !== 'dismissed') actions.push(`<button type="button" data-act="agreement-status" data-agreement="${esc(a.id)}" data-status="dismissed">Dismiss</button>`);
+  if (a.status !== 'open') actions.push(`<button type="button" data-act="agreement-status" data-agreement="${esc(a.id)}" data-status="open">Reopen</button>`);
+  actions.push(`<button type="button" data-act="agreement-delete" data-agreement="${esc(a.id)}">delete</button>`);
+  return `<div class="tcard ${esc(a.status)}" data-agreement="${esc(a.id)}">
+    <div class="thead">
+      <span class="kind agreement">${a.n_papers} papers</span>
+      <span class="st ${esc(a.status)}">${esc(a.status)}</span>
+      ${topics}
+      <span class="cact">${actions.join('')}</span>
+    </div>
+    ${a.note ? `<p class="tnote">${esc(a.note)}</p>` : ''}
+    <div class="tgroup">${a.claims.map(tensionClaimCard).join('')}</div>
+    ${a.stale ? '<p class="stale">A claim here was edited or removed after this was found. Re-run Find agreements to re-judge it, or decide it yourself.</p>' : ''}
+  </div>`;
+}
+
+function visibleAgreements() {
+  return (S.agreements || []).filter((a) =>
+    (!V.agreementStatus || a.status === V.agreementStatus)
+    && (!V.tag || (a.topics || []).includes(V.tag))
+    && (!V.agreementFocus || a.claims.some((c) => c.id === V.agreementFocus)));
+}
+
+function renderAgreements() {
+  const main = $('main');
+  const scrollTop = main ? main.scrollTop : 0;
+  const rows = visibleAgreements();
+  const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+  const focus = V.agreementFocus ? S.claims.find((c) => c.id === V.agreementFocus) : null;
+  let html = `<div class="paperhead">
+    <h2>Where papers agree</h2>
+    <p class="ps">Findings that several papers make: the same question, answered the same way.
+      The count is how many papers make it, which is the answer to "how much evidence do I
+      have for this". Confirm the ones that hold up, dismiss the rest.</p>
+    <div class="row">
+      <select id="agreement-status">
+        <option value="" ${V.agreementStatus ? '' : 'selected'}>every status</option>
+        ${statuses.map((st) => `<option value="${esc(st)}" ${V.agreementStatus === st ? 'selected' : ''}>${esc(st)}</option>`).join('')}
+      </select>
+      ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
+      ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
+                 <button type="button" data-act="agreement-unfocus">show all</button>` : ''}
+      <button type="button" data-act="find-agreements" style="margin-left:auto">Find agreements</button>
+    </div>
+  </div>`;
+  if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
+  if (!rows.length) {
+    html += (S.agreements || []).length
+      ? '<p class="empty">No agreements match these filters.</p>'
+      : '<p class="empty">Nothing found yet. Find agreements asks the model, topic by topic, which claims from different papers assert the same finding.</p>';
+  } else {
+    html += rows.map(agreementCard).join('');
+  }
+  $('content').innerHTML = html;
+  if (main) main.scrollTop = scrollTop;
+}
+
+async function findAgreements() {
+  V.error = null;
+  try {
+    const result = await api('/api/agreements', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    if (!result.queued) {
+      V.error = 'No topic has claims from two papers yet, so there is nothing to compare.';
+    }
+  } catch (error) {
+    V.error = `Could not start the pass: ${error.message}`;
+  }
+  await refresh();
 }
 
 // A claim as it appears inside a tension: the same card, minus the review and
@@ -733,6 +844,7 @@ function showView(view) {
   V.error = null;
   V.view = view;
   if (view !== 'tensions') V.tensionFocus = null;
+  if (view !== 'agreements') V.agreementFocus = null;
 }
 
 function editForm(row) {
@@ -861,6 +973,7 @@ async function synthesize(topics) {
 function renderContent() {
   if (V.view === 'tensions') { renderTensions(); return; }
   if (V.view === 'research') { renderResearch(); return; }
+  if (V.view === 'agreements') { renderAgreements(); return; }
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const shown = new Set();
@@ -1301,6 +1414,34 @@ $('content').addEventListener('click', async (event) => {
       await refreshAll();
       return;
     }
+    if (act === 'agreement-focus') {
+      showView('agreements');
+      V.agreementFocus = claim;
+      V.agreementStatus = '';
+      renderAll();
+      return;
+    }
+    if (act === 'agreement-unfocus') { V.agreementFocus = null; renderContent(); return; }
+    if (act === 'agreement-status') {
+      V.error = null;
+      try {
+        await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: button.dataset.status }),
+        });
+      } catch (error) {
+        V.error = `Could not update the agreement: ${error.message}`;
+      }
+      await refreshAll();
+      return;
+    }
+    if (act === 'agreement-delete') {
+      if (!confirm('Delete this agreement?')) return;
+      await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, { method: 'DELETE' });
+      await refreshAll();
+      return;
+    }
+    if (act === 'find-agreements') { await findAgreements(); return; }
     if (act === 'find-tensions') {
       await findTensions();
       return;
@@ -1483,6 +1624,18 @@ $('tensions-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('tensions');
   renderAll();
+});
+
+$('agreements-nav').addEventListener('click', (event) => {
+  if (!event.target.closest('[data-view]')) return;
+  showView('agreements');
+  renderAll();
+});
+
+$('btn-agreements').addEventListener('click', async () => {
+  showView('agreements');
+  renderAll();
+  await findAgreements();
 });
 
 $('research-nav').addEventListener('click', (event) => {
@@ -1680,9 +1833,8 @@ $('content').addEventListener('input', (e) => {
 
 // Each filter keeps whatever is typed in an open editor before redrawing.
 $('content').addEventListener('change', (e) => {
-  if (e.target.id !== 'tension-status') return;
-  V.tensionStatus = e.target.value;
-  renderContent();
+  if (e.target.id === 'tension-status') { V.tensionStatus = e.target.value; renderContent(); }
+  if (e.target.id === 'agreement-status') { V.agreementStatus = e.target.value; renderContent(); }
 });
 $('q').addEventListener('input', (e) => { captureOpenEditor(); V.q = e.target.value; renderContent(); });
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
@@ -1798,7 +1950,7 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       renderStats();
-      renderPapers(); renderTensionsNav(); renderResearchNav(); renderTags();
+      renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);

@@ -29,7 +29,10 @@ reads it with Claude, and records:
   for, refines, or is independent of them
 
 Once several papers share a topic, a second pass writes what they hold on it,
-and a third finds where they disagree:
+a third finds where they agree, and a fourth finds where they disagree. An
+agreement is a group of claims from two or more papers that assert the same
+finding, with a count of how many papers make it, which is the answer to "how
+much evidence do I have for this". A tension is the opposite:
 pairs of claims from different papers that pull against each other on the same
 question, each with a note on what the disagreement is and what might account
 for it. These are reviewed too, and the confirmed ones go into the export.
@@ -65,6 +68,7 @@ doxograph retag                       # reassign topics against the current voca
 doxograph verify                      # check that every quote is in its paper's PDF
 doxograph tensions                    # find claims from different papers that disagree
 doxograph tensions --list             # show what has been found, without calling the model
+doxograph agreements                  # find claims from different papers that say the same thing
 doxograph synthesize                  # write what the papers hold on each topic
 doxograph synthesize --list           # show the syntheses on file
 doxograph list                        # what is in the corpus

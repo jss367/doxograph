@@ -165,6 +165,43 @@ def cmd_tensions(args) -> int:
     return 0
 
 
+def cmd_agreements(args) -> int:
+    """Find, or list, claims from different papers that assert the same finding."""
+    if not args.list:
+        topics = args.topics or store.tension_topics()
+        if not topics:
+            print("no topic has claims from two papers yet", file=sys.stderr)
+        failures = 0
+        for topic in topics:
+            try:
+                result = extract.find_agreements(topic)
+                print(f"{topic}: {result['returned']} returned, {result['added']} new"
+                      + (f", {result['grown']} grown" if result["grown"] else "")
+                      + (f", {result['reopened']} reopened" if result["reopened"] else ""))
+            except Exception as exc:
+                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failures += 1
+        if failures:
+            return 1
+    rows = store.agreement_rows()
+    if args.topics:
+        rows = [r for r in rows if set(r.get("topics", [])) & set(args.topics)]
+    if not args.all:
+        rows = [r for r in rows if r["status"] != "dismissed"]
+    for row in rows:
+        stale = " (a claim changed since)" if row.get("stale") else ""
+        print(f"{row['id']:<5} {row['status']:<9} {row['n_papers']} papers  "
+              f"#{' #'.join(row.get('topics', []))}{stale}")
+        if row.get("note"):
+            print(f"      {row['note']}")
+        for claim in row["claims"]:
+            cite = store.cite_surname(claim.get("paper_authors"), claim["paper"])
+            print(f"      [{cite} {claim.get('paper_year') or 'n.d.'}] {claim.get('text', '')}")
+    open_count = sum(1 for r in rows if r["status"] == "open")
+    print(f"\n{len(rows)} agreements, {open_count} open")
+    return 0
+
+
 def cmd_synthesize(args) -> int:
     """Write, or list, what the papers hold on each topic."""
     if not args.list:
@@ -310,6 +347,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
     p.add_argument("--all", action="store_true", help="include dismissed tensions in the listing")
     p.set_defaults(func=cmd_tensions)
+
+    p = sub.add_parser("agreements", help="find claims from different papers that assert the same finding")
+    p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")
+    p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
+    p.add_argument("--all", action="store_true", help="include dismissed agreements in the listing")
+    p.set_defaults(func=cmd_agreements)
 
     p = sub.add_parser("synthesize", help="write what the papers hold on each topic")
     p.add_argument("topics", nargs="*", help="topics to write; default is every topic with two papers")

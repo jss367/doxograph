@@ -406,7 +406,7 @@ def test_export_filters_a_tension_as_a_pair():
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
     html = export.render()
     assert html.count('<div class="ledger" data-tension>') == 1
-    assert "querySelectorAll('[data-tension]')" in export.SCRIPT
+    assert "querySelectorAll('[data-tension], [data-agreement]')" in export.SCRIPT
 
 
 def test_cli_lists_tensions_without_calling_the_model(capsys):

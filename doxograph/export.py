@@ -45,6 +45,7 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
   letter-spacing: .04em; padding: .05rem .35rem; border: 1px solid var(--line);
   border-radius: 3px; margin-right: .4rem; color: var(--muted); }
 .kind.negative, .kind.conjecture, .kind.contradiction { color: var(--warn); border-color: var(--warn); }
+.kind.agreement { color: var(--accent); border-color: var(--accent); text-transform: none; }
 .tag { font-size: .78rem; color: var(--accent); margin-right: .4rem; white-space: nowrap; }
 .paper { padding: .9rem 0; border-bottom: 1px solid var(--line); }
 .paper .title { font-weight: 600; }
@@ -87,7 +88,7 @@ function apply() {
   });
   // A tension is one comparison, not two claims: it shows both sides or
   // neither, and it shows when either side matches.
-  document.querySelectorAll('[data-tension]').forEach(pair => {
+  document.querySelectorAll('[data-tension], [data-agreement]').forEach(pair => {
     const sides = pair.querySelectorAll('[data-claim]');
     const shown = Array.from(sides).some(side => !side.hidden);
     sides.forEach(side => { side.hidden = !shown; });
@@ -206,6 +207,7 @@ def render(title: str = "Doxograph") -> str:
     ledger = store.load_ledger()
     ledger_by_id = {c["id"]: c for c in ledger}
     tensions = [t for t in store.tension_rows(rows) if t.get("status") != "dismissed"]
+    agreements = [a for a in store.agreement_rows(rows) if a.get("status") != "dismissed"]
     syntheses = {s["topic"]: s for s in store.synthesis_rows(rows)}
     rows_by_id = {r["id"]: r for r in rows}
 
@@ -245,6 +247,22 @@ def render(title: str = "Doxograph") -> str:
                     f'<span class="count" data-total="{len(untagged)}">{len(untagged)}</span></h3>')
         body.extend(_claim_html(r, ledger_by_id) for r in untagged)
         body.append("</section>")
+
+    if agreements:
+        body.append("<h2>Where the papers agree</h2>")
+        body.append('<p class="sub">Findings that several papers make. The count is how many '
+                    'papers make it. Confirmed ones have been checked by hand; open ones have not.</p>')
+        for agreement in agreements:
+            topics = "".join(f'<span class="tag">#{_e(t)}</span>' for t in agreement.get("topics", []))
+            status = "" if agreement.get("status") == "confirmed" else \
+                '<span class="rel-tag">open</span>'
+            stale = '<span class="rel-tag">a claim changed since</span>' if agreement.get("stale") else ""
+            body.append('<div class="ledger" data-agreement>')
+            body.append(f'<p class="own"><span class="kind agreement">{agreement["n_papers"]} papers</span>'
+                        f'{status}{stale}{topics}' + (f' {_e(agreement["note"])}' if agreement.get("note") else "")
+                        + "</p>")
+            body.extend(_claim_html(r, ledger_by_id) for r in agreement["claims"])
+            body.append("</div>")
 
     if tensions:
         body.append("<h2>Where the papers disagree</h2>")

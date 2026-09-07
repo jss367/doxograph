@@ -153,6 +153,9 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .kind.tension { color: var(--accent); border-color: var(--accent); }
 .tmark { font-size: .78rem; color: var(--warn); cursor: pointer; white-space: nowrap; }
 .tmark.confirmed { color: var(--ok); }
+.amark { font-size: .78rem; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.amark.confirmed { color: var(--ok); }
+.kind.agreement { color: var(--accent); border-color: var(--accent); text-transform: none; }
 
 .tcard { border: 1px solid var(--line); border-radius: 6px; padding: .6rem .8rem; margin: .8rem 0; }
 .tcard.confirmed { border-color: var(--ok); }
@@ -164,6 +167,8 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .tcard .thead .st.confirmed { color: var(--ok); }
 .tcard .tpair { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; margin-top: .5rem; }
 .tcard .tpair .claim { margin: 0; }
+.tcard .tgroup { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: .6rem; margin-top: .5rem; }
+.tcard .tgroup .claim { margin: 0; }
 .tcard .tnote { margin: .5rem 0 0; font-size: .92rem; }
 .tcard .stale { color: var(--warn); font-size: .82rem; margin: .4rem 0 0; }
 @media (max-width: 70rem) { .tcard .tpair { grid-template-columns: 1fr; } }
