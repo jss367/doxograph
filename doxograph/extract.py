@@ -10,8 +10,10 @@ it again.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import anthropic
@@ -164,6 +166,28 @@ RETAG_SCHEMA = {
 def client() -> anthropic.Anthropic:
     key = config.api_key()
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+
+
+def run_concurrently(items: list, work, workers: int | None = None):
+    """Run `work(item)` for every item, a few at a time, yielding
+    `(item, result, error)` as each finishes.
+
+    Each call runs in a copy of the caller's context, so a job bound to a
+    workspace stays in it. One item's failure is reported and the rest go on:
+    the passes run in a fixed order, and an item that always fails would
+    otherwise keep the ones after it from ever being done.
+    """
+    if not items:
+        return
+    workers = min(workers or config.PASS_WORKERS, len(items))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
+        futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                yield item, future.result(), None
+            except Exception as exc:
+                yield item, None, exc
 
 
 def vocabulary_block(tags: list[dict] | None = None) -> str:
@@ -635,18 +659,21 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
     return "\n\n".join(blocks)
 
 
-def find_tensions(topic: str, rows: list[dict] | None = None) -> dict:
+def find_tensions(topic: str, rows: list[dict] | None = None,
+                  tags: list[dict] | None = None) -> dict:
     """Ask the model which claims in `topic` disagree, and record the answer.
 
     Cheap in the way retag is cheap: it sends claim text rather than PDFs. One
     call per topic, and only topics with claims from at least two papers are
-    worth a call; `store.tension_topics` lists them.
+    worth a call; `store.tension_topics` lists them. `rows` and `tags` let a
+    pass over many topics read the corpus once.
     """
     rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
     papers = {r["paper"] for r in rows}
     if len(papers) < 2:
         return {"added": 0, "reopened": 0, "kept": 0, "returned": 0}
-    description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
+    tags = store.load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     # The claims as the prompt shows them, keyed by id. The merge uses this to
     # drop ids the model invented; staleness against later edits is judged
     # separately, from the fingerprints the merge records.
@@ -740,7 +767,8 @@ def _tension_block(topic: str, tensions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
+def synthesize_topic(topic: str, rows: list[dict] | None = None,
+                     tags: list[dict] | None = None) -> dict:
     """Ask the model what the papers hold on `topic`, and record the answer.
 
     Cheap in the way the tensions pass is cheap: one call per topic, claim
@@ -758,7 +786,8 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
     papers = {r["paper"] for r in rows}
     if not rows:
         return {"written": False, "claims": 0, "papers": 0}
-    description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
+    tags = store.load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
     tensions = store.tension_rows(all_rows)
     # The record on file as the call starts, so the write can tell whether a

@@ -76,32 +76,34 @@ def _read(key: str) -> int:
     return 0
 
 
+def _run_pass(items: list, work, report) -> int:
+    """Run `work` over `items` a few at a time, printing each result as it
+    lands and each failure to stderr. Returns the number of failures."""
+    failures = 0
+    for item, result, exc in extract.run_concurrently(items, work):
+        if exc is not None:
+            print(f"{item}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            failures += 1
+        else:
+            report(item, result)
+    return failures
+
+
 def cmd_extract(args) -> int:
     keys = args.keys or [
         p["key"] for p in store.all_papers()
         if args.all or not p.get("claims")
     ]
-    failures = 0
-    for key in keys:
-        try:
-            paper = extract.extract_paper(key, keep_reviewed=not args.replace_reviewed)
-            print(f"{key}: {len(paper['claims'])} claims, {len(paper['proposed_tags'])} proposed topics")
-        except Exception as exc:
-            print(f"{key}: {type(exc).__name__}: {exc}", file=sys.stderr)
-            failures += 1
+    failures = _run_pass(
+        keys, lambda key: extract.extract_paper(key, keep_reviewed=not args.replace_reviewed),
+        lambda key, paper: print(f"{key}: {len(paper['claims'])} claims, "
+                                 f"{len(paper['proposed_tags'])} proposed topics"))
     return 1 if failures else 0
 
 
 def cmd_retag(args) -> int:
     keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
-    failures = 0
-    for key in keys:
-        try:
-            extract.retag_paper(key)
-            print(f"retagged {key}")
-        except Exception as exc:
-            print(f"{key}: {type(exc).__name__}: {exc}", file=sys.stderr)
-            failures += 1
+    failures = _run_pass(keys, extract.retag_paper, lambda key, _paper: print(f"retagged {key}"))
     return 1 if failures else 0
 
 
@@ -134,15 +136,12 @@ def cmd_tensions(args) -> int:
         topics = args.topics or store.tension_topics()
         if not topics:
             print("no topic has claims from two papers yet", file=sys.stderr)
-        failures = 0
-        for topic in topics:
-            try:
-                result = extract.find_tensions(topic)
-                print(f"{topic}: {result['returned']} returned, {result['added']} new"
-                      + (f", {result['reopened']} reopened" if result["reopened"] else ""))
-            except Exception as exc:
-                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
-                failures += 1
+        rows, tags = store.claim_rows(), store.load_tags()
+        failures = _run_pass(
+            topics, lambda topic: extract.find_tensions(topic, rows, tags),
+            lambda topic, result: print(
+                f"{topic}: {result['returned']} returned, {result['added']} new"
+                + (f", {result['reopened']} reopened" if result["reopened"] else "")))
         if failures:
             return 1
     rows = store.tension_rows()
@@ -171,16 +170,13 @@ def cmd_agreements(args) -> int:
         topics = args.topics or store.tension_topics()
         if not topics:
             print("no topic has claims from two papers yet", file=sys.stderr)
-        failures = 0
-        for topic in topics:
-            try:
-                result = extract.find_agreements(topic)
-                print(f"{topic}: {result['returned']} returned, {result['added']} new"
-                      + (f", {result['grown']} grown" if result["grown"] else "")
-                      + (f", {result['reopened']} reopened" if result["reopened"] else ""))
-            except Exception as exc:
-                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
-                failures += 1
+        rows, tags = store.claim_rows(), store.load_tags()
+        failures = _run_pass(
+            topics, lambda topic: extract.find_agreements(topic, rows, tags),
+            lambda topic, result: print(
+                f"{topic}: {result['returned']} returned, {result['added']} new"
+                + (f", {result['grown']} grown" if result["grown"] else "")
+                + (f", {result['reopened']} reopened" if result["reopened"] else "")))
         if failures:
             return 1
     rows = store.agreement_rows()
@@ -209,19 +205,18 @@ def cmd_synthesize(args) -> int:
         if not topics:
             print("no topic has claims from two papers yet; name a topic to synthesize it anyway",
                   file=sys.stderr)
-        failures = 0
-        for topic in topics:
-            try:
-                result = extract.synthesize_topic(topic)
-                if result["written"]:
-                    print(f"{topic}: written from {result['claims']} claims in {result['papers']} papers")
-                else:
-                    print(f"{topic}: no claims, nothing written", file=sys.stderr)
-                    failures += 1
-            except Exception as exc:
-                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
-                failures += 1
-        if failures:
+        rows, tags = store.claim_rows(), store.load_tags()
+        unwritten = []
+
+        def report(topic, result):
+            if result["written"]:
+                print(f"{topic}: written from {result['claims']} claims in {result['papers']} papers")
+            else:
+                print(f"{topic}: no claims, nothing written", file=sys.stderr)
+                unwritten.append(topic)
+
+        failures = _run_pass(topics, lambda topic: extract.synthesize_topic(topic, rows, tags), report)
+        if failures or unwritten:
             return 1
     rows = store.synthesis_rows()
     if args.topics:

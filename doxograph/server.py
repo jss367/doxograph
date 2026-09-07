@@ -509,32 +509,33 @@ def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
         _prune_jobs()
 
 
+def _finish_pass(job: dict, total: int, unit: str, failed: int, last_failure: str, summary: str) -> None:
+    if failed:
+        _set(job, state="error", detail=f"{failed} of {total} {unit} failed, {summary}; {last_failure}")
+    else:
+        _set(job, state="done", detail=f"{total} {unit}, {summary}")
+
+
 @_workspace_job
 def _run_tensions(job: dict, topics: list[str]) -> None:
     try:
-        added = reopened = failed = 0
+        rows, tags = store.claim_rows(), store.load_tags()
+        added = reopened = failed = done = 0
         last_failure = ""
-        for index, topic in enumerate(topics, 1):
-            _set(job, state="reading", detail=f"{index} of {len(topics)}: {topic}")
-            # One topic's refusal or bad answer must not cost the topics after
-            # it: they run in a fixed order, so an early topic that always
-            # fails would keep the later ones from ever being read. Go on, as
-            # the command line does, and say how many did not finish.
-            try:
-                result = extract.find_tensions(topic)
-            except Exception as exc:
+        _set(job, state="reading", detail=f"0 of {len(topics)} topics")
+        for topic, result, exc in extract.run_concurrently(
+                topics, lambda t: extract.find_tensions(t, rows, tags)):
+            done += 1
+            if exc is not None:
                 failed += 1
                 last_failure = f"{topic}: {type(exc).__name__}: {exc}"
-                traceback.print_exc()
-                continue
-            added += result["added"]
-            reopened += result["reopened"]
+                traceback.print_exception(exc)
+            else:
+                added += result["added"]
+                reopened += result["reopened"]
+            _set(job, detail=f"{done} of {len(topics)} topics")
         summary = f"{added} new" + (f", {reopened} reopened" if reopened else "")
-        if failed:
-            _set(job, state="error",
-                 detail=f"{failed} of {len(topics)} topics failed, {summary}; {last_failure}")
-        else:
-            _set(job, state="done", detail=f"{len(topics)} topics, {summary}")
+        _finish_pass(job, len(topics), "topics", failed, last_failure, summary)
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -545,25 +546,23 @@ def _run_tensions(job: dict, topics: list[str]) -> None:
 @_workspace_job
 def _run_agreements(job: dict, topics: list[str]) -> None:
     try:
-        added = grown = failed = 0
+        rows, tags = store.claim_rows(), store.load_tags()
+        added = grown = failed = done = 0
         last_failure = ""
-        for index, topic in enumerate(topics, 1):
-            _set(job, state="reading", detail=f"{index} of {len(topics)}: {topic}")
-            try:
-                result = extract.find_agreements(topic)
-            except Exception as exc:
+        _set(job, state="reading", detail=f"0 of {len(topics)} topics")
+        for topic, result, exc in extract.run_concurrently(
+                topics, lambda t: extract.find_agreements(t, rows, tags)):
+            done += 1
+            if exc is not None:
                 failed += 1
                 last_failure = f"{topic}: {type(exc).__name__}: {exc}"
-                traceback.print_exc()
-                continue
-            added += result["added"]
-            grown += result["grown"]
+                traceback.print_exception(exc)
+            else:
+                added += result["added"]
+                grown += result["grown"]
+            _set(job, detail=f"{done} of {len(topics)} topics")
         summary = f"{added} new" + (f", {grown} grown" if grown else "")
-        if failed:
-            _set(job, state="error",
-                 detail=f"{failed} of {len(topics)} topics failed, {summary}; {last_failure}")
-        else:
-            _set(job, state="done", detail=f"{len(topics)} topics, {summary}")
+        _finish_pass(job, len(topics), "topics", failed, last_failure, summary)
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -574,20 +573,20 @@ def _run_agreements(job: dict, topics: list[str]) -> None:
 @_workspace_job
 def _run_syntheses(job: dict, topics: list[str]) -> None:
     try:
-        written = failed = 0
+        rows, tags = store.claim_rows(), store.load_tags()
+        written = failed = done = 0
         last_failure = ""
-        for index, topic in enumerate(topics, 1):
-            _set(job, state="reading", detail=f"{index} of {len(topics)}: {topic}")
-            # As with tensions: one topic's failure must not cost the topics
-            # after it. Go on, and say how many did not finish.
-            try:
-                result = extract.synthesize_topic(topic)
-            except Exception as exc:
+        _set(job, state="reading", detail=f"0 of {len(topics)} topics")
+        for topic, result, exc in extract.run_concurrently(
+                topics, lambda t: extract.synthesize_topic(t, rows, tags)):
+            done += 1
+            if exc is not None:
                 failed += 1
                 last_failure = f"{topic}: {type(exc).__name__}: {exc}"
-                traceback.print_exc()
-                continue
-            written += 1 if result["written"] else 0
+                traceback.print_exception(exc)
+            else:
+                written += 1 if result["written"] else 0
+            _set(job, detail=f"{done} of {len(topics)} topics")
         if failed:
             _set(job, state="error",
                  detail=f"{failed} of {len(topics)} topics failed, {written} written; {last_failure}")
@@ -603,21 +602,16 @@ def _run_syntheses(job: dict, topics: list[str]) -> None:
 @_workspace_job
 def _run_retag(job: dict, keys: list[str]) -> None:
     try:
-        failed = 0
+        failed = done = 0
         last_failure = ""
-        for index, key in enumerate(keys, 1):
-            _set(job, state="reading", key=key, detail=f"{index} of {len(keys)}")
-            # As with tensions and syntheses, and as the command line does: one
-            # paper's refusal or bad answer must not cost the papers after it.
-            # Retag all runs the whole corpus in a fixed order, so a single
-            # early failure used to leave every later paper unretagged.
-            try:
-                extract.retag_paper(key)
-            except Exception as exc:
+        _set(job, state="reading", detail=f"0 of {len(keys)}")
+        for key, _result, exc in extract.run_concurrently(keys, extract.retag_paper):
+            done += 1
+            if exc is not None:
                 failed += 1
                 last_failure = f"{key}: {type(exc).__name__}: {exc}"
-                traceback.print_exc()
-                continue
+                traceback.print_exception(exc)
+            _set(job, key=key, detail=f"{done} of {len(keys)}")
         if failed:
             _set(job, state="error",
                  detail=f"{failed} of {len(keys)} papers failed; {last_failure}")

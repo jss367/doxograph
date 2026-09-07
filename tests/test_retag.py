@@ -296,7 +296,7 @@ def test_a_retag_failure_does_not_cost_the_papers_after_it(monkeypatch):
     def retag(key):
         if key == "a2020first":
             raise RuntimeError("the model refused")
-        retagged.append(key)
+        retagged.append(key)   # papers run a few at a time, so the order is not fixed
 
     monkeypatch.setattr(extract, "retag_paper", retag)
     job = server._new_job("retag 3 papers")
@@ -305,7 +305,7 @@ def test_a_retag_failure_does_not_cost_the_papers_after_it(monkeypatch):
     finally:
         server._jobs.pop(job["id"], None)
 
-    assert retagged == ["b2021second", "c2022third"], "a failure stopped the whole batch"
+    assert sorted(retagged) == ["b2021second", "c2022third"], "a failure stopped the whole batch"
     assert job["state"] == "error"
     assert "1 of 3 papers failed" in job["detail"]
 

@@ -78,7 +78,10 @@ doxograph bibtex --out refs.bib
 ```
 
 `add`, `extract`, and `retag` exit nonzero if any reference or paper they were
-asked to handle failed, so a script can tell a partial run from a clean one. A
+asked to handle failed, so a script can tell a partial run from a clean one.
+`extract`, `retag`, `tensions`, `agreements` and `synthesize` run four model
+calls at a time; set `DOXOGRAPH_PASS_WORKERS` to change that, in the shell or
+for the web app. A
 paper that arrives without its PDF counts as a failure and says so; running
 `add` on it again retries the download and then reads it.
 
