@@ -729,3 +729,38 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
         {"id": "L1", "text": "Recovery is path-dependent."},
         {"id": "L2", "text": "Steering is reversible."},
     ]
+
+
+@pytest.mark.browser
+def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    _paper("paper-c", "Paper C", "recovery")
+    store.record_agreements("recovery", [{"claims": ["paper-a-c1", "paper-b-c1", "paper-c-c1"],
+                                          "note": "All three report it."}],
+                            {r["id"]: r for r in store.claim_rows()})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                # The claim card says how many other papers agree, and the
+                # marker opens the agreements view focused on that claim.
+                marker = page.locator('.claim[data-claim="paper-a-c1"] .amark')
+                await marker.wait_for(state="visible")
+                assert "2 other papers agree" in (await marker.text_content())
+                await marker.click()
+                card = page.locator('.tcard[data-agreement="a1"]')
+                await card.wait_for(state="visible")
+                assert await card.locator(".kind.agreement").text_content() == "3 papers"
+                assert await card.locator(".tgroup .claim").count() == 3
+                assert await card.locator(".tnote").text_content() == "All three report it."
+                await card.get_by_role("button", name="Confirm").click()
+                await page.locator('.tcard.confirmed[data-agreement="a1"]').wait_for(state="visible")
+                await page.locator('#agreements-nav', has_text="1 confirmed").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.agreement_rows()[0]["status"] == "confirmed"
