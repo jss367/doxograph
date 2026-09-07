@@ -330,3 +330,43 @@ def test_a_paper_patch_ignores_a_field_that_is_not_the_users_to_set():
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.patch("/api/papers/doe2026study", json={"title": "A Study", "claims": ["nonsense"]})
     assert store.load_paper("doe2026study")["claims"] == []
+
+
+# --- a claim patch is typed, like a paper patch ---------------------------
+
+def test_a_claim_patch_refuses_an_unknown_kind_or_strength():
+    store.save_paper(store.new_paper("doe2026study"))
+    claim = store.add_claim("doe2026study", {"text": "X."})
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        path = f"/api/papers/doe2026study/claims/{claim['id']}"
+        assert client.patch(path, json={"kind": "hunch"}).status_code == 422
+        assert client.patch(path, json={"strength": "strong"}).status_code == 422
+        assert client.patch(path, json={"reviewed": "yes please"}).status_code == 422
+        assert client.post("/api/papers/doe2026study/claims", json={"text": 5}).status_code == 422
+    assert store.load_paper("doe2026study")["claims"][0]["kind"] == "finding"
+
+
+def test_a_claim_patch_applies_only_the_fields_it_names_and_cleans_tags():
+    store.save_paper(store.new_paper("doe2026study"))
+    claim = store.add_claim("doe2026study", {"text": "X.", "evidence": "n = 3", "tags": ["alpha"]})
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.patch(f"/api/papers/doe2026study/claims/{claim['id']}",
+                                json={"tags": ["Beta Gamma", "alpha", " ", "alpha"]})
+    updated = response.json()
+    assert updated["tags"] == ["alpha", "beta-gamma"]
+    assert updated["evidence"] == "n = 3" and updated["text"] == "X."
+
+
+def test_a_claim_patch_refuses_an_unknown_ledger_relation_and_an_unknown_field():
+    store.save_ledger([{"id": "L1", "text": "Mine."}])
+    store.save_paper(store.new_paper("doe2026study"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        bad = client.post("/api/papers/doe2026study/claims", json={
+            "text": "X.", "ledger_links": [{"claim": "L1", "relation": "sort-of", "note": ""}]})
+        assert bad.status_code == 422
+        good = client.post("/api/papers/doe2026study/claims", json={
+            "text": "X.", "id": "doe2026study-c99", "paper": "other",
+            "ledger_links": [{"claim": "L1", "relation": "supports"}]})
+    claim = good.json()
+    assert claim["id"] == "doe2026study-c1"           # the id is not the caller's to set
+    assert claim["ledger_links"] == [{"claim": "L1", "relation": "supports", "note": ""}]

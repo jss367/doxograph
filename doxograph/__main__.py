@@ -283,14 +283,10 @@ def cmd_serve(args) -> int:
 def _listening_port(value: str) -> int:
     """A `--port` argument, refused here rather than an hour into a session.
 
-    Port 0 is the one worth naming. `bind` reads it as "give me any free port",
-    and uvicorn honours it -- but the server records where it was told to listen
-    before the socket exists, so a published `--host` would answer for `:0`
-    while listening somewhere else entirely, and every request from another
-    machine would come back 403 with nothing to explain it. It cannot be
-    repaired by reading the port back off the socket either: with no port agreed
-    in advance, nobody can be told where the page is. The native launcher
-    already leaves 0 out of its port walk for the same reason.
+    Port 0 asks the kernel for any free port, but the server records where it
+    was told to listen before the socket exists, so a published `--host` would
+    trust `:0` while listening elsewhere and refuse every request from another
+    machine. The native launcher leaves 0 out of its port walk for the same reason.
     """
     try:
         port = int(value)
@@ -299,7 +295,7 @@ def _listening_port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError(
             f"{port} is not a port to serve on: ports run 1-65535, and 0 asks "
-            "for whichever is free, which leaves no address to hand out"
+            "for whichever is free, so nobody can say where the page is"
         )
     return port
 

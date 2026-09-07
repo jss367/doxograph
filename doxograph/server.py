@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from . import __version__, bib, config, export, extract, ingest, store
 
@@ -36,43 +36,18 @@ _requests_arriving = 0
 
 
 class CountArrivingRequests:
-    """Counts a request that might become work from the moment it lands.
+    """Count a request that might become work from the moment it lands.
 
-    A handler cannot count this for itself. `api_upload`'s
-    `files: list[UploadFile]` parameter means Starlette has received and parsed
-    the whole multipart body before the handler runs, and that receive is
-    exactly the window nobody can see: the job does not exist yet, so
-    `/api/health` answers `busy: 0` while a paper is still arriving, and the
-    macOS launcher stops the server it started on top of it. The same hole,
-    narrower, is in front of every other handler — a JSON body is still a body
-    that has to arrive, and `/api/ingest` posted by the page can be receiving or
-    parsing when the user quits. The app keeps its own count of the papers it is
-    sending, but only for the drops it makes itself; anything the page posts
-    goes straight to the server and never passes through it.
+    A handler cannot count this for itself: Starlette has received the whole
+    body before the handler runs, and during that receive the job does not
+    exist yet. `/api/health` would say idle while a paper was still arriving,
+    and the macOS launcher would stop the server on top of it.
 
-    Counting here covers every client: the page inside the app, the page in a
-    browser, curl, anything later. The two counts overlap rather than leaving a
-    seam, since this one starts before the app's can end and outlasts the job's
-    creation.
-
-    The net is cast by method rather than by a list of routes, and that is the
-    point. "Routes that can create work" is a list that goes stale the first
-    time someone adds one — upload, ingest, extract and retag today, whatever
-    comes next tomorrow — and the failure is silent: the new route simply is not
-    counted, and a quit lands on top of it. A method is a property of the
-    request itself, so the rule stays true as the route table grows. It costs
-    nothing to be broad, either. The number's only job is to be nonzero while
-    the server is holding something that might become work, and a small JSON
-    POST is inside this count for microseconds — far too briefly for a quit to
-    catch it and ask a question about nothing.
-
-    Reads are what is left out, and they have to be: `/api/health` is itself a
-    GET, so counting reads would have it report itself as busy, and the page
-    polls `/api/state` twice a second.
-
-    Written against ASGI rather than as an `@app.middleware("http")` function so
-    that it does not pump every other response — a whole paper, on `/pdf/{key}`
-    — through an extra stream to do the counting.
+    Counted by method rather than by a list of routes, so a new route that
+    creates work is counted without anyone remembering to add it. Reads are
+    left out: `/api/health` is itself a GET and would report itself busy.
+    Written as raw ASGI so it does not pump `/pdf/{key}` through an extra
+    stream to do the counting.
     """
 
     def __init__(self, app):
@@ -96,15 +71,12 @@ class CountArrivingRequests:
 #: fall back to loopback-only and refuse the page's own writes.
 BIND_ENV = "DOXOGRAPH_BIND"
 
-#: Where an operator who published this server has said its page really lives:
-#: a comma-separated list of origins, or bare `host:port` authorities. Needed
-#: wherever the name the browser typed cannot be read off the socket and must
-#: not be taken from the request: a wildcard bind, and a Unix socket, which
-#: reports no port for the origin rule to compare against. Behind a TLS
-#: terminator, publish both spellings -- `https://name` for the browser's
-#: `Origin`, and `http://name` for the `Host` it forwards over a plain-scheme
-#: scope -- since an authority is matched on its port and the scheme is what
-#: supplies the implicit one. See `trust_bind`.
+#: Where an operator who published this server has said its page lives: a
+#: comma-separated list of origins, or bare `host:port` authorities. Needed
+#: where the name the browser typed cannot be read off the socket and must not
+#: be taken from the request: a wildcard bind, or a Unix socket. Behind a TLS
+#: terminator publish both `https://name` (the browser's Origin) and
+#: `http://name` (the forwarded Host). See `trust_bind`.
 PUBLISHED_ORIGINS_ENV = "DOXOGRAPH_PUBLISHED_ORIGINS"
 
 #: The port a scheme means when an authority does not spell one out. A `Host`
@@ -132,12 +104,9 @@ def _is_loopback(hostname: str) -> bool:
         return False
 
 
-#: The spellings a browser actually produces for this machine. `127.0.0.0/8` is
-#: loopback all the way up, but a page served from `http://127.0.0.2:8765` is a
-#: *different browser origin* from the one this app is served on, so it is
-#: another site however local it is. `localhost`, `127.0.0.1` and `::1` stay
-#: interchangeable: they all genuinely name here, and the browser picks between
-#: them on the user's behalf.
+#: The loopback names a browser actually produces. `127.0.0.2:8765` is
+#: loopback too, but it is a different browser origin from the page this app
+#: is served on, so for an Origin check it is another site.
 _CANONICAL_LOOPBACK = frozenset({ipaddress.ip_address("127.0.0.1"),
                                  ipaddress.ip_address("::1")})
 
@@ -156,17 +125,9 @@ def _is_canonical_loopback(hostname: str) -> bool:
 def _origin_authority(origin: str) -> tuple[str, int | None]:
     """An origin as the `(hostname, port)` pair it names, the port made explicit.
 
-    `urlsplit` does the fiddly parts: lowercasing the name, unwrapping the
-    brackets around an IPv6 literal, and raising rather than guessing when the
-    port is not a number. A port the origin leaves out is the one its scheme
-    implies, so `http://localhost` and `http://localhost:80` are the same place.
-
-    `urlsplit` itself raises on a half-written IPv6 literal such as `http://[::1`
-    -- before any attribute is touched -- so it is inside the `try` as well.
-    Anything unparseable comes back as the empty authority, which is trusted by
-    nobody: a typo in an environment variable is skipped rather than being left
-    to abort the import, and a malformed `Origin` header is refused rather than
-    raising a 500 out of the middleware.
+    A port the origin leaves out is the one its scheme implies. Anything
+    `urlsplit` cannot parse, including a half-written IPv6 literal, comes back
+    as the empty authority, which nobody trusts.
     """
     try:
         split = urlsplit(origin)
@@ -189,44 +150,19 @@ def _is_our_own(
 ) -> bool:
     """Whether an authority is one this server could itself be answering for.
 
-    Trust is derived from where this server listens, never from what a request
-    says about itself. Loopback is where the app runs unless someone
-    deliberately says otherwise, and `bound_port` -- read off the listening
-    socket, so no client can influence it -- stops that trust from spreading to
-    every other program on this machine: `http://localhost:3000` is a different
-    origin, and a page served from it is a different site.
+    Trust comes from where this server listens, never from what a request
+    says about itself. Loopback is trusted against `bound_port`, read off the
+    listening socket, so `http://localhost:3000` stays another origin. The
+    scheme is not compared: a Host carries none, and the same server behind a
+    TLS terminator is the same server.
 
-    The scheme is deliberately not part of the comparison. A `Host` header does
-    not carry one, and the same server behind a TLS terminator is still the same
-    server; the port is what distinguishes it from its neighbours.
-
-    An authority the operator published is consulted first, before the loopback
-    rule, so that a name like `https://localhost` in front of a backend on
-    another port is answered for rather than silently dropped for failing the
-    bound-port comparison. That ordering costs nothing in safety:
-    `_published_authorities` is written only from the operator's own
-    environment and the host `serve()` was given, never from a request.
-
-    `as_a_browser_origin` narrows the loopback rule to the names a browser
-    actually gives this machine. An `Origin` is judged that way: the whole of
-    `127.0.0.0/8` answers here, but `http://127.0.0.2:8765` is a separate
-    browser origin from the page this app is served on, so a page bound there
-    is another site and its uploads are somebody else's. A `Host` keeps the
-    broad rule -- it is asking which addresses reach this server rather than
-    which page sent the request, and `curl http://127.0.0.5:8765` against a
-    wildcard bind is a perfectly ordinary way to arrive. An alternate loopback
-    address that `serve()` was actually given is recorded by `trust_bind`, so
-    its own page keeps working under the narrow rule too.
-
-    A scope carrying no port -- a Unix socket, which uvicorn reports as
-    `(socket_path, None)` -- leaves nothing to compare against. A `Host` can
-    still be judged on the name alone, since it only asks which addresses reach
-    here. A browser origin cannot: with the port gone there is nothing left to
-    separate this server's own page from `http://localhost:3000`, and the
-    loopback rule would wave through every program on the machine. So an origin
-    arriving that way has to be one the operator published. Nothing this CLI
-    starts lands here -- `serve()` binds a TCP port and there is no `--uds`
-    option -- but `uvicorn doxograph.server:app --uds ...` run by hand does.
+    Published authorities are consulted first, so `https://localhost` in front
+    of a backend on another port is answered for. `as_a_browser_origin` narrows
+    loopback to the names a browser gives this machine, since another loopback
+    address is another browser origin. With no port on the socket (a Unix
+    socket) a Host can still be judged by name, but an Origin has to be one
+    the operator published, or the loopback rule would admit every program on
+    the machine.
     """
     hostname, port = authority
     if not hostname:
@@ -256,16 +192,11 @@ def _authorities_from_environment() -> set[tuple[str, int | None]]:
 def trust_bind(host: str, port: int) -> None:
     """Record where the server is listening, so its own page is recognised.
 
-    The loopback names a browser uses -- `localhost`, `127.0.0.1`, `::1` -- need
-    no recording; they are trusted always, against whatever port the socket
-    reports. Anywhere else in `127.0.0.0/8` does get recorded, because an origin
-    is judged on the narrow list and `serve --host 127.0.0.2` would otherwise
-    lock its own page out. A wildcard bind cannot be recorded either: `0.0.0.0` and
-    `::` are the whole point of `--host`, publishing on every address this
-    machine has, and which of them the browser then typed is not knowable from
-    the socket. It is emphatically not knowable from the request's own headers,
-    which is where a rebound page would like it to be read from, so nothing is
-    inferred and the operator says it themselves via `PUBLISHED_ORIGINS_ENV`.
+    The canonical loopback names need no recording. Another loopback address
+    does, or `serve --host 127.0.0.2` would lock out its own page. A wildcard
+    bind records nothing: which of this machine's names the browser typed is
+    not knowable from the socket and must not be read from the request, so the
+    operator says it via `PUBLISHED_ORIGINS_ENV`.
     """
     global _published_authorities, _bound_to_every_address
     host = host.strip("[]").lower()
@@ -292,36 +223,21 @@ _trust_bind_from_environment()
 class RejectCrossSiteRequests:
     """Refuse a request another site sent, or one addressed to another name.
 
-    Two checks, and the first is the one that carries the weight. A page on
-    `evil.example.com` whose name has been rebound to `127.0.0.1` reaches this
-    server over a connection the browser itself considers same-origin -- that is
-    precisely what DNS rebinding buys, and it means the same-origin policy does
-    not save us: the page can read every reply, so `/api/state` hands it the
-    corpus and `/pdf/{key}` hands it the papers. Nor can it be caught by
-    comparing `Origin` against `Host`, since both come from the request and the
-    rebound page sets both to its own name; that comparison only asks a caller
-    to agree with itself.
+    The Host check carries the weight. A page on `evil.example.com` whose name
+    has been rebound to `127.0.0.1` reaches this server over a connection the
+    browser considers same-origin, and it can read every reply. Comparing
+    Origin against Host would not catch it, since the page sets both. What it
+    cannot change is the name it asked for, which the browser puts in Host, so
+    every request has to be addressed to an authority this server answers for,
+    as `_is_our_own` works out from the socket.
 
-    What gives the page away is the one thing it cannot change: the name it
-    asked for. The browser puts that in `Host`, so every request, reads
-    included, has to be addressed to an authority this server actually answers
-    for -- and `_is_our_own` works that out from the listening socket rather
-    than from the request.
+    The Origin check is the ordinary cross-site one. `/api/upload` is a
+    multipart POST, which a browser sends across origins without a preflight;
+    every other mutating route takes JSON and is held back by one. A request
+    with no Origin (curl, the CLI, the macOS uploader) is left alone.
 
-    The second check is the ordinary cross-site one, for a page that is honest
-    about who it is. `/api/upload` is the route reachable that way: a multipart
-    POST is a "simple" request, so a browser sends it across origins without
-    asking permission first, while every other mutating route here takes a JSON
-    body and is held back by the preflight it cannot answer. A browser sets
-    `Origin` on every request that is not a plain read, and an origin is a
-    scheme, a host and a port, so a page on another loopback port -- or on
-    another loopback address, such as `http://127.0.0.2:8765` -- is another site
-    however local it is. A request with no `Origin` is left alone: curl,
-    the CLI and the macOS app's uploader are not a browser acting for somebody
-    else's page, which is the only thing that check is for.
-
-    Outermost of the middlewares, so a refused request is never counted as work
-    in flight and never selects a workspace.
+    Outermost of the middlewares, so a refused request is never counted as
+    work in flight and never selects a workspace.
     """
 
     def __init__(self, app):
@@ -351,11 +267,8 @@ class RejectCrossSiteRequests:
 
     @staticmethod
     async def _refuse(detail: str, scope, receive, send):
-        # 403 rather than 421 Misdirected Request, which fits the wording but
-        # invites an HTTP/2 client to retry on a fresh connection -- reaching
-        # the same refusal, since the objection is to the request, not to the
-        # route it took. Both refusals here say the same thing anyway: this came
-        # from somewhere this server does not serve.
+        # 403 rather than 421: a 421 invites an HTTP/2 client to retry on a
+        # fresh connection, and the objection is to the request itself.
         response = JSONResponse({"detail": detail}, status_code=403)
         return await response(scope, receive, send)
 
@@ -673,18 +586,69 @@ class SynthesisTextBody(BaseModel):
     text: str
 
 
+class LedgerLink(BaseModel):
+    claim: str
+    relation: str = config.LEDGER_RELATIONS[-1]
+    note: str = ""
+
+    @field_validator("relation")
+    @classmethod
+    def _known_relation(cls, value: str) -> str:
+        if value not in config.LEDGER_RELATIONS:
+            raise ValueError(f"relation must be one of {config.LEDGER_RELATIONS}")
+        return value
+
+
+class ClaimPatch(BaseModel):
+    """The claim fields a person may set, with the types they must hold.
+
+    Only the fields the caller sent are applied, so a patch stays a patch. A
+    `kind` or `strength` outside the known set is refused here rather than
+    stored and shown as a blank badge.
+    """
+
+    text: str | None = None
+    kind: str | None = None
+    strength: str | None = None
+    tags: list[str] | None = None
+    evidence: str | None = None
+    quote: str | None = None
+    locator: str | None = None
+    ledger_links: list[LedgerLink] | None = None
+    reviewed: bool | None = None
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, value: str | None) -> str | None:
+        if value is not None and value not in config.CLAIM_KINDS:
+            raise ValueError(f"kind must be one of {config.CLAIM_KINDS}")
+        return value
+
+    @field_validator("strength")
+    @classmethod
+    def _known_strength(cls, value: str | None) -> str | None:
+        if value is not None and value not in config.CLAIM_STRENGTHS:
+            raise ValueError(f"strength must be one of {config.CLAIM_STRENGTHS}")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def _slug_tags(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return sorted({store.slugify(t) for t in value if store.slugify(t)})
+
+    def fields(self) -> dict:
+        """The fields the caller sent, as plain values the store writes."""
+        return self.model_dump(exclude_unset=True)
+
+
 class PaperPatch(BaseModel):
     """The paper fields a person may correct, and the types they must hold.
 
-    Every other write here goes through a model; this route took a bare dict
-    and wrote whatever was in it. A year of `"2020"` was accepted as a string
-    and then broke the export, which sorts papers by year and cannot compare a
-    string with the numbers every other paper carries — a corpus wedged by one
-    request, with no way back except editing the JSON by hand.
-
-    Every field is optional and the caller's own fields are the only ones
-    applied, so a patch stays a patch: `None` is a value to write (clearing a
-    year), and an absent field is left alone.
+    A year of `"2020"` was once accepted as a string and broke the export,
+    which sorts papers by year. Only the fields the caller sent are applied:
+    `None` is a value to write (clearing a year), an absent field is left alone.
     """
 
     title: str | None = None
@@ -750,44 +714,19 @@ ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
 def health() -> dict:
     """Say the server is up, and whether it is in the middle of something.
 
-    The macOS launcher polls this while it waits for uvicorn to bind, and asks
-    it again on quit to find out whether anything would be lost. `/api/state`
-    answers both questions but loads the whole corpus to do it, which is the
-    wrong price for a readiness probe.
+    The macOS launcher polls this while it waits for uvicorn to bind and asks
+    again on quit. `/api/state` would answer but loads the corpus to do it.
 
-    A request that could make work counts from the moment it arrives, before it
-    is a job at all. For the sliver between the job being made and the response
-    going out the same paper is counted twice, which reads as one paper too many
-    rather than one too few — the safe direction for a number whose only job is
-    to stop someone quitting on top of work. This route is a GET, so it is never
-    counted and never reports itself.
+    Read `arriving` before `jobs`. A request stops being counted only once its
+    response has gone out, and it makes its jobs before it answers, so an
+    `arriving` of zero means anything in flight a moment ago has already left
+    its jobs behind for the read that follows. The other order lets a paper
+    landing between the two reads fall through both. Do not swap these.
 
-    The two counters are sampled under separate locks, so the order they are
-    read in is the whole of what makes this snapshot safe: read `arriving`
-    first. A request only stops being counted once its response has gone out,
-    and it makes its jobs before it answers, so an `arriving` of zero already
-    implies that anything in flight a moment ago has left its jobs behind for
-    the read that follows. The other order guarantees nothing: `jobs` would be
-    sampled at an instant `arriving` cannot vouch for, and a paper landing
-    between the two reads would fall through both — an idle answer, and a
-    launcher stopping the server on top of a queued job. Do not swap these.
-
-    The two kinds of work are also reported apart, because they are not lost by
-    the same event. `jobs` dies with the server: stop it mid-extraction and the
-    paper stays unread. `arriving` dies with the client that is sending it, and
-    a client can stop while the server keeps running — the macOS app quitting
-    tears down its web view's upload even when the server it adopted lives on.
-    An app deciding whether it may quit needs to tell those apart. `busy` stays
-    their sum, which is what it has always meant, so nothing that reads only
-    that number has to change.
-
-    `arriving` is every request on the wire that is not a read, not only the
-    uploads it began as; see `CountArrivingRequests` for why the net is that
-    wide. The field name is unchanged because its meaning is: work in flight
-    that belongs to whoever is sending it. An app that reads it as "papers being
-    added" is right about the only thing it does with the number — whether it is
-    zero — and wrong only about the wording of a dialog it shows in the
-    microseconds a small POST is on the wire.
+    The two are reported apart because they are lost by different events:
+    `jobs` dies with the server, `arriving` with the client sending it. `busy`
+    is their sum. A request in `arriving` is counted twice for the sliver
+    between job creation and response, which errs towards busy.
     """
     with _arrivals_lock:
         arriving = _requests_arriving
@@ -977,17 +916,17 @@ def retag(body: RetagBody) -> dict:
 
 
 @app.post("/api/papers/{key}/claims")
-def create_claim(key: str, patch: dict = Body(default={})) -> dict:
+def create_claim(key: str, patch: ClaimPatch = Body(default=ClaimPatch())) -> dict:
     try:
-        return store.add_claim(key, patch)
+        return store.add_claim(key, patch.fields())
     except KeyError:
         raise HTTPException(404, f"no paper {key}")
 
 
 @app.patch("/api/papers/{key}/claims/{claim_id}")
-def patch_claim(key: str, claim_id: str, patch: dict = Body(...)) -> dict:
+def patch_claim(key: str, claim_id: str, patch: ClaimPatch) -> dict:
     try:
-        return store.update_claim(key, claim_id, patch)
+        return store.update_claim(key, claim_id, patch.fields())
     except KeyError:
         raise HTTPException(404, f"no claim {claim_id} on {key}")
 
@@ -1216,27 +1155,20 @@ def serve_pdf(key: str, inline: bool = False) -> FileResponse:
 def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> None:
     import uvicorn
 
-    # The CLI turns this away first, with a usage message; this catches the
-    # direct caller. Port 0 means "any free port" to uvicorn, which picks one
-    # after `trust_bind` has already written the authority down -- so the
-    # server would answer on a port nobody named while trusting a port nobody
-    # is listening on, and every request from off this machine would be refused
-    # with no way to work out why. Nor can the trust be repaired once the socket
-    # exists: with a published `--host`, the operator has to know the port in
-    # advance to reach the page at all.
+    # The CLI refuses this first; this catches a direct caller. Port 0 means
+    # "any free port", chosen after `trust_bind` has recorded the authority, so
+    # the server would trust a port nobody listens on and refuse everything.
     if not 1 <= port <= 65535:
         raise ValueError(
             f"cannot serve on port {port}: ports run 1-65535, and 0 asks the "
-            "kernel for whichever happens to be free, leaving nobody -- this "
-            "server included -- able to say where the page is"
+            "kernel for whichever is free, so nobody can say where the page is"
         )
     config.ensure_dirs()
     trust_bind(host, port)
     os.environ[BIND_ENV] = f"{host}:{port}"
     if _bound_to_every_address and not _published_authorities:
-        # Silence here would be the wrong kind: the operator asked to be
-        # reachable from anywhere, and writes from anywhere but this machine
-        # will be refused until they say what name the page is served under.
+        # Writes from anywhere but this machine will be refused until the
+        # operator says what name the page is served under.
         print(
             f"warning: --host {host} publishes on every address, but the name a browser\n"
             f"         will use cannot be read off the socket and is not taken from the\n"
