@@ -43,7 +43,10 @@ MODEL = os.environ.get("DOXOGRAPH_MODEL", "claude-opus-5")
 # How many model calls a per-topic or per-paper pass keeps in flight. The
 # passes are independent per item and the merges tolerate any interleaving,
 # so the only reason to hold this down is the API rate limit.
-PASS_WORKERS = max(1, int(os.environ.get("DOXOGRAPH_PASS_WORKERS", "4")))
+try:
+    PASS_WORKERS = max(1, int(os.environ.get("DOXOGRAPH_PASS_WORKERS", "4")))
+except ValueError:
+    PASS_WORKERS = 4
 
 # Bumped when the extraction schema or prompt changes in a way that makes older
 # extractions worth re-running. Stored on each paper so you can find stale ones.
