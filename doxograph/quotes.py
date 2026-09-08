@@ -17,7 +17,7 @@ from pathlib import Path
 # Squashed page text is cached per file, since a paper is checked once per
 # claim and text extraction is the slow part. Keyed on the file's identity so
 # a replaced PDF is re-read.
-_cache: dict[Path, tuple[tuple[int, int], str]] = {}
+_cache: dict[Path, tuple[tuple[int, int, int], str]] = {}
 _cache_lock = threading.Lock()
 _CACHE_LIMIT = 32
 
@@ -51,7 +51,7 @@ def pdf_text(path: Path) -> str | None:
         st = path.stat()
     except OSError:
         return None
-    identity = (st.st_size, st.st_mtime_ns)
+    identity = (st.st_size, st.st_mtime_ns, st.st_ino)
     with _cache_lock:
         hit = _cache.get(path)
         if hit and hit[0] == identity:
