@@ -842,3 +842,35 @@ def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
 
     asyncio.run(scenario())
     assert store.agreement_rows()[0]["status"] == "confirmed"
+
+
+@pytest.mark.browser
+def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
+    _paper("paper-a", "Paper A", "recovery")
+    store.save_context("Original context.")
+    store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                nav = page.locator('#research-nav [data-view="research"]')
+                await nav.wait_for(state="visible")
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                # The context changes elsewhere while the form is open; only
+                # the ledger is edited here, so only the ledger is written.
+                store.save_context("Changed from the shell while the form was open.")
+                await page.wait_for_timeout(3000)
+                await form.locator('[name="ledger-text"]').fill("Recovery is path-dependent, at every scale.")
+                await form.get_by_role("button", name="Save").click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_context() == "Changed from the shell while the form was open."
+    assert store.load_ledger() == [{"id": "L1", "text": "Recovery is path-dependent, at every scale."}]

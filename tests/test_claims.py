@@ -370,3 +370,17 @@ def test_a_claim_patch_refuses_an_unknown_ledger_relation_and_an_unknown_field()
     claim = good.json()
     assert claim["id"] == "doe2026study-c1"           # the id is not the caller's to set
     assert claim["ledger_links"] == [{"claim": "L1", "relation": "supports", "note": ""}]
+
+
+def test_a_null_in_a_claim_patch_is_not_written():
+    """`{"tags": null}` used to be stored as None and break tag_counts, and
+    `{"text": null}` on creation reached `.strip()`. A null is not sent."""
+    store.save_paper(store.new_paper("doe2026study"))
+    claim = store.add_claim("doe2026study", {"text": "X.", "tags": ["alpha"]})
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        updated = client.patch(f"/api/papers/doe2026study/claims/{claim['id']}",
+                               json={"tags": None, "evidence": "n = 4"}).json()
+        assert updated["tags"] == ["alpha"] and updated["evidence"] == "n = 4"
+        created = client.post("/api/papers/doe2026study/claims", json={"text": None}).json()
+        assert created["text"] == "" and created["reviewed"] is False
+        assert client.get("/api/state").status_code == 200

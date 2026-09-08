@@ -870,15 +870,25 @@ async function saveResearch() {
   V.error = null;
   V.researchSaving = true;
   setResearchSaving(form, true);
+  // Only what was edited is written, judged against what the form was drawn
+  // from: a field left alone must not carry the value the form opened with
+  // over a change made elsewhere while it was open.
+  const base = V.researchBase || storedResearch();
+  const ledgerChanged = JSON.stringify(claims) !== JSON.stringify(base.claims);
+  const contextChanged = context.trim() !== base.context.trim();
   try {
     // The ledger goes first: it is the one of the two the server can refuse
     // (a missing or repeated id), so nothing is written unless both will be.
-    await api('/api/ledger', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ claims }),
-    });
-    await api('/api/context', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: context }),
-    });
+    if (ledgerChanged) {
+      await api('/api/ledger', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ claims }),
+      });
+    }
+    if (contextChanged) {
+      await api('/api/context', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: context }),
+      });
+    }
   } catch (error) {
     // Show the error over the form as typed; redrawing from S would put the
     // saved values back and lose the edit that just failed.

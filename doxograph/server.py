@@ -639,8 +639,13 @@ class ClaimPatch(BaseModel):
         return sorted({store.slugify(t) for t in value if store.slugify(t)})
 
     def fields(self) -> dict:
-        """The fields the caller sent, as plain values the store writes."""
-        return self.model_dump(exclude_unset=True)
+        """The fields the caller sent, as plain values the store writes.
+
+        A null is treated as not sent. No claim field is cleared by null (an
+        empty string or list does that), and writing None would leave a claim
+        that `tag_counts` and the export cannot read.
+        """
+        return {k: v for k, v in self.model_dump(exclude_unset=True).items() if v is not None}
 
 
 class PaperPatch(BaseModel):
