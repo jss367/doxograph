@@ -295,7 +295,7 @@ async function switchWorkspace(workspaceId) {
   }
   const hasDraft = V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
-    || Object.keys(V.synthDrafts).length;
+    || Object.keys(V.synthDrafts).length || researchFormDirty();
   if (hasDraft && !confirm('Switch workspaces and discard unsaved edits in this workspace?')) {
     renderWorkspacePicker();
     return;
@@ -804,6 +804,17 @@ function renderResearch() {
   </form>`;
   $('content').innerHTML = html;
   if (main) main.scrollTop = scrollTop;
+}
+
+// Whether the research form on screen differs from what the server holds. The
+// form is the only place its edits live until Save, so leaving the workspace
+// with it dirty is leaving a draft behind.
+function researchFormDirty() {
+  if (V.view !== 'research' || !$('research-form')) return false;
+  const { context, claims } = readResearchForm();
+  const stored = (S.ledger || []).map((c) => ({ id: c.id || '', text: c.text || '' }));
+  return context.trim() !== (S.context || '').trim()
+    || JSON.stringify(claims) !== JSON.stringify(stored);
 }
 
 function readResearchForm() {
