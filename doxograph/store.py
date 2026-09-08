@@ -1439,7 +1439,9 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
 
 def set_agreement_status(agreement_id: str, status: str) -> dict:
     """Record the reviewer's decision; as for tensions, deciding refreshes
-    the fingerprints and reopening does not."""
+    the fingerprints and reopening does not. A decision is about the members
+    that still exist, so it also drops deleted ones from the record, as long
+    as two papers remain; that is what the reviewer saw and judged."""
     if status not in AGREEMENT_STATUSES:
         raise ValueError(f"status must be one of {AGREEMENT_STATUSES}, not {status!r}")
     with agreements_lock():
@@ -1450,8 +1452,9 @@ def set_agreement_status(agreement_id: str, status: str) -> dict:
                 record["decided"] = now()
                 if status != "open":
                     live = {c["id"]: c for c in claim_rows()}
-                    ids = record.get("claims", [])
-                    if all(i in live for i in ids):
+                    ids = [i for i in record.get("claims", []) if i in live]
+                    if len(_agreement_papers(ids, live)) >= 2:
+                        record["claims"] = ids
                         record["fingerprints"] = {i: claim_fingerprint(live[i]) for i in ids}
                 _save_agreements(data)
                 return record

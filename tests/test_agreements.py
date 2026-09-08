@@ -99,6 +99,20 @@ def test_a_topic_from_a_returned_part_needs_every_member_to_carry_it():
     assert store.agreement_rows()[0]["topics"] == ["recovery-rate"]
 
 
+def test_deciding_a_group_that_lost_a_member_judges_the_survivors():
+    a, b, c, d = build_corpus()
+    store.record_agreements("recovery-rate", [{"claims": [a, b, d], "note": "half"}], shown())
+    aid = store.agreement_rows()[0]["id"]
+    store.set_agreement_status(aid, "confirmed")
+    store.delete_claim("roe2024vectors", d)
+    assert store.agreement_rows()[0]["stale"] is True
+    store.set_agreement_status(aid, "confirmed")
+    [row] = store.agreement_rows()
+    assert row["stale"] is False and row["n_papers"] == 2 and row["status"] == "confirmed"
+    assert {c["id"] for c in row["claims"]} == {a, b}
+    assert set(store.load_agreements()[0]["claims"]) == {a, b}
+
+
 def test_editing_or_deleting_a_member_marks_it_stale_and_a_rerun_reopens_it():
     a, b, c, d = build_corpus()
     store.record_agreements("recovery-rate", [{"claims": [a, b, d], "note": "half"}], shown())
