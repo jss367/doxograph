@@ -757,8 +757,11 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
                 await rows.nth(2).locator('[name="ledger-text"]').fill("Typed, then refused.")
                 await form.get_by_role("button", name="Save").click()
                 await page.locator("#content .warn").get_by_text("used twice", exact=False).wait_for()
-                # The form is as typed, not redrawn from what was saved before.
+                # The form is as typed, not redrawn from what was saved before,
+                # and it is editable again now that the save has settled.
                 assert await form.locator('[name="context"]').input_value() == "A context that must not be saved."
+                assert await form.locator('[name="context"]').is_enabled()
+                assert "saving" not in (await form.get_attribute("class"))
                 assert await rows.count() == 3
                 assert await rows.nth(2).locator('[name="ledger-text"]').input_value() == "Typed, then refused."
             await browser.close()

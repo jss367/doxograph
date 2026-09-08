@@ -220,7 +220,7 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .paperhead .ps { font-size: .9rem; margin: .4rem 0 0; }
 
 /* A form whose save is in flight: read-only until the request settles. */
-form[data-form].saving { opacity: .6; }
+form[data-form].saving, #research-form.saving { opacity: .6; }
 .synth.saving { opacity: .6; }
 
 /* A topic's synthesis: what the papers, taken together, hold. */

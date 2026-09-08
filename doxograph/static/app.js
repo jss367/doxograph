@@ -124,8 +124,8 @@ const NEW_CLAIM_ID = '__new__';
 // success redraws from the server value and typing meanwhile would be lost.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
-            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null, agreementStatus: '', agreementFocus: null,
-            synthEditing: null, synthDrafts: {}, synthSaving: null };
+            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+            synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false };
 
 function blankClaim(paper) {
   return {
@@ -267,8 +267,8 @@ function resetWorkspaceView() {
   Object.assign(V, {
     paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
-    error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null, agreementStatus: '', agreementFocus: null,
-    synthEditing: null, synthDrafts: {}, synthSaving: null,
+    error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+    synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false,
   });
   savingClaims.clear();
   $('q').value = '';
@@ -281,7 +281,7 @@ function resetWorkspaceView() {
 
 async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId) return;
-  if (pendingMutations || savingClaims.size || V.synthSaving) {
+  if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
     alert('Wait for the current change to finish before switching workspaces.');
     renderWorkspacePicker();
     return;
@@ -808,9 +808,19 @@ function readResearchForm() {
   return { context: form.querySelector('[name="context"]').value, claims };
 }
 
+function setResearchSaving(form, busy) {
+  if (!form.isConnected) return;   // a finished save has already left the view
+  form.classList.toggle('saving', busy);
+  form.querySelectorAll('input, textarea, button').forEach((field) => { field.disabled = busy; });
+}
+
 async function saveResearch() {
+  if (V.researchSaving) return;   // a save is in flight: one ledger/context pair at a time
+  const form = $('research-form');
   const { context, claims } = readResearchForm();
   V.error = null;
+  V.researchSaving = true;
+  setResearchSaving(form, true);
   try {
     // The ledger goes first: it is the one of the two the server can refuse
     // (a missing or repeated id), so nothing is written unless both will be.
@@ -824,7 +834,6 @@ async function saveResearch() {
     // Show the error over the form as typed; redrawing from S would put the
     // saved values back and lose the edit that just failed.
     V.error = `Could not save: ${error.message}`;
-    const form = $('research-form');
     let warn = form.previousElementSibling;
     if (!warn || !warn.classList.contains('warn')) {
       form.insertAdjacentHTML('beforebegin', '<p class="warn"></p>');
@@ -832,6 +841,9 @@ async function saveResearch() {
     }
     warn.textContent = V.error;
     return;
+  } finally {
+    V.researchSaving = false;
+    setResearchSaving(form, false);
   }
   showView('claims');
   await refreshAll();
