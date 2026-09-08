@@ -74,6 +74,19 @@ def test_nothing_to_check_is_none(tmp_path):
     assert quotes.verify(pdf, "") is None
 
 
+def test_a_pdf_with_no_text_leaves_quotes_unchecked(tmp_path):
+    # A scanned paper opens without error, but every page extracts to "".
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(minimal_pdf(""))
+    assert quotes.pdf_text(pdf) is None
+    assert quotes.verify(pdf, SENTENCE) is None
+    assert quotes.verify(pdf, SENTENCE) is None     # the cached answer says the same
+    key = paper_with_pdf(text="")
+    claim = store.add_claim(key, {"text": "A.", "quote": SENTENCE})
+    assert claim["quote_verified"] is None
+    assert store.summarize(store.load_paper(key))["n_unverified"] == 0
+
+
 def test_the_text_cache_notices_a_replaced_pdf(tmp_path):
     pdf = tmp_path / "p.pdf"
     pdf.write_bytes(minimal_pdf("first version of the paper text here"))

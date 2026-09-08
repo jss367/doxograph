@@ -44,7 +44,9 @@ def squash(text: str) -> str:
 
 
 def pdf_text(path: Path) -> str | None:
-    """The whole paper's text, squashed. None if it cannot be read."""
+    """The whole paper's text, squashed. None if it cannot be read, or if it
+    has no text: a scanned paper opens fine but every page comes back empty,
+    and there is nothing to check a quote against."""
     try:
         st = path.stat()
     except OSError:
@@ -53,7 +55,7 @@ def pdf_text(path: Path) -> str | None:
     with _cache_lock:
         hit = _cache.get(path)
         if hit and hit[0] == identity:
-            return hit[1]
+            return hit[1] or None
     try:
         from pypdf import PdfReader
         reader = PdfReader(str(path))
@@ -64,7 +66,7 @@ def pdf_text(path: Path) -> str | None:
         if len(_cache) >= _CACHE_LIMIT:
             _cache.pop(next(iter(_cache)))
         _cache[path] = (identity, text)
-    return text
+    return text or None
 
 
 def coverage(quote: str, haystack: str) -> float:
