@@ -682,3 +682,195 @@ def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redr
     saved = {r["id"]: r for r in store.claim_rows()}
     assert saved["paper-a-c1"]["text"] == "Claim saved while the synthesis editor was open."
     assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written."]
+
+
+@pytest.mark.browser
+def test_the_research_context_and_ledger_are_edited_in_the_app():
+    _paper("paper-a", "Paper A", "recovery")
+    store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                nav = page.locator('#research-nav [data-view="research"]')
+                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                assert await form.locator('[name="ledger-text"]').input_value() == "Recovery is path-dependent."
+
+                # Opening the form and leaving without typing leaves no draft
+                # behind, so a change made elsewhere is what comes back.
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                store.save_context("Written from the shell meanwhile.")
+                await page.wait_for_timeout(3000)   # a poll picks it up
+                assert "unsaved edits" not in (await nav.text_content())
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                assert await form.locator('[name="context"]').input_value() == "Written from the shell meanwhile."
+                # A change made elsewhere while the form is open, untouched,
+                # does not turn the form into a draft either.
+                store.save_context("Changed again while the form was open.")
+                await page.wait_for_timeout(3000)   # a poll replaces S under the open form
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                assert "unsaved edits" not in (await nav.text_content())
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                assert await form.locator('[name="context"]').input_value() == "Changed again while the form was open."
+
+                await form.locator('[name="context"]').fill("Steering vectors and what recovers from them.")
+                await form.get_by_role("button", name="Add a claim").click()
+                rows = form.locator("[data-ledger-row]")
+                assert await rows.count() == 2
+                assert await rows.nth(1).locator('[name="ledger-id"]').input_value() == "L2"
+                await rows.nth(1).locator('[name="ledger-text"]').fill("Steering is reversible.")
+                # A poll while the form is open must not redraw it: wait past
+                # one tick and check the typed text is still there. Nor must a
+                # click on the sidebar item that is already active.
+                await page.wait_for_timeout(3000)
+                await nav.click()
+                assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
+                # Nor must leaving for a paper and coming back: the draft is
+                # kept, and the sidebar says so meanwhile.
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                await nav.get_by_text("unsaved edits", exact=False).wait_for()
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                rows = form.locator("[data-ledger-row]")
+                assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
+                assert await form.locator('[name="context"]').input_value() == "Steering vectors and what recovers from them."
+                await form.get_by_role("button", name="Save").click()
+
+                # Back on the claims, and the sidebar counts the new state.
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                await nav.get_by_text("context written · 2 claims of my own").wait_for()
+                assert "unsaved edits" not in (await nav.text_content())   # the saved form left no draft
+                # The editor offers the new ledger claim as a link target.
+                await page.locator('.claim[data-claim="paper-a-c1"] button[data-act="edit"]').click()
+                options = page.locator('form[data-form] select[name="link-claim"] option')
+                assert "L2" in " ".join(await options.all_text_contents())
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_context() == "Steering vectors and what recovers from them."
+    assert store.load_ledger() == [
+        {"id": "L1", "text": "Recovery is path-dependent."},
+        {"id": "L2", "text": "Steering is reversible."},
+    ]
+
+
+@pytest.mark.browser
+def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
+    _paper("paper-a", "Paper A", "recovery")
+    store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."},
+                       {"id": "L3", "text": "Steering is reversible."}])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                nav = page.locator('#research-nav [data-view="research"]')
+                await nav.get_by_text("2 claims of my own", exact=False).wait_for()
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                await form.locator('[name="context"]').fill("A context that must not be saved.")
+                await form.get_by_role("button", name="Add a claim").click()
+                rows = form.locator("[data-ledger-row]")
+                # The new row takes the first free id, not the row count.
+                assert await rows.nth(2).locator('[name="ledger-id"]').input_value() == "L2"
+                await rows.nth(2).locator('[name="ledger-id"]').fill("L1")
+                await rows.nth(2).locator('[name="ledger-text"]').fill("Typed, then refused.")
+                await form.get_by_role("button", name="Save").click()
+                await page.locator("#content .warn").get_by_text("used twice", exact=False).wait_for()
+                # The form is as typed, not redrawn from what was saved before,
+                # and it is editable again now that the save has settled.
+                assert await form.locator('[name="context"]').input_value() == "A context that must not be saved."
+                assert await form.locator('[name="context"]').is_enabled()
+                assert "saving" not in (await form.get_attribute("class"))
+                assert await rows.count() == 3
+                assert await rows.nth(2).locator('[name="ledger-text"]').input_value() == "Typed, then refused."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_context() == ""
+    assert store.load_ledger() == [{"id": "L1", "text": "Recovery is path-dependent."},
+                                   {"id": "L3", "text": "Steering is reversible."}]
+
+
+@pytest.mark.browser
+def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    _paper("paper-c", "Paper C", "recovery")
+    store.record_agreements("recovery", [{"claims": ["paper-a-c1", "paper-b-c1", "paper-c-c1"],
+                                          "note": "All three report it."}],
+                            {r["id"]: r for r in store.claim_rows()})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                # The claim card says how many other papers agree, and the
+                # marker opens the agreements view focused on that claim.
+                marker = page.locator('.claim[data-claim="paper-a-c1"] .amark')
+                await marker.wait_for(state="visible")
+                assert "2 other papers agree" in (await marker.text_content())
+                await marker.click()
+                card = page.locator('.tcard[data-agreement="a1"]')
+                await card.wait_for(state="visible")
+                assert await card.locator(".kind.agreement").text_content() == "3 papers"
+                assert await card.locator(".tgroup .claim").count() == 3
+                assert await card.locator(".tnote").text_content() == "All three report it."
+                await card.get_by_role("button", name="Confirm").click()
+                await page.locator('.tcard.confirmed[data-agreement="a1"]').wait_for(state="visible")
+                await page.locator('#agreements-nav', has_text="1 confirmed").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.agreement_rows()[0]["status"] == "confirmed"
+
+
+@pytest.mark.browser
+def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
+    _paper("paper-a", "Paper A", "recovery")
+    store.save_context("Original context.")
+    store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                nav = page.locator('#research-nav [data-view="research"]')
+                await nav.wait_for(state="visible")
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                # The context changes elsewhere while the form is open; only
+                # the ledger is edited here, so only the ledger is written.
+                store.save_context("Changed from the shell while the form was open.")
+                await page.wait_for_timeout(3000)
+                await form.locator('[name="ledger-text"]').fill("Recovery is path-dependent, at every scale.")
+                await form.get_by_role("button", name="Save").click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_context() == "Changed from the shell while the form was open."
+    assert store.load_ledger() == [{"id": "L1", "text": "Recovery is path-dependent, at every scale."}]

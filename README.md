@@ -29,7 +29,10 @@ reads it with Claude, and records:
   for, refines, or is independent of them
 
 Once several papers share a topic, a second pass writes what they hold on it,
-and a third finds where they disagree:
+a third finds where they agree, and a fourth finds where they disagree. An
+agreement is a group of claims from two or more papers that assert the same
+finding, with a count of how many papers make it, which is the answer to "how
+much evidence do I have for this". A tension is the opposite:
 pairs of claims from different papers that pull against each other on the same
 question, each with a note on what the disagreement is and what might account
 for it. These are reviewed too, and the confirmed ones go into the export.
@@ -37,6 +40,12 @@ for it. These are reviewed too, and the confirmed ones go into the export.
 Then you review. Extraction gets claims subtly wrong — wording that is too
 strong, a result attributed to the wrong condition, a missing caveat — so every
 claim starts unreviewed and the web app is built for correcting them quickly.
+
+One error the machine can catch on its own: a quote that is not in the paper.
+Every quote is checked against the PDF's text when it is extracted or edited,
+on letters and digits alone so line breaks and hyphenation do not count against
+it, and a quote that is not found is flagged on the claim. `doxograph verify`
+runs the check over a corpus extracted before it existed.
 
 ## Install
 
@@ -56,8 +65,10 @@ doxograph add 2602.06941              # arXiv ID, arXiv URL, DOI, PDF URL, or a 
 doxograph add --no-extract paper.pdf  # fetch now, read later
 doxograph extract                     # read every paper that has no claims yet
 doxograph retag                       # reassign topics against the current vocabulary
+doxograph verify                      # check that every quote is in its paper's PDF
 doxograph tensions                    # find claims from different papers that disagree
 doxograph tensions --list             # show what has been found, without calling the model
+doxograph agreements                  # find claims from different papers that say the same thing
 doxograph synthesize                  # write what the papers hold on each topic
 doxograph synthesize --list           # show the syntheses on file
 doxograph list                        # what is in the corpus
@@ -67,7 +78,10 @@ doxograph bibtex --out refs.bib
 ```
 
 `add`, `extract`, and `retag` exit nonzero if any reference or paper they were
-asked to handle failed, so a script can tell a partial run from a clean one. A
+asked to handle failed, so a script can tell a partial run from a clean one.
+`extract`, `retag`, `tensions`, `agreements` and `synthesize` run four model
+calls at a time; set `DOXOGRAPH_PASS_WORKERS` to change that, in the shell or
+for the web app. A
 paper that arrives without its PDF counts as a failure and says so; running
 `add` on it again retries the download and then reads it.
 
@@ -182,7 +196,9 @@ claims:
 
 These are your own claims. Extraction links a paper's claims to them, which is
 what turns the corpus into an answer to "what external evidence do I have for
-this" rather than a pile of notes.
+this" rather than a pile of notes. The file can be edited by hand or from the
+web app, under *What I am studying* in the sidebar, which edits the research
+context in the same form.
 
 ### context.md
 

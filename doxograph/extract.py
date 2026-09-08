@@ -10,8 +10,11 @@ it again.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import anthropic
@@ -166,6 +169,43 @@ def client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
+#: Model calls in flight across this process. Sized once, from the setting as
+#: it was at import. Every call goes through `_create`, so the cap holds
+#: whether a call comes from a pass, from a single paper's read queued by the
+#: web app, or from both at once.
+_pass_slots = threading.BoundedSemaphore(config.PASS_WORKERS)
+
+
+def _create(api: anthropic.Anthropic, **kwargs):
+    """One model call, inside the process-wide cap."""
+    with _pass_slots:
+        return api.messages.create(**kwargs)
+
+
+def run_concurrently(items: list, work, workers: int | None = None):
+    """Run `work(item)` for every item, a few at a time, yielding
+    `(item, result, error)` as each finishes.
+
+    Each call runs in a copy of the caller's context, so a job bound to a
+    workspace stays in it. One item's failure is reported and the rest go on:
+    the passes run in a fixed order, and an item that always fails would
+    otherwise keep the ones after it from ever being done.
+    """
+    if not items:
+        return
+    # The executor caps one pass; `_create` caps the process, so passes
+    # queued together still make PASS_WORKERS calls between them.
+    workers = min(workers or config.PASS_WORKERS, len(items))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
+        futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                yield item, future.result(), None
+            except Exception as exc:
+                yield item, None, exc
+
+
 def vocabulary_block(tags: list[dict] | None = None) -> str:
     tags = store.load_tags() if tags is None else tags
     if not tags:
@@ -190,10 +230,7 @@ def ledger_block() -> str:
 
 
 def context_block() -> str:
-    path = config.data_dir() / "context.md"
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip()
-    return "No research context has been recorded, so judge relevance broadly."
+    return store.load_context() or "No research context has been recorded, so judge relevance broadly."
 
 
 def _pdf_fingerprint(pdf: Path) -> dict:
@@ -318,9 +355,17 @@ The attached PDF is:
 Extract its claims."""
 
 
+# Fields of a claim that nobody edits: the id, and the quote verdict, which is
+# derived from the PDF and can be (re)computed by `verify_quotes` while a
+# re-read is waiting on the model. Counting a fresh verdict as an edit would
+# keep every unreviewed claim and then append the new extraction beside it.
+DERIVED_CLAIM_FIELDS = frozenset({"id", "quote_verified"})
+
+
 def claim_state(claim: dict) -> str:
     """Everything about a claim a person can change, as a comparable string."""
-    return json.dumps({k: v for k, v in claim.items() if k != "id"}, sort_keys=True, default=str)
+    return json.dumps({k: v for k, v in claim.items() if k not in DERIVED_CLAIM_FIELDS},
+                      sort_keys=True, default=str)
 
 
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
@@ -345,7 +390,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         instructions = {"type": "text", "text": _instructions(paper, tags)}
 
         def read(pdf_block: dict):
-            return api.messages.create(
+            return _create(api, 
                 model=config.MODEL,
                 max_tokens=16000,
                 system=SYSTEM,
@@ -434,6 +479,8 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
         )
         if not claim["text"]:
             continue
+        # The prompt asks for a verbatim quote; this is where that is checked.
+        store.check_quote(key, claim)
         fresh.append(claim)
         working["claims"] = kept + fresh
 
@@ -501,7 +548,7 @@ def retag_paper(key: str) -> dict:
     # was changed by somebody else while the model thought.
     claims_before = {c["id"]: state_of(c) for c in claims}
     api = client()
-    response = api.messages.create(
+    response = _create(api, 
         model=config.MODEL,
         max_tokens=8000,
         system=(
@@ -636,24 +683,27 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
     return "\n\n".join(blocks)
 
 
-def find_tensions(topic: str, rows: list[dict] | None = None) -> dict:
+def find_tensions(topic: str, rows: list[dict] | None = None,
+                  tags: list[dict] | None = None) -> dict:
     """Ask the model which claims in `topic` disagree, and record the answer.
 
     Cheap in the way retag is cheap: it sends claim text rather than PDFs. One
     call per topic, and only topics with claims from at least two papers are
-    worth a call; `store.tension_topics` lists them.
+    worth a call; `store.tension_topics` lists them. `rows` and `tags` let a
+    pass over many topics read the corpus once.
     """
     rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
     papers = {r["paper"] for r in rows}
     if len(papers) < 2:
         return {"added": 0, "reopened": 0, "kept": 0, "returned": 0}
-    description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
+    tags = store.load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     # The claims as the prompt shows them, keyed by id. The merge uses this to
     # drop ids the model invented; staleness against later edits is judged
     # separately, from the fingerprints the merge records.
     shown = {r["id"]: r for r in rows}
     api = client()
-    response = api.messages.create(
+    response = _create(api, 
         model=config.MODEL,
         max_tokens=8000,
         system=TENSION_SYSTEM,
@@ -741,7 +791,8 @@ def _tension_block(topic: str, tensions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
+def synthesize_topic(topic: str, rows: list[dict] | None = None,
+                     tags: list[dict] | None = None) -> dict:
     """Ask the model what the papers hold on `topic`, and record the answer.
 
     Cheap in the way the tensions pass is cheap: one call per topic, claim
@@ -759,14 +810,15 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
     papers = {r["paper"] for r in rows}
     if not rows:
         return {"written": False, "claims": 0, "papers": 0}
-    description = next((t.get("description", "") for t in store.load_tags() if t["name"] == topic), "")
+    tags = store.load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
     tensions = store.tension_rows(all_rows)
     # The record on file as the call starts, so the write can tell whether a
     # reviewer edited or deleted it while the model was thinking.
     before = store.load_syntheses().get(topic)
     api = client()
-    response = api.messages.create(
+    response = _create(api, 
         model=config.MODEL,
         max_tokens=8000,
         system=SYNTHESIS_SYSTEM,
@@ -792,3 +844,92 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None) -> dict:
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
     record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions, before=before)
     return {"written": record is not None, "claims": len(rows), "papers": len(papers)}
+
+
+# --- where the papers agree -----------------------------------------------
+
+AGREEMENT_SYSTEM = """\
+You look for findings that several research papers share.
+
+You are given every claim in one topic, grouped by paper. Return the groups of
+claims, drawn from at least two different papers, that assert the same finding:
+the same question, answered the same way. A group may have members from many
+papers; put every claim that makes the finding into it, one group per finding.
+
+Claims that merely share a topic are not an agreement. Two papers measuring
+different quantities, or the same quantity under conditions that change the
+answer, are not in agreement; nor are a claim and one that refines or qualifies
+it. A result and its replication are. When in doubt, leave the group out: an
+empty list is a good answer for a topic where every paper says something
+different.
+
+Each note is one sentence, in plain language, stating the shared finding in the
+scope the papers actually share. Refer to papers by author and year, not by
+claim id."""
+
+AGREEMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "agreements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claims": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "description": "The ids of the claims, from at least two different papers.",
+                    },
+                    "note": {"type": "string", "description": "The finding they share, in one sentence."},
+                },
+                "required": ["claims", "note"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["agreements"],
+    "additionalProperties": False,
+}
+
+
+def find_agreements(topic: str, rows: list[dict] | None = None,
+                    tags: list[dict] | None = None) -> dict:
+    """Ask the model which claims in `topic` assert the same finding, and
+    record the answer. One call per topic, claim text rather than PDFs, as the
+    tensions pass; `store.tension_topics` lists the topics worth a call."""
+    rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
+    papers = {r["paper"] for r in rows}
+    if len(papers) < 2:
+        return {"added": 0, "grown": 0, "reopened": 0, "kept": 0, "returned": 0}
+    tags = store.load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
+    shown = {r["id"]: r for r in rows}
+    api = client()
+    response = _create(api, 
+        model=config.MODEL,
+        max_tokens=8000,
+        system=AGREEMENT_SYSTEM,
+        thinking={"type": "adaptive"},
+        output_config={
+            "effort": "medium",
+            "format": {"type": "json_schema", "schema": AGREEMENT_SCHEMA},
+        },
+        messages=[{
+            "role": "user",
+            "content": (
+                f"My research:\n\n{context_block()}\n\n"
+                f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
+                f"Claims, by paper:\n\n{_tension_listing(rows)}\n\n"
+                "Return the groups of claims from different papers that assert the same finding."
+            ),
+        }],
+    )
+    if response.stop_reason == "refusal":
+        detail = getattr(response.stop_details, "explanation", "") or ""
+        raise RuntimeError(f"agreement pass refused for {topic}: {detail}")
+    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    found = payload.get("agreements", [])
+    result = store.record_agreements(topic, found, shown)
+    result["returned"] = len(found)
+    return result

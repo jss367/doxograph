@@ -76,32 +76,60 @@ def _read(key: str) -> int:
     return 0
 
 
+def _run_pass(items: list, work, report) -> int:
+    """Run `work` over `items` a few at a time, printing each result as it
+    lands and each failure to stderr. Returns the number of failures."""
+    failures = 0
+    for item, result, exc in extract.run_concurrently(items, work):
+        if exc is not None:
+            print(f"{item}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            failures += 1
+        else:
+            report(item, result)
+    return failures
+
+
 def cmd_extract(args) -> int:
     keys = args.keys or [
         p["key"] for p in store.all_papers()
         if args.all or not p.get("claims")
     ]
-    failures = 0
-    for key in keys:
-        try:
-            paper = extract.extract_paper(key, keep_reviewed=not args.replace_reviewed)
-            print(f"{key}: {len(paper['claims'])} claims, {len(paper['proposed_tags'])} proposed topics")
-        except Exception as exc:
-            print(f"{key}: {type(exc).__name__}: {exc}", file=sys.stderr)
-            failures += 1
+    failures = _run_pass(
+        keys, lambda key: extract.extract_paper(key, keep_reviewed=not args.replace_reviewed),
+        lambda key, paper: print(f"{key}: {len(paper['claims'])} claims, "
+                                 f"{len(paper['proposed_tags'])} proposed topics"))
     return 1 if failures else 0
 
 
 def cmd_retag(args) -> int:
     keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
+    failures = _run_pass(keys, extract.retag_paper, lambda key, _paper: print(f"retagged {key}"))
+    return 1 if failures else 0
+
+
+def cmd_verify(args) -> int:
+    """Check every claim's quote against its paper's PDF."""
+    keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
     failures = 0
     for key in keys:
         try:
-            extract.retag_paper(key)
-            print(f"retagged {key}")
-        except Exception as exc:
-            print(f"{key}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            paper = store.verify_quotes(key)
+        except KeyError:
+            print(f"{key}: no such paper", file=sys.stderr)
             failures += 1
+            continue
+        # Only claims that carry a quote are counted: a hand-added claim
+        # without one has nothing to verify and must not pad the tally.
+        quoted = [c for c in paper.get("claims", []) if c.get("quote")]
+        not_found = [c for c in quoted if c.get("quote_verified") is False]
+        unchecked = [c for c in quoted if c.get("quote_verified") is None]
+        line = f"{key}: {len(quoted) - len(not_found) - len(unchecked)} of {len(quoted)} quotes found"
+        if not_found:
+            line += f", {len(not_found)} not in the PDF"
+        if unchecked:
+            line += f", {len(unchecked)} unchecked (no readable PDF)"
+        print(line)
+        failures += len(not_found)
     return 1 if failures else 0
 
 
@@ -111,15 +139,12 @@ def cmd_tensions(args) -> int:
         topics = args.topics or store.tension_topics()
         if not topics:
             print("no topic has claims from two papers yet", file=sys.stderr)
-        failures = 0
-        for topic in topics:
-            try:
-                result = extract.find_tensions(topic)
-                print(f"{topic}: {result['returned']} returned, {result['added']} new"
-                      + (f", {result['reopened']} reopened" if result["reopened"] else ""))
-            except Exception as exc:
-                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
-                failures += 1
+        rows, tags = store.claim_rows(), store.load_tags()
+        failures = _run_pass(
+            topics, lambda topic: extract.find_tensions(topic, rows, tags),
+            lambda topic, result: print(
+                f"{topic}: {result['returned']} returned, {result['added']} new"
+                + (f", {result['reopened']} reopened" if result["reopened"] else "")))
         if failures:
             return 1
     rows = store.tension_rows()
@@ -142,6 +167,40 @@ def cmd_tensions(args) -> int:
     return 0
 
 
+def cmd_agreements(args) -> int:
+    """Find, or list, claims from different papers that assert the same finding."""
+    if not args.list:
+        topics = args.topics or store.tension_topics()
+        if not topics:
+            print("no topic has claims from two papers yet", file=sys.stderr)
+        rows, tags = store.claim_rows(), store.load_tags()
+        failures = _run_pass(
+            topics, lambda topic: extract.find_agreements(topic, rows, tags),
+            lambda topic, result: print(
+                f"{topic}: {result['returned']} returned, {result['added']} new"
+                + (f", {result['grown']} grown" if result["grown"] else "")
+                + (f", {result['reopened']} reopened" if result["reopened"] else "")))
+        if failures:
+            return 1
+    rows = store.agreement_rows()
+    if args.topics:
+        rows = [r for r in rows if set(r.get("topics", [])) & set(args.topics)]
+    if not args.all:
+        rows = [r for r in rows if r["status"] != "dismissed"]
+    for row in rows:
+        stale = " (a claim changed since)" if row.get("stale") else ""
+        print(f"{row['id']:<5} {row['status']:<9} {row['n_papers']} papers  "
+              f"#{' #'.join(row.get('topics', []))}{stale}")
+        if row.get("note"):
+            print(f"      {row['note']}")
+        for claim in row["claims"]:
+            cite = store.cite_surname(claim.get("paper_authors"), claim["paper"])
+            print(f"      [{cite} {claim.get('paper_year') or 'n.d.'}] {claim.get('text', '')}")
+    open_count = sum(1 for r in rows if r["status"] == "open")
+    print(f"\n{len(rows)} agreements, {open_count} open")
+    return 0
+
+
 def cmd_synthesize(args) -> int:
     """Write, or list, what the papers hold on each topic."""
     if not args.list:
@@ -149,19 +208,18 @@ def cmd_synthesize(args) -> int:
         if not topics:
             print("no topic has claims from two papers yet; name a topic to synthesize it anyway",
                   file=sys.stderr)
-        failures = 0
-        for topic in topics:
-            try:
-                result = extract.synthesize_topic(topic)
-                if result["written"]:
-                    print(f"{topic}: written from {result['claims']} claims in {result['papers']} papers")
-                else:
-                    print(f"{topic}: no claims, nothing written", file=sys.stderr)
-                    failures += 1
-            except Exception as exc:
-                print(f"{topic}: {type(exc).__name__}: {exc}", file=sys.stderr)
-                failures += 1
-        if failures:
+        rows, tags = store.claim_rows(), store.load_tags()
+        unwritten = []
+
+        def report(topic, result):
+            if result["written"]:
+                print(f"{topic}: written from {result['claims']} claims in {result['papers']} papers")
+            else:
+                print(f"{topic}: no claims, nothing written", file=sys.stderr)
+                unwritten.append(topic)
+
+        failures = _run_pass(topics, lambda topic: extract.synthesize_topic(topic, rows, tags), report)
+        if failures or unwritten:
             return 1
     rows = store.synthesis_rows()
     if args.topics:
@@ -228,14 +286,10 @@ def cmd_serve(args) -> int:
 def _listening_port(value: str) -> int:
     """A `--port` argument, refused here rather than an hour into a session.
 
-    Port 0 is the one worth naming. `bind` reads it as "give me any free port",
-    and uvicorn honours it -- but the server records where it was told to listen
-    before the socket exists, so a published `--host` would answer for `:0`
-    while listening somewhere else entirely, and every request from another
-    machine would come back 403 with nothing to explain it. It cannot be
-    repaired by reading the port back off the socket either: with no port agreed
-    in advance, nobody can be told where the page is. The native launcher
-    already leaves 0 out of its port walk for the same reason.
+    Port 0 asks the kernel for any free port, but the server records where it
+    was told to listen before the socket exists, so a published `--host` would
+    trust `:0` while listening elsewhere and refuse every request from another
+    machine. The native launcher leaves 0 out of its port walk for the same reason.
     """
     try:
         port = int(value)
@@ -244,7 +298,7 @@ def _listening_port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError(
             f"{port} is not a port to serve on: ports run 1-65535, and 0 asks "
-            "for whichever is free, which leaves no address to hand out"
+            "for whichever is free, so nobody can say where the page is"
         )
     return port
 
@@ -278,11 +332,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("keys", nargs="*")
     p.set_defaults(func=cmd_retag)
 
+    p = sub.add_parser("verify", help="check that each claim's quote is in its paper's PDF")
+    p.add_argument("keys", nargs="*", help="paper keys; default is every paper with claims")
+    p.set_defaults(func=cmd_verify)
+
     p = sub.add_parser("tensions", help="find claims from different papers that disagree")
     p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")
     p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
     p.add_argument("--all", action="store_true", help="include dismissed tensions in the listing")
     p.set_defaults(func=cmd_tensions)
+
+    p = sub.add_parser("agreements", help="find claims from different papers that assert the same finding")
+    p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")
+    p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
+    p.add_argument("--all", action="store_true", help="include dismissed agreements in the listing")
+    p.set_defaults(func=cmd_agreements)
 
     p = sub.add_parser("synthesize", help="write what the papers hold on each topic")
     p.add_argument("topics", nargs="*", help="topics to write; default is every topic with two papers")

@@ -114,6 +114,19 @@
     </div>
 
     <div class="sec">
+      <h2>Agreements</h2>
+      <ul class="plist" id="agreements-nav"></ul>
+      <div class="row right">
+        <button type="button" id="btn-agreements" title="Ask the model which claims in each topic assert the same finding">Find agreements</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>Research</h2>
+      <ul class="plist" id="research-nav"></ul>
+    </div>
+
+    <div class="sec">
       <h2>Topics</h2>
       <ul class="taglist" id="tags"></ul>
       <div class="row">
@@ -131,6 +144,7 @@
       <input type="search" id="q" placeholder="Filter claims, quotes, papers">
       <select id="kind"><option value="">every kind</option></select>
       <label><input type="checkbox" id="only-unreviewed"> unreviewed only</label>
+      <label title="Claims whose quote was not found in the PDF text"><input type="checkbox" id="only-unverified"> quote not found</label>
       <label><input type="checkbox" id="group-by-tag" checked> group by topic</label>
     </div>
     <div id="content"></div>

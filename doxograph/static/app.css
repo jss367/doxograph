@@ -144,12 +144,18 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .claim .cev { font-size: .86rem; margin: .3rem 0 0; }
 .claim blockquote { margin: .3rem 0 0; padding-left: .6rem; border-left: 2px solid var(--line);
   color: var(--muted); font-size: .84rem; }
+.qflag { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid var(--warn); border-radius: 3px; padding: 0 .3rem; color: var(--warn);
+  margin-right: .3rem; cursor: help; }
 .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
   border: 1px solid var(--line); border-radius: 3px; padding: 0 .3rem; color: var(--muted); }
 .kind.negative, .kind.conjecture, .kind.contradiction { color: var(--warn); border-color: var(--warn); }
 .kind.tension { color: var(--accent); border-color: var(--accent); }
 .tmark { font-size: .78rem; color: var(--warn); cursor: pointer; white-space: nowrap; }
 .tmark.confirmed { color: var(--ok); }
+.amark { font-size: .78rem; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.amark.confirmed { color: var(--ok); }
+.kind.agreement { color: var(--accent); border-color: var(--accent); text-transform: none; }
 
 .tcard { border: 1px solid var(--line); border-radius: 6px; padding: .6rem .8rem; margin: .8rem 0; }
 .tcard.confirmed { border-color: var(--ok); }
@@ -161,6 +167,8 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .tcard .thead .st.confirmed { color: var(--ok); }
 .tcard .tpair { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; margin-top: .5rem; }
 .tcard .tpair .claim { margin: 0; }
+.tcard .tgroup { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: .6rem; margin-top: .5rem; }
+.tcard .tgroup .claim { margin: 0; }
 .tcard .tnote { margin: .5rem 0 0; font-size: .92rem; }
 .tcard .stale { color: var(--warn); font-size: .82rem; margin: .4rem 0 0; }
 @media (max-width: 70rem) { .tcard .tpair { grid-template-columns: 1fr; } }
@@ -212,7 +220,7 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .paperhead .ps { font-size: .9rem; margin: .4rem 0 0; }
 
 /* A form whose save is in flight: read-only until the request settles. */
-form[data-form].saving { opacity: .6; }
+form[data-form].saving, #research-form.saving { opacity: .6; }
 .synth.saving { opacity: .6; }
 
 /* A topic's synthesis: what the papers, taken together, hold. */
@@ -226,3 +234,7 @@ form[data-form].saving { opacity: .6; }
 .synth .smeta .stale { color: var(--warn); }
 .synth textarea { width: 100%; min-height: 8rem; font: inherit; font-size: .92rem; }
 .group h3 .mini { font-size: .72rem; font-weight: 400; margin-left: .4rem; }
+
+/* The research form: context and the ledger of my own claims. */
+.edit.research .linkrow input[name="ledger-id"] { flex: 0 0 5rem; font-family: ui-monospace, Menlo, monospace; }
+.edit.research .linkrow input[name="ledger-text"] { flex: 1; }
