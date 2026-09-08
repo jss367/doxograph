@@ -49,7 +49,8 @@ def test_concurrent_uploads_of_the_same_filename_keep_their_own_pdfs(monkeypatch
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        t.join(timeout=10)
+    assert all(not t.is_alive() for t in threads), "an upload thread never finished"
 
     assert not errors, errors
     assert len(set(results.values())) == 2, f"uploads collided: {results}"
