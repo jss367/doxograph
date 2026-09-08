@@ -84,3 +84,16 @@ def test_jobs_have_their_own_route_and_are_not_in_state():
         # Other tests leave jobs behind in the module-level table; this one's
         # is among them, newest first.
         assert listed[0]["id"] == job["id"]
+
+
+def test_the_etag_changes_when_the_api_key_appears(monkeypatch):
+    # has_key comes from the environment, not the corpus, so it is part of
+    # the identity: a key added while the server runs is seen on the next poll.
+    monkeypatch.setattr(config, "api_key", lambda: None)
+    with client() as c:
+        first = c.get("/api/state")
+        assert first.json()["has_key"] is False
+        monkeypatch.setattr(config, "api_key", lambda: "sk-test")
+        second = c.get("/api/state", headers={"If-None-Match": first.headers["etag"]})
+        assert second.status_code == 200
+        assert second.json()["has_key"] is True

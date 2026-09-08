@@ -785,7 +785,9 @@ def state(request: Request) -> Response:
     alone, and two empty workspaces have the same one.
     """
     workspace = config.workspace_id()
-    signature = store.corpus_signature()
+    # `has_key` is in the payload but comes from the environment and the
+    # credentials file, not the corpus, so it is part of the identity too.
+    signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}"
     etag = f'"{workspace}-{signature}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})

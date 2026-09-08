@@ -1386,11 +1386,19 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             fingerprints = {i: claim_fingerprint(claims_by_id[i]) for i in ids}
             topic_live = all(topic in (live[i].get("tags") or []) for i in ids)
             wanted = set(ids)
+            # The answer describes the claims as the prompt showed them. If one
+            # was edited during the call, the answer is about text that no
+            # longer exists, and the record on file, decided against text a
+            # reviewer could see, stands: nothing grows, folds, or reopens.
+            stale = any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids)
             # Every record the returned group covers, in file order; the first
             # is the one that stays. Failing that, a record that covers it.
             contained = [r for r in existing if set(r["claims"]) <= wanted]
             current = contained[0] if contained else next(
                 (r for r in existing if wanted < set(r["claims"])), None)
+            if current is not None and stale:
+                kept += 1
+                continue
             if current is not None:
                 have = set(current["claims"])
                 # The members the record will hold: the returned group when it
@@ -1413,9 +1421,6 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                     continue
                 if current.get("fingerprints") == fingerprints:
                     kept += 1
-                    continue
-                if any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids):
-                    kept += 1   # changed during the call: the record on file stands
                     continue
                 current.update(note=note, fingerprints=fingerprints, status="open", found=now())
                 reopened += 1

@@ -713,6 +713,17 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
                 assert await form.locator('[name="context"]').input_value() == "Written from the shell meanwhile."
+                # A change made elsewhere while the form is open, untouched,
+                # does not turn the form into a draft either.
+                store.save_context("Changed again while the form was open.")
+                await page.wait_for_timeout(3000)   # a poll replaces S under the open form
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                assert "unsaved edits" not in (await nav.text_content())
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                assert await form.locator('[name="context"]').input_value() == "Changed again while the form was open."
 
                 await form.locator('[name="context"]').fill("Steering vectors and what recovers from them.")
                 await form.get_by_role("button", name="Add a claim").click()

@@ -214,3 +214,19 @@ def test_cli_lists_agreements_without_calling_the_model(capsys):
     assert __main__.main(["agreements", "--list"]) == 0
     out = capsys.readouterr().out
     assert "3 papers" in out and "[Roe 2024]" in out and "1 agreements, 1 open" in out
+
+
+def test_a_group_that_grows_on_a_stale_answer_is_left_alone():
+    """A member edited while the model was thinking makes the answer about
+    text that no longer exists. The confirmed group on file stands; the
+    stale answer does not grow, fold, or reopen it."""
+    a, b, c, d = build_corpus()
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "two"}], shown())
+    aid = store.agreement_rows()[0]["id"]
+    store.set_agreement_status(aid, "confirmed")
+    before = shown()                                   # what the prompt showed
+    store.update_claim("roe2024vectors", d, {"text": "Almost no steered rollouts recover."})
+    result = store.record_agreements("recovery-rate", [{"claims": [a, b, d], "note": "three"}], before)
+    assert result == {"added": 0, "grown": 0, "reopened": 0, "kept": 1}
+    [row] = store.agreement_rows()
+    assert row["status"] == "confirmed" and row["n_papers"] == 2 and row["note"] == "two"

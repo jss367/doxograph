@@ -125,7 +125,7 @@ const NEW_CLAIM_ID = '__new__';
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
-            synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null };
+            synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null };
 
 function blankClaim(paper) {
   return {
@@ -275,7 +275,7 @@ function resetWorkspaceView() {
     paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
-    synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null,
+    synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
   });
   savingClaims.clear();
   $('q').value = '';
@@ -787,16 +787,23 @@ function ledgerRow(claim, i) {
 function captureResearchDraft() {
   if (!$('research-form')) return;
   const current = readResearchForm();
-  // A form that still matches the server is not a draft. Keeping it would
-  // pin the values as they were: a change from another tab or the CLI would
-  // then read as unsaved edits here, and reopening would show the old ones.
-  V.researchDraft = differsFromStored(current) ? current : null;
+  // A form nobody has typed into is not a draft. It is judged against what
+  // it was drawn from, not against `S`: a poll can replace `S` while the form
+  // is open, and an untouched form would then look edited, be kept, and
+  // later write the old values over the change made elsewhere.
+  V.researchDraft = differs(current, V.researchBase || storedResearch()) ? current : null;
 }
 
-function differsFromStored({ context, claims }) {
-  const stored = (S.ledger || []).map((c) => ({ id: c.id || '', text: c.text || '' }));
-  return context.trim() !== (S.context || '').trim()
-    || JSON.stringify(claims) !== JSON.stringify(stored);
+function storedResearch() {
+  return {
+    context: S.context || '',
+    claims: (S.ledger || []).map((c) => ({ id: c.id || '', text: c.text || '' })),
+  };
+}
+
+function differs(a, b) {
+  return a.context.trim() !== b.context.trim()
+    || JSON.stringify(a.claims) !== JSON.stringify(b.claims);
 }
 
 function renderResearch() {
@@ -804,6 +811,10 @@ function renderResearch() {
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const draft = V.researchDraft;
+  // Drawn from the server, the form remembers what it was drawn from, so a
+  // later poll cannot make an untouched form look edited. A draft keeps the
+  // base it was typed against.
+  if (!draft) V.researchBase = storedResearch();
   const context = draft ? draft.context : (S.context || '');
   const ledger = draft ? draft.claims : (S.ledger || []);
   let html = `<div class="paperhead">
@@ -833,8 +844,8 @@ function renderResearch() {
 // form is the only place its edits live until Save, so leaving the workspace
 // with it dirty is leaving a draft behind.
 function researchFormDirty() {
-  const current = $('research-form') ? readResearchForm() : V.researchDraft;
-  return Boolean(current) && differsFromStored(current);
+  if ($('research-form')) return differs(readResearchForm(), V.researchBase || storedResearch());
+  return Boolean(V.researchDraft);
 }
 
 function readResearchForm() {
@@ -885,6 +896,7 @@ async function saveResearch() {
   }
   showView('claims');       // captures the form on the way out, so clear after
   V.researchDraft = null;
+  V.researchBase = null;
   await refreshAll();
 }
 
@@ -1424,6 +1436,7 @@ $('content').addEventListener('click', async (event) => {
       V.error = null;
       showView('claims');
       V.researchDraft = null;   // Cancel is the one way out that drops the edits
+      V.researchBase = null;
       renderAll();
       return;
     }
