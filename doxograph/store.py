@@ -1353,7 +1353,10 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
     `record_tensions`, with one addition for groups, which can grow: a group
     the model returns that contains an existing one is that agreement with
     more members, and it goes back to open, since the new member is new
-    evidence nobody has looked at. A returned group contained in an existing
+    evidence nobody has looked at. If it contains several existing ones,
+    as when two pairs found separately turn out to be one finding, the
+    earliest of them grows and the rest fold into it, topics included, so
+    one finding is one card. A returned group contained in an existing
     one adds nothing and is kept. Members whose claims no longer exist are
     dropped, and a group left with claims from fewer than two papers goes.
     A dropped member's fingerprint is kept, so the reduced group reads as
@@ -1383,12 +1386,20 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             fingerprints = {i: claim_fingerprint(claims_by_id[i]) for i in ids}
             topic_live = all(topic in (live[i].get("tags") or []) for i in ids)
             wanted = set(ids)
-            current = next((r for r in existing if set(r["claims"]) & wanted
-                            and (set(r["claims"]) <= wanted or wanted <= set(r["claims"]))), None)
+            # Every record the returned group covers, in file order; the first
+            # is the one that stays. Failing that, a record that covers it.
+            contained = [r for r in existing if set(r["claims"]) <= wanted]
+            current = contained[0] if contained else next(
+                (r for r in existing if wanted < set(r["claims"])), None)
             if current is not None:
-                if topic_live and topic not in current.setdefault("topics", []):
-                    current["topics"].append(topic)
-                    current["topics"].sort()
+                topics = set(current.get("topics", []))
+                for other in contained[1:]:
+                    topics |= set(other.get("topics", []))
+                    existing.remove(other)
+                if topic_live:
+                    topics.add(topic)
+                current["topics"] = sorted(t for t in topics
+                                           if all(t in (live[i].get("tags") or []) for i in ids))
                 have = set(current["claims"])
                 if wanted > have:
                     current["claims"] = ids

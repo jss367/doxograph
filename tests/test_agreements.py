@@ -53,6 +53,26 @@ def test_a_group_that_grows_is_the_same_agreement_reopened_for_the_new_member():
     assert row["note"] == "half, three papers"
 
 
+def test_a_group_covering_two_agreements_merges_them_into_one():
+    a, b, c, d = build_corpus()
+    e, = _paper("kim2023half", "Half recover", "Su Kim", 2023,
+                ("Roughly half of steered rollouts get back on task.", ["recovery-rate", "scaling"]))
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "one pair"}], shown())
+    store.record_agreements("scaling", [{"claims": [c, e], "note": "another pair"}], shown())
+    first, second = store.agreement_rows()
+    result = store.record_agreements("recovery-rate", [{"claims": [a, b, c, e], "note": "all one finding"}], shown())
+    assert result == {"added": 0, "grown": 1, "reopened": 0, "kept": 0}
+    [row] = store.agreement_rows()
+    assert row["id"] == first["id"] and row["n_papers"] == 3 and row["note"] == "all one finding"
+    assert {c["id"] for c in row["claims"]} == {a, b, c, e}
+    # The folded record's topic comes along only where every member carries it.
+    assert row["topics"] == ["recovery-rate"]
+    # The merged card is what a repeat pass matches, so nothing comes back.
+    result = store.record_agreements("recovery-rate", [{"claims": [a, b, c, e], "note": "all one finding"}], shown())
+    assert result == {"added": 0, "grown": 0, "reopened": 0, "kept": 1}
+    assert len(store.agreement_rows()) == 1
+
+
 def test_a_returned_subset_and_a_repeat_keep_the_decision():
     a, b, c, d = build_corpus()
     store.record_agreements("recovery-rate", [{"claims": [a, b, d], "note": "first"}], shown())
