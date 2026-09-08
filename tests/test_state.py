@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from doxograph import server, store
+from doxograph import config, server, store
 
 
 def client() -> TestClient:
@@ -32,6 +32,19 @@ def test_a_write_changes_the_etag_and_the_answer():
         assert second.status_code == 200
         assert second.headers["etag"] != first.headers["etag"]
         assert [r["text"] for r in second.json()["claims"]] == ["A holds."]
+
+
+def test_the_etag_tells_two_empty_workspaces_apart():
+    # The signature is of the corpus files alone, so two empty workspaces
+    # share one; an ETag from one must not answer 304 for the other.
+    other = config.create_workspace("Other")
+    with client() as c:
+        etag = c.get("/api/state").headers["etag"]
+        headers = {"X-Doxograph-Workspace": other["id"], "If-None-Match": etag}
+        response = c.get("/api/state", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["workspace"]["name"] == "Other"
+        assert response.headers["etag"] != etag
 
 
 def test_the_cached_answer_is_served_while_nothing_changes(monkeypatch):

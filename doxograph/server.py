@@ -779,12 +779,14 @@ def state(request: Request) -> Response:
     """The corpus as the page shows it. Jobs are not in here; they change
     every second while a paper is read and have their own route.
 
-    The answer carries the corpus signature as its ETag, and a request that
-    presents the same one back gets a 304 with no body.
+    The answer carries the workspace and the corpus signature as its ETag,
+    and a request that presents the same one back gets a 304 with no body.
+    The workspace is in it because the signature is of the corpus files
+    alone, and two empty workspaces have the same one.
     """
     workspace = config.workspace_id()
     signature = store.corpus_signature()
-    etag = f'"{signature}"'
+    etag = f'"{workspace}-{signature}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
     with _state_cache_lock:
