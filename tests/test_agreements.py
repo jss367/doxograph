@@ -87,6 +87,18 @@ def test_a_returned_subset_and_a_repeat_keep_the_decision():
     assert row["status"] == "dismissed" and row["note"] == "first"
 
 
+def test_a_topic_from_a_returned_part_needs_every_member_to_carry_it():
+    a, b, c, d = build_corpus()
+    store.update_claim("doe2026recovery", a, {"tags": ["recovery-rate", "scaling"]})
+    store.update_claim("li2025steer", b, {"tags": ["recovery-rate", "scaling"]})
+    store.record_agreements("recovery-rate", [{"claims": [a, b, d], "note": "half"}], shown())
+    result = store.record_agreements("scaling", [{"claims": [a, b], "note": "half, at scale"}], shown())
+    assert result == {"added": 0, "grown": 0, "reopened": 0, "kept": 1}
+    # d does not carry "scaling", so the three-paper group is not filed under it.
+    assert store.load_agreements()[0]["topics"] == ["recovery-rate"]
+    assert store.agreement_rows()[0]["topics"] == ["recovery-rate"]
+
+
 def test_editing_or_deleting_a_member_marks_it_stale_and_a_rerun_reopens_it():
     a, b, c, d = build_corpus()
     store.record_agreements("recovery-rate", [{"claims": [a, b, d], "note": "half"}], shown())

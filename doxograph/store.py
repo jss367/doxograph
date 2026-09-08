@@ -1392,15 +1392,16 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             current = contained[0] if contained else next(
                 (r for r in existing if wanted < set(r["claims"])), None)
             if current is not None:
-                topics = set(current.get("topics", []))
+                have = set(current["claims"])
+                # The members the record will hold: the returned group when it
+                # grows the record, the record's own when it is a part of it.
+                members = wanted | have
+                topics = {topic} | set(current.get("topics", []))
                 for other in contained[1:]:
                     topics |= set(other.get("topics", []))
                     existing.remove(other)
-                if topic_live:
-                    topics.add(topic)
                 current["topics"] = sorted(t for t in topics
-                                           if all(t in (live[i].get("tags") or []) for i in ids))
-                have = set(current["claims"])
+                                           if all(t in (live[i].get("tags") or []) for i in members))
                 if wanted > have:
                     current["claims"] = ids
                     current["fingerprints"] = fingerprints
