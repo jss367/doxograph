@@ -702,6 +702,18 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 await form.wait_for(state="visible")
                 assert await form.locator('[name="ledger-text"]').input_value() == "Recovery is path-dependent."
 
+                # Opening the form and leaving without typing leaves no draft
+                # behind, so a change made elsewhere is what comes back.
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                store.save_context("Written from the shell meanwhile.")
+                await page.wait_for_timeout(3000)   # a poll picks it up
+                assert "unsaved edits" not in (await nav.text_content())
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                assert await form.locator('[name="context"]').input_value() == "Written from the shell meanwhile."
+
                 await form.locator('[name="context"]').fill("Steering vectors and what recovers from them.")
                 await form.get_by_role("button", name="Add a claim").click()
                 rows = form.locator("[data-ledger-row]")

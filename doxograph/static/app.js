@@ -786,8 +786,17 @@ function ledgerRow(claim, i) {
 // when there is one, so navigating away and back finds the text as it was.
 function captureResearchDraft() {
   if (!$('research-form')) return;
-  const { context, claims } = readResearchForm();
-  V.researchDraft = { context, claims };
+  const current = readResearchForm();
+  // A form that still matches the server is not a draft. Keeping it would
+  // pin the values as they were: a change from another tab or the CLI would
+  // then read as unsaved edits here, and reopening would show the old ones.
+  V.researchDraft = differsFromStored(current) ? current : null;
+}
+
+function differsFromStored({ context, claims }) {
+  const stored = (S.ledger || []).map((c) => ({ id: c.id || '', text: c.text || '' }));
+  return context.trim() !== (S.context || '').trim()
+    || JSON.stringify(claims) !== JSON.stringify(stored);
 }
 
 function renderResearch() {
@@ -825,10 +834,7 @@ function renderResearch() {
 // with it dirty is leaving a draft behind.
 function researchFormDirty() {
   const current = $('research-form') ? readResearchForm() : V.researchDraft;
-  if (!current) return false;
-  const stored = (S.ledger || []).map((c) => ({ id: c.id || '', text: c.text || '' }));
-  return current.context.trim() !== (S.context || '').trim()
-    || JSON.stringify(current.claims) !== JSON.stringify(stored);
+  return Boolean(current) && differsFromStored(current);
 }
 
 function readResearchForm() {
