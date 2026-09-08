@@ -714,6 +714,17 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 await page.wait_for_timeout(3000)
                 await nav.click()
                 assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
+                # Nor must leaving for a paper and coming back: the draft is
+                # kept, and the sidebar says so meanwhile.
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
+                await nav.get_by_text("unsaved edits", exact=False).wait_for()
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                rows = form.locator("[data-ledger-row]")
+                assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
+                assert await form.locator('[name="context"]').input_value() == "Steering vectors and what recovers from them."
                 await form.get_by_role("button", name="Save").click()
 
                 # Back on the claims, and the sidebar counts the new state.

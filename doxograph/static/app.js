@@ -125,7 +125,7 @@ const NEW_CLAIM_ID = '__new__';
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
-            synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false };
+            synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null };
 
 function blankClaim(paper) {
   return {
@@ -275,7 +275,7 @@ function resetWorkspaceView() {
     paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
-    synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false,
+    synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null,
   });
   savingClaims.clear();
   $('q').value = '';
@@ -441,6 +441,7 @@ function renderResearchNav() {
   const bits = [];
   bits.push(S.context ? 'context written' : 'no context yet');
   bits.push(n ? `${n} claims of my own` : 'no claims of my own');
+  if (V.view !== 'research' && researchFormDirty()) bits.push('unsaved edits');
   $('research-nav').innerHTML = `<li class="${V.view === 'research' ? 'active' : ''}" data-view="research">
     <span class="pt">What I am studying</span>
     <span class="pm">${esc(bits.join(' · '))}</span></li>`;
@@ -779,10 +780,23 @@ function ledgerRow(claim, i) {
   </div>`;
 }
 
+// The research form's edits live only in the DOM until Save, and every other
+// redraw (a filter, a paper click, the topic list) rebuilds `#content`. Read
+// the form into `V.researchDraft` before any of that, and draw from the draft
+// when there is one, so navigating away and back finds the text as it was.
+function captureResearchDraft() {
+  if (!$('research-form')) return;
+  const { context, claims } = readResearchForm();
+  V.researchDraft = { context, claims };
+}
+
 function renderResearch() {
+  captureResearchDraft();
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
-  const ledger = S.ledger || [];
+  const draft = V.researchDraft;
+  const context = draft ? draft.context : (S.context || '');
+  const ledger = draft ? draft.claims : (S.ledger || []);
   let html = `<div class="paperhead">
     <h2>What I am studying</h2>
     <p class="ps">The context goes into every model pass and is the main lever on the
@@ -793,7 +807,7 @@ function renderResearch() {
   html += `<form class="edit research" id="research-form">
     <div><label for="research-context">Research context</label>
       <textarea id="research-context" name="context" rows="8"
-        placeholder="What the research is about, and what makes a paper relevant to it.">${esc(S.context || '')}</textarea></div>
+        placeholder="What the research is about, and what makes a paper relevant to it.">${esc(context)}</textarea></div>
     <div><label>My own claims</label>
       <div class="links" id="ledger-rows">${ledger.map(ledgerRow).join('')}</div>
       <div class="row"><button type="button" data-act="add-ledger">Add a claim</button></div></div>
@@ -810,11 +824,11 @@ function renderResearch() {
 // form is the only place its edits live until Save, so leaving the workspace
 // with it dirty is leaving a draft behind.
 function researchFormDirty() {
-  if (V.view !== 'research' || !$('research-form')) return false;
-  const { context, claims } = readResearchForm();
+  const current = $('research-form') ? readResearchForm() : V.researchDraft;
+  if (!current) return false;
   const stored = (S.ledger || []).map((c) => ({ id: c.id || '', text: c.text || '' }));
-  return context.trim() !== (S.context || '').trim()
-    || JSON.stringify(claims) !== JSON.stringify(stored);
+  return current.context.trim() !== (S.context || '').trim()
+    || JSON.stringify(current.claims) !== JSON.stringify(stored);
 }
 
 function readResearchForm() {
@@ -863,6 +877,7 @@ async function saveResearch() {
     V.researchSaving = false;
     setResearchSaving(form, false);
   }
+  V.researchDraft = null;
   showView('claims');
   await refreshAll();
 }
@@ -875,6 +890,7 @@ $('content').addEventListener('submit', async (event) => {
 
 function showView(view) {
   if (view === V.view) return;
+  if (V.view === 'research') captureResearchDraft();
   // The tensions view has no editor. Park any open one rather than leaving
   // `V.editing` set on a form that is no longer on screen, which would also
   // stop the background poll. The same for a synthesis editor.
@@ -1398,7 +1414,13 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'drop-ledger') { button.closest('[data-ledger-row]').remove(); return; }
-    if (act === 'cancel-research') { V.error = null; showView('claims'); renderAll(); return; }
+    if (act === 'cancel-research') {
+      V.error = null;
+      showView('claims');
+      V.researchDraft = null;   // Cancel is the one way out that drops the edits
+      renderAll();
+      return;
+    }
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
       button.closest('.linkrow').style.display = 'none';
