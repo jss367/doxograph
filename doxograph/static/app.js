@@ -189,9 +189,13 @@ async function api(path, options = {}) {
   }
 }
 
-// The corpus is fetched with the ETag of the last answer, so a poll that finds
-// nothing changed costs the server a directory listing and costs the page
-// nothing at all: `fetchState` returns null on a 304 and `S` is left alone.
+// The corpus is fetched with the ETag of the last answer applied, so a poll
+// that finds nothing changed costs the server a directory listing and costs
+// the page nothing at all: `fetchState` returns null on a 304 and `S` is left
+// alone. The tag is committed only once the payload has been applied to `S`,
+// in `pull`. Committing it on receipt would, if the jobs request beside it
+// failed, leave the page presenting a tag for a corpus it never showed and
+// getting 304s against it until the next write.
 let stateEtag = null;
 
 async function fetchState() {
@@ -205,8 +209,7 @@ async function fetchState() {
     try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
     throw new Error(detail);
   }
-  stateEtag = response.headers.get('ETag');
-  return response.json();
+  return { state: await response.json(), etag: response.headers.get('ETag') };
 }
 
 async function fetchJobs() {
@@ -220,8 +223,12 @@ async function pull() {
   const requestedWorkspace = currentWorkspaceId;
   const [next, jobs] = await Promise.all([fetchState(), fetchJobs()]);
   if (requestedWorkspace !== currentWorkspaceId) return false;
-  if (next) S = { ...next, jobs };
-  else S.jobs = jobs;
+  if (next) {
+    S = { ...next.state, jobs };
+    stateEtag = next.etag;
+  } else {
+    S.jobs = jobs;
+  }
   return Boolean(next);
 }
 
