@@ -121,11 +121,16 @@ def test_verify_quotes_backfills_a_paper():
 def test_verify_route_and_command(capsys):
     key = paper_with_pdf()
     store.add_claim(key, {"text": "A.", "quote": "Steering always recovers within ten steps."})
+    store.add_claim(key, {"text": "No quote, so nothing to count."})
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(f"/api/papers/{key}/verify")
         assert response.json() == {"key": key, "n_unverified": 1}
         assert client.post("/api/papers/nobody/verify").status_code == 404
     assert __main__.main(["verify"]) == 1
-    assert "1 not in the PDF" in capsys.readouterr().out
+    assert "0 of 1 quotes found, 1 not in the PDF" in capsys.readouterr().out
     store.update_claim(key, store.load_paper(key)["claims"][0]["id"], {"quote": SENTENCE})
     assert __main__.main(["verify", key]) == 0
+    assert "1 of 1 quotes found" in capsys.readouterr().out
+    # A key that is not a paper fails the run, not just a line on stderr.
+    assert __main__.main(["verify", key, "nobody"]) == 1
+    assert "nobody: no such paper" in capsys.readouterr().err

@@ -110,24 +110,27 @@ def cmd_retag(args) -> int:
 def cmd_verify(args) -> int:
     """Check every claim's quote against its paper's PDF."""
     keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
-    missing = 0
+    failures = 0
     for key in keys:
         try:
             paper = store.verify_quotes(key)
         except KeyError:
             print(f"{key}: no such paper", file=sys.stderr)
+            failures += 1
             continue
-        claims = paper.get("claims", [])
-        not_found = [c for c in claims if c.get("quote_verified") is False]
-        unchecked = [c for c in claims if c.get("quote_verified") is None and c.get("quote")]
-        line = f"{key}: {len(claims) - len(not_found) - len(unchecked)} of {len(claims)} quotes found"
+        # Only claims that carry a quote are counted: a hand-added claim
+        # without one has nothing to verify and must not pad the tally.
+        quoted = [c for c in paper.get("claims", []) if c.get("quote")]
+        not_found = [c for c in quoted if c.get("quote_verified") is False]
+        unchecked = [c for c in quoted if c.get("quote_verified") is None]
+        line = f"{key}: {len(quoted) - len(not_found) - len(unchecked)} of {len(quoted)} quotes found"
         if not_found:
             line += f", {len(not_found)} not in the PDF"
         if unchecked:
             line += f", {len(unchecked)} unchecked (no readable PDF)"
         print(line)
-        missing += len(not_found)
-    return 1 if missing else 0
+        failures += len(not_found)
+    return 1 if failures else 0
 
 
 def cmd_tensions(args) -> int:
