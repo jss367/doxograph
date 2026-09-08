@@ -1356,6 +1356,9 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
     evidence nobody has looked at. A returned group contained in an existing
     one adds nothing and is kept. Members whose claims no longer exist are
     dropped, and a group left with claims from fewer than two papers goes.
+    A dropped member's fingerprint is kept, so the reduced group reads as
+    stale until someone judges it: the note and decision on file were about
+    a group that no longer exists.
 
     Returns `{"added": n, "grown": n, "reopened": n, "kept": n}`.
     """
@@ -1368,7 +1371,6 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             if len(_agreement_papers(ids, live)) < 2:
                 continue
             record["claims"] = ids
-            record["fingerprints"] = {i: fp for i, fp in (record.get("fingerprints") or {}).items() if i in ids}
             record["topics"] = sorted(t for t in record.get("topics", [])
                                       if all(t in (live[i].get("tags") or []) for i in ids))
             existing.append(record)
@@ -1457,7 +1459,9 @@ def delete_agreement(agreement_id: str) -> None:
 def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
     """Every agreement still backed by claims from two papers, joined to
     those claims, with `stale`, `n_papers`, and topics filtered to what every
-    member still carries."""
+    member still carries. Stale when a member was edited or removed since the
+    agreement was found or decided: the fingerprints name the members the
+    judgment was about, so a set of them other than the live members is stale."""
     live = {c["id"]: c for c in (rows if rows is not None else claim_rows())}
     out = []
     for record in load_agreements():
@@ -1470,8 +1474,8 @@ def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
         row["n_papers"] = len(_agreement_papers(ids, live))
         row["topics"] = sorted(t for t in record.get("topics", [])
                                if all(t in (live[i].get("tags") or []) for i in ids))
-        row["stale"] = (len(ids) != len(record.get("claims", []))
-                        or any(fingerprints.get(i) != claim_fingerprint(live[i]) for i in ids))
+        row["stale"] = (set(fingerprints) != set(ids)
+                        or any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids))
         out.append(row)
     order = {s: n for n, s in enumerate(AGREEMENT_STATUSES)}
     out.sort(key=lambda r: (order.get(r.get("status"), 9), -r["n_papers"], r.get("found") or ""))

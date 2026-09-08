@@ -83,6 +83,18 @@ def test_editing_or_deleting_a_member_marks_it_stale_and_a_rerun_reopens_it():
     store.delete_claim("roe2024vectors", d)
     [row] = store.agreement_rows()
     assert row["stale"] is True and row["n_papers"] == 2
+    # A later pass on any topic prunes the dead member from the record; the
+    # group is still stale, since the confirmation was of three papers.
+    store.record_agreements("scaling", [], shown())
+    [row] = store.agreement_rows()
+    assert row["stale"] is True and row["status"] == "confirmed"
+    assert {c["id"] for c in row["claims"]} == {a, b}
+    # Re-judging the reduced group reopens it against the current members.
+    result = store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "two"}], shown())
+    assert result["reopened"] == 1
+    [row] = store.agreement_rows()
+    assert row["stale"] is False and row["status"] == "open" and row["note"] == "two"
+    store.set_agreement_status(aid, "confirmed")
     # Down to one paper, it disappears.
     store.delete_claim("li2025steer", b)
     assert store.agreement_rows() == []
