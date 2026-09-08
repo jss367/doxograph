@@ -169,9 +169,17 @@ def client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
-#: Model calls in flight across every pass in this process. Sized once, from
-#: the setting as it was at import.
+#: Model calls in flight across this process. Sized once, from the setting as
+#: it was at import. Every call goes through `_create`, so the cap holds
+#: whether a call comes from a pass, from a single paper's read queued by the
+#: web app, or from both at once.
 _pass_slots = threading.BoundedSemaphore(config.PASS_WORKERS)
+
+
+def _create(api: anthropic.Anthropic, **kwargs):
+    """One model call, inside the process-wide cap."""
+    with _pass_slots:
+        return api.messages.create(**kwargs)
 
 
 def run_concurrently(items: list, work, workers: int | None = None):
@@ -185,17 +193,11 @@ def run_concurrently(items: list, work, workers: int | None = None):
     """
     if not items:
         return
+    # The executor caps one pass; `_create` caps the process, so passes
+    # queued together still make PASS_WORKERS calls between them.
     workers = min(workers or config.PASS_WORKERS, len(items))
-
-    def slot(item):
-        # The executor caps one pass; the semaphore caps the process, so
-        # three passes queued together still make PASS_WORKERS calls, not
-        # three times that.
-        with _pass_slots:
-            return work(item)
-
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
-        futures = {pool.submit(contextvars.copy_context().run, slot, item): item for item in items}
+        futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
         for future in as_completed(futures):
             item = futures[future]
             try:
@@ -388,7 +390,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         instructions = {"type": "text", "text": _instructions(paper, tags)}
 
         def read(pdf_block: dict):
-            return api.messages.create(
+            return _create(api, 
                 model=config.MODEL,
                 max_tokens=16000,
                 system=SYSTEM,
@@ -546,7 +548,7 @@ def retag_paper(key: str) -> dict:
     # was changed by somebody else while the model thought.
     claims_before = {c["id"]: state_of(c) for c in claims}
     api = client()
-    response = api.messages.create(
+    response = _create(api, 
         model=config.MODEL,
         max_tokens=8000,
         system=(
@@ -701,7 +703,7 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
     # separately, from the fingerprints the merge records.
     shown = {r["id"]: r for r in rows}
     api = client()
-    response = api.messages.create(
+    response = _create(api, 
         model=config.MODEL,
         max_tokens=8000,
         system=TENSION_SYSTEM,
@@ -816,7 +818,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
     # reviewer edited or deleted it while the model was thinking.
     before = store.load_syntheses().get(topic)
     api = client()
-    response = api.messages.create(
+    response = _create(api, 
         model=config.MODEL,
         max_tokens=8000,
         system=SYNTHESIS_SYSTEM,
@@ -904,7 +906,7 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
     api = client()
-    response = api.messages.create(
+    response = _create(api, 
         model=config.MODEL,
         max_tokens=8000,
         system=AGREEMENT_SYSTEM,

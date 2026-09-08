@@ -52,7 +52,16 @@ def test_the_cap_holds_across_passes_running_at_once(monkeypatch):
             running.remove(item)
         return item
 
-    passes = [threading.Thread(target=lambda: list(extract.run_concurrently([1, 2, 3, 4], work, workers=4)))
+    class Api:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                return work(kwargs["item"])
+
+    # Every model call, from a pass or a single paper's read, goes through
+    # `_create`; three passes at once still make two calls between them.
+    call = lambda item: extract._create(Api(), item=item)
+    passes = [threading.Thread(target=lambda: list(extract.run_concurrently([1, 2, 3, 4], call, workers=4)))
               for _ in range(3)]
     for t in passes:
         t.start()
