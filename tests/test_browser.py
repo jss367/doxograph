@@ -732,6 +732,44 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
 
 
 @pytest.mark.browser
+def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
+    _paper("paper-a", "Paper A", "recovery")
+    store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."},
+                       {"id": "L3", "text": "Steering is reversible."}])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                nav = page.locator('#research-nav [data-view="research"]')
+                await nav.get_by_text("2 claims of my own", exact=False).wait_for()
+                await nav.click()
+                form = page.locator("#research-form")
+                await form.wait_for(state="visible")
+                await form.locator('[name="context"]').fill("A context that must not be saved.")
+                await form.get_by_role("button", name="Add a claim").click()
+                rows = form.locator("[data-ledger-row]")
+                # The new row takes the first free id, not the row count.
+                assert await rows.nth(2).locator('[name="ledger-id"]').input_value() == "L2"
+                await rows.nth(2).locator('[name="ledger-id"]').fill("L1")
+                await rows.nth(2).locator('[name="ledger-text"]').fill("Typed, then refused.")
+                await form.get_by_role("button", name="Save").click()
+                await page.locator("#content .warn").get_by_text("used twice", exact=False).wait_for()
+                # The form is as typed, not redrawn from what was saved before.
+                assert await form.locator('[name="context"]').input_value() == "A context that must not be saved."
+                assert await rows.count() == 3
+                assert await rows.nth(2).locator('[name="ledger-text"]').input_value() == "Typed, then refused."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_context() == ""
+    assert store.load_ledger() == [{"id": "L1", "text": "Recovery is path-dependent."},
+                                   {"id": "L3", "text": "Steering is reversible."}]
+
+
+@pytest.mark.browser
 def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")

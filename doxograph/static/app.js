@@ -812,15 +812,25 @@ async function saveResearch() {
   const { context, claims } = readResearchForm();
   V.error = null;
   try {
-    await api('/api/context', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: context }),
-    });
+    // The ledger goes first: it is the one of the two the server can refuse
+    // (a missing or repeated id), so nothing is written unless both will be.
     await api('/api/ledger', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ claims }),
     });
+    await api('/api/context', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: context }),
+    });
   } catch (error) {
+    // Show the error over the form as typed; redrawing from S would put the
+    // saved values back and lose the edit that just failed.
     V.error = `Could not save: ${error.message}`;
-    renderResearch();
+    const form = $('research-form');
+    let warn = form.previousElementSibling;
+    if (!warn || !warn.classList.contains('warn')) {
+      form.insertAdjacentHTML('beforebegin', '<p class="warn"></p>');
+      warn = form.previousElementSibling;
+    }
+    warn.textContent = V.error;
     return;
   }
   showView('claims');
@@ -1349,7 +1359,11 @@ $('content').addEventListener('click', async (event) => {
     if (act === 'add-ledger') {
       const rows = $('ledger-rows');
       const count = rows.querySelectorAll('[data-ledger-row]').length;
-      rows.insertAdjacentHTML('beforeend', ledgerRow({ id: `L${count + 1}`, text: '' }, count));
+      // The first id nobody uses, not the row count: L1 and L3 get L2, not a second L3.
+      const taken = new Set([...rows.querySelectorAll('[name="ledger-id"]')].map((f) => f.value.trim()));
+      let n = 1;
+      while (taken.has(`L${n}`)) n += 1;
+      rows.insertAdjacentHTML('beforeend', ledgerRow({ id: `L${n}`, text: '' }, count));
       rows.lastElementChild.querySelector('[name="ledger-text"]').focus();
       return;
     }
