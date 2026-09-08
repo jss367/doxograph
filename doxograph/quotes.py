@@ -10,7 +10,6 @@ that is really there.
 from __future__ import annotations
 
 import difflib
-import re
 import threading
 import unicodedata
 from pathlib import Path
@@ -38,9 +37,10 @@ _MAX_SITES = 200
 
 
 def squash(text: str) -> str:
-    """Letters and digits only, lowercase, ligatures decomposed."""
+    """Letters and digits only, in any script, lowercase; ligatures decomposed
+    and accents dropped, since PDF extraction is unreliable on both."""
     text = unicodedata.normalize("NFKD", text or "")
-    return re.sub(r"[^a-z0-9]+", "", text.lower())
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
 
 
 def pdf_text(path: Path) -> str | None:
@@ -80,11 +80,23 @@ def coverage(quote: str, haystack: str) -> float:
         return 1.0
     if len(quote) < _EXACT_BELOW:
         return 0.0
+    # Full-length anchors first; if none of them lines the quote up well
+    # enough, half-length ones, which survive an error at an anchor seam
+    # in a quote near the minimum length. Both passes are capped the same.
+    best = _align(quote, haystack, _ANCHOR)
+    if best < _COVERAGE:
+        best = max(best, _align(quote, haystack, _ANCHOR // 2))
+    return best
+
+
+def _align(quote: str, haystack: str, size: int) -> float:
+    """The best coverage over every place an anchor of `size` characters
+    from `quote` occurs in `haystack`."""
     n = len(quote)
     best = 0.0
     tried: set[int] = set()
-    for k in range(0, n - _ANCHOR + 1, _ANCHOR):
-        anchor = quote[k:k + _ANCHOR]
+    for k in range(0, n - size + 1, size):
+        anchor = quote[k:k + size]
         at = haystack.find(anchor)
         while at >= 0 and len(tried) < _MAX_SITES:
             # Where the quote would start if this anchor sits where it does in

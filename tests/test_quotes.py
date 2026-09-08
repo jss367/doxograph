@@ -26,6 +26,23 @@ def test_squash_ignores_case_punctuation_and_ligatures():
     assert quotes.squash("eﬃcient") == "efficient"   # the ffi ligature
 
 
+def test_squash_keeps_letters_in_every_script_and_drops_accents():
+    assert quotes.squash("研究结果 — Résumé") == "研究结果resume"
+    assert quotes.squash("Модель восстанавливается") == "модельвосстанавливается"
+
+
+def test_a_cjk_quote_is_checked_like_any_other():
+    hay = quotes.squash("实验表明，被引导的模型在大约一半的运行中恢复到原任务。")
+    assert quotes.coverage(quotes.squash("被引导的模型在大约一半的运行中恢复"), hay) == 1.0
+    assert quotes.coverage(quotes.squash("模型从不恢复到原任务"), hay) == 0.0
+
+
+def test_errors_at_an_anchor_seam_do_not_hide_a_match():
+    # Two wrong characters where the two full-length anchors meet, in a quote
+    # of the minimum length: no full anchor survives, the half-length ones do.
+    assert quotes.coverage("abcdefghijklmnopqrstuvwx", "abcdefghijkZYnopqrstuvwx") >= quotes._COVERAGE
+
+
 def test_a_verbatim_quote_is_found_despite_line_breaks_and_hyphenation(tmp_path):
     pdf = tmp_path / "p.pdf"
     pdf.write_bytes(minimal_pdf("steering is a path-dependent out- come across"))
