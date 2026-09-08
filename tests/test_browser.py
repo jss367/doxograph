@@ -709,8 +709,10 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 assert await rows.nth(1).locator('[name="ledger-id"]').input_value() == "L2"
                 await rows.nth(1).locator('[name="ledger-text"]').fill("Steering is reversible.")
                 # A poll while the form is open must not redraw it: wait past
-                # one tick and check the typed text is still there.
+                # one tick and check the typed text is still there. Nor must a
+                # click on the sidebar item that is already active.
                 await page.wait_for_timeout(3000)
+                await nav.click()
                 assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
                 await form.get_by_role("button", name="Save").click()
 

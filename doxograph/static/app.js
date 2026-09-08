@@ -1673,6 +1673,9 @@ $('btn-agreements').addEventListener('click', async () => {
 
 $('research-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
+  // Clicking the item already shown is not navigation. Redrawing here would
+  // rebuild the form from `S` and throw away whatever has been typed into it.
+  if (V.view === 'research') return;
   showView('research');
   renderAll();
 });
