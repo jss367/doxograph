@@ -324,3 +324,22 @@ def test_extraction_lock_is_held_across_processes(tmp_path):
     assert blocked, "the child did not wait for the extraction lock"
     assert child.returncode == 0
     assert log.read_text().split() == ["parent", "child"]
+
+
+# --- a quote verdict is not an edit -----------------------------------------
+
+def test_a_backfilled_quote_verdict_does_not_count_as_a_correction():
+    """`verify_quotes` can run while a re-read waits on the model. The verdict
+    it writes is derived, not a person's change, so the merge must still
+    replace the unreviewed claim rather than keeping it beside the new one."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    old = store.add_claim("doe2026study", {"text": "Old claim.", "quote": "old words", "reviewed": False})
+    before = {old["id"]: extract.claim_state(old)}
+    paper = store.load_paper("doe2026study")
+    paper["claims"][0]["quote_verified"] = False      # what a backfill during the call does
+    store.save_paper(paper)
+    payload = {"summary": "", "relevance": "", "proposed_tags": [],
+               "claims": [{"text": "New claim.", "kind": "finding", "strength": "supporting", "tags": [],
+                           "evidence": "", "quote": "", "locator": "", "ledger_links": []}]}
+    merged = extract.merge_extraction("doe2026study", payload, claims_before=before)
+    assert [c["text"] for c in merged["claims"]] == ["New claim."]

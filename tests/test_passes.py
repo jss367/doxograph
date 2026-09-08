@@ -37,6 +37,30 @@ def test_workers_are_capped_by_the_setting(monkeypatch):
     assert max(peak) == 1
 
 
+def test_the_cap_holds_across_passes_running_at_once(monkeypatch):
+    monkeypatch.setattr(extract, "_pass_slots", threading.BoundedSemaphore(2))
+    running = []
+    peak = []
+    guard = threading.Lock()
+
+    def work(item):
+        with guard:
+            running.append(item)
+            peak.append(len(running))
+        time.sleep(0.02)
+        with guard:
+            running.remove(item)
+        return item
+
+    passes = [threading.Thread(target=lambda: list(extract.run_concurrently([1, 2, 3, 4], work, workers=4)))
+              for _ in range(3)]
+    for t in passes:
+        t.start()
+    for t in passes:
+        t.join(timeout=10)
+    assert max(peak) == 2
+
+
 def test_a_workspace_bound_job_keeps_its_workspace_on_every_worker():
     workspace = config.create_workspace("Locomotion")
     seen = []

@@ -730,6 +730,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 # Back on the claims, and the sidebar counts the new state.
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
                 await nav.get_by_text("context written · 2 claims of my own").wait_for()
+                assert "unsaved edits" not in (await nav.text_content())   # the saved form left no draft
                 # The editor offers the new ledger claim as a link target.
                 await page.locator('.claim[data-claim="paper-a-c1"] button[data-act="edit"]').click()
                 options = page.locator('form[data-form] select[name="link-claim"] option')

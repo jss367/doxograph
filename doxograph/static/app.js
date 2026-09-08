@@ -877,8 +877,8 @@ async function saveResearch() {
     V.researchSaving = false;
     setResearchSaving(form, false);
   }
+  showView('claims');       // captures the form on the way out, so clear after
   V.researchDraft = null;
-  showView('claims');
   await refreshAll();
 }
 

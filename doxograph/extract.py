@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -168,6 +169,11 @@ def client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
+#: Model calls in flight across every pass in this process. Sized once, from
+#: the setting as it was at import.
+_pass_slots = threading.BoundedSemaphore(config.PASS_WORKERS)
+
+
 def run_concurrently(items: list, work, workers: int | None = None):
     """Run `work(item)` for every item, a few at a time, yielding
     `(item, result, error)` as each finishes.
@@ -180,8 +186,16 @@ def run_concurrently(items: list, work, workers: int | None = None):
     if not items:
         return
     workers = min(workers or config.PASS_WORKERS, len(items))
+
+    def slot(item):
+        # The executor caps one pass; the semaphore caps the process, so
+        # three passes queued together still make PASS_WORKERS calls, not
+        # three times that.
+        with _pass_slots:
+            return work(item)
+
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
-        futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
+        futures = {pool.submit(contextvars.copy_context().run, slot, item): item for item in items}
         for future in as_completed(futures):
             item = futures[future]
             try:
@@ -339,9 +353,17 @@ The attached PDF is:
 Extract its claims."""
 
 
+# Fields of a claim that nobody edits: the id, and the quote verdict, which is
+# derived from the PDF and can be (re)computed by `verify_quotes` while a
+# re-read is waiting on the model. Counting a fresh verdict as an edit would
+# keep every unreviewed claim and then append the new extraction beside it.
+DERIVED_CLAIM_FIELDS = frozenset({"id", "quote_verified"})
+
+
 def claim_state(claim: dict) -> str:
     """Everything about a claim a person can change, as a comparable string."""
-    return json.dumps({k: v for k, v in claim.items() if k != "id"}, sort_keys=True, default=str)
+    return json.dumps({k: v for k, v in claim.items() if k not in DERIVED_CLAIM_FIELDS},
+                      sort_keys=True, default=str)
 
 
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
