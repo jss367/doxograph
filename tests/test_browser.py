@@ -740,6 +740,52 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
 
 
 @pytest.mark.browser
+def test_the_map_repaints_on_a_theme_change_omits_independent_links_and_clamps_the_threshold():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    store.save_ledger([{"id": "L1", "text": "Mine."}, {"id": "L2", "text": "Unrelated."}])
+    store.update_claim("paper-a", "paper-a-c1", {"ledger_links": [
+        {"claim": "L1", "relation": "supports", "note": ""},
+        {"claim": "L2", "relation": "independent", "note": ""},
+    ]})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1200, "height": 800})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                await page.wait_for_timeout(200)
+                before = await page.evaluate("document.querySelector('.graph-wrap canvas').toDataURL()")
+                # Switch to dark with the graph settled; the canvas must repaint by itself.
+                await page.locator("#btn-settings").click()
+                await page.locator('#settings-menu input[name="appearance"][value="dark"]').check()
+                await page.wait_for_timeout(200)
+                after = await page.evaluate("document.querySelector('.graph-wrap canvas').toDataURL()")
+                assert after != before, "canvas kept the old theme"
+                # ...and what it painted is what a fresh draw paints.
+                forced = await page.evaluate("graphDraw(); document.querySelector('.graph-wrap canvas').toDataURL()")
+                assert forced == after
+
+                graph = await page.evaluate("window.doxographGraph()")
+                ids = {n["id"] for n in graph["nodes"]}
+                assert "l:L1" in ids and "l:L2" not in ids, ids
+                assert not any(e.get("relation") == "independent" for e in graph["edges"])
+                # A threshold above what the corpus can reach is clamped, not honoured.
+                await page.evaluate("V.graph.minShared = 99; renderGraph();")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                assert any(e["type"] == "topic" for e in graph["edges"]), graph["edges"]
+                label = await page.locator("[data-graph-min]").text_content()
+                assert label == "1", label
+            await browser.close()
+
+    asyncio.run(scenario())
+
+@pytest.mark.browser
 def test_the_research_context_and_ledger_are_edited_in_the_app():
     _paper("paper-a", "Paper A", "recovery")
     store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])

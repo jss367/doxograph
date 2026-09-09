@@ -77,6 +77,10 @@ function applyThemeSettings(settings, persist = false) {
   Object.entries(THEME_PALETTES[settings.colors][mode]).forEach(([name, value]) => {
     root.style.setProperty(`--${name}`, value);
   });
+  // The map is painted pixels, not styled elements: unlike the rest of the
+  // page it does not follow the variables, so repaint it. Deferred a frame
+  // because the first call is made at load, before the map's state exists.
+  requestAnimationFrame(() => { if (GRAPH.canvas) graphDraw(); });
   if (persist) {
     try { localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(settings)); } catch (error) { /* preference remains for this page */ }
   }
@@ -111,10 +115,11 @@ const NEW_CLAIM_ID = '__new__';
 // list. Without it a re-render redraws from the unchanged server row and
 // silently discards the edit. A map rather than one slot, so opening a second
 // claim's editor does not throw away the first one's draft.
-// view is 'claims', 'tensions', or 'graph'. Neither of the last two has an
-// editor, so switching to one closes any open editor (keeping its draft) and
-// lets the background poll run. graph holds the map's display choices; the
-// layout itself is in GRAPH below.
+// view is 'claims', 'tensions', 'agreements', 'research', or 'graph'. Only
+// the first has a claim editor, so switching away closes any open one (keeping
+// its draft) and lets the background poll run. graph holds the map's display
+// choices, reset with the rest when the workspace changes; the layout itself
+// is in GRAPH below.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
 // synthEditing is the topic whose synthesis is open for correction by hand, and
@@ -279,6 +284,7 @@ function resetWorkspaceView() {
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
+    graph: { topics: true, minShared: null, tensions: true, ledger: true },
   });
   savingClaims.clear();
   graphReset();
@@ -1258,11 +1264,12 @@ function graphData() {
     // shares something between nearly every pair, and drawing all of it hides
     // the structure. The slider shows the value picked.
     const weights = [...pairs.values()].map((e) => e.w).sort((a, b) => a - b);
+    maxShared = weights.length ? Math.max(1, weights[weights.length - 1]) : 1;
     minShared = opts.minShared || (weights.length ? weights[Math.floor(weights.length / 2)] : 1);
-    for (const pair of pairs.values()) {
-      maxShared = Math.max(maxShared, pair.w);
-      if (pair.w >= minShared) edges.push(pair);
-    }
+    // A threshold chosen for a bigger corpus can exceed every weight here,
+    // which would hide every topic link while the label promised otherwise.
+    minShared = Math.min(minShared, maxShared);
+    for (const pair of pairs.values()) if (pair.w >= minShared) edges.push(pair);
   }
   if (opts.tensions) {
     const pairs = new Map();
@@ -1287,6 +1294,9 @@ function graphData() {
       if (!byPaper.has(c.paper)) continue;
       for (const link of c.ledger_links || []) {
         if (!own.has(link.claim)) continue;
+        // `independent` records that a paper does not bear on the claim; a
+        // line would say the opposite, so it is left off the map.
+        if (link.relation === 'independent') continue;
         used.add(link.claim);
         const key = `${c.paper}|${link.claim}|${link.relation}`;
         if (!pairs.has(key)) pairs.set(key, { type: 'ledger', a: `p:${c.paper}`, b: `l:${link.claim}`, relation: link.relation, n: 0 });
@@ -1550,6 +1560,7 @@ function graphBindCanvas(canvas) {
     if (node) {
       GRAPH.drag = { node, dx: node.x - x, dy: node.y - y };
       node.fixed = true;
+      GRAPH.autofit = false;   // or each frame refits the map under the pointer
       graphHeat(0.3);
     } else {
       GRAPH.pan = { sx, sy, tx: GRAPH.tx, ty: GRAPH.ty };
@@ -1646,6 +1657,7 @@ function graphHeader() {
       <span><i class="supports"></i>supports my claim</span>
       <span><i class="contradicts"></i>contradicts it</span>
       <span><i class="other"></i>refines it or supplies a method</span>
+      <span>(links marked independent are not drawn)</span>
     </div>
     <div class="row graph-controls">
       <label><input type="checkbox" data-graph-opt="topics" ${opts.topics ? 'checked' : ''}> shared topics</label>
