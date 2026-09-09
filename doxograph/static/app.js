@@ -1442,12 +1442,37 @@ function graphDraw() {
   const linked = new Set();
   if (hover) GRAPH.edges.forEach((e) => { if (e.source === hover) linked.add(e.target); if (e.target === hover) linked.add(e.source); });
 
+  // Edges of different kinds between the same two nodes would be drawn along
+  // one line, the later hiding the earlier and a solid topic stroke showing
+  // through the gaps of a dashed tension. A tension is found within a shared
+  // topic, so that pair's topic edge says nothing the tension does not: it is
+  // left out. Several ledger relations between one paper and one claim are
+  // fanned out side by side instead.
+  const pairKey = (e) => `${e.a}|${e.b}`;
+  const tensionPairs = new Set(GRAPH.edges.filter((e) => e.type === 'tension').map(pairKey));
+  const fan = new Map();
   for (const e of GRAPH.edges) {
+    if (e.type !== 'ledger') continue;
+    const key = pairKey(e);
+    if (!fan.has(key)) fan.set(key, []);
+    fan.get(key).push(e);
+  }
+  for (const e of GRAPH.edges) {
+    if (e.type === 'topic' && tensionPairs.has(pairKey(e))) continue;
     const { source: a, target: b } = e;
     const touching = hover && (a === hover || b === hover);
     const faded = (hover && !touching) || dim(a) || dim(b);
     ctx.globalAlpha = faded ? 0.12 : 1;
     ctx.setLineDash([]);
+    let ox = 0, oy = 0;
+    if (e.type === 'ledger') {
+      const siblings = fan.get(pairKey(e));
+      if (siblings.length > 1) {
+        const at = siblings.indexOf(e) - (siblings.length - 1) / 2;
+        const d = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
+        ox = (-(b.y - a.y) / d) * 4 * at; oy = ((b.x - a.x) / d) * 4 * at;
+      }
+    }
     if (e.type === 'topic') {
       ctx.strokeStyle = colors.muted;
       ctx.globalAlpha *= 0.25 + 0.09 * Math.min(e.w, 8);
@@ -1461,7 +1486,7 @@ function graphDraw() {
       ctx.lineWidth = 1.4;
       if (e.relation === 'contradicts') ctx.setLineDash([2, 3]);
     }
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(a.x + ox, a.y + oy); ctx.lineTo(b.x + ox, b.y + oy); ctx.stroke();
   }
   ctx.setLineDash([]);
 
