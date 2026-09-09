@@ -100,7 +100,15 @@ is restored when the page is reopened. Papers dropped on the Mac app's Dock
 icon go to the workspace currently shown in its window.
 
 The Tensions entry in the sidebar shows where papers disagree; `Escape`
-returns to the claims. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
+returns to the claims. The Map entry draws the papers as a graph: each
+paper is a circle sized by its claims and coloured by its most frequent
+topic, papers whose claims share a topic are joined, tensions are drawn
+in the warning colour, and your own claims appear as squares joined to the
+papers that support, contradict, refine, or supply a method for them; a
+link marked independent is not drawn. A slider hides topic
+links below a chosen number of shared claims; it starts at the median so
+a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
+and click a paper to read it. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
 reviewed, `Escape` cancels. Clicking a topic filters to it.
 
 "Add claim by hand" opens an editor that exists only in the browser; the claim

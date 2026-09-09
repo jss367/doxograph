@@ -235,6 +235,29 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .synth textarea { width: 100%; min-height: 8rem; font: inherit; font-size: .92rem; }
 .group h3 .mini { font-size: .72rem; font-weight: 400; margin-left: .4rem; }
 
+/* The map: papers as nodes on a canvas. The wrapper is sized from JS to fill
+   what is left of #main below the header, so the whole graph is on screen. */
+.graph-wrap { position: relative; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); overflow: hidden; min-height: 18rem; }
+.graph-wrap canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.graph-wrap canvas.hover { cursor: pointer; }
+.graph-wrap canvas.drag { cursor: grabbing; }
+.graph-tip { position: absolute; pointer-events: none; max-width: 22rem; z-index: 3;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: .35rem .5rem; font-size: .82rem; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.graph-tip .pm { color: var(--muted); font-size: .76rem; margin-top: .15rem; }
+.graph-controls { flex-wrap: wrap; font-size: .84rem; color: var(--muted); }
+.graph-controls label { display: flex; align-items: center; gap: .25rem; }
+.graph-controls input[type=range] { width: 6rem; }
+.graph-legend { display: flex; gap: .9rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted);
+  margin: .3rem 0 .5rem; }
+.graph-legend i { display: inline-block; width: 1.2rem; height: 0; border-top: 2px solid var(--line);
+  vertical-align: middle; margin-right: .3rem; }
+.graph-legend i.tension { border-top-color: var(--warn); }
+.graph-legend i.supports { border-top-color: var(--ok); }
+.graph-legend i.contradicts { border-top-color: var(--warn); border-top-style: dotted; }
+.graph-legend i.other { border-top-color: var(--accent); }
+
 /* The research form: context and the ledger of my own claims. */
 .edit.research .linkrow input[name="ledger-id"] { flex: 0 0 5rem; font-family: ui-monospace, Menlo, monospace; }
 .edit.research .linkrow input[name="ledger-text"] { flex: 1; }
