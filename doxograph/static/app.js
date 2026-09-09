@@ -87,7 +87,7 @@ appearanceQuery.addEventListener('change', () => {
   if (themeSettings.appearance === 'system') applyThemeSettings(themeSettings);
 });
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 let workspaces = [];
 let currentWorkspaceId = null;
@@ -124,10 +124,10 @@ const NEW_CLAIM_ID = '__new__';
 // away the first one's text. synthSaving is the topic whose hand save is in
 // flight: its editor is frozen, as a claim form is while it saves, because
 // success redraws from the server value and typing meanwhile would be lost.
-const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
+const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
-            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
-            synthEditing: null, synthDrafts: {}, synthSaving: null,
+            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+            synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             graph: { topics: true, minShared: null, tensions: true, ledger: true } };
 
 function blankClaim(paper) {
@@ -192,11 +192,53 @@ async function api(path, options = {}) {
   }
 }
 
+// The corpus is fetched with the ETag of the last answer applied, so a poll
+// that finds nothing changed costs the server a directory listing and costs
+// the page nothing at all: `fetchState` returns null on a 304 and `S` is left
+// alone. The tag is committed only once the payload has been applied to `S`,
+// in `pull`. Committing it on receipt would, if the jobs request beside it
+// failed, leave the page presenting a tag for a corpus it never showed and
+// getting 304s against it until the next write.
+let stateEtag = null;
+
+async function fetchState() {
+  const headers = new Headers();
+  if (currentWorkspaceId) headers.set('X-Doxograph-Workspace', currentWorkspaceId);
+  if (stateEtag) headers.set('If-None-Match', stateEtag);
+  const response = await fetch('/api/state', { headers });
+  if (response.status === 304) return null;
+  if (!response.ok) {
+    let detail = response.statusText;
+    try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
+    throw new Error(detail);
+  }
+  return { state: await response.json(), etag: response.headers.get('ETag') };
+}
+
+async function fetchJobs() {
+  const result = await api('/api/jobs');
+  return result.jobs || [];
+}
+
+// Pulls the corpus and the jobs, keeping `S.jobs` across a state answer that
+// did not change. Returns whether the corpus changed.
+async function pull() {
+  const requestedWorkspace = currentWorkspaceId;
+  const [next, jobs] = await Promise.all([fetchState(), fetchJobs()]);
+  if (requestedWorkspace !== currentWorkspaceId) return false;
+  if (next) {
+    S = { ...next.state, jobs };
+    stateEtag = next.etag;
+  } else {
+    S.jobs = jobs;
+  }
+  return Boolean(next);
+}
+
 async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
-  const next = await api('/api/state');
+  await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  S = next;
   render();
 }
 
@@ -207,9 +249,8 @@ async function refresh() {
 async function refreshAll() {
   captureOpenEditor();
   const requestedWorkspace = currentWorkspaceId;
-  const next = await api('/api/state');
+  await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  S = next;
   renderAll();
 }
 
@@ -231,38 +272,40 @@ function renderWorkspacePicker() {
 }
 
 function resetWorkspaceView() {
-  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], tensions: [], syntheses: [],
+  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
         kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
   Object.assign(V, {
-    paper: null, tag: null, q: '', kind: '', unreviewed: false, group: true,
+    paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
-    error: null, view: 'claims', tensionStatus: '', tensionFocus: null,
-    synthEditing: null, synthDrafts: {}, synthSaving: null,
+    error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+    synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
   });
   savingClaims.clear();
   graphReset();
   $('q').value = '';
   $('kind').value = '';
   $('only-unreviewed').checked = false;
+  $('only-unverified').checked = false;
   $('group-by-tag').checked = true;
   closePaperMenu();
 }
 
 async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId) return;
-  if (pendingMutations || savingClaims.size || V.synthSaving) {
+  if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
     alert('Wait for the current change to finish before switching workspaces.');
     renderWorkspacePicker();
     return;
   }
   const hasDraft = V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
-    || Object.keys(V.synthDrafts).length;
+    || Object.keys(V.synthDrafts).length || researchFormDirty();
   if (hasDraft && !confirm('Switch workspaces and discard unsaved edits in this workspace?')) {
     renderWorkspacePicker();
     return;
   }
   currentWorkspaceId = workspaceId;
+  stateEtag = null;   // the tag belongs to the other workspace's corpus
   try { localStorage.setItem('doxograph-workspace', workspaceId); } catch (e) { /* optional */ }
   resetWorkspaceView();
   renderWorkspacePicker();
@@ -297,6 +340,7 @@ function visibleClaims() {
     && (!V.tag || (row.tags || []).includes(V.tag))
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
+    && (!V.unverified || row.quote_verified === false)
     && (!needle || haystack(row).includes(needle)));
 }
 
@@ -308,9 +352,12 @@ function render() {
   renderStats();
   renderPapers();
   renderTensionsNav();
+  renderAgreementsNav();
+  renderResearchNav();
   renderGraphNav();
   renderTags();
-  if (!V.editing && !V.synthEditing) renderContent();
+  // The research form is an editor too: a poll must not redraw it under the cursor.
+  if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
   renderJobs();
 }
 
@@ -322,6 +369,8 @@ function renderAll() {
   renderStats();
   renderPapers();
   renderTensionsNav();
+  renderAgreementsNav();
+  renderResearchNav();
   renderGraphNav();
   renderTags();
   renderContent();
@@ -337,9 +386,13 @@ function renderStats() {
     `${Object.keys(S.tag_counts).length} topics`,
   ];
   if (unreviewed) bits.push(`${unreviewed} unreviewed`);
+  const unverified = S.claims.filter((c) => c.quote_verified === false).length;
+  if (unverified) bits.push(`${unverified} quotes not found`);
   if (proposed) bits.push(`${proposed} proposed topics`);
   const openTensions = (S.tensions || []).filter((t) => t.status === 'open').length;
   if (openTensions) bits.push(`${openTensions} open tensions`);
+  const openAgreements = (S.agreements || []).filter((a) => a.status === 'open').length;
+  if (openAgreements) bits.push(`${openAgreements} open agreements`);
   const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
   if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
   if (!S.has_key) bits.push('no API key found');
@@ -369,6 +422,35 @@ function renderTensionsNav() {
   $('tensions-nav').innerHTML = `<li class="${V.view === 'tensions' ? 'active' : ''}" data-view="tensions">
     <span class="pt">Where papers disagree</span>
     <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
+}
+
+function renderAgreementsNav() {
+  const all = S.agreements || [];
+  const count = (status) => all.filter((a) => a.status === status).length;
+  const parts = [];
+  if (count('open')) parts.push(`${count('open')} open`);
+  if (count('confirmed')) parts.push(`${count('confirmed')} confirmed`);
+  if (count('dismissed')) parts.push(`${count('dismissed')} dismissed`);
+  $('agreements-nav').innerHTML = `<li class="${V.view === 'agreements' ? 'active' : ''}" data-view="agreements">
+    <span class="pt">Where papers agree</span>
+    <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
+}
+
+// Agreements a claim is part of, for the marker on its card.
+function agreementsFor(claimId) {
+  return (S.agreements || []).filter((a) => a.status !== 'dismissed'
+    && a.claims.some((c) => c.id === claimId));
+}
+
+function renderResearchNav() {
+  const n = (S.ledger || []).length;
+  const bits = [];
+  bits.push(S.context ? 'context written' : 'no context yet');
+  bits.push(n ? `${n} claims of my own` : 'no claims of my own');
+  if (V.view !== 'research' && researchFormDirty()) bits.push('unsaved edits');
+  $('research-nav').innerHTML = `<li class="${V.view === 'research' ? 'active' : ''}" data-view="research">
+    <span class="pt">What I am studying</span>
+    <span class="pm">${esc(bits.join(' · '))}</span></li>`;
 }
 
 // Tensions a claim takes part in, for the marker on its card. Dismissed ones
@@ -407,6 +489,7 @@ function paperHeader(key) {
     <div class="row">
       <button type="button" data-act="reextract" data-paper="${esc(key)}">Re-read paper</button>
       <button type="button" data-act="retag-one" data-paper="${esc(key)}">Retag claims</button>
+      ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
@@ -484,6 +567,7 @@ function claimCard(row, shown) {
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
       ${tensionMarker(row.id)}
+      ${agreementMarker(row.id)}
       <span class="cact">
         <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
@@ -492,9 +576,20 @@ function claimCard(row, shown) {
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
+    ${quoteHtml(row)}
     ${links}
   </div>`;
+}
+
+// The quote, flagged when it was not found in the paper's text. A quote the
+// model paraphrased or invented is the commonest extraction error, and this is
+// the one error the machine can catch on its own.
+function quoteHtml(row) {
+  if (!row.quote) return '';
+  const flag = row.quote_verified === false
+    ? '<span class="qflag" title="This quote was not found in the PDF text. Check it against the paper.">not found in PDF</span> '
+    : '';
+  return `<blockquote>${flag}${esc(row.quote)}</blockquote>`;
 }
 
 function tensionMarker(claimId) {
@@ -505,6 +600,94 @@ function tensionMarker(claimId) {
   const label = involved.length === 1 ? 'in tension with 1 claim' : `in tension with ${involved.length} claims`;
   return `<span class="tmark ${confirmed ? 'confirmed' : ''}" data-act="tension-focus"
     data-claim="${esc(claimId)}" title="Show the tensions this claim is part of">⚡ ${esc(label)}</span>`;
+}
+
+function agreementMarker(claimId) {
+  if (V.view === 'agreements') return '';
+  const involved = agreementsFor(claimId);
+  if (!involved.length) return '';
+  const papers = new Set(involved.flatMap((a) => a.claims.map((c) => c.paper)));
+  papers.delete((S.claims.find((c) => c.id === claimId) || {}).paper);
+  const confirmed = involved.every((a) => a.status === 'confirmed');
+  const label = `${papers.size} other ${papers.size === 1 ? 'paper agrees' : 'papers agree'}`;
+  return `<span class="amark ${confirmed ? 'confirmed' : ''}" data-act="agreement-focus"
+    data-claim="${esc(claimId)}" title="Show the agreements this claim is part of">≈ ${esc(label)}</span>`;
+}
+
+function agreementCard(a) {
+  const topics = (a.topics || []).map((x) => `<span class="tag" data-tag="${esc(x)}">#${esc(x)}</span>`).join(' ');
+  const actions = [];
+  if (a.stale || a.status !== 'confirmed') actions.push(`<button type="button" data-act="agreement-status" data-agreement="${esc(a.id)}" data-status="confirmed">Confirm</button>`);
+  if (a.stale || a.status !== 'dismissed') actions.push(`<button type="button" data-act="agreement-status" data-agreement="${esc(a.id)}" data-status="dismissed">Dismiss</button>`);
+  if (a.status !== 'open') actions.push(`<button type="button" data-act="agreement-status" data-agreement="${esc(a.id)}" data-status="open">Reopen</button>`);
+  actions.push(`<button type="button" data-act="agreement-delete" data-agreement="${esc(a.id)}">delete</button>`);
+  return `<div class="tcard ${esc(a.status)}" data-agreement="${esc(a.id)}">
+    <div class="thead">
+      <span class="kind agreement">${a.n_papers} papers</span>
+      <span class="st ${esc(a.status)}">${esc(a.status)}</span>
+      ${topics}
+      <span class="cact">${actions.join('')}</span>
+    </div>
+    ${a.note ? `<p class="tnote">${esc(a.note)}</p>` : ''}
+    <div class="tgroup">${a.claims.map(tensionClaimCard).join('')}</div>
+    ${a.stale ? '<p class="stale">A claim here was edited or removed after this was found. Re-run Find agreements to re-judge it, or decide it yourself.</p>' : ''}
+  </div>`;
+}
+
+function visibleAgreements() {
+  return (S.agreements || []).filter((a) =>
+    (!V.agreementStatus || a.status === V.agreementStatus)
+    && (!V.tag || (a.topics || []).includes(V.tag))
+    && (!V.agreementFocus || a.claims.some((c) => c.id === V.agreementFocus)));
+}
+
+function renderAgreements() {
+  const main = $('main');
+  const scrollTop = main ? main.scrollTop : 0;
+  const rows = visibleAgreements();
+  const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+  const focus = V.agreementFocus ? S.claims.find((c) => c.id === V.agreementFocus) : null;
+  let html = `<div class="paperhead">
+    <h2>Where papers agree</h2>
+    <p class="ps">Findings that several papers make: the same question, answered the same way.
+      The count is how many papers make it, which is the answer to "how much evidence do I
+      have for this". Confirm the ones that hold up, dismiss the rest.</p>
+    <div class="row">
+      <select id="agreement-status">
+        <option value="" ${V.agreementStatus ? '' : 'selected'}>every status</option>
+        ${statuses.map((st) => `<option value="${esc(st)}" ${V.agreementStatus === st ? 'selected' : ''}>${esc(st)}</option>`).join('')}
+      </select>
+      ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
+      ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
+                 <button type="button" data-act="agreement-unfocus">show all</button>` : ''}
+      <button type="button" data-act="find-agreements" style="margin-left:auto">Find agreements</button>
+    </div>
+  </div>`;
+  if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
+  if (!rows.length) {
+    html += (S.agreements || []).length
+      ? '<p class="empty">No agreements match these filters.</p>'
+      : '<p class="empty">Nothing found yet. Find agreements asks the model, topic by topic, which claims from different papers assert the same finding.</p>';
+  } else {
+    html += rows.map(agreementCard).join('');
+  }
+  $('content').innerHTML = html;
+  if (main) main.scrollTop = scrollTop;
+}
+
+async function findAgreements() {
+  V.error = null;
+  try {
+    const result = await api('/api/agreements', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    if (!result.queued) {
+      V.error = 'No topic has claims from two papers yet, so there is nothing to compare.';
+    }
+  } catch (error) {
+    V.error = `Could not start the pass: ${error.message}`;
+  }
+  await refresh();
 }
 
 // A claim as it appears inside a tension: the same card, minus the review and
@@ -521,7 +704,7 @@ function tensionClaimCard(row) {
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${row.quote ? `<blockquote>${esc(row.quote)}</blockquote>` : ''}
+    ${quoteHtml(row)}
   </div>`;
 }
 
@@ -589,8 +772,159 @@ function renderTensions() {
   if (main) main.scrollTop = scrollTop;
 }
 
+// --- research: the context and the ledger, edited in place -----------------
+//
+// context.md and ledger.yaml are the two inputs that most shape what
+// extraction returns, and both used to need a text editor outside the app.
+// One form edits both; Save writes both.
+
+function ledgerRow(claim, i) {
+  return `<div class="linkrow" data-ledger-row="${i}">
+    <input name="ledger-id" value="${esc(claim.id || '')}" placeholder="L${i + 1}" size="6" aria-label="Claim id">
+    <input name="ledger-text" value="${esc(claim.text || '')}" placeholder="One of my own claims, as a sentence" aria-label="Claim text">
+    <button type="button" data-act="drop-ledger" title="Remove this claim">×</button>
+  </div>`;
+}
+
+// The research form's edits live only in the DOM until Save, and every other
+// redraw (a filter, a paper click, the topic list) rebuilds `#content`. Read
+// the form into `V.researchDraft` before any of that, and draw from the draft
+// when there is one, so navigating away and back finds the text as it was.
+function captureResearchDraft() {
+  if (!$('research-form')) return;
+  const current = readResearchForm();
+  // A form nobody has typed into is not a draft. It is judged against what
+  // it was drawn from, not against `S`: a poll can replace `S` while the form
+  // is open, and an untouched form would then look edited, be kept, and
+  // later write the old values over the change made elsewhere.
+  V.researchDraft = differs(current, V.researchBase || storedResearch()) ? current : null;
+}
+
+function storedResearch() {
+  return {
+    context: S.context || '',
+    claims: (S.ledger || []).map((c) => ({ id: c.id || '', text: c.text || '' })),
+  };
+}
+
+function differs(a, b) {
+  return a.context.trim() !== b.context.trim()
+    || JSON.stringify(a.claims) !== JSON.stringify(b.claims);
+}
+
+function renderResearch() {
+  captureResearchDraft();
+  const main = $('main');
+  const scrollTop = main ? main.scrollTop : 0;
+  const draft = V.researchDraft;
+  // Drawn from the server, the form remembers what it was drawn from, so a
+  // later poll cannot make an untouched form look edited. A draft keeps the
+  // base it was typed against.
+  if (!draft) V.researchBase = storedResearch();
+  const context = draft ? draft.context : (S.context || '');
+  const ledger = draft ? draft.claims : (S.ledger || []);
+  let html = `<div class="paperhead">
+    <h2>What I am studying</h2>
+    <p class="ps">The context goes into every model pass and is the main lever on the
+      <em>why it is here</em> line. Your own claims are what a paper's claims are linked
+      against: supports, contradicts, supplies a method for, refines.</p>
+  </div>`;
+  if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
+  html += `<form class="edit research" id="research-form">
+    <div><label for="research-context">Research context</label>
+      <textarea id="research-context" name="context" rows="8"
+        placeholder="What the research is about, and what makes a paper relevant to it.">${esc(context)}</textarea></div>
+    <div><label>My own claims</label>
+      <div class="links" id="ledger-rows">${ledger.map(ledgerRow).join('')}</div>
+      <div class="row"><button type="button" data-act="add-ledger">Add a claim</button></div></div>
+    <div class="row right">
+      <button type="button" data-act="cancel-research">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>`;
+  $('content').innerHTML = html;
+  if (main) main.scrollTop = scrollTop;
+}
+
+// Whether the research form on screen differs from what the server holds. The
+// form is the only place its edits live until Save, so leaving the workspace
+// with it dirty is leaving a draft behind.
+function researchFormDirty() {
+  if ($('research-form')) return differs(readResearchForm(), V.researchBase || storedResearch());
+  return Boolean(V.researchDraft);
+}
+
+function readResearchForm() {
+  const form = $('research-form');
+  const claims = [...form.querySelectorAll('[data-ledger-row]')].map((row) => ({
+    id: row.querySelector('[name="ledger-id"]').value.trim(),
+    text: row.querySelector('[name="ledger-text"]').value.trim(),
+  })).filter((c) => c.id || c.text);
+  return { context: form.querySelector('[name="context"]').value, claims };
+}
+
+function setResearchSaving(form, busy) {
+  if (!form.isConnected) return;   // a finished save has already left the view
+  form.classList.toggle('saving', busy);
+  form.querySelectorAll('input, textarea, button').forEach((field) => { field.disabled = busy; });
+}
+
+async function saveResearch() {
+  if (V.researchSaving) return;   // a save is in flight: one ledger/context pair at a time
+  const form = $('research-form');
+  const { context, claims } = readResearchForm();
+  V.error = null;
+  V.researchSaving = true;
+  setResearchSaving(form, true);
+  // Only what was edited is written, judged against what the form was drawn
+  // from: a field left alone must not carry the value the form opened with
+  // over a change made elsewhere while it was open.
+  const base = V.researchBase || storedResearch();
+  const ledgerChanged = JSON.stringify(claims) !== JSON.stringify(base.claims);
+  const contextChanged = context.trim() !== base.context.trim();
+  try {
+    // The ledger goes first: it is the one of the two the server can refuse
+    // (a missing or repeated id), so nothing is written unless both will be.
+    if (ledgerChanged) {
+      await api('/api/ledger', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ claims }),
+      });
+    }
+    if (contextChanged) {
+      await api('/api/context', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: context }),
+      });
+    }
+  } catch (error) {
+    // Show the error over the form as typed; redrawing from S would put the
+    // saved values back and lose the edit that just failed.
+    V.error = `Could not save: ${error.message}`;
+    let warn = form.previousElementSibling;
+    if (!warn || !warn.classList.contains('warn')) {
+      form.insertAdjacentHTML('beforebegin', '<p class="warn"></p>');
+      warn = form.previousElementSibling;
+    }
+    warn.textContent = V.error;
+    return;
+  } finally {
+    V.researchSaving = false;
+    setResearchSaving(form, false);
+  }
+  showView('claims');       // captures the form on the way out, so clear after
+  V.researchDraft = null;
+  V.researchBase = null;
+  await refreshAll();
+}
+
+$('content').addEventListener('submit', async (event) => {
+  if (event.target.id !== 'research-form') return;
+  event.preventDefault();
+  await saveResearch();
+});
+
 function showView(view) {
   if (view === V.view) return;
+  if (V.view === 'research') captureResearchDraft();
   // Neither the tensions view nor the map has an editor. Park any open one
   // rather than leaving `V.editing` set on a form that is no longer on screen,
   // which would also stop the background poll. The same for a synthesis editor.
@@ -600,6 +934,7 @@ function showView(view) {
   V.error = null;
   V.view = view;
   if (view !== 'tensions') V.tensionFocus = null;
+  if (view !== 'agreements') V.agreementFocus = null;
 }
 
 function editForm(row) {
@@ -729,6 +1064,8 @@ function renderContent() {
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (V.view === 'tensions') { renderTensions(); return; }
+  if (V.view === 'research') { renderResearch(); return; }
+  if (V.view === 'agreements') { renderAgreements(); return; }
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const shown = new Set();
@@ -1663,6 +2000,26 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'cancel') { cancelEdit(); return; }
+    if (act === 'add-ledger') {
+      const rows = $('ledger-rows');
+      const count = rows.querySelectorAll('[data-ledger-row]').length;
+      // The first id nobody uses, not the row count: L1 and L3 get L2, not a second L3.
+      const taken = new Set([...rows.querySelectorAll('[name="ledger-id"]')].map((f) => f.value.trim()));
+      let n = 1;
+      while (taken.has(`L${n}`)) n += 1;
+      rows.insertAdjacentHTML('beforeend', ledgerRow({ id: `L${n}`, text: '' }, count));
+      rows.lastElementChild.querySelector('[name="ledger-text"]').focus();
+      return;
+    }
+    if (act === 'drop-ledger') { button.closest('[data-ledger-row]').remove(); return; }
+    if (act === 'cancel-research') {
+      V.error = null;
+      showView('claims');
+      V.researchDraft = null;   // Cancel is the one way out that drops the edits
+      V.researchBase = null;
+      renderAll();
+      return;
+    }
     if (act === 'drop-link') {
       button.closest('.linkrow').querySelector('[name="link-claim"]').value = '';
       button.closest('.linkrow').style.display = 'none';
@@ -1722,6 +2079,34 @@ $('content').addEventListener('click', async (event) => {
       await refreshAll();
       return;
     }
+    if (act === 'agreement-focus') {
+      showView('agreements');
+      V.agreementFocus = claim;
+      V.agreementStatus = '';
+      renderAll();
+      return;
+    }
+    if (act === 'agreement-unfocus') { V.agreementFocus = null; renderContent(); return; }
+    if (act === 'agreement-status') {
+      V.error = null;
+      try {
+        await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: button.dataset.status }),
+        });
+      } catch (error) {
+        V.error = `Could not update the agreement: ${error.message}`;
+      }
+      await refreshAll();
+      return;
+    }
+    if (act === 'agreement-delete') {
+      if (!confirm('Delete this agreement?')) return;
+      await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, { method: 'DELETE' });
+      await refreshAll();
+      return;
+    }
+    if (act === 'find-agreements') { await findAgreements(); return; }
     if (act === 'find-tensions') {
       await findTensions();
       return;
@@ -1784,6 +2169,7 @@ $('content').addEventListener('click', async (event) => {
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
+        if (V.unverified && row.quote_verified !== false) { V.unverified = false; $('only-unverified').checked = false; }
         if (V.q.trim() && !haystack(row).includes(V.q.trim().toLowerCase())) { V.q = ''; $('q').value = ''; }
       }
       V.selectedId = claim;
@@ -1794,6 +2180,16 @@ $('content').addEventListener('click', async (event) => {
     if (act === 'reextract') {
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
       await refresh();
+      return;
+    }
+    if (act === 'verify') {
+      V.error = null;
+      try {
+        await api(`/api/papers/${encodeURIComponent(paper)}/verify`, { method: 'POST' });
+      } catch (error) {
+        V.error = `Could not check the quotes: ${error.message}`;
+      }
+      await refreshAll();
       return;
     }
     if (act === 'retag-one') {
@@ -1848,7 +2244,7 @@ $('content').addEventListener('click', async (event) => {
   // fields bubbles down to the card-selection branch below. Re-rendering there
   // replaces the form, drops focus, and redraws from the stored row, which
   // makes the editor unusable with a mouse.
-  if (event.target.closest('form[data-form]')) return;
+  if (event.target.closest('form[data-form], #research-form')) return;
 
   const tagEl = event.target.closest('[data-tag]');
   if (tagEl && !tagEl.dataset.act) {
@@ -1892,6 +2288,27 @@ $('papers').addEventListener('click', (event) => {
 $('tensions-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('tensions');
+  renderAll();
+});
+
+$('agreements-nav').addEventListener('click', (event) => {
+  if (!event.target.closest('[data-view]')) return;
+  showView('agreements');
+  renderAll();
+});
+
+$('btn-agreements').addEventListener('click', async () => {
+  showView('agreements');
+  renderAll();
+  await findAgreements();
+});
+
+$('research-nav').addEventListener('click', (event) => {
+  if (!event.target.closest('[data-view]')) return;
+  // Clicking the item already shown is not navigation. Redrawing here would
+  // rebuild the form from `S` and throw away whatever has been typed into it.
+  if (V.view === 'research') return;
+  showView('research');
   renderAll();
 });
 
@@ -2085,9 +2502,8 @@ $('content').addEventListener('input', (e) => {
 // Each filter keeps whatever is typed in an open editor before redrawing.
 $('content').addEventListener('change', (e) => {
   if (e.target.matches('[data-graph-opt]')) { graphOption(e.target); return; }
-  if (e.target.id !== 'tension-status') return;
-  V.tensionStatus = e.target.value;
-  renderContent();
+  if (e.target.id === 'tension-status') { V.tensionStatus = e.target.value; renderContent(); }
+  if (e.target.id === 'agreement-status') { V.agreementStatus = e.target.value; renderContent(); }
 });
 $('content').addEventListener('input', (e) => {
   if (e.target.matches('[data-graph-opt="minShared"]')) graphOption(e.target);
@@ -2107,6 +2523,7 @@ function graphOption(field) {
 $('q').addEventListener('input', (e) => { captureOpenEditor(); V.q = e.target.value; renderContent(); });
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
 $('only-unreviewed').addEventListener('change', (e) => { captureOpenEditor(); V.unreviewed = e.target.checked; renderContent(); });
+$('only-unverified').addEventListener('change', (e) => { captureOpenEditor(); V.unverified = e.target.checked; renderContent(); });
 $('group-by-tag').addEventListener('change', (e) => { captureOpenEditor(); V.group = e.target.checked; renderContent(); });
 
 // --- keyboard -------------------------------------------------------------
@@ -2203,17 +2620,6 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
-function stateSignature(state) {
-  return JSON.stringify([
-    (state.papers || []).map((p) => [p.key, p.status, p.n_claims, p.n_proposed_tags, p.updated]),
-    (state.claims || []).map((c) => [c.id, c.reviewed, c.updated || c.added, (c.tags || []).join(',')]),
-    (state.tags || []).map((t) => t.name),
-    (state.ledger || []).map((c) => c.id),
-    (state.tensions || []).map((t) => [t.id, t.status, t.stale, t.found, (t.topics || []).join(',')]),
-    (state.syntheses || []).map((s) => [s.topic, s.written, s.stale, s.source]),
-  ]);
-}
-
 async function boot() {
   await loadWorkspaces();
   await refresh();
@@ -2224,15 +2630,12 @@ async function boot() {
     const busy = (S.jobs || []).some((j) => ['queued', 'fetching', 'reading'].includes(j.state));
     if (!busy && (V.editing || V.synthEditing)) return;
     try {
-      const requestedWorkspace = currentWorkspaceId;
-      const next = await api('/api/state');
-      if (requestedWorkspace !== currentWorkspaceId) return;
-      const changed = stateSignature(next) !== stateSignature(S);
-      S = next;
+      const changed = await pull();
       renderJobs();
       if (!changed) return;
       renderStats();
-      if (!V.editing && !V.synthEditing) { renderPapers(); renderTensionsNav(); renderGraphNav(); renderTags(); renderContent(); }
+      renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
+      if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
 }

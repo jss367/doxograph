@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import itertools
 import json
 import os
@@ -25,7 +26,7 @@ from typing import Any
 
 import yaml
 
-from . import config
+from . import config, quotes
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for",
@@ -475,10 +476,30 @@ def new_claim(paper: dict, **fields) -> dict:
         "locator": "",
         "ledger_links": [],
         "reviewed": False,
+        # True when the quote was found in the PDF, False when it was not, None
+        # when there was nothing to check (no quote, or no readable PDF).
+        "quote_verified": None,
         "added": now(),
     }
     claim.update(fields)
     return claim
+
+
+def check_quote(key: str, claim: dict) -> bool | None:
+    """Set and return `quote_verified` for one claim against the paper's PDF."""
+    claim["quote_verified"] = quotes.verify(pdf_path(key), claim.get("quote") or "")
+    return claim["quote_verified"]
+
+
+@_locked
+def verify_quotes(key: str) -> dict:
+    """Re-check every quote on a paper. For corpora extracted before quotes
+    were checked, and for a PDF that arrived after its claims did."""
+    paper = load_paper(key)
+    for claim in paper.get("claims", []):
+        check_quote(key, claim)
+    save_paper(paper)
+    return paper
 
 
 def clean_ledger_links(links: Any) -> list[dict]:
@@ -518,6 +539,8 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
             for field, value in patch.items():
                 if field in CLAIM_FIELDS:
                     claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
+            if "quote" in patch:
+                check_quote(key, claim)
             claim["updated"] = now()
             refresh_status(paper)
             save_paper(paper)
@@ -536,6 +559,8 @@ def add_claim(key: str, patch: dict) -> dict:
     # An explicit `reviewed` in the patch still wins.
     if "reviewed" not in patch:
         claim["reviewed"] = bool(claim["text"].strip())
+    if claim.get("quote"):
+        check_quote(key, claim)
     paper.setdefault("claims", []).append(claim)
     refresh_status(paper)
     save_paper(paper)
@@ -662,6 +687,19 @@ def _retag_all(old: str, new: str | None) -> None:
             touched = True
         if touched:
             _save_tensions(data)
+    with agreements_lock():
+        data = _read_agreements()
+        touched = False
+        for record in data["agreements"]:
+            if old not in record.get("topics", []):
+                continue
+            kept = {t for t in record["topics"] if t != old}
+            if new:
+                kept.add(new)
+            record["topics"] = sorted(kept)
+            touched = True
+        if touched:
+            _save_agreements(data)
     with syntheses_lock():
         data = _read_syntheses()
         record = data["syntheses"].pop(old, None)
@@ -682,7 +720,21 @@ def delete_tag(name: str) -> None:
         _retag_all(name, None)
 
 
-# --- your own claims ------------------------------------------------------
+# --- your own claims, and what the research is about ----------------------
+
+def context_path() -> Path:
+    return config.data_dir() / "context.md"
+
+
+def load_context() -> str:
+    """The free-text description of the research, given to every model pass."""
+    path = context_path()
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
+def save_context(text: str) -> None:
+    write_atomic(context_path(), (text or "").strip() + "\n")
+
 
 def load_ledger() -> list[dict]:
     path = config.ledger_path()
@@ -700,6 +752,36 @@ def save_ledger(claims: list[dict]) -> None:
 
 
 # --- cross-paper views ----------------------------------------------------
+
+def corpus_signature() -> str:
+    """A string that changes whenever anything `/api/state` shows would.
+
+    Built from directory listings and file stats rather than file contents:
+    a few hundred stats cost a millisecond or two, where reading every paper
+    costs a good fraction of a second, and the page asks twice a second. The
+    writes are all atomic replaces, so a changed file has a new inode and
+    mtime; a CLI process writing the corpus is seen the same way as this one.
+    """
+    parts: list[tuple] = []
+    for directory, suffix in ((config.papers_dir(), ".json"), (config.pdfs_dir(), ".pdf")):
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.name.endswith(suffix) and not entry.name.startswith("."):
+                        st = entry.stat()
+                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino))
+        except FileNotFoundError:
+            pass
+    for path in (config.tags_path(), config.ledger_path(), tensions_path(), syntheses_path(),
+                 agreements_path(), context_path()):
+        try:
+            st = path.stat()
+            parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino))
+        except FileNotFoundError:
+            parts.append((path.name,))
+    parts.sort()
+    return hashlib.sha1(repr(parts).encode()).hexdigest()
+
 
 def claim_rows(papers: list[dict] | None = None) -> list[dict]:
     """Flatten every claim with the paper fields needed to display it."""
@@ -752,6 +834,7 @@ def summarize(paper: dict) -> dict:
         "updated": paper.get("updated"),
         "n_claims": len(claims),
         "n_unreviewed": sum(1 for c in claims if not c.get("reviewed")),
+        "n_unverified": sum(1 for c in claims if c.get("quote_verified") is False),
         "n_proposed_tags": len(paper.get("proposed_tags", [])),
         "schema_version": (paper.get("extraction") or {}).get("schema_version"),
         "has_pdf": pdf_path(paper["key"]).exists(),
@@ -1208,3 +1291,212 @@ def synthesis_topics(rows: list[dict] | None = None) -> list[str]:
     """Topics worth a synthesis by default: claims from at least two papers.
     One paper's claims can be synthesized too, by naming the topic."""
     return tension_topics(rows)
+
+
+# --- where the papers agree ------------------------------------------------
+#
+# An agreement is a group of claims from two or more papers that assert the
+# same finding. Topics group claims by subject and tensions find where they
+# differ; this is the case in between, and the common one: several papers
+# saying the same thing, which is what "how much evidence do I have for X"
+# needs counted. Found by a model pass per topic, reviewed like tensions, and
+# kept in one file since each group belongs to several papers at once.
+
+AGREEMENT_STATUSES = TENSION_STATUSES
+
+_agreements = threading.RLock()
+
+
+def agreements_path() -> Path:
+    return config.data_dir() / "agreements.json"
+
+
+@contextlib.contextmanager
+def agreements_lock():
+    """Guard `agreements.json`. Nests inside `vocab_lock` alone, as the
+    tensions lock does, and is never held with it."""
+    with _agreements, _reentrant_file_lock("agreements", config.locks_dir() / "agreements.lock"):
+        yield
+
+
+def _read_agreements() -> dict:
+    path = agreements_path()
+    if not path.exists():
+        return {"seq": 0, "agreements": []}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
+    loaded.setdefault("seq", 0)
+    loaded.setdefault("agreements", [])
+    return loaded
+
+
+def load_agreements() -> list[dict]:
+    return list(_read_agreements()["agreements"])
+
+
+def _save_agreements(data: dict) -> None:
+    write_json(agreements_path(), data)
+
+
+def _agreement_papers(ids, live: dict[str, dict]) -> set[str]:
+    return {live[i].get("paper") for i in ids if i in live}
+
+
+def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dict]) -> dict:
+    """Merge one topic's model output into the file.
+
+    `found` is a list of `{"claims": [id, ...], "note"}`. The rules follow
+    `record_tensions`, with one addition for groups, which can grow: a group
+    the model returns that contains an existing one is that agreement with
+    more members, and it goes back to open, since the new member is new
+    evidence nobody has looked at. If it contains several existing ones,
+    as when two pairs found separately turn out to be one finding, the
+    earliest of them grows and the rest fold into it, topics included, so
+    one finding is one card. A returned group contained in an existing
+    one adds nothing and is kept. Members whose claims no longer exist are
+    dropped, and a group left with claims from fewer than two papers goes.
+    A dropped member's fingerprint is kept, so the reduced group reads as
+    stale until someone judges it: the note and decision on file were about
+    a group that no longer exists.
+
+    Returns `{"added": n, "grown": n, "reopened": n, "kept": n}`.
+    """
+    with vocab_lock(), agreements_lock():
+        data = _read_agreements()
+        live = {c["id"]: c for c in claim_rows()}
+        existing = []
+        for record in data["agreements"]:
+            ids = [i for i in record.get("claims", []) if i in live]
+            if len(_agreement_papers(ids, live)) < 2:
+                continue
+            record["claims"] = ids
+            record["topics"] = sorted(t for t in record.get("topics", [])
+                                      if all(t in (live[i].get("tags") or []) for i in ids))
+            existing.append(record)
+        added = grown = reopened = kept = 0
+        for item in found:
+            ids = sorted({i for i in item.get("claims", []) if i in claims_by_id and i in live})
+            if len(_agreement_papers(ids, live)) < 2:
+                continue
+            note = (item.get("note") or "").strip()
+            fingerprints = {i: claim_fingerprint(claims_by_id[i]) for i in ids}
+            topic_live = all(topic in (live[i].get("tags") or []) for i in ids)
+            wanted = set(ids)
+            # The answer describes the claims as the prompt showed them. If one
+            # was edited during the call, the answer is about text that no
+            # longer exists, and the record on file, decided against text a
+            # reviewer could see, stands: nothing grows, folds, or reopens.
+            stale = any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids)
+            # Every record the returned group covers, in file order; the first
+            # is the one that stays. Failing that, a record that covers it.
+            contained = [r for r in existing if set(r["claims"]) <= wanted]
+            current = contained[0] if contained else next(
+                (r for r in existing if wanted < set(r["claims"])), None)
+            if current is not None and stale:
+                kept += 1
+                continue
+            if current is not None:
+                have = set(current["claims"])
+                # The members the record will hold: the returned group when it
+                # grows the record, the record's own when it is a part of it.
+                members = wanted | have
+                topics = {topic} | set(current.get("topics", []))
+                for other in contained[1:]:
+                    topics |= set(other.get("topics", []))
+                    existing.remove(other)
+                current["topics"] = sorted(t for t in topics
+                                           if all(t in (live[i].get("tags") or []) for i in members))
+                if wanted > have:
+                    current["claims"] = ids
+                    current["fingerprints"] = fingerprints
+                    current.update(note=note or current.get("note", ""), status="open", found=now())
+                    grown += 1
+                    continue
+                if wanted < have:
+                    kept += 1   # a part of what is already on file adds nothing
+                    continue
+                if current.get("fingerprints") == fingerprints:
+                    kept += 1
+                    continue
+                current.update(note=note, fingerprints=fingerprints, status="open", found=now())
+                reopened += 1
+                continue
+            data["seq"] = int(data.get("seq") or 0) + 1
+            record = {
+                "id": f"a{data['seq']}",
+                "claims": ids,
+                "topics": [topic] if topic_live else [],
+                "note": note,
+                "status": "open",
+                "found": now(),
+                "fingerprints": fingerprints,
+            }
+            existing.append(record)
+            added += 1
+        data["agreements"] = existing
+        _save_agreements(data)
+        return {"added": added, "grown": grown, "reopened": reopened, "kept": kept}
+
+
+def set_agreement_status(agreement_id: str, status: str) -> dict:
+    """Record the reviewer's decision; as for tensions, deciding refreshes
+    the fingerprints and reopening does not. A decision is about the members
+    that still exist, so it also drops deleted ones from the record, as long
+    as two papers remain; that is what the reviewer saw and judged."""
+    if status not in AGREEMENT_STATUSES:
+        raise ValueError(f"status must be one of {AGREEMENT_STATUSES}, not {status!r}")
+    with agreements_lock():
+        data = _read_agreements()
+        for record in data["agreements"]:
+            if record.get("id") == agreement_id:
+                record["status"] = status
+                record["decided"] = now()
+                if status != "open":
+                    live = {c["id"]: c for c in claim_rows()}
+                    ids = [i for i in record.get("claims", []) if i in live]
+                    if len(_agreement_papers(ids, live)) >= 2:
+                        record["claims"] = ids
+                        record["fingerprints"] = {i: claim_fingerprint(live[i]) for i in ids}
+                _save_agreements(data)
+                return record
+    raise KeyError(agreement_id)
+
+
+def delete_agreement(agreement_id: str) -> None:
+    with agreements_lock():
+        data = _read_agreements()
+        before = len(data["agreements"])
+        data["agreements"] = [r for r in data["agreements"] if r.get("id") != agreement_id]
+        if len(data["agreements"]) == before:
+            raise KeyError(agreement_id)
+        _save_agreements(data)
+
+
+def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
+    """Every agreement still backed by claims from two papers, joined to
+    those claims, with `stale`, `n_papers`, and topics filtered to what every
+    member still carries. Stale when a member was edited or removed since the
+    agreement was found or decided: the fingerprints name the members the
+    judgment was about, so a set of them other than the live members is stale."""
+    live = {c["id"]: c for c in (rows if rows is not None else claim_rows())}
+    out = []
+    for record in load_agreements():
+        ids = [i for i in record.get("claims", []) if i in live]
+        if len(_agreement_papers(ids, live)) < 2:
+            continue
+        fingerprints = record.get("fingerprints") or {}
+        row = dict(record)
+        row["claims"] = [live[i] for i in ids]
+        row["n_papers"] = len(_agreement_papers(ids, live))
+        row["topics"] = sorted(t for t in record.get("topics", [])
+                               if all(t in (live[i].get("tags") or []) for i in ids))
+        row["stale"] = (set(fingerprints) != set(ids)
+                        or any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids))
+        out.append(row)
+    order = {s: n for n, s in enumerate(AGREEMENT_STATUSES)}
+    out.sort(key=lambda r: (order.get(r.get("status"), 9), -r["n_papers"], r.get("found") or ""))
+    return out

@@ -359,7 +359,7 @@ def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_top
 def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     asked = []
 
-    def find(topic):
+    def find(topic, rows=None, tags=None):
         asked.append(topic)
         if topic == "recovery-rate":
             raise RuntimeError("tension pass refused for recovery-rate: no")
@@ -368,7 +368,7 @@ def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     monkeypatch.setattr(extract, "find_tensions", find)
     job = server._new_job("tensions in 2 topics")
     server._run_tensions(job, ["recovery-rate", "scaling"])
-    assert asked == ["recovery-rate", "scaling"]          # the failure did not end the pass
+    assert sorted(asked) == ["recovery-rate", "scaling"]  # the failure did not end the pass
     assert job["state"] == "error"
     assert job["detail"] == ("1 of 2 topics failed, 2 new, 1 reopened; "
                              "recovery-rate: RuntimeError: tension pass refused for recovery-rate: no")
@@ -406,7 +406,7 @@ def test_export_filters_a_tension_as_a_pair():
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "n"}], shown())
     html = export.render()
     assert html.count('<div class="ledger" data-tension>') == 1
-    assert "querySelectorAll('[data-tension]')" in export.SCRIPT
+    assert "querySelectorAll('[data-tension], [data-agreement]')" in export.SCRIPT
 
 
 def test_cli_lists_tensions_without_calling_the_model(capsys):

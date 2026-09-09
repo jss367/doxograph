@@ -401,7 +401,7 @@ def test_api_synthesize_queues_nothing_for_a_corpus_of_one_paper():
 def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     asked = []
 
-    def synth(topic):
+    def synth(topic, rows=None, tags=None):
         asked.append(topic)
         if topic == "recovery-rate":
             raise RuntimeError("synthesis refused for recovery-rate: no")
@@ -410,7 +410,7 @@ def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     monkeypatch.setattr(extract, "synthesize_topic", synth)
     job = server._new_job("synthesis of 2 topics")
     server._run_syntheses(job, ["recovery-rate", "scaling"])
-    assert asked == ["recovery-rate", "scaling"]
+    assert sorted(asked) == ["recovery-rate", "scaling"]   # topics run a few at a time
     assert job["state"] == "error"
     assert job["detail"] == ("1 of 2 topics failed, 1 written; "
                              "recovery-rate: RuntimeError: synthesis refused for recovery-rate: no")
