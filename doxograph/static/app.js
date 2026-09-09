@@ -1268,7 +1268,10 @@ function graphData() {
     minShared = opts.minShared || (weights.length ? weights[Math.floor(weights.length / 2)] : 1);
     // A threshold chosen for a bigger corpus can exceed every weight here,
     // which would hide every topic link while the label promised otherwise.
+    // The clamp is written back to the choice, so what the slider shows is
+    // what later recomputations start from, rather than a value it once had.
     minShared = Math.min(minShared, maxShared);
+    if (opts.minShared && opts.minShared > maxShared) opts.minShared = maxShared;
     for (const pair of pairs.values()) if (pair.w >= minShared) edges.push(pair);
   }
   if (opts.tensions) {
@@ -1283,6 +1286,14 @@ function graphData() {
       pair.n += 1;
       if (t.status === 'open') pair.open += 1;
       pair.kinds.add(t.kind);
+    }
+    // A tension is found within a shared topic, so the topic edge between the
+    // same two papers says nothing the tension does not, and drawn together
+    // the solid topic stroke would show through the dashes of an open one.
+    // Dropped here rather than at draw time, so the link count agrees with
+    // what is on screen.
+    for (let i = edges.length - 1; i >= 0; i -= 1) {
+      if (edges[i].type === 'topic' && pairs.has(`${edges[i].a.slice(2)}|${edges[i].b.slice(2)}`)) edges.splice(i, 1);
     }
     edges.push(...pairs.values());
   }
@@ -1442,14 +1453,10 @@ function graphDraw() {
   const linked = new Set();
   if (hover) GRAPH.edges.forEach((e) => { if (e.source === hover) linked.add(e.target); if (e.target === hover) linked.add(e.source); });
 
-  // Edges of different kinds between the same two nodes would be drawn along
-  // one line, the later hiding the earlier and a solid topic stroke showing
-  // through the gaps of a dashed tension. A tension is found within a shared
-  // topic, so that pair's topic edge says nothing the tension does not: it is
-  // left out. Several ledger relations between one paper and one claim are
-  // fanned out side by side instead.
+  // Several ledger relations between one paper and one claim would be drawn
+  // along one line, the later hiding the earlier; they are fanned out side by
+  // side. (A topic edge under a tension is dropped in graphData instead.)
   const pairKey = (e) => `${e.a}|${e.b}`;
-  const tensionPairs = new Set(GRAPH.edges.filter((e) => e.type === 'tension').map(pairKey));
   const fan = new Map();
   for (const e of GRAPH.edges) {
     if (e.type !== 'ledger') continue;
@@ -1458,7 +1465,6 @@ function graphDraw() {
     fan.get(key).push(e);
   }
   for (const e of GRAPH.edges) {
-    if (e.type === 'topic' && tensionPairs.has(pairKey(e))) continue;
     const { source: a, target: b } = e;
     const touching = hover && (a === hover || b === hover);
     const faded = (hover && !touching) || dim(a) || dim(b);

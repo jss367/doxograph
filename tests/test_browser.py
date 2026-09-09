@@ -711,9 +711,22 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
                 graph = await page.evaluate("window.doxographGraph()")
 
                 kinds = {(e["type"], e["a"], e["b"]) for e in graph["edges"]}
-                assert ("topic", "p:paper-a", "p:paper-b") in kinds
+                # The tension stands in for the topic edge between the same pair.
                 assert ("tension", "p:paper-a", "p:paper-b") in kinds
+                assert ("topic", "p:paper-a", "p:paper-b") not in kinds
                 assert ("ledger", "p:paper-a", "l:L1") in kinds
+                assert await page.locator("[data-graph-count]").text_content() == "3 papers · 2 links"
+
+                # Without the tension layer the shared topic is drawn instead.
+                await page.locator('[data-graph-opt="tensions"]').uncheck()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                kinds = {(e["type"], e["a"], e["b"]) for e in graph["edges"]}
+                assert ("topic", "p:paper-a", "p:paper-b") in kinds
+                assert ("tension", "p:paper-a", "p:paper-b") not in kinds
+                await page.locator('[data-graph-opt="tensions"]').check()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
                 assert not any(e["type"] == "topic" and "p:paper-c" in (e["a"], e["b"]) for e in graph["edges"])
                 assert {n["id"] for n in graph["nodes"]} == {"p:paper-a", "p:paper-b", "p:paper-c", "l:L1"}
 
