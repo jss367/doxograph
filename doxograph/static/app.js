@@ -1729,8 +1729,11 @@ function renderGraph() {
     GRAPH.canvas = wrap.querySelector('canvas');
     GRAPH.ctx = GRAPH.canvas.getContext('2d');
     graphBindCanvas(GRAPH.canvas);
+    // Watch the pane, not the wrapper: graphFit sets the wrapper's height
+    // itself, so a vertical-only window resize changes the pane and leaves the
+    // wrapper's box as it was, which would never fire an observer on it.
     GRAPH.observer = new ResizeObserver(() => graphFit());
-    GRAPH.observer.observe(wrap);
+    GRAPH.observer.observe($('main'));
     GRAPH.autofit = true;
     graphFit();
     graphHeat(1);
