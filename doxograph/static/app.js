@@ -1246,7 +1246,10 @@ function graphData() {
   const edges = [];
   let maxShared = 1;
   let minShared = opts.minShared || 1;
-  if (opts.topics) {
+  // The weights are worked out whether or not topic edges are drawn, so the
+  // slider keeps its range while the layer is off and the threshold survives
+  // turning it back on.
+  {
     const pairs = new Map();
     for (const [tag, set] of tagPapers) {
       const list = [...set].sort();
@@ -1272,7 +1275,7 @@ function graphData() {
     // what later recomputations start from, rather than a value it once had.
     minShared = Math.min(minShared, maxShared);
     if (opts.minShared && opts.minShared > maxShared) opts.minShared = maxShared;
-    for (const pair of pairs.values()) if (pair.w >= minShared) edges.push(pair);
+    if (opts.topics) for (const pair of pairs.values()) if (pair.w >= minShared) edges.push(pair);
   }
   if (opts.tensions) {
     const pairs = new Map();
@@ -1403,13 +1406,14 @@ function graphColors() {
            dark: document.documentElement.style.colorScheme !== 'light' };
 }
 
-// One hue per topic, spaced by the golden angle in the order of the vocabulary
-// so a topic keeps its colour as others come and go around it.
+// One hue per topic, from a hash of its name, so a topic keeps its colour
+// however the vocabulary around it changes; a paper changes colour only when
+// its dominant topic does.
 function topicColor(topic, dark) {
-  const names = Object.keys(S.tag_counts).sort();
-  const at = names.indexOf(topic);
-  if (at < 0) return dark ? '#7a8090' : '#9aa0ab';
-  const hue = Math.round((at * 137.508) % 360);
+  if (!topic) return dark ? '#7a8090' : '#9aa0ab';
+  let h = 2166136261;
+  for (const ch of topic) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  const hue = h % 360;
   return dark ? `hsl(${hue} 50% 62%)` : `hsl(${hue} 55% 46%)`;
 }
 
