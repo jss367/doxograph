@@ -1074,6 +1074,9 @@ def test_analysis_setting_survives_reload_and_disables_actions():
                 await expect(toggle).to_be_enabled()
                 await expect(toggle).not_to_be_checked()
                 await page.get_by_role("button", name="Close settings").click()
+                for view in ["tensions", "agreements"]:
+                    await page.locator(f'#{view}-nav [data-view="{view}"]').click()
+                    await expect(page.locator(f'[data-act="find-{view}"]')).to_be_disabled()
                 await page.locator('#workspace').select_option(label="Other")
                 await expect(page.locator('#btn-retag')).to_be_disabled()
                 await page.get_by_role("button", name="Settings", exact=True).click()
@@ -1082,6 +1085,45 @@ def test_analysis_setting_survives_reload_and_disables_actions():
                 await expect(page.locator('#ai-settings-status')).to_have_text("AI analysis enabled.")
                 await expect(page.locator('#btn-retag')).to_be_enabled()
                 await expect(page.locator('#auto-extract')).to_be_checked()
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("view", ["tensions", "agreements"])
+def test_analysis_controls_follow_settings_changed_in_another_tab(view):
+    from playwright.async_api import expect
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            context = await browser.new_context()
+            page = await context.new_page()
+            other_page = await context.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'#{view}-nav [data-view="{view}"]').click()
+                await page.get_by_role("button", name="Settings", exact=True).click()
+                toggle = page.get_by_label("Enable AI analysis")
+                await expect(toggle).to_be_checked()
+
+                await other_page.goto(url)
+                await other_page.get_by_role("button", name="Settings", exact=True).click()
+                other_toggle = other_page.get_by_label("Enable AI analysis")
+                for enabled in [False, True]:
+                    await other_toggle.set_checked(enabled)
+                    status = "enabled" if enabled else "disabled"
+                    await expect(other_page.locator('#ai-settings-status')).to_have_text(
+                        f"AI analysis {status}."
+                    )
+                    # Leave the first tab untouched: only its normal state poll
+                    # can update the open menu and the rendered action buttons.
+                    await expect(toggle).to_be_checked(checked=enabled, timeout=10000)
+                    for selector in ['#btn-retag', '#btn-tensions', '#btn-agreements',
+                                     '#btn-synth', '#auto-extract', f'[data-act="find-{view}"]']:
+                        await expect(page.locator(selector)).to_be_enabled(enabled=enabled)
+                    await expect(page.locator('#auto-extract')).to_be_checked(checked=enabled)
             await browser.close()
 
     asyncio.run(scenario())

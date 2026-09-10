@@ -707,7 +707,7 @@ function renderAgreements() {
       ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
       ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
                  <button type="button" data-act="agreement-unfocus">show all</button>` : ''}
-      <button type="button" data-act="find-agreements" style="margin-left:auto">Find agreements</button>
+      <button type="button" data-act="find-agreements" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} style="margin-left:auto">Find agreements</button>
     </div>
   </div>`;
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
@@ -804,7 +804,7 @@ function renderTensions() {
       ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
       ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
                  <button type="button" data-act="tension-unfocus">show all</button>` : ''}
-      <button type="button" data-act="find-tensions" style="margin-left:auto">Find tensions</button>
+      <button type="button" data-act="find-tensions" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} style="margin-left:auto">Find tensions</button>
     </div>
   </div>`;
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
@@ -2772,6 +2772,7 @@ async function boot() {
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
+      syncAnalysisControls();
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
 }
