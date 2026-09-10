@@ -29,7 +29,7 @@ def cmd_add(args) -> int:
                 continue
             print(f"{'added' if created else 'already present'}: {key}")
             failures += _report_missing_pdf(key)
-            if not args.no_extract and store.needs_extraction(key):
+            if not args.no_extract and config.ai_enabled() and store.needs_extraction(key):
                 failures += _read(key)
             continue
         tokens.append(value)
@@ -47,7 +47,7 @@ def cmd_add(args) -> int:
             continue
         print(f"{'added' if created else 'already present'}: {key}")
         failures += _report_missing_pdf(key)
-        if not args.no_extract and store.needs_extraction(key):
+        if not args.no_extract and config.ai_enabled() and store.needs_extraction(key):
             failures += _read(key)
     return 1 if failures else 0
 

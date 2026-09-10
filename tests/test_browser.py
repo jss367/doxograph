@@ -268,7 +268,7 @@ def test_theme_settings_apply_immediately_and_survive_a_reload():
             with _server() as url:
                 await page.goto(url)
                 await page.get_by_role("button", name="Settings").click()
-                settings = page.get_by_role("dialog", name="Appearance")
+                settings = page.get_by_role("dialog", name="Settings")
                 await settings.get_by_label("Dark").check()
                 await settings.get_by_label("Forest").check()
 
@@ -1036,6 +1036,52 @@ def test_paper_sort_orders_the_list_and_survives_a_reload():
                 assert await sort.input_value() == "title"
                 assert await keys() == ["mid", "new", "old"]
 
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_analysis_setting_survives_reload_and_disables_actions():
+    from playwright.async_api import expect
+    from doxograph import config
+
+    _paper("example", "Example paper", "Memory")
+    config.create_workspace("Other")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="example"]').click()
+                await page.get_by_role("button", name="Settings", exact=True).click()
+                toggle = page.get_by_label("Enable AI analysis")
+                await expect(toggle).to_be_checked()
+                await toggle.uncheck()
+                await expect(page.locator('#ai-settings-status')).to_have_text("AI analysis disabled.")
+                for selector in ['#btn-retag', '#btn-tensions', '#btn-agreements', '#btn-synth',
+                                 '#auto-extract', '[data-act="reextract"]', '[data-act="retag-one"]']:
+                    await expect(page.locator(selector)).to_be_disabled()
+                await expect(page.locator('#auto-extract')).not_to_be_checked()
+                await expect(page.locator('[data-act="add-claim"]')).to_be_enabled()
+                await expect(page.locator('#btn-add')).to_be_enabled()
+                await expect(page.locator('#btn-export')).to_be_enabled()
+
+                await page.reload()
+                await page.get_by_role("button", name="Settings", exact=True).click()
+                await expect(toggle).to_be_enabled()
+                await expect(toggle).not_to_be_checked()
+                await page.get_by_role("button", name="Close settings").click()
+                await page.locator('#workspace').select_option(label="Other")
+                await expect(page.locator('#btn-retag')).to_be_disabled()
+                await page.get_by_role("button", name="Settings", exact=True).click()
+                await expect(toggle).not_to_be_checked()
+                await toggle.check()
+                await expect(page.locator('#ai-settings-status')).to_have_text("AI analysis enabled.")
+                await expect(page.locator('#btn-retag')).to_be_enabled()
+                await expect(page.locator('#auto-extract')).to_be_checked()
             await browser.close()
 
     asyncio.run(scenario())

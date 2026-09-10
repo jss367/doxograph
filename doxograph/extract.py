@@ -179,6 +179,7 @@ _pass_slots = threading.BoundedSemaphore(config.PASS_WORKERS)
 def _create(api: anthropic.Anthropic, **kwargs):
     """One model call, inside the process-wide cap."""
     with _pass_slots:
+        config.require_ai_enabled()
         return api.messages.create(**kwargs)
 
 
@@ -277,6 +278,7 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     never uploaded twice. `force` discards the stored id, for when the server
     no longer has the file.
     """
+    config.require_ai_enabled()
     pdf = store.pdf_path(key)
     if not pdf.exists():
         raise FileNotFoundError(f"no PDF stored for {key}; add one before extracting")
@@ -288,6 +290,7 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
             _delete_superseded_uploads(key, api or client())
         return upload["file_id"]
     api = api or client()
+    config.require_ai_enabled()
     uploaded = api.files.upload(file=pdf)
     with store.paper_lock(key):
         paper = store.load_paper(key)
@@ -370,6 +373,7 @@ def claim_state(claim: dict) -> str:
 
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
     """Run extraction and merge the result into the stored paper."""
+    config.require_ai_enabled()
     # A second re-read starting from the same snapshot cannot be distinguished
     # from claims a person adds while the first call runs: both appear as new
     # ids at merge time. Serialize only extractions across the model call. The
@@ -527,6 +531,7 @@ def retag_paper(key: str) -> dict:
     because it sends the claim texts rather than the PDF, and it leaves every
     other field, including hand-edited claim text, untouched.
     """
+    config.require_ai_enabled()
     paper = store.load_paper(key)
     claims = paper.get("claims", [])
     if not claims:
@@ -692,6 +697,7 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
     worth a call; `store.tension_topics` lists them. `rows` and `tags` let a
     pass over many topics read the corpus once.
     """
+    config.require_ai_enabled()
     rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
     papers = {r["paper"] for r in rows}
     if len(papers) < 2:
@@ -805,6 +811,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
     the model was thinking, or when its synthesis was corrected by hand or
     deleted meanwhile: that decision is newer than the answer and stands.
     """
+    config.require_ai_enabled()
     all_rows = rows if rows is not None else store.claim_rows()
     rows = store.topic_claims(topic, all_rows)
     papers = {r["paper"] for r in rows}
@@ -898,6 +905,7 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
     """Ask the model which claims in `topic` assert the same finding, and
     record the answer. One call per topic, claim text rather than PDFs, as the
     tensions pass; `store.tension_topics` lists the topics worth a call."""
+    config.require_ai_enabled()
     rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
     papers = {r["paper"] for r in rows}
     if len(papers) < 2:

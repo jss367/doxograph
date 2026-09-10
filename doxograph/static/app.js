@@ -365,6 +365,7 @@ function render() {
   // The research form is an editor too: a poll must not redraw it under the cursor.
   if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
   renderJobs();
+  syncAnalysisControls();
 }
 
 // `renderAll` is for a view change the user asked for. The draft is captured
@@ -381,6 +382,7 @@ function renderAll() {
   renderTags();
   renderContent();
   renderJobs();
+  syncAnalysisControls();
 }
 
 function renderStats() {
@@ -401,7 +403,8 @@ function renderStats() {
   if (openAgreements) bits.push(`${openAgreements} open agreements`);
   const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
   if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
-  if (!S.has_key) bits.push('no API key found');
+  if (S.ai_enabled === false) bits.push('AI analysis off');
+  else if (!S.has_key) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
 }
 
@@ -531,8 +534,8 @@ function paperHeader(key) {
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
     <div class="row">
-      <button type="button" data-act="reextract" data-paper="${esc(key)}">Re-read paper</button>
-      <button type="button" data-act="retag-one" data-paper="${esc(key)}">Retag claims</button>
+      <button type="button" data-act="reextract" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Re-read paper</button>
+      <button type="button" data-act="retag-one" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Retag claims</button>
       ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
@@ -1070,7 +1073,7 @@ function synthesisBlock(tag) {
         · ${synth.n_claims} claims in ${synth.n_papers} papers</span>
       ${synth.stale ? '<span class="stale">claims or tensions have changed since</span>' : ''}
       <span class="cact" style="margin-left:auto">
-        <button type="button" data-act="synthesize" data-topic="${esc(tag)}">Rewrite</button>
+        <button type="button" data-act="synthesize" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-topic="${esc(tag)}">Rewrite</button>
         <button type="button" data-act="edit-synth" data-topic="${esc(tag)}">edit</button>
         <button type="button" data-act="del-synth" data-topic="${esc(tag)}">delete</button>
       </span>
@@ -1081,7 +1084,7 @@ function synthesisBlock(tag) {
 // The button in a topic heading when no synthesis exists yet.
 function synthesizeButton(tag) {
   if (synthesisFor(tag) || V.synthEditing === tag) return '';
-  return `<button type="button" class="mini" data-act="synthesize" data-topic="${esc(tag)}"
+  return `<button type="button" class="mini" data-act="synthesize" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-topic="${esc(tag)}"
     title="Ask the model what the papers hold on this topic">synthesize</button>`;
 }
 
@@ -2429,7 +2432,45 @@ $('btn-synth').addEventListener('click', async () => {
   await synthesize(null);
 });
 
-// --- appearance settings -------------------------------------------------
+// --- settings ------------------------------------------------------------
+
+let savingAnalysisSetting = false;
+let readOnArrival = $('auto-extract').checked;
+$('auto-extract').addEventListener('change', () => { readOnArrival = $('auto-extract').checked; });
+
+function syncAnalysisControls() {
+  const enabled = S.ai_enabled === true;
+  const toggle = $('ai-enabled');
+  toggle.disabled = savingAnalysisSetting || typeof S.ai_enabled !== 'boolean';
+  if (!savingAnalysisSetting) toggle.checked = enabled;
+  $('auto-extract').disabled = !enabled;
+  $('auto-extract').checked = enabled && readOnArrival;
+  document.querySelectorAll('[data-ai-action]').forEach((button) => {
+    button.disabled = !enabled;
+  });
+}
+
+$('ai-enabled').addEventListener('change', async () => {
+  const enabled = $('ai-enabled').checked;
+  savingAnalysisSetting = true;
+  syncAnalysisControls();
+  $('ai-settings-status').textContent = 'Saving…';
+  try {
+    const settings = await api('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ai_enabled: enabled }),
+    });
+    S.ai_enabled = settings.ai_enabled;
+    stateEtag = null;
+    $('ai-settings-status').textContent = settings.ai_enabled ? 'AI analysis enabled.' : 'AI analysis disabled.';
+  } catch (error) {
+    $('ai-settings-status').textContent = `Could not save: ${error.message}`;
+  } finally {
+    savingAnalysisSetting = false;
+    syncAnalysisControls();
+    renderStats();
+  }
+});
 
 function syncThemeControls() {
   const appearance = document.querySelector(`input[name="appearance"][value="${themeSettings.appearance}"]`);
@@ -2447,6 +2488,7 @@ function closeSettings({ restoreFocus = false } = {}) {
 function openSettings() {
   closePaperMenu();
   syncThemeControls();
+  syncAnalysisControls();
   $('settings-menu').hidden = false;
   $('btn-settings').setAttribute('aria-expanded', 'true');
 }

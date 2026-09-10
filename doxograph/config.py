@@ -61,6 +61,27 @@ def base_data_dir() -> Path:
     return Path(os.environ.get("DOXOGRAPH_DATA", DEFAULT_DATA_DIR)).expanduser()
 
 
+def ai_enabled() -> bool:
+    """Analysis is enabled by default; the preference is shared by all workspaces."""
+    try:
+        settings = json.loads((base_data_dir() / "settings.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    # A damaged preference must not silently re-enable paid analysis.
+    return isinstance(settings, dict) and settings.get("ai_enabled") is True
+
+
+def set_ai_enabled(enabled: bool) -> None:
+    _write_json(base_data_dir() / "settings.json", {"ai_enabled": enabled})
+
+
+def require_ai_enabled() -> None:
+    if not ai_enabled():
+        raise RuntimeError("AI analysis is disabled. Enable it in Settings to run analysis.")
+
+
 def workspace_id() -> str:
     return _workspace_id.get()
 
@@ -173,12 +194,15 @@ def get_workspace(value: str | None = None) -> dict | None:
 
 
 def _write_workspace_records(records: list[dict]) -> None:
-    path = workspaces_path()
+    _write_json(workspaces_path(), records)
+
+
+def _write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(records, handle, indent=2)
+            json.dump(value, handle, indent=2)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
