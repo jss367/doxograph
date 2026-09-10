@@ -101,7 +101,16 @@
     </div>
 
     <div class="sec">
-      <h2>Papers</h2>
+      <div class="sechead">
+        <h2>Papers</h2>
+        <select id="paper-sort" aria-label="Sort papers">
+          <option value="added-desc">newest added</option>
+          <option value="added-asc">oldest added</option>
+          <option value="year-desc">newest year</option>
+          <option value="year-asc">oldest year</option>
+          <option value="title">title</option>
+        </select>
+      </div>
       <ul class="plist" id="papers"></ul>
     </div>
 
