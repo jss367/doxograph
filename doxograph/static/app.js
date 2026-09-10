@@ -974,7 +974,7 @@ function showView(view) {
   if (V.view === 'research') captureResearchDraft();
   // Neither the tensions view nor the map has an editor. Park any open one
   // rather than leaving `V.editing` set on a form that is no longer on screen,
-  // which would also stop the background poll. The same for a synthesis editor.
+  // which would also stop background content updates. The same for a synthesis editor.
   captureOpenEditor();
   V.editing = null;
   parkSynthEditor();
@@ -1119,8 +1119,8 @@ function renderContent() {
   const card = (row) => claimCard(row, shown);
   const rows = visibleClaims();
   // An editor for a claim the current filters exclude cannot be drawn, and
-  // leaving `V.editing` set would also hold down the background poll, which
-  // stands aside whenever an editor is open. Park it: keep the draft, close
+  // leaving `V.editing` set would also stop background content updates, which
+  // stand aside whenever an editor is open. Park it: keep the draft, close
   // the editor. The text is read from the form that is still on screen.
   if (V.editing && V.editing !== NEW_CLAIM_ID && !rows.some((row) => row.id === V.editing)) {
     captureOpenEditor();
@@ -2763,8 +2763,8 @@ async function boot() {
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   setInterval(async () => {
     if (document.hidden) return;
-    const busy = (S.jobs || []).some((j) => ['queued', 'fetching', 'reading'].includes(j.state));
-    if (!busy && (V.editing || V.synthEditing)) return;
+    // Keep settings current while editing; the content guard below preserves
+    // the editor DOM, draft text, focus, and selection.
     try {
       const changed = await pull();
       renderJobs();

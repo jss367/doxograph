@@ -556,7 +556,7 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
                 await page.locator('textarea[data-synth="recovery"]').fill("Recovery draft.")
 
                 # Reading a paper closes the editor: nothing is being edited on
-                # screen, so the background poll must be free to run. Coming
+                # screen, so background content updates must be free to run. Coming
                 # back to All papers does not reopen it.
                 await page.click('#papers [data-paper="paper-a"]')
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="hidden")
@@ -1124,6 +1124,53 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
                                      '#btn-synth', '#auto-extract', f'[data-act="find-{view}"]']:
                         await expect(page.locator(selector)).to_be_enabled(enabled=enabled)
                     await expect(page.locator('#auto-extract')).to_be_checked(checked=enabled)
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("editor", ["claim", "synthesis"])
+def test_analysis_settings_poll_preserves_an_open_editor(editor):
+    from playwright.async_api import expect
+
+    _paper("paper-a", "Paper A", "recovery")
+    store.record_synthesis("recovery", "Recovery as written.",
+                           {row["id"]: row for row in store.claim_rows()})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            context = await browser.new_context()
+            page = await context.new_page()
+            other_page = await context.new_page()
+            with _server() as url:
+                await page.goto(url)
+                if editor == "claim":
+                    await page.locator('#papers [data-paper="paper-a"]').click()
+                    await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                    field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
+                    action = page.locator('[data-act="reextract"]')
+                else:
+                    await page.locator('.synth[data-topic="recovery"] [data-act="edit-synth"]').click()
+                    field = page.locator('textarea[data-synth="recovery"]')
+                    action = page.locator('#btn-synth')
+                await field.fill("Unsaved draft that polling must preserve.")
+                await field.evaluate("el => el.setSelectionRange(8, 13)")
+                original_field = await field.element_handle()
+                await page.get_by_role("button", name="Settings", exact=True).click()
+                toggle = page.get_by_label("Enable AI analysis")
+
+                await other_page.goto(url)
+                await other_page.get_by_role("button", name="Settings", exact=True).click()
+                for enabled in [False, True]:
+                    await other_page.get_by_label("Enable AI analysis").set_checked(enabled)
+                    await expect(toggle).to_be_checked(checked=enabled, timeout=10000)
+                    await expect(action).to_be_enabled(enabled=enabled)
+                    await expect(page.locator('#auto-extract')).to_be_checked(checked=enabled)
+                    await expect(field).to_have_value("Unsaved draft that polling must preserve.")
+                    assert await original_field.evaluate("el => el.isConnected")
+                    assert await field.evaluate("el => [el.selectionStart, el.selectionEnd]") == [8, 13]
             await browser.close()
 
     asyncio.run(scenario())
