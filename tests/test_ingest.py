@@ -7,10 +7,13 @@ def test_parses_arxiv_forms():
     arXiv:2505.12345v2
     https://arxiv.org/abs/2401.00001
     https://arxiv.org/pdf/2401.00002v1
+    https://arxiv.org/html/2401.00003v1
     """
     refs, unknown = ingest.parse_refs(text)
-    assert [r.kind for r in refs] == ["arxiv"] * 4
-    assert [r.value for r in refs] == ["2602.06941", "2505.12345v2", "2401.00001", "2401.00002v1"]
+    assert [r.kind for r in refs] == ["arxiv"] * 5
+    assert [r.value for r in refs] == [
+        "2602.06941", "2505.12345v2", "2401.00001", "2401.00002v1", "2401.00003v1"
+    ]
     assert unknown == []
 
 
