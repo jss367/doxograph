@@ -17,7 +17,7 @@
   </span>
   <span class="stats" id="stats"></span>
   <div class="actions">
-    <button type="button" id="btn-retag" title="Reassign tags on every paper against the current vocabulary">Retag all</button>
+    <button type="button" id="btn-retag" data-ai-action disabled title="Reassign tags on every paper against the current vocabulary">Retag all</button>
     <button type="button" id="btn-bib">BibTeX</button>
     <button type="button" id="btn-export" class="primary">Export HTML</button>
     <div class="settings-wrap">
@@ -25,11 +25,18 @@
         aria-controls="settings-menu">Settings</button>
       <div class="settings-menu" id="settings-menu" role="dialog" aria-labelledby="settings-title" hidden>
         <div class="settings-head">
-          <h2 id="settings-title">Appearance</h2>
+          <h2 id="settings-title">Settings</h2>
           <button type="button" class="icon-button" id="btn-close-settings" aria-label="Close settings">×</button>
         </div>
         <fieldset>
-          <legend>Mode</legend>
+          <legend>AI analysis</legend>
+          <label><input type="checkbox" id="ai-enabled" disabled aria-describedby="ai-help"> Enable AI analysis</label>
+          <p class="hint" id="ai-help">Allow Claude to read papers and analyze claims. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+          <p class="hint">Saved for all workspaces on this installation.</p>
+          <p class="hint" id="ai-settings-status" role="status"></p>
+        </fieldset>
+        <fieldset>
+          <legend>Appearance</legend>
           <div class="choice-row">
             <label><input type="radio" name="appearance" value="system"> System</label>
             <label><input type="radio" name="appearance" value="light"> Light</label>
@@ -83,8 +90,8 @@
           </div>
         </fieldset>
         <div class="settings-foot">
-          <span class="hint">Saved in this browser</span>
-          <button type="button" id="btn-reset-theme">Reset</button>
+          <span class="hint">Appearance saved in this browser</span>
+          <button type="button" id="btn-reset-theme">Reset appearance</button>
         </div>
       </div>
     </div>
@@ -118,7 +125,7 @@
       <h2>Tensions</h2>
       <ul class="plist" id="tensions-nav"></ul>
       <div class="row right">
-        <button type="button" id="btn-tensions" title="Ask the model which claims in each topic pull against each other">Find tensions</button>
+        <button type="button" id="btn-tensions" data-ai-action disabled title="Ask the model which claims in each topic pull against each other">Find tensions</button>
       </div>
     </div>
 
@@ -126,7 +133,7 @@
       <h2>Agreements</h2>
       <ul class="plist" id="agreements-nav"></ul>
       <div class="row right">
-        <button type="button" id="btn-agreements" title="Ask the model which claims in each topic assert the same finding">Find agreements</button>
+        <button type="button" id="btn-agreements" data-ai-action disabled title="Ask the model which claims in each topic assert the same finding">Find agreements</button>
       </div>
     </div>
 
@@ -148,7 +155,7 @@
         <button type="button" id="btn-tag">Add</button>
       </div>
       <div class="row right">
-        <button type="button" id="btn-synth" title="Ask the model what the papers, taken together, hold on each topic with two or more papers">Synthesize topics</button>
+        <button type="button" id="btn-synth" data-ai-action disabled title="Ask the model what the papers, taken together, hold on each topic with two or more papers">Synthesize topics</button>
       </div>
     </div>
   </aside>

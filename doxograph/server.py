@@ -381,7 +381,7 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
              detail="" if created else ("PDF recovered" if recovered else "already in the corpus"))
         # Read whenever the paper has a PDF and no claims, rather than only when
         # it was just created: a recovered download needs reading too.
-        if do_extract and store.needs_extraction(key):
+        if do_extract and config.ai_enabled() and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
         _finish(job, key)
@@ -398,7 +398,7 @@ def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> Non
         _set(job, state="fetching")
         key, created = ingest.ingest_staged_pdf(staged, filename)
         _set(job, key=key, label=key, detail="" if created else "already in the corpus")
-        if do_extract and store.needs_extraction(key):
+        if do_extract and config.ai_enabled() and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
         _finish(job, key)
@@ -538,6 +538,10 @@ def _run_retag(job: dict, keys: list[str]) -> None:
 
 
 # --- request bodies -------------------------------------------------------
+
+class SettingsBody(BaseModel):
+    ai_enabled: bool
+
 
 class IngestBody(BaseModel):
     text: str = ""
@@ -776,6 +780,7 @@ def _build_state() -> dict:
         "data_dir": str(config.data_dir()),
         "model": config.MODEL,
         "has_key": config.api_key() is not None,
+        "ai_enabled": config.ai_enabled(),
     }
 
 
@@ -790,9 +795,10 @@ def state(request: Request) -> Response:
     alone, and two empty workspaces have the same one.
     """
     workspace = config.workspace_id()
-    # `has_key` is in the payload but comes from the environment and the
-    # credentials file, not the corpus, so it is part of the identity too.
-    signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}"
+    # Credentials and installation settings live outside the corpus, but
+    # changes to either must reach every workspace on the next poll.
+    ai_enabled = config.ai_enabled()
+    signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}-{int(ai_enabled)}"
     etag = f'"{workspace}-{signature}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
@@ -800,11 +806,24 @@ def state(request: Request) -> Response:
         cached = _state_cache.get(workspace)
     if cached is None or cached[0] != signature:
         payload = _build_state()
+        # Match the signature even if the switch changed during the build.
+        payload["ai_enabled"] = ai_enabled
         with _state_cache_lock:
             _state_cache[workspace] = (signature, payload)
     else:
         payload = cached[1]
     return JSONResponse(payload, headers={"ETag": etag})
+
+
+@app.put("/api/settings")
+def update_settings(body: SettingsBody) -> dict:
+    config.set_ai_enabled(body.ai_enabled)
+    return {"ai_enabled": config.ai_enabled()}
+
+
+def _require_analysis() -> None:
+    if not config.ai_enabled():
+        raise HTTPException(403, "AI analysis is disabled. Enable it in Settings to run analysis.")
 
 
 @app.get("/api/jobs")
@@ -837,7 +856,7 @@ def api_ingest(body: IngestBody) -> dict:
     refs, unknown = ingest.parse_refs(body.text)
     for ref in refs:
         job = _new_job(ref.value)
-        _pool.submit(_run_ingest, job, ref, body.extract)
+        _pool.submit(_run_ingest, job, ref, body.extract and config.ai_enabled())
     return {"queued": len(refs), "unknown": unknown}
 
 
@@ -857,7 +876,7 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
         staged = await run_in_threadpool(ingest.stage_upload, upload.file, name)
         job = _new_job(name)
         try:
-            _pool.submit(_run_upload, job, staged, name, extract_now)
+            _pool.submit(_run_upload, job, staged, name, extract_now and config.ai_enabled())
         except BaseException:
             staged.unlink(missing_ok=True)
             raise
@@ -896,6 +915,7 @@ def remove_paper(key: str) -> dict:
 
 @app.post("/api/papers/{key}/extract")
 def reextract(key: str, keep_reviewed: bool = True) -> dict:
+    _require_analysis()
     if not store.paper_path(key).exists():
         raise HTTPException(404, f"no paper {key}")
     job = _new_job(key)
@@ -916,6 +936,7 @@ def verify_quotes(key: str) -> dict:
 
 @app.post("/api/retag")
 def retag(body: RetagBody) -> dict:
+    _require_analysis()
     keys = body.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
     if not keys:
         return {"queued": 0}
@@ -1002,6 +1023,7 @@ def find_tensions(body: TensionsBody) -> dict:
     possible; a topic with claims from one paper has nothing to find, so it
     would cost a model call to learn nothing.
     """
+    _require_analysis()
     possible = store.tension_topics()
     topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
     if not topics:
@@ -1034,6 +1056,7 @@ def remove_tension(tension_id: str) -> dict:
 def find_agreements(body: AgreementsBody) -> dict:
     """Queue a pass over every topic where two papers could agree: the same
     topics a tension is possible in."""
+    _require_analysis()
     possible = store.tension_topics()
     topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
     if not topics:
@@ -1070,6 +1093,7 @@ def synthesize(body: SynthesesBody) -> dict:
     none named, every topic with claims from two papers is written, since one
     paper's claims add up to little on their own.
     """
+    _require_analysis()
     if body.topics:
         rows = store.claim_rows()
         topics = sorted({t for t in body.topics if store.topic_claims(t, rows)})

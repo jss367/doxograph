@@ -57,6 +57,14 @@ Doxograph needs an Anthropic API key. It reads `ANTHROPIC_API_KEY`, then falls
 back to an `ANTHROPIC_API_KEY=` line in `~/.credentials`, then to whatever the
 Anthropic SDK resolves on its own (including an `ant auth login` profile).
 
+To turn off model use, open **Settings** and uncheck **Enable AI analysis**.
+The preference survives restarts and applies to every workspace and the CLI
+using the same data directory. While off, imports skip extraction, and
+extraction, retagging, agreements, tensions, and synthesis cannot start new
+model calls or upload PDFs for analysis. Requests already sent may finish.
+Browsing, manual editing, quote checks, and exports remain available. Removing
+a paper still deletes any previously uploaded copy from Anthropic.
+
 ## Use
 
 ```
