@@ -37,6 +37,10 @@ TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?"
 ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
 DOI_RE = r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+"
+# arXiv serves a paper at /abs, /pdf and, for recent submissions, /html. The
+# HTML render carries no citation metadata or canonical link, so it can only be
+# recognised from its URL.
+ARXIV_URL_RE = rf"arxiv\.org/(?:abs|pdf|html)/({ARXIV_NEW}|{ARXIV_OLD})"
 
 def normalize_doi(doi: str) -> str:
     """Trim citation punctuation off a DOI picked up from surrounding prose.
@@ -59,7 +63,7 @@ def normalize_doi(doi: str) -> str:
 
 
 _ARXIV_PATTERNS = [
-    re.compile(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", re.I),
+    re.compile(ARXIV_URL_RE, re.I),
     re.compile(rf"arxiv[:\s]+({ARXIV_NEW}|{ARXIV_OLD})", re.I),
     re.compile(rf"^({ARXIV_NEW}|{ARXIV_OLD})$"),
 ]
@@ -247,7 +251,7 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
     ):
         if not candidate:
             continue
-        match = re.search(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", candidate, re.I)
+        match = re.search(ARXIV_URL_RE, candidate, re.I)
         if match:
             return Ref("arxiv", match.group(1), url)
 
@@ -266,7 +270,7 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
         return Ref("pdf", advertised, url)
 
     # Last resort, and only within the head, where a bibliography does not reach.
-    match = re.search(rf"arxiv\.org/(?:abs|pdf)/({ARXIV_NEW}|{ARXIV_OLD})", head, re.I)
+    match = re.search(ARXIV_URL_RE, head, re.I)
     if match:
         return Ref("arxiv", match.group(1), url)
     match = re.search(DOI_RE, head)
