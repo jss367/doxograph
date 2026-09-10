@@ -988,3 +988,54 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
     asyncio.run(scenario())
     assert store.load_context() == "Changed from the shell while the form was open."
     assert store.load_ledger() == [{"id": "L1", "text": "Recovery is path-dependent, at every scale."}]
+
+
+@pytest.mark.browser
+def test_paper_sort_orders_the_list_and_survives_a_reload():
+    def paper(key, title, added, year=None):
+        row = store.new_paper(key, title=title)
+        row["added"] = added
+        row["year"] = year
+        store.write_json(store.paper_path(key), row)
+
+    paper("old", "Zebra crossings", "2026-01-05T09:00:00+00:00", 2001)
+    paper("mid", "Apple orchards", "2026-03-05T09:00:00+00:00", 2020)
+    paper("new", "Mango groves", "2026-06-05T09:00:00+00:00", None)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                rows = page.locator("#papers li[data-paper]:not([data-paper=''])")
+                await rows.first.wait_for()
+
+                async def keys():
+                    return await rows.evaluate_all("els => els.map((el) => el.dataset.paper)")
+
+                assert await keys() == ["new", "mid", "old"]
+                assert "2026-06-05" in await rows.first.inner_text()
+
+                sort = page.get_by_label("Sort papers")
+                await sort.select_option("added-asc")
+                assert await keys() == ["old", "mid", "new"]
+
+                await sort.select_option("year-desc")
+                assert await keys() == ["mid", "old", "new"]
+                assert "2026-03-05" not in await rows.first.inner_text()
+
+                await sort.select_option("year-asc")
+                assert await keys() == ["old", "mid", "new"]
+
+                await sort.select_option("title")
+                assert await keys() == ["mid", "new", "old"]
+
+                await page.reload()
+                await rows.first.wait_for()
+                assert await sort.input_value() == "title"
+                assert await keys() == ["mid", "new", "old"]
+
+            await browser.close()
+
+    asyncio.run(scenario())

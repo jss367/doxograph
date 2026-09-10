@@ -133,7 +133,7 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-            graph: { topics: true, minShared: null, tensions: true, ledger: true } };
+            graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null };
 
 function blankClaim(paper) {
   return {
@@ -405,16 +405,54 @@ function renderStats() {
   $('stats').textContent = bits.join(' · ');
 }
 
+// The server sends papers newest-added first. The other orders are a view
+// preference, so they are applied here and remembered per browser, not per
+// workspace: the choice is about how the person likes to scan the list.
+const PAPER_SORT_KEY = 'doxograph-paper-sort';
+const PAPER_SORTS = ['added-desc', 'added-asc', 'year-desc', 'year-asc', 'title'];
+
+function readPaperSort() {
+  try {
+    const saved = localStorage.getItem(PAPER_SORT_KEY);
+    return PAPER_SORTS.includes(saved) ? saved : PAPER_SORTS[0];
+  } catch (error) {
+    return PAPER_SORTS[0];
+  }
+}
+V.paperSort = readPaperSort();
+
+function sortedPapers(papers, order) {
+  const byTitle = (a, b) => (a.title || a.key).localeCompare(b.title || b.key, undefined, { sensitivity: 'base' });
+  const byAdded = (a, b) => (a.added || '').localeCompare(b.added || '');
+  const list = [...papers];
+  switch (order) {
+    case 'added-asc': return list.sort((a, b) => byAdded(a, b) || byTitle(a, b));
+    case 'title': return list.sort(byTitle);
+    // A paper with no year sinks to the bottom in either direction: it is
+    // unknown, not ancient or brand new.
+    case 'year-desc': return list.sort((a, b) => ((b.year ?? -Infinity) - (a.year ?? -Infinity)) || byTitle(a, b));
+    case 'year-asc': return list.sort((a, b) => ((a.year ?? Infinity) - (b.year ?? Infinity)) || byTitle(a, b));
+    default: return list.sort((a, b) => byAdded(b, a) || byTitle(a, b));
+  }
+}
+
+function addedLabel(p) {
+  if (!p.added) return '';
+  const day = p.added.slice(0, 10);
+  return `<time datetime="${esc(p.added)}" title="added ${esc(p.added)}">${esc(day)}</time>`;
+}
+
 function renderPapers() {
   const claims = V.view === 'claims';
+  const byAdded = V.paperSort.startsWith('added');
   const all = `<li class="${claims && V.paper === null ? 'active' : ''}" data-paper="">
     <span class="pt">All papers</span>
     <span class="pm">${S.claims.length} claims</span></li>`;
-  $('papers').innerHTML = all + S.papers.map((p) => `
+  $('papers').innerHTML = all + sortedPapers(S.papers, V.paperSort).map((p) => `
     <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
       <span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
-        ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}</span>
+        ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
     </li>`).join('');
 }
 
@@ -2572,6 +2610,12 @@ function graphOption(field) {
 }
 $('q').addEventListener('input', (e) => { captureOpenEditor(); V.q = e.target.value; renderContent(); });
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
+$('paper-sort').addEventListener('change', (e) => {
+  V.paperSort = PAPER_SORTS.includes(e.target.value) ? e.target.value : PAPER_SORTS[0];
+  try { localStorage.setItem(PAPER_SORT_KEY, V.paperSort); } catch (error) { /* preference remains for this page */ }
+  renderPapers();
+});
+$('paper-sort').value = V.paperSort;
 $('only-unreviewed').addEventListener('change', (e) => { captureOpenEditor(); V.unreviewed = e.target.checked; renderContent(); });
 $('only-unverified').addEventListener('change', (e) => { captureOpenEditor(); V.unverified = e.target.checked; renderContent(); });
 $('group-by-tag').addEventListener('change', (e) => { captureOpenEditor(); V.group = e.target.checked; renderContent(); });

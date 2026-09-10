@@ -104,6 +104,10 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .sec { margin-top: 1.1rem; }
 .sec h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); margin: 0 0 .4rem; font-weight: 600; }
+.sechead { display: flex; align-items: baseline; justify-content: space-between; gap: .4rem; }
+.sechead h2 { margin-bottom: 0; }
+.sechead select { font-size: .74rem; color: var(--muted); border: none; background: transparent; padding: 0; cursor: pointer; }
+.sec .sechead + .plist { margin-top: .4rem; }
 
 .plist { list-style: none; margin: 0; padding: 0; }
 .plist li { padding: .35rem .4rem; border-radius: 4px; cursor: pointer; font-size: .87rem; }
