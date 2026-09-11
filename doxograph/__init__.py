@@ -7,4 +7,4 @@ claims, each claim carries topic tags and its supporting quote, and the views
 are organized by topic rather than by paper.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.1"
