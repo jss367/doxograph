@@ -837,6 +837,19 @@ def jobs() -> dict:
     return {"jobs": recent}
 
 
+@app.delete("/api/jobs/{job_id}", status_code=204)
+def dismiss_job(job_id: int) -> Response:
+    """Dismiss a finished notification without cancelling background work."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None or job.get("workspace") != config.workspace_id():
+            raise HTTPException(404, "Job not found")
+        if job["state"] not in ("done", "error"):
+            raise HTTPException(409, "This job is still running")
+        del _jobs[job_id]
+    return Response(status_code=204)
+
+
 @app.get("/api/workspaces")
 def workspaces() -> dict:
     return {"workspaces": config.list_workspaces()}

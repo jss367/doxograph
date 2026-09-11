@@ -93,6 +93,50 @@ def _paper_with_proposal(key: str, title: str, proposal: str, updated: str) -> N
 
 
 @pytest.mark.browser
+def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                # An invalid PDF fails locally, without network or model calls.
+                response = httpx.post(
+                    f"{url}/api/upload?extract_now=false",
+                    files={"files": ("broken.pdf", b"not a PDF", "application/pdf")},
+                )
+                assert response.status_code == 200
+                await page.goto(url)
+                await page.locator("#jobs .job.error").wait_for()
+                dismiss = page.get_by_role("button", name="Dismiss notification for broken.pdf")
+
+                # A failed dismissal must leave the error available to retry.
+                async def reject_delete(route):
+                    await route.fulfill(status=500, json={"detail": "Try again"})
+
+                await page.route("**/api/jobs/*", reject_delete)
+                async with page.expect_event("dialog") as dialog_info:
+                    await dismiss.click()
+                dialog = await dialog_info.value
+                assert "Could not dismiss notification: Try again" in dialog.message
+                await dialog.accept()
+                assert await page.locator("#jobs .job.error").count() == 1
+                await page.unroute("**/api/jobs/*", reject_delete)
+
+                # A native button also supports keyboard dismissal.
+                await dismiss.focus()
+                await page.keyboard.press("Enter")
+                await page.locator("#jobs .job.error").wait_for(state="detached")
+                assert httpx.get(f"{url}/api/jobs").json()["jobs"] == []
+                await page.reload()
+                await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
+                assert await page.locator("#jobs .job").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_proposed_topic_cache_is_isolated_between_workspaces():
     from doxograph import config
 
