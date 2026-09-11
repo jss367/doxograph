@@ -1200,8 +1200,22 @@ function renderJobs() {
     <div class="job ${j.state === 'error' ? 'error' : ''}">
       <span class="lbl">${esc(j.label)}</span>
       <span class="st">${esc(j.state)}${j.detail ? ': ' + esc(j.detail) : ''}</span>
+      ${['done', 'error'].includes(j.state) ? `<button type="button" class="dismiss-job" data-job-id="${j.id}" aria-label="Dismiss notification for ${esc(j.label)}" title="Dismiss notification">×</button>` : ''}
     </div>`).join('');
 }
+
+$('jobs').addEventListener('click', async (event) => {
+  const button = event.target.closest('.dismiss-job');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    await api(`/api/jobs/${button.dataset.jobId}`, { method: 'DELETE' });
+    await refresh();
+  } catch (error) {
+    button.disabled = false;
+    alert(`Could not dismiss notification: ${error.message}`);
+  }
+});
 
 // --- the map: papers as nodes ----------------------------------------------
 
