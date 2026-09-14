@@ -119,6 +119,14 @@ a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
 and click a paper to read it. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
 reviewed, `Escape` cancels. Clicking a topic filters to it.
 
+The search box narrows the claims and the paper list together. It matches
+claim text, evidence, quotes, topics, paper titles, authors, keys, and
+years, so a word from a title finds the paper even when nothing has been
+extracted from it yet, and the paper list says how many of the corpus
+matched. A claim shows
+its paper as a surname and a year; hovering that citation gives the title,
+and clicking it opens the paper.
+
 "Add claim by hand" opens an editor that exists only in the browser; the claim
 is created when you save it, so cancelling, filtering it away, or switching
 papers leaves nothing behind. If you open another claim's editor while writing
