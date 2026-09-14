@@ -333,9 +333,14 @@ async function loadWorkspaces() {
 
 // --- filtering ------------------------------------------------------------
 
+// A claim's searchable text. It carries its paper's key and year as well as
+// the title, so that every query matching a paper also matches that paper's
+// claims: listing a paper in the sidebar and then showing it as empty when
+// clicked would be worse than not listing it at all.
 function haystack(row) {
-  return [row.text, row.evidence, row.quote, row.paper_title,
-          (row.paper_authors || []).join(' '), (row.tags || []).join(' ')]
+  return [row.text, row.evidence, row.quote, row.paper, row.paper_title,
+          row.paper_year, (row.paper_authors || []).join(' '),
+          (row.tags || []).join(' ')]
     .join(' ').toLowerCase();
 }
 
@@ -347,18 +352,16 @@ function paperHaystack(paper) {
     .join(' ').toLowerCase();
 }
 
-// The papers the query leaves standing: the ones it matches directly and the
-// ones owning a matching claim. The claim match ignores the selected paper, so
-// narrowing to one paper does not empty the list you would use to leave it,
-// and the selection itself always stays on screen for the same reason.
-function visiblePapers() {
+// The papers the query matches: directly, or through a claim of theirs. The
+// claim match ignores the selected paper, so narrowing to one paper does not
+// empty the list you would use to leave it.
+function matchingPapers() {
   const needle = V.q.trim().toLowerCase();
   if (!needle) return S.papers;
   const owners = new Set(S.claims
     .filter((row) => haystack(row).includes(needle))
     .map((row) => row.paper));
-  return S.papers.filter((p) => p.key === V.paper || owners.has(p.key)
-    || paperHaystack(p).includes(needle));
+  return S.papers.filter((p) => owners.has(p.key) || paperHaystack(p).includes(needle));
 }
 
 function visibleClaims() {
@@ -470,11 +473,18 @@ function addedLabel(p) {
 function renderPapers() {
   const claims = V.view === 'claims';
   const byAdded = V.paperSort.startsWith('added');
-  const shown = visiblePapers();
+  const matched = matchingPapers();
+  // The selected paper is listed whether or not it matches, or there would be
+  // no way back out of it. It is not counted as a match, though: the count is
+  // about the query, and navigation state must not inflate it.
+  const keys = new Set(matched.map((p) => p.key));
+  const shown = V.paper !== null && !keys.has(V.paper)
+    ? S.papers.filter((p) => keys.has(p.key) || p.key === V.paper)
+    : matched;
   // The count doubles as the reason the list got shorter: a filtered sidebar
   // with no explanation reads as papers having gone missing.
-  const meta = shown.length < S.papers.length
-    ? `${shown.length} of ${S.papers.length} match`
+  const meta = matched.length < S.papers.length
+    ? `${matched.length} of ${S.papers.length} match`
     : `${S.claims.length} claims`;
   const all = `<li class="${claims && V.paper === null ? 'active' : ''}" data-paper="">
     <span class="pt">All papers</span>

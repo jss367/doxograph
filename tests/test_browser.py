@@ -64,8 +64,8 @@ def _server():
             process.wait(timeout=5)
 
 
-def _paper(key: str, title: str, *tags: str) -> None:
-    paper = store.new_paper(key, title=title)
+def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
+    paper = store.new_paper(key, title=title, year=year)
     paper["claims"] = [
         {
             "id": f"{key}-c1",
@@ -1228,9 +1228,9 @@ def _paper_without_claims(key: str, title: str) -> None:
 
 @pytest.mark.browser
 def test_the_query_filters_the_paper_list_and_says_how_many_match():
-    _paper("introspect", "Introspection in language models", "introspection")
-    _paper("gait", "Quadruped gait control", "locomotion")
-    _paper_without_claims("unread", "Introspection without any claims yet")
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    _paper("ling2025gait", "Quadruped gait control", "locomotion")
+    _paper_without_claims("wu2026silent", "Introspection without any claims yet")
 
     async def scenario():
         async with async_playwright() as playwright:
@@ -1238,26 +1238,59 @@ def test_the_query_filters_the_paper_list_and_says_how_many_match():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
-                await page.locator('#papers [data-paper="gait"]').wait_for()
+                await page.locator('#papers [data-paper="ling2025gait"]').wait_for()
+                meta = page.locator('#papers [data-paper=""] .pm')
 
                 await page.locator("#q").fill("introspection")
                 # A paper matching only through its title, with nothing
                 # extracted from it yet, is exactly what a title search wants.
-                await page.locator('#papers [data-paper="unread"]').wait_for()
-                assert await page.locator('#papers [data-paper="introspect"]').count() == 1
-                assert await page.locator('#papers [data-paper="gait"]').count() == 0
-                meta = page.locator('#papers [data-paper=""] .pm')
+                await page.locator('#papers [data-paper="wu2026silent"]').wait_for()
+                assert await page.locator('#papers [data-paper="han2026reports"]').count() == 1
+                assert await page.locator('#papers [data-paper="ling2025gait"]').count() == 0
                 assert await meta.inner_text() == "2 of 3 match"
 
-                # The selected paper stays listed however the query narrows,
-                # or there would be no way back to the rest of the corpus.
+                # The selected paper stays listed however the query narrows, or
+                # there would be no way back to the rest of the corpus. It is
+                # still not a match, and must not be counted as one.
                 await page.locator("#q").fill("")
-                await page.locator('#papers [data-paper="gait"]').click()
+                await page.locator('#papers [data-paper="ling2025gait"]').click()
                 await page.locator("#q").fill("introspection")
-                assert await page.locator('#papers [data-paper="gait"]').count() == 1
+                assert await page.locator('#papers [data-paper="ling2025gait"]').count() == 1
+                assert await meta.inner_text() == "2 of 3 match"
 
                 await page.locator("#q").fill("")
                 assert await page.locator("#papers li").count() == 4
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_paper_found_by_its_key_or_year_shows_that_paper_s_claims():
+    """A sidebar hit that opens onto "no claims match" is worse than no hit."""
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    _paper("survey", "A survey of everything", "locomotion", year=2019)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="survey"]').wait_for()
+
+                await page.locator("#q").fill("han2026reports")
+                assert await page.locator('#papers [data-paper="survey"]').count() == 0
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+                # A year is not in every key, so it has to reach the claims on
+                # its own for the sidebar and the list to agree about it.
+                await page.locator("#q").fill("2019")
+                await page.locator('#papers [data-paper="survey"]').wait_for()
+                assert await page.locator('#papers [data-paper="han2026reports"]').count() == 0
+                assert await page.locator("#content .claim").count() == 1
 
             await browser.close()
 

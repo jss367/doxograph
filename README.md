@@ -120,9 +120,10 @@ and click a paper to read it. `j` and `k` move between claims, `e` edits the sel
 reviewed, `Escape` cancels. Clicking a topic filters to it.
 
 The search box narrows the claims and the paper list together. It matches
-claim text, evidence, quotes, topics, paper titles, and authors, so a word
-from a title finds the paper even when nothing has been extracted from it
-yet, and the paper list says how many of the corpus matched. A claim shows
+claim text, evidence, quotes, topics, paper titles, authors, keys, and
+years, so a word from a title finds the paper even when nothing has been
+extracted from it yet, and the paper list says how many of the corpus
+matched. A claim shows
 its paper as a surname and a year; hovering that citation gives the title,
 and clicking it opens the paper.
 
