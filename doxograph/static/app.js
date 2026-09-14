@@ -339,6 +339,28 @@ function haystack(row) {
     .join(' ').toLowerCase();
 }
 
+// A paper's own text, for the query. `haystack` covers a paper through its
+// claims; this covers one that has none yet, which is exactly the paper a
+// title search is most likely to be looking for.
+function paperHaystack(paper) {
+  return [paper.title, paper.key, (paper.authors || []).join(' '), paper.year]
+    .join(' ').toLowerCase();
+}
+
+// The papers the query leaves standing: the ones it matches directly and the
+// ones owning a matching claim. The claim match ignores the selected paper, so
+// narrowing to one paper does not empty the list you would use to leave it,
+// and the selection itself always stays on screen for the same reason.
+function visiblePapers() {
+  const needle = V.q.trim().toLowerCase();
+  if (!needle) return S.papers;
+  const owners = new Set(S.claims
+    .filter((row) => haystack(row).includes(needle))
+    .map((row) => row.paper));
+  return S.papers.filter((p) => p.key === V.paper || owners.has(p.key)
+    || paperHaystack(p).includes(needle));
+}
+
 function visibleClaims() {
   const needle = V.q.trim().toLowerCase();
   return S.claims.filter((row) =>
@@ -448,10 +470,16 @@ function addedLabel(p) {
 function renderPapers() {
   const claims = V.view === 'claims';
   const byAdded = V.paperSort.startsWith('added');
+  const shown = visiblePapers();
+  // The count doubles as the reason the list got shorter: a filtered sidebar
+  // with no explanation reads as papers having gone missing.
+  const meta = shown.length < S.papers.length
+    ? `${shown.length} of ${S.papers.length} match`
+    : `${S.claims.length} claims`;
   const all = `<li class="${claims && V.paper === null ? 'active' : ''}" data-paper="">
     <span class="pt">All papers</span>
-    <span class="pm">${S.claims.length} claims</span></li>`;
-  $('papers').innerHTML = all + sortedPapers(S.papers, V.paperSort).map((p) => `
+    <span class="pm">${meta}</span></li>`;
+  $('papers').innerHTML = all + sortedPapers(shown, V.paperSort).map((p) => `
     <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
       <span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
@@ -611,7 +639,8 @@ function claimCard(row, shown) {
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
-      <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
+      <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer"
+        title="${esc(row.paper_title || row.paper)}">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
       ${tensionMarker(row.id)}
       ${agreementMarker(row.id)}
@@ -746,7 +775,8 @@ function tensionClaimCard(row) {
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'}" data-tclaim="${esc(row.id)}">
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
-      <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer">${esc(cite)}</span>
+      <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer"
+        title="${esc(row.paper_title || row.paper)}">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
@@ -2664,7 +2694,12 @@ function graphOption(field) {
   }
   if (V.view === 'graph') renderGraph();
 }
-$('q').addEventListener('input', (e) => { captureOpenEditor(); V.q = e.target.value; renderContent(); });
+$('q').addEventListener('input', (e) => {
+  captureOpenEditor();
+  V.q = e.target.value;
+  renderPapers();   // the query filters the paper list as well as the claims
+  renderContent();
+});
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
 $('paper-sort').addEventListener('change', (e) => {
   V.paperSort = PAPER_SORTS.includes(e.target.value) ? e.target.value : PAPER_SORTS[0];

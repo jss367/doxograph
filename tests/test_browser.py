@@ -1218,3 +1218,66 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
             await browser.close()
 
     asyncio.run(scenario())
+
+
+def _paper_without_claims(key: str, title: str) -> None:
+    paper = store.new_paper(key, title=title)
+    store.refresh_status(paper)
+    store.save_paper(paper)
+
+
+@pytest.mark.browser
+def test_the_query_filters_the_paper_list_and_says_how_many_match():
+    _paper("introspect", "Introspection in language models", "introspection")
+    _paper("gait", "Quadruped gait control", "locomotion")
+    _paper_without_claims("unread", "Introspection without any claims yet")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="gait"]').wait_for()
+
+                await page.locator("#q").fill("introspection")
+                # A paper matching only through its title, with nothing
+                # extracted from it yet, is exactly what a title search wants.
+                await page.locator('#papers [data-paper="unread"]').wait_for()
+                assert await page.locator('#papers [data-paper="introspect"]').count() == 1
+                assert await page.locator('#papers [data-paper="gait"]').count() == 0
+                meta = page.locator('#papers [data-paper=""] .pm')
+                assert await meta.inner_text() == "2 of 3 match"
+
+                # The selected paper stays listed however the query narrows,
+                # or there would be no way back to the rest of the corpus.
+                await page.locator("#q").fill("")
+                await page.locator('#papers [data-paper="gait"]').click()
+                await page.locator("#q").fill("introspection")
+                assert await page.locator('#papers [data-paper="gait"]').count() == 1
+
+                await page.locator("#q").fill("")
+                assert await page.locator("#papers li").count() == 4
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_claim_citation_carries_its_paper_title():
+    _paper("introspect", "Introspection in language models", "introspection")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                cite = page.locator('.claim .cmeta [data-act="open-paper"]').first
+                await cite.wait_for()
+                assert await cite.get_attribute("title") == "Introspection in language models"
+
+            await browser.close()
+
+    asyncio.run(scenario())
