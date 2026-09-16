@@ -207,3 +207,16 @@ def test_a_reference_naming_one_of_two_twins_cites_that_one():
         "https://doi.org/10.5555/3295222.3295349, 2017.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["published"]
+
+
+def test_a_list_that_names_both_twins_cites_both():
+    """The preprint by its identifier in one entry, the published version by
+    its title in another: two printings of the title, two citations."""
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] A Vaswani et al. Attention is all you need. arXiv:1706.03762, 2017.\n"
+        "[2] A Vaswani et al. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]

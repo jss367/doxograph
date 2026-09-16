@@ -157,7 +157,7 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
                 # An arXiv id or a DOI, rather than a title: `fingerprints`
                 # puts the identifiers first and the title last.
                 named[other] = named.get(other, False) or at < len(found) - 1
-    hits = [hit for hit in hits if _identified(hit[1], named, marks)]
+    hits = [hit for hit in hits if _identified(hit[1], named, marks, listing)]
     # Longest first, so a shorter mark inside one already taken is dropped —
     # but only where every mention of it is inside one, and against every
     # place the longer one was printed: a bibliography can name the same paper
@@ -166,7 +166,12 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
     taken: list[tuple[int, int]] = []
     cited: set[str] = set()
     for width, other, places in sorted(hits, key=lambda hit: -hit[0]):
-        covered = all(any(begin <= at and at + width <= end for begin, end in taken)
+        # Strictly wider: a mark swallows a shorter one printed inside it, but
+        # two papers whose titles are the same word for word — a preprint and
+        # its published version — do not swallow each other. Which of those is
+        # cited is settled by `_identified`, on the identifiers.
+        covered = all(any(width < end - begin and begin <= at and at + width <= end
+                          for begin, end in taken)
                       for at in places)
         # A paper already cited keeps contributing its spans — one edge per
         # paper, whichever of its marks the list happens to carry.
@@ -176,7 +181,8 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
     return sorted(cited)
 
 
-def _identified(key: str, named: dict[str, bool], marks: dict[str, list[str]]) -> bool:
+def _identified(key: str, named: dict[str, bool], marks: dict[str, list[str]],
+                listing: str) -> bool:
     """Whether a paper survives a twin with the same title.
 
     A preprint and its published version carry one title and two identifiers.
@@ -186,9 +192,16 @@ def _identified(key: str, named: dict[str, bool], marks: dict[str, list[str]]) -
     nothing but the title they have in common.
     """
     title = marks[key][-1] if marks.get(key) else ""
+    if named.get(key, False) or not title:
+        return True
     twins = [other for other, found in marks.items()
-             if other != key and found and found[-1] == title and other in named]
-    return named.get(key, False) or not any(named[other] for other in twins)
+             if other != key and found and found[-1] == title and named.get(other, False)]
+    if not twins:
+        return True
+    # One printing of the title, one citation: the identified twin has it.
+    # Several printings mean several entries, and a bibliography that lists
+    # the preprint and the published version names them both.
+    return len(_occurrences(listing, title)) > len(twins)
 
 
 def _occurrences(listing: str, mark: str, cap: int = 20) -> list[int]:

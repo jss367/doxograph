@@ -256,7 +256,7 @@ async function pull() {
 // next poll is told nothing happened.
 function corpusChanged() {
   rerunTextSearch();     // a paper imported since holds the query's words too
-  V.similar = null;      // and the claims it was compared against have moved
+  closeSimilar();        // and the claims it was compared against have moved
   // A PDF that arrived while the map is open cites what it cites; the papers
   // are redrawn from state but the arrows are fetched on their own.
   if (V.view === 'graph') loadCitations();
@@ -375,7 +375,11 @@ async function loadWorkspaces() {
 // claim. These are the expansions that turn up in a research corpus; the rest
 // of Unicode's case folding is left to the server.
 const FOLD = [[/ß/g, 'ss'], [/ẞ/g, 'ss'], [/İ/g, 'i'], [/ﬀ/g, 'ff'], [/ﬁ/g, 'fi'],
-              [/ﬂ/g, 'fl'], [/ﬃ/g, 'ffi'], [/ﬄ/g, 'ffl'], [/ŉ/g, 'ʼn']];
+              [/ﬂ/g, 'fl'], [/ﬃ/g, 'ffi'], [/ﬄ/g, 'ffl'], [/ŉ/g, 'ʼn'],
+              // `toLowerCase` knows where a Greek word ends and Python's
+              // `casefold` does not: ΟΣ lowercases to ος, while a query
+              // typed as οσ stays οσ. Both go to σ here, as on the server.
+              [/ς/g, 'σ']];
 
 function fold(text) {
   return FOLD.reduce((out, [from, to]) => out.replace(from, to), String(text ?? '').toLowerCase());
@@ -896,6 +900,20 @@ function quoteContextHtml(row) {
     ${diff}
     <div class="qacts">${replace}</div>
   </div>`;
+}
+
+// Drop the alike panel, taking it off the screen even when no redraw will
+// come: `render` leaves the content alone while an editor is open, and a
+// panel left standing there shows matches worked out from claims that have
+// since moved, under a button that says "hide alike" and would start a new
+// lookup because the state says it is closed.
+function closeSimilar() {
+  if (!V.similar) return;
+  V.similar = null;
+  document.querySelectorAll('#content .alike').forEach((node) => node.remove());
+  document.querySelectorAll('#content [data-act="similar"]').forEach((button) => {
+    button.textContent = 'alike';
+  });
 }
 
 function similarOpen(claimId) {
@@ -1610,6 +1628,7 @@ function renderGraphNav() {
 // them until the answer lands.
 let CITATIONS = [];
 let citationsSeq = 0;
+let citationsFailed = false;
 
 async function loadCitations() {
   // Whose citations these are, and which asking. A request left in flight when
@@ -1624,9 +1643,14 @@ async function loadCitations() {
     const found = await api('/api/citations');
     edges = found.edges || [];
   } catch (error) {
-    edges = [];   // a map without citation links is still worth drawing
+    // The server may be restarting. Leave the arrows that are drawn where
+    // they are and ask again on the next poll: the corpus need never change
+    // again, so waiting for it to would leave the map bare for the session.
+    citationsFailed = true;
+    return;
   }
   if (seq !== citationsSeq || workspace !== currentWorkspaceId) return;
+  citationsFailed = false;
   CITATIONS = edges;
   if (V.view === 'graph') renderGraph();
 }
@@ -2643,7 +2667,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'similar') {
-      if (similarOpen(claim)) { V.similar = null; captureOpenEditor(); renderContent(); return; }
+      if (similarOpen(claim)) { closeSimilar(); captureOpenEditor(); renderContent(); return; }
       await showSimilar(paper, claim);
       return;
     }
@@ -3317,8 +3341,14 @@ async function boot() {
     try {
       const changed = await pull();
       renderJobs();
-      if (!changed) return;
+      if (!changed) {
+        if (citationsFailed && V.view === 'graph') loadCitations();
+        return;
+      }
       corpusChanged();
+      // An asking that failed is asked again while the map is open, whether
+      // or not anything in the corpus has moved.
+      if (citationsFailed && V.view === 'graph') loadCitations();
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
