@@ -1649,3 +1649,29 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_finds_what_the_server_finds_whatever_the_case():
+    """JavaScript lowercases one character to one; the server folds properly.
+    A query that found the paper through its PDF must not lose the claim."""
+    _paper("weber2026strasse", "Die Straße als Metapher", "introspection")
+    store.update_claim("weber2026strasse", "weber2026strasse-c1",
+                       {"text": "Die Straße ist lang."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                for query in ("Straße", "STRASSE", "strasse"):
+                    await page.locator("#q").fill(query)
+                    await page.locator("#content .claim").first.wait_for()
+                    assert await page.locator("#content .claim").count() == 1, query
+                    assert await page.locator('#papers [data-paper="weber2026strasse"]').count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())

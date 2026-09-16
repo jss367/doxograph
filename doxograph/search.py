@@ -65,12 +65,6 @@ def terms(query: str) -> list[str]:
     return list(seen.values())
 
 
-# A word broken across a line by a hyphen, as `quotes.tidy` puts it back
-# together for reading. A search has to see one word there too, or the
-# commonest word in a two-column paper is the one it cannot find.
-_LINE_HYPHEN = re.compile(r"(?<=\w)[-‐­][ \t]*\n[ \t]*(?=\w)")
-
-
 def fold(text: str) -> str:
     """`text` with the case taken out and its line-broken words put together.
 
@@ -91,7 +85,10 @@ def fold_with_offsets(text: str) -> tuple[str, array.array]:
     and this is what carries a position in the folded text back to the paper's
     own characters.
     """
-    dropped = {at for match in _LINE_HYPHEN.finditer(text)
+    # A word broken across a line by a hyphen is one word to a search, as it is
+    # one word to `quotes.tidy` when a passage is read. The same pattern, so
+    # the two cannot disagree about which words a paper contains.
+    dropped = {at for match in quotes.LINE_HYPHEN.finditer(text)
                for at in range(match.start(), match.end())}
     folded: list[str] = []
     offsets = array.array("i")
