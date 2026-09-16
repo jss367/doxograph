@@ -418,8 +418,9 @@ def _forward(raw: str, at: int, high: int) -> int:
 
 # A word broken across a line by a hyphen is put back together. Only at a line
 # break: "pre- and post-training" is a hyphen followed by a space, and joining
-# that would invent a word.
-_LINE_HYPHEN = re.compile(r"(\w)[-‐­][ \t]*\n[ \t]*(\w)")
+# that would invent a word. A page break is a line break too — a word split at
+# the foot of a page has a form feed between its halves, not a newline.
+_LINE_HYPHEN = re.compile(rf"(\w)[-‐­][ \t]*[\n{PAGE_BREAK}][ \t\n{PAGE_BREAK}]*(\w)")
 
 
 def tidy(text: str) -> str:
