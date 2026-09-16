@@ -394,8 +394,14 @@ async function settleDeletes(wanted = null) {
 }
 
 async function flushTrash(wanted = null) {
-  const waiting = [...trash.values()].filter((entry) => !wanted || wanted(entry));
-  await Promise.all(waiting.map((entry) => entry.send()));
+  // Drained rather than snapshotted: the page stays interactive while this
+  // runs, so a row deleted during it has to go with the rest. A snapshot would
+  // leave that one on file for the export or the model pass waiting on this.
+  for (;;) {
+    const waiting = [...trash.values()].filter((entry) => !wanted || wanted(entry));
+    if (!waiting.length) return;
+    await Promise.all(waiting.map((entry) => entry.send()));
+  }
 }
 
 // Coming back to a page the browser froze rather than unloaded. `pagehide`
@@ -1452,6 +1458,7 @@ async function saveResearch() {
   showView('claims');       // captures the form on the way out, so clear after
   V.researchDraft = null;
   V.researchBase = null;
+  syncHash(true);           // as with Cancel: leaving the form is a move
   await refreshAll();
 }
 
@@ -2759,6 +2766,7 @@ $('content').addEventListener('click', async (event) => {
       showView('claims');
       V.researchDraft = null;   // Cancel is the one way out that drops the edits
       V.researchBase = null;
+      syncHash(true);   // leaving the form is a move; Back goes back to it
       renderAll();
       return;
     }

@@ -2456,3 +2456,63 @@ def test_back_from_the_analysis_views_returns_to_the_claims():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_flush_takes_deletes_made_while_it_is_running():
+    """The page stays interactive while a flush runs, and the export or model
+    pass waiting on it must not read a row deleted in the meantime."""
+    one, two, three = _paper_with_claims("doe2026study", "A study", ["One.", "Two.", "Three."])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim[data-claim="{one}"]').wait_for()
+                await page.evaluate("""
+                  ([a, b]) => (async () => {
+                    const path = (id) => `/api/papers/doe2026study/claims/${id}`;
+                    deleteLater('claim', a, path(a), 'the claim');
+                    const flushing = flushTrash();
+                    deleteLater('claim', b, path(b), 'the claim');
+                    await flushing;
+                  })()
+                """, [one, two])
+                assert await page.evaluate("trash.size") == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [three]
+
+
+@pytest.mark.browser
+def test_back_returns_to_the_research_form_after_leaving_it():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                for leave in ["Cancel", "Save"]:
+                    await page.locator('#research-nav [data-view="research"]').click()
+                    await page.locator("#research-form").wait_for()
+                    assert "view=research" in page.url
+                    await page.locator("#research-form").get_by_role(
+                        "button", name=leave, exact=True).click()
+                    await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                    assert "view=research" not in page.url
+
+                    # Back goes back to the form rather than appearing to do
+                    # nothing, which is what replacing its entry looked like.
+                    await page.go_back()
+                    await page.locator("#research-form").wait_for()
+                    await page.locator('#research-nav [data-view="research"].active').wait_for()
+                    await page.go_forward()
+                    await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
