@@ -360,7 +360,11 @@ async function loadWorkspaces() {
 // claim. These are the expansions that turn up in a research corpus; the rest
 // of Unicode's case folding is left to the server.
 const FOLD = [[/ß/g, 'ss'], [/ẞ/g, 'ss'], [/İ/g, 'i'], [/ﬀ/g, 'ff'], [/ﬁ/g, 'fi'],
-              [/ﬂ/g, 'fl'], [/ﬃ/g, 'ffi'], [/ﬄ/g, 'ffl'], [/ŉ/g, 'ʼn']];
+              [/ﬂ/g, 'fl'], [/ﬃ/g, 'ffi'], [/ﬄ/g, 'ffl'], [/ŉ/g, 'ʼn'],
+              // `toLowerCase` knows where a Greek word ends and Python's
+              // `casefold` does not: ΟΣ lowercases to ος, while a query
+              // typed as οσ stays οσ. Both go to σ here, as on the server.
+              [/ς/g, 'σ']];
 
 function fold(text) {
   return FOLD.reduce((out, [from, to]) => out.replace(from, to), String(text ?? '').toLowerCase());
