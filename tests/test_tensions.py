@@ -581,3 +581,32 @@ def test_a_corrected_attribution_reaches_the_note(monkeypatch):
                                   "note": "Doe et al. (2026) see recovery."}], calls)
     assert extract.find_tensions("recovery-rate")["skipped"] is False
     assert store.tension_rows()[0]["note"] == "Doe et al. (2026) see recovery."
+
+
+def test_a_topic_deleted_during_the_call_does_not_get_its_pass_recorded(monkeypatch):
+    """`_retag_all` forgets the pass and strips the topic; a late result must
+    not write the pass back, or recreating the tag skips the run that would
+    put the topic on the pairs again."""
+    a, b, _ = build_corpus()
+    calls = []
+
+    class Text:
+        type = "text"
+        def __init__(self, text): self.text = text
+
+    class Response:
+        stop_reason = "end_turn"
+        content = [Text(json.dumps({"tensions": [{"claims": [a, b], "kind": "tension", "note": "n"}]}))]
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            store.delete_tag("recovery-rate")     # deleted while the model thinks
+            return Response()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    extract.find_tensions("recovery-rate")
+    assert store.tension_pass("recovery-rate") is None

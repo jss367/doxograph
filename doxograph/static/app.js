@@ -385,15 +385,22 @@ function queryMatcher() {
   return (text) => patterns.every((pattern) => pattern.test(text));
 }
 
-// A term matches from the start of a word. `\b` in JavaScript knows only
-// ASCII and would never match a query written in another script, and a
-// lookbehind is not available: the app supports macOS 13.0, whose WKWebView
-// has none, and the SyntaxError would take the whole filter down. What is
-// left is to consume the character before the word, and to allow the start
-// of the string in its place.
+// Scripts that do not put spaces between their words, as `search.py` has
+// them. A term in one of these is looked for wherever it falls: every
+// character around it is a letter, so a word start never comes.
+const UNSEGMENTED = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\u0e00-\u0e7f\u1780-\u17ff\u0f00-\u0fff]/u;
+
+// A term matches from the start of a word, where words have starts. `\b` in
+// JavaScript knows only ASCII and would never match a query written in
+// another script, and a lookbehind is not available: the app supports macOS
+// 13.0, whose WKWebView has none, and the SyntaxError would take the whole
+// filter down. What is left is to consume the character before the word, and
+// to allow the start of the string in its place.
 function queryPatterns(query) {
   return (query.match(/[\p{L}\p{N}_]+/gu) || [])
-    .map((term) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${term}`, 'iu'));
+    .map((term) => (UNSEGMENTED.test(term)
+      ? new RegExp(term, 'iu')
+      : new RegExp(`(?:^|[^\\p{L}\\p{N}])${term}`, 'iu')));
 }
 
 // A claim's searchable text. It carries its paper's key and year as well as
@@ -2623,7 +2630,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'similar') {
-      if (similarOpen(claim)) { V.similar = null; renderContent(); return; }
+      if (similarOpen(claim)) { V.similar = null; captureOpenEditor(); renderContent(); return; }
       await showSimilar(paper, claim);
       return;
     }

@@ -1128,8 +1128,11 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
             by_pair[(a, b)] = record
             added += 1
         data["tensions"] = existing
-        # Recorded only on the way out, so a failed call is asked again.
-        if signature:
+        # Recorded only on the way out, so a failed call is asked again — and
+        # only while some live claim still carries the topic. A topic deleted
+        # during the call has had its pass forgotten already, and writing it
+        # back would skip the pass that has to run when the tag comes back.
+        if signature and any(topic in (c.get("tags") or []) for c in live.values()):
             data.setdefault("passes", {})[topic] = signature
         _save_tensions(data)
         return {"added": added, "reopened": reopened, "kept": kept}
@@ -1587,8 +1590,9 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             existing.append(record)
             added += 1
         data["agreements"] = existing
-        # Recorded only on the way out, so a failed call is asked again.
-        if signature:
+        # Recorded only on the way out, and only while some live claim still
+        # carries the topic; see `record_tensions`.
+        if signature and any(topic in (c.get("tags") or []) for c in live.values()):
             data.setdefault("passes", {})[topic] = signature
         _save_agreements(data)
         return {"added": added, "grown": grown, "reopened": reopened, "kept": kept}
