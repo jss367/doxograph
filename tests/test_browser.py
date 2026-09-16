@@ -1512,3 +1512,28 @@ def test_a_paper_arriving_after_the_search_still_turns_up_in_it():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_query_with_no_words_in_it_matches_nothing():
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    _paper("ling2025gait", "Quadruped gait control", "locomotion")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                # No paper holds "---" as a phrase and it has no words to look
+                # for, so it narrows to nothing rather than to everything.
+                await page.locator("#q").fill("---")
+                await page.locator("#content .empty").wait_for()
+                assert await page.locator("#content .claim").count() == 0
+                # The "all papers" row stays; no paper does.
+                assert await page.locator('#papers li[data-paper]:not([data-paper=""])').count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
