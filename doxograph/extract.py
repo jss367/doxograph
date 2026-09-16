@@ -673,13 +673,7 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
         by_paper.setdefault(row["paper"], []).append(row)
     blocks = []
     for key, claims in by_paper.items():
-        first = claims[0]
-        authors = first.get("paper_authors") or []
-        head = store.cite_surname(authors, key)
-        if len(authors) > 1:
-            head += " et al."
-        head += f" ({first.get('paper_year') or 'n.d.'}): {first.get('paper_title') or key}"
-        lines = [f"## {head}"]
+        lines = [f"## {store.cite_head(claims[0])}"]
         for claim in claims:
             line = f"- {claim['id']} [{claim.get('kind', 'finding')}]: {claim.get('text', '')}"
             if mark_unreviewed and not claim.get("reviewed"):

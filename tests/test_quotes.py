@@ -437,3 +437,47 @@ def test_the_stored_text_is_never_seen_half_written(tmp_path):
     # the file that was there or the whole of the new one.
     assert list(cache.parent.iterdir()) == [cache]
     assert quotes.squash(SENTENCE) in quotes.squash(cache.read_text(encoding="utf-8"))
+
+
+def test_a_passage_the_paper_prints_twice_is_marked_even_when_the_quote_drifts(tmp_path):
+    line = "Recovery under steering is a path-dependent outcome across all scales."
+    pdf = tmp_path / "twice.pdf"
+    pdf.write_bytes(minimal_pdf([f"First page. {line}", f"Second page. {line}"]))
+    # Not verbatim, so the match is an alignment rather than a find, and the
+    # passage it lands on is still one the paper prints twice.
+    found = quotes.locate(pdf, "Recovery under steering is a path dependant outcome across all scales.")
+    assert found["repeated"] is True
+
+
+def test_the_text_of_a_replaced_pdf_cannot_be_stored_after_the_replacement(tmp_path):
+    """A reader that started before a publish must not store what it read
+    afterwards: stored last is stored newest, and would be believed."""
+    import threading
+
+    from doxograph import ingest
+
+    key = "doe2026recovery"
+    store.save_paper(store.new_paper(key, title="Recovery"))
+    store.pdf_path(key).write_bytes(minimal_pdf(SENTENCE))
+    store.text_path(key).unlink(missing_ok=True)
+    quotes._cache.clear()
+
+    replaced = threading.Event()
+    staged = tmp_path / "second.pdf"
+    staged.write_bytes(minimal_pdf("A wholly different paper about penguins."))
+
+    def republish():
+        ingest.publish_pdf(key, staged)
+        replaced.set()
+
+    # The reader takes the paper's lock, so the publish waits for it rather
+    # than landing in the middle of the read.
+    reader = threading.Thread(target=lambda: store.check_quote(key, {"quote": SENTENCE}))
+    other = threading.Thread(target=republish)
+    reader.start()
+    other.start()
+    reader.join(timeout=10)
+    other.join(timeout=10)
+    assert replaced.is_set()
+    stored = store.text_path(key).read_text(encoding="utf-8")
+    assert "penguins" in stored and quotes.squash(SENTENCE) not in quotes.squash(stored)

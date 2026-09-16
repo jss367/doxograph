@@ -500,7 +500,8 @@ def check_quote(key: str, claim: dict) -> bool | None:
     The search knows where it found the quote, so the page comes along for
     free and is recorded too.
     """
-    found = quotes.locate(pdf_path(key), claim.get("quote") or "", text_path(key))
+    found = quotes.locate(pdf_path(key), claim.get("quote") or "", text_path(key),
+                          guard=lambda: paper_lock(key))
     claim["quote_verified"] = found["found"] if found else None
     claim["quote_page"] = found["page"] if found else None
     return claim["quote_verified"]
@@ -526,7 +527,7 @@ def quote_context(key: str, claim_id: str) -> dict:
     }
     if not quote.strip():
         return {**context, "available": False, "reason": "This claim has no quote."}
-    found = quotes.locate(pdf_path(key), quote, text_path(key))
+    found = quotes.locate(pdf_path(key), quote, text_path(key), guard=lambda: paper_lock(key))
     if found is None:
         reason = ("This paper has no PDF to check against."
                   if not pdf_path(key).exists()
@@ -984,6 +985,22 @@ def claim_fingerprint(claim: dict) -> str:
     return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("kind", "finding")])
 
 
+def cite_head(claim: dict) -> str:
+    """How a cross-paper prompt names a claim's paper.
+
+    `_tension_listing` writes the cited surname, "et al." where there is more
+    than one author, the year and the title. Adding a coauthor changes the
+    heading without changing any one of those fields, so the count is in here
+    too.
+    """
+    authors = claim.get("paper_authors") or []
+    key = claim.get("paper") or ""
+    head = cite_surname(authors, key)
+    if len(authors) > 1:
+        head += " et al."
+    return f"{head} ({claim.get('paper_year') or 'n.d.'}): {claim.get('paper_title') or key}"
+
+
 def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
     """What a per-topic pass was asked about, in one string.
 
@@ -996,9 +1013,7 @@ def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
     and the merge would keep the answer it already has, so it is not asked.
     """
     payload = [topic, extra] + sorted(
-        f"{r['id']} {r.get('paper')} {cite_surname(r.get('paper_authors'), r.get('paper') or '')}"
-        f" {r.get('paper_year')} {r.get('paper_title')} {claim_fingerprint(r)}"
-        for r in rows
+        f"{r['id']} {r.get('paper')} {cite_head(r)} {claim_fingerprint(r)}" for r in rows
     )
     return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()[:16]
 
@@ -1272,8 +1287,7 @@ def synthesis_basis(rows: list[dict]) -> dict[str, str]:
 
 def synthesis_claim_basis(claim: dict) -> str:
     """One claim as a synthesis rests on it: what it says, and whose paper it is."""
-    return (f"{cite_surname(claim.get('paper_authors'), claim.get('paper') or '')}"
-            f" {claim.get('paper_year')} {claim.get('paper_title')} {claim_fingerprint(claim)}")
+    return f"{cite_head(claim)} {claim_fingerprint(claim)}"
 
 
 def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
