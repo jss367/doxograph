@@ -98,14 +98,19 @@ let currentWorkspaceId = null;
 // The workspace change in flight, if any: its corpus is still on its way.
 let workspaceSwitch = null;
 let pendingMutations = 0;
-// The native app can receive a Finder/Dock drop while the first state request
-// is still loading. Publish the remembered choice synchronously so that drop
-// does not fall back to the default workspace during startup.
+// The page can be asked to write before the workspace registry has loaded: a
+// Finder or Dock drop in the native app, a paste into the box, an Export. Take
+// the workspace from the address, or from what this browser was last on, before
+// any of that is possible — a request sent with no workspace named goes to the
+// Default corpus, which is the one thing a link naming another must never do.
+// `loadWorkspaces` corrects this if the name turns out not to exist.
 try {
-  window.doxographWorkspaceId = localStorage.getItem('doxograph-workspace') || 'default';
+  const named = new URLSearchParams((location.hash || '').replace(/^#/, '')).get('ws');
+  currentWorkspaceId = named || localStorage.getItem('doxograph-workspace') || 'default';
 } catch (e) {
-  window.doxographWorkspaceId = 'default';
+  currentWorkspaceId = 'default';
 }
+window.doxographWorkspaceId = currentWorkspaceId;
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
 // onto claims one-to-one. newClaim holds a claim being written by hand; it lives
@@ -316,22 +321,30 @@ async function deleteLater(kind, id, path, label) {
   if (trash.has(token)) return;
   const workspace = currentWorkspaceId || 'default';
   let notice = null;
-  const send = async () => {
-    if (!trash.has(token)) return;   // already sent, or already undone
+  // The entry stays in the trash until the request settles, so the row does not
+  // flash back on screen between the notice fading and the server answering.
+  // That leaves it visible to a second caller — the notice running out while an
+  // export flushes, say — so the request itself is what is shared: one delete,
+  // and no second one to come back 404 and leave a failure notice standing.
+  let sending = null;
+  const send = () => {
+    if (!trash.has(token)) return Promise.resolve();   // already sent, or undone
+    if (sending) return sending;
     if (notice) notice.close();
-    try {
-      // Named rather than implied: `flushTrash` sends these before a switch,
-      // and this makes that a guarantee rather than an ordering to preserve.
-      await api(path, { method: 'DELETE', headers: { 'X-Doxograph-Workspace': workspace } });
-    } catch (error) {
-      toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
-    } finally {
-      // Held until the request settles, so the row does not flash back on
-      // screen between the notice fading and the server answering.
-      trash.delete(token);
-      forgetStateTag();
-    }
-    await refreshAll();
+    sending = (async () => {
+      try {
+        // Named rather than implied: `flushTrash` sends these before a switch,
+        // and this makes that a guarantee rather than an ordering to preserve.
+        await api(path, { method: 'DELETE', headers: { 'X-Doxograph-Workspace': workspace } });
+      } catch (error) {
+        toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
+      } finally {
+        trash.delete(token);
+        forgetStateTag();
+      }
+      await refreshAll();
+    })();
+    return sending;
   };
   trash.set(token, { path, workspace, send });
   forgetStateTag();
@@ -674,11 +687,10 @@ async function loadWorkspaces() {
   const response = await fetch('/api/workspaces');
   if (!response.ok) throw new Error('Could not load workspaces');
   workspaces = (await response.json()).workspaces || [];
-  let remembered = null;
-  try { remembered = localStorage.getItem('doxograph-workspace'); } catch (e) { /* optional */ }
-  // A link that names a workspace wins over the one this browser was last on:
-  // landing where the link points is the whole of what it is for.
-  const wanted = hashParams().get('ws') || remembered;
+  // `currentWorkspaceId` was taken from the address or from this browser's last
+  // choice before the page could send anything anywhere. This is where it is
+  // checked against the corpora that actually exist.
+  const wanted = currentWorkspaceId;
   currentWorkspaceId = workspaces.some((workspace) => workspace.id === wanted) ? wanted : 'default';
   try { localStorage.setItem('doxograph-workspace', currentWorkspaceId); } catch (e) { /* optional */ }
   renderWorkspacePicker();
@@ -2573,6 +2585,11 @@ async function removePaper(paper) {
     ok: 'Remove',
   });
   if (!go) return;
+  // A claim of this paper still waiting out its notice has to go first. Left
+  // waiting, its Undo would have nothing to restore and its request would
+  // arrive under a paper that no longer exists, failing in the reader's face
+  // over a deletion they got what they asked for.
+  await flushTrash();
   await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
   // Close an editor that belonged to the deleted paper, so its form is not
   // captured as a draft for a claim that no longer exists. An editor on some

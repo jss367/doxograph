@@ -1824,3 +1824,82 @@ def test_a_refused_workspace_switch_leaves_the_entry_alone():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_link_naming_a_workspace_writes_there_before_the_registry_loads():
+    """A request with no workspace named goes to the Default corpus, which is
+    the one place a link naming another must never write."""
+    from doxograph import config
+
+    other = config.create_workspace("Other")
+
+    async def scenario():
+        held = asyncio.Event()
+        release = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_registry(route):
+                held.set()
+                await release.wait()
+                await route.continue_()
+
+            await page.route("**/api/workspaces", hold_registry)
+            with _server() as url:
+                loading = asyncio.ensure_future(page.goto(f"{url}/#ws={other['id']}"))
+                await asyncio.wait_for(held.wait(), timeout=10)
+                # The registry has not answered yet, and already anything the
+                # page sends carries the workspace the link named.
+                assert await page.evaluate("currentWorkspaceId") == other["id"]
+                assert await page.evaluate("window.doxographWorkspaceId") == other["id"]
+                release.set()
+                await loading
+                assert await page.locator("#workspace").input_value() == other["id"]
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_held_delete_is_sent_once_and_settles_before_its_paper_is_removed():
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                card = page.locator(f'.claim[data-claim="{one}"]')
+                await card.get_by_role("button", name="delete").click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+
+                # Two flushes at once — an export while the notice is up, say —
+                # must not send two DELETEs and leave a 404 notice standing.
+                await page.evaluate("Promise.all([flushTrash(), flushTrash()])")
+                assert await page.locator("#toasts .toast", has_text="Could not delete").count() == 0
+                assert len(store.load_paper("doe2026study")["claims"]) == 1
+
+                # And a claim still waiting goes before its paper does, rather
+                # than failing afterwards under a paper that is not there.
+                await card.wait_for(state="detached")
+                await page.locator(f'.claim[data-claim="{two}"] [data-act="del"]').click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await page.locator('#papers [data-paper="doe2026study"]').wait_for(state="detached")
+                # Nothing is left waiting: had the claim's delete survived its
+                # paper, this would send it under a paper that is not there and
+                # leave a failure notice standing over a deletion that worked.
+                assert await page.evaluate("trash.size") == 0
+                await page.evaluate("flushTrash()")
+                await page.wait_for_timeout(500)
+                assert await page.locator("#toasts .toast", has_text="Could not delete").count() == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.all_papers() == []
