@@ -239,11 +239,37 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
         high = len(raw) if high < 0 else high
         begin = max(low, at - PASSAGE_SPAN)
         end = min(high, at + PASSAGE_SPAN)
+        shown = quotes.tidy(raw[begin:end])
         passages.append({
-            "text": quotes.tidy(raw[begin:end]),
+            "text": shown,
             "page": raw.count(quotes.PAGE_BREAK, 0, at) + 1,
+            # Where the terms are in what is shown. Worked out here because
+            # here is where the folding is known: a browser's own
+            # case-insensitive matching cannot expand ß to ss, so it would
+            # find nothing to mark in the passage that was found for it.
+            "marks": _marks(shown, patterns),
         })
     return passages
+
+
+def _marks(shown: str, patterns: list[re.Pattern]) -> list[list[int]]:
+    """Where each term falls in a passage, as [start, end] pairs that do not
+    overlap, in order. The offsets are into the text as it is shown."""
+    folded, offsets = fold_with_offsets(shown)
+    spans: list[list[int]] = []
+    for pattern in patterns:
+        for match in pattern.finditer(folded):
+            begin = offsets[match.start()] if match.start() < len(offsets) else len(shown)
+            end = offsets[match.end() - 1] + 1 if match.end() - 1 < len(offsets) else len(shown)
+            spans.append([begin, end])
+    spans.sort()
+    merged: list[list[int]] = []
+    for span in spans:
+        if merged and span[0] <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], span[1])
+        else:
+            merged.append(span)
+    return merged
 
 
 def cache_text(key: str) -> None:
