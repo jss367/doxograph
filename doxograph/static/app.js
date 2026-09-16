@@ -352,14 +352,27 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   await refreshAll();
   // The wait can end during that refresh — `flushTrash` sends what is waiting
   // — and a notice raised afterwards would offer to undo a delete the server
-  // already has.
-  if (!trash.has(token)) return;
+  // already has. The entry is still in the trash while its request is in
+  // flight, which is what keeps the row off the screen, so `sending` is the
+  // thing to ask: once it is set there is nothing left to undo.
+  if (!trash.has(token) || sending) return;
   notice = toast(`Deleted ${label}.`, {
     timeout: UNDO_MS,
     onExpire: send,
     actions: [{
       label: 'Undo',
-      onClick: async () => { trash.delete(token); forgetStateTag(); await refreshAll(); },
+      onClick: async () => {
+        // Sent between the notice going up and this being clicked. `send`
+        // closes the notice, so this is all but unreachable — but an Undo that
+        // quietly does nothing is worse than one that says so.
+        if (sending) {
+          toast(`That delete has already been sent; ${label} is gone.`, { tone: 'warn' });
+          return;
+        }
+        trash.delete(token);
+        forgetStateTag();
+        await refreshAll();
+      },
     }],
   });
 }

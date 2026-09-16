@@ -2401,3 +2401,36 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_no_undo_is_offered_for_a_delete_that_has_already_been_sent():
+    """The entry stays in the trash while its request is in flight, which is
+    what keeps the row off the screen — so the trash alone cannot say whether
+    there is anything left to undo."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim[data-claim="{one}"]').wait_for()
+
+                # Another action flushes while the delete's own redraw, which
+                # runs before the notice goes up, is still in flight.
+                await page.evaluate("""
+                  ([id, path]) => (async () => {
+                    const held = deleteLater('claim', id, path, 'the claim');
+                    flushTrash();
+                    await held;
+                  })()
+                """, [one, f"/api/papers/doe2026study/claims/{one}"])
+
+                assert await page.locator("#toasts .toast", has_text="Deleted the claim.").count() == 0
+                await page.locator(f'.claim[data-claim="{one}"]').wait_for(state="detached")
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
