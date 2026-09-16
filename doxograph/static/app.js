@@ -122,6 +122,10 @@ const NEW_CLAIM_ID = '__new__';
 // is in GRAPH below.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
+// quoteContext is the one claim whose quote is being shown in the paper, with
+// the passage the check matched it against: { claim, paper, loading, error,
+// data }. One at a time, since it is read in place of the PDF and two open at
+// once would only push the claims apart.
 // synthEditing is the topic whose synthesis is open for correction by hand, and
 // synthDrafts what has been typed into each, by topic, kept across redraws and
 // navigation like claim drafts. A map for the same reason `drafts` is: opening
@@ -133,7 +137,8 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-            graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null };
+            graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null,
+            quoteContext: null };
 
 function blankClaim(paper) {
   return {
@@ -285,6 +290,7 @@ function resetWorkspaceView() {
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     graph: { topics: true, minShared: null, tensions: true, ledger: true },
+    quoteContext: null,
   });
   savingClaims.clear();
   graphReset();
@@ -630,7 +636,11 @@ async function loadProposed(key, wanted) {
 // mode a claim appears once per topic, and emitting a form for each occurrence
 // would put several elements under one `data-form`, so `captureOpenEditor` would
 // read the first while the user typed into another.
-function claimCard(row, shown) {
+// `group` is which drawing of the claim this is: the topic heading it sits
+// under, or the tension it belongs to. A claim with several tags is drawn
+// under each of them, and a passage belongs beside the copy whose button was
+// pressed rather than the first one on the page.
+function claimCard(row, shown, group = '') {
   if (V.editing === row.id && shown && !shown.has(row.id)) {
     shown.add(row.id);
     const draft = V.drafts[row.id];
@@ -645,7 +655,7 @@ function claimCard(row, shown) {
       ${esc(own ? own.text : l.claim)}${l.note ? ' — ' + esc(l.note) : ''}</div>`;
   }).join('');
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'} ${row.id === V.selectedId ? 'sel' : ''}"
-       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
+       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}">
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
@@ -662,7 +672,7 @@ function claimCard(row, shown) {
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${quoteHtml(row)}
+    ${quoteHtml(row, group)}
     ${links}
   </div>`;
 }
@@ -670,12 +680,74 @@ function claimCard(row, shown) {
 // The quote, flagged when it was not found in the paper's text. A quote the
 // model paraphrased or invented is the commonest extraction error, and this is
 // the one error the machine can catch on its own.
-function quoteHtml(row) {
+function quoteHtml(row, group = '') {
   if (!row.quote) return '';
   const flag = row.quote_verified === false
     ? '<span class="qflag" title="This quote was not found in the PDF text. Check it against the paper.">not found in PDF</span> '
     : '';
-  return `<blockquote>${flag}${esc(row.quote)}</blockquote>`;
+  // Beside the copy whose button was pressed. Grouped by topic a claim with
+  // several tags is drawn under each of them, and in the tensions view it
+  // appears in every pair it is part of; without the group the passage would
+  // open under all of them, and keyed on the first drawn it would open
+  // somewhere the reader is not looking.
+  const open = Boolean(V.quoteContext && V.quoteContext.claim === row.id
+    && (V.quoteContext.group || '') === group);
+  const show = `<button type="button" class="qshow" data-act="quote-context"
+    data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}"
+    title="Read this quote where it sits in the PDF">${open ? 'hide the paper' : 'in the paper'}</button>`;
+  return `<blockquote>${flag}${esc(row.quote)} ${show}</blockquote>
+    ${open ? quoteContextHtml(row) : ''}`;
+}
+
+// The passage of the PDF the quote was matched against, read out of the text
+// already extracted for the check. A quote the model reworded is the commonest
+// extraction error and the slowest to correct by hand, so the paper's own
+// sentence is offered as a replacement rather than left to be copied out of
+// the PDF.
+function quoteContextHtml(row) {
+  const ctx = V.quoteContext;
+  if (ctx.loading) return '<div class="qctx">Reading the PDF…</div>';
+  if (ctx.error) return `<div class="qctx"><span class="qflag">${esc(ctx.error)}</span></div>`;
+  const found = ctx.data;
+  if (!found.available) return `<div class="qctx">${esc(found.reason)}</div>`;
+  // The passage was worked out from the quote and locator the server held when
+  // it was asked. If they have moved since — another tab, another process, the
+  // CLI — it describes a claim that is no longer there, and offering to write
+  // its suggestion back would undo that edit.
+  if (found.quote !== row.quote || (found.locator || '') !== (row.locator || '')) {
+    return '<div class="qctx">This claim changed while the passage was open. Open it again.</div>';
+  }
+  if (!found.suggestion) {
+    return '<div class="qctx">No passage in this PDF resembles this quote.</div>';
+  }
+  const where = found.page
+    ? `${found.found ? 'Found on' : 'Closest passage,'} page ${found.page} of ${found.pages}`
+    : (found.found ? 'Found in the PDF' : 'Closest passage');
+  // The locator is the model's own answer to the same question, and it is
+  // wrong often enough to be worth showing side by side with the real page.
+  // Unless the quote is in the paper more than once: then the page shown is
+  // the first of them, and the locator naming another one is no disagreement.
+  const elsewhere = found.repeated
+    ? '<span class="qlocator" title="The passage shown is the first of them.">appears more than once</span>'
+    : (found.locator_page && found.page && found.locator_page !== found.page
+      ? `<span class="qlocator" title="The claim's locator names a different page.">locator says ${esc(row.locator)}</span>`
+      : '');
+  const diff = found.diff.length
+    ? `<p class="qdiff">${found.diff.map((part) => {
+        if (part.op === 'quote') return `<del>${esc(part.text)}</del>`;
+        if (part.op === 'paper') return `<ins>${esc(part.text)}</ins>`;
+        return esc(part.text);
+      }).join(' ')}</p>`
+    : '';
+  const replace = found.suggestion === row.quote ? '' : `<button type="button" class="primary"
+    data-act="use-wording" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
+    title="Replace the quote with the sentence as the paper writes it">Use the paper's wording</button>`;
+  return `<div class="qctx">
+    <div class="qwhere">${esc(where)} ${elsewhere}</div>
+    <p class="qpassage">${esc(found.before)} <mark>${esc(found.suggestion)}</mark> ${esc(found.after)}</p>
+    ${diff}
+    <div class="qacts">${replace}</div>
+  </div>`;
 }
 
 function tensionMarker(claimId) {
@@ -715,7 +787,7 @@ function agreementCard(a) {
       <span class="cact">${actions.join('')}</span>
     </div>
     ${a.note ? `<p class="tnote">${esc(a.note)}</p>` : ''}
-    <div class="tgroup">${a.claims.map(tensionClaimCard).join('')}</div>
+    <div class="tgroup">${a.claims.map((row) => tensionClaimCard(row, a.id)).join('')}</div>
     ${a.stale ? '<p class="stale">A claim here was edited or removed after this was found. Re-run Find agreements to re-judge it, or decide it yourself.</p>' : ''}
   </div>`;
 }
@@ -779,7 +851,10 @@ async function findAgreements() {
 // A claim as it appears inside a tension: the same card, minus the review and
 // edit controls. Editing belongs to the claims view, where the editor's
 // lifecycle is handled; a click on the citation goes there.
-function tensionClaimCard(row) {
+// `group` is the tension or agreement this drawing of the claim belongs to;
+// one claim can be in several, and a passage opens beside the one it was
+// asked for. See `claimCard`.
+function tensionClaimCard(row, group = '') {
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'}" data-tclaim="${esc(row.id)}">
@@ -791,7 +866,7 @@ function tensionClaimCard(row) {
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${quoteHtml(row)}
+    ${quoteHtml(row, group)}
   </div>`;
 }
 
@@ -811,7 +886,7 @@ function tensionCard(t) {
       ${topics}
       <span class="cact">${actions.join('')}</span>
     </div>
-    <div class="tpair">${t.claims.map(tensionClaimCard).join('')}</div>
+    <div class="tpair">${t.claims.map((row) => tensionClaimCard(row, t.id)).join('')}</div>
     ${t.note ? `<p class="tnote">${esc(t.note)}</p>` : ''}
     ${t.stale ? '<p class="stale">A claim here was edited after this was found. Re-run Find tensions to re-judge it, or decide it yourself.</p>' : ''}
   </div>`;
@@ -1156,7 +1231,7 @@ function renderContent() {
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const shown = new Set();
-  const card = (row) => claimCard(row, shown);
+  const card = (row, group = '') => claimCard(row, shown, group);
   const rows = visibleClaims();
   // An editor for a claim the current filters exclude cannot be drawn, and
   // leaving `V.editing` set would also stop background content updates, which
@@ -1220,11 +1295,11 @@ function renderContent() {
       html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span>${synthesizeButton(tag)}</h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
         + synthesisBlock(tag)
-        + group.map(card).join('') + '</div>';
+        + group.map((row) => card(row, tag)).join('') + '</div>';
     }
     if (untagged.length) {
       html += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
-        + untagged.map(card).join('') + '</div>';
+        + untagged.map((row) => card(row, 'untagged')).join('') + '</div>';
     }
   } else {
     html += rows.map(card).join('');
@@ -1980,7 +2055,79 @@ async function toggleReviewed(row) {
   if (stillOpen) renderContent();
 }
 
+async function showQuoteContext(paper, claim, group = '') {
+  // The pending request itself is what a late answer has to match, not the
+  // claim id: claim ids are unique per corpus and not across workspaces, so
+  // opening the same id in another workspace before the first read finishes
+  // would otherwise be answered with the other corpus's passage — and "use
+  // the paper's wording" would write it into this one.
+  const pending = { claim, paper, group, loading: true, error: null, data: null };
+  // Another claim's editor can be open on the same screen, holding text that
+  // exists only in the DOM. Every redraw has to read it first or the passage
+  // opening throws away what somebody was typing.
+  captureOpenEditor();
+  V.quoteContext = pending;
+  renderContent();
+  try {
+    const data = await api(
+      `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/quote-context`);
+    if (V.quoteContext === pending) {
+      V.quoteContext = { claim, paper, group, loading: false, error: null, data };
+    }
+  } catch (error) {
+    if (V.quoteContext === pending) {
+      V.quoteContext = { claim, paper, group, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
+    }
+  }
+  captureOpenEditor();   // an editor may have been opened while the PDF was read
+  renderContent();
+}
+
+// Take the paper's wording for a quote. The claim's editor is never open while
+// the passage is on screen — the card is replaced by the form — but a draft
+// from an earlier edit can be, and it holds the old quote: saving it later
+// would put the model's version back.
+async function usePaperWording(paper, claim) {
+  const found = V.quoteContext && V.quoteContext.data;
+  const wording = found && found.suggestion;
+  if (!wording || isSaving(claim)) return;
+  // The passage on screen can be older than the claim: while an editor is
+  // open the poll leaves the content alone, so a quote edited elsewhere
+  // refreshes `S` under a button still offering the old suggestion. Checked
+  // again here, against the row as it stands, rather than trusted because it
+  // is drawn.
+  const row = S.claims.find((c) => c.id === claim);
+  if (!row || found.quote !== row.quote || (found.locator || '') !== (row.locator || '')) {
+    V.quoteContext = null;
+    V.error = 'This claim changed while the passage was open; nothing was written.';
+    captureOpenEditor();
+    renderContent();
+    return;
+  }
+  V.error = null;
+  markSaving(claim, true);
+  try {
+    await patchClaim(paper, claim, { quote: wording });
+    if (V.drafts[claim]) V.drafts[claim] = { ...V.drafts[claim], quote: wording };
+    V.quoteContext = null;
+  } catch (error) {
+    V.error = `Could not replace the quote: ${error.message}`;
+  } finally {
+    markSaving(claim, false);
+  }
+  captureOpenEditor();   // another claim's editor may be open and unsaved
+  renderContent();
+}
+
 async function patchClaim(paper, claim, patch) {
+  // An open passage was worked out from the quote and locator as they were.
+  // Saving either makes it describe a claim that no longer exists, and "use
+  // the paper's wording" would then write the old suggestion over the new
+  // quote. Closed rather than refetched: the reviewer just decided what the
+  // quote should say, and reopening it under them would be a surprise.
+  if (('quote' in patch || 'locator' in patch) && V.quoteContext && V.quoteContext.claim === claim) {
+    V.quoteContext = null;
+  }
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -2172,6 +2319,22 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'review') {
       await toggleReviewed(S.claims.find((c) => c.id === claim));
+      return;
+    }
+    if (act === 'quote-context') {
+      const group = button.dataset.group || '';
+      if (V.quoteContext && V.quoteContext.claim === claim
+          && (V.quoteContext.group || '') === group) {
+        V.quoteContext = null;
+        captureOpenEditor();
+        renderContent();
+        return;
+      }
+      await showQuoteContext(paper, claim, group);
+      return;
+    }
+    if (act === 'use-wording') {
+      await usePaperWording(paper, claim);
       return;
     }
     if (act === 'del') {

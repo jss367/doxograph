@@ -148,9 +148,23 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .claim .cev { font-size: .86rem; margin: .3rem 0 0; }
 .claim blockquote { margin: .3rem 0 0; padding-left: .6rem; border-left: 2px solid var(--line);
   color: var(--muted); font-size: .84rem; }
-.qflag { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+.qflag, .qlocator { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
   border: 1px solid var(--warn); border-radius: 3px; padding: 0 .3rem; color: var(--warn);
   margin-right: .3rem; cursor: help; }
+
+/* The quote as the paper writes it, opened under the claim. */
+.qshow { font-size: .72rem; padding: 0 .3rem; color: var(--muted); vertical-align: baseline; }
+.qctx { margin: .35rem 0 0 .6rem; padding: .45rem .6rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 5px; font-size: .84rem; }
+.qwhere { color: var(--muted); font-size: .76rem; display: flex; gap: .4rem;
+  align-items: center; flex-wrap: wrap; }
+.qpassage { margin: .3rem 0 0; color: var(--muted); }
+.qpassage mark { background: var(--sel); color: var(--ink); padding: 0 .1rem; }
+.qdiff { margin: .35rem 0 0; padding-top: .35rem; border-top: 1px solid var(--line); }
+.qdiff del { color: var(--warn); }
+.qdiff ins { color: var(--ok); text-decoration: none; font-weight: 600; }
+.qacts:not(:empty) { margin-top: .45rem; }
+.qacts button { font-size: .76rem; }
 .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
   border: 1px solid var(--line); border-radius: 3px; padding: 0 .3rem; color: var(--muted); }
 .kind.negative, .kind.conjecture, .kind.contradiction { color: var(--warn); border-color: var(--warn); }

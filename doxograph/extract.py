@@ -362,7 +362,10 @@ Extract its claims."""
 # derived from the PDF and can be (re)computed by `verify_quotes` while a
 # re-read is waiting on the model. Counting a fresh verdict as an edit would
 # keep every unreviewed claim and then append the new extraction beside it.
-DERIVED_CLAIM_FIELDS = frozenset({"id", "quote_verified"})
+# Fields the machine fills in. A quote check running against a claim while a
+# re-read is in flight must not look like somebody editing it, or the merge
+# keeps the "edited" claim and appends the freshly extracted one beside it.
+DERIVED_CLAIM_FIELDS = frozenset({"id", "quote_verified", "quote_page"})
 
 
 def claim_state(claim: dict) -> str:

@@ -47,6 +47,15 @@ on letters and digits alone so line breaks and hyphenation do not count against
 it, and a quote that is not found is flagged on the claim. `doxograph verify`
 runs the check over a corpus extracted before it existed.
 
+The check knows where in the paper it looked, so the app can show you. Under
+any quote, **in the paper** opens the passage the check matched it against:
+the sentence as the paper writes it, the text either side, the page it is on,
+and the words that differ from the quote on the claim. A quote the model
+reworded is corrected with one click on **Use the paper's wording**, which is
+an ordinary edit and re-runs the check. The page it was really found on sits
+next to the locator the model wrote, so a claim pointing at the wrong page
+says so. None of this calls the API.
+
 ## Install
 
 ```
@@ -166,6 +175,7 @@ workspaces.json       named workspace registry
 workspaces/<id>/      an independent named corpus
 papers/<key>.json    one paper and its claims
 pdfs/<key>.pdf       the paper itself
+text/<key>.txt       its text, extracted once and reused (pages split by \f)
 locks/               lock files, so two processes do not write at once
 retired-keys.json    keys of removed papers, never issued again
 tags.yaml            the topic vocabulary
@@ -175,6 +185,11 @@ ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 export/              generated HTML
 ```
+
+The text under `text/` is a cache: delete it and the next quote check writes
+it again from the PDF. It is what the quote checks, the passage shown beside a
+claim, and the page numbers are all read out of, so a paper is parsed once
+rather than once per claim.
 
 One file per paper, so every change to a claim is a readable diff. If you want
 version history for the corpus, `git init` inside the data directory.

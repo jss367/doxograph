@@ -947,6 +947,17 @@ def verify_quotes(key: str) -> dict:
     return {"key": key, "n_unverified": store.summarize(paper)["n_unverified"]}
 
 
+@app.get("/api/papers/{key}/claims/{claim_id}/quote-context")
+def quote_context(key: str, claim_id: str) -> dict:
+    """The passage of the PDF a claim's quote was matched against."""
+    if not store.paper_path(key).exists():
+        raise HTTPException(404, f"no paper {key}")
+    try:
+        return store.quote_context(key, claim_id)
+    except KeyError:
+        raise HTTPException(404, f"no claim {claim_id} on {key}")
+
+
 @app.post("/api/retag")
 def retag(body: RetagBody) -> dict:
     _require_analysis()
