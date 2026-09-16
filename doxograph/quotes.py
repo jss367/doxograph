@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import array
 import difflib
+import os
 import re
+import tempfile
 import threading
 import unicodedata
 from dataclasses import dataclass
@@ -172,15 +174,27 @@ def _read_cached(cache: Path | None, pdf_mtime_ns: int) -> str | None:
 
 def _write_cached(cache: Path | None, raw: str) -> None:
     """Store the extracted text, including the empty text of a scanned paper
-    so it is not parsed again on every claim. A corpus that cannot be written
-    to is not worth failing a quote check over."""
+    so it is not parsed again on every claim.
+
+    Written to a temporary file and moved into place: `doxograph serve` and a
+    `doxograph extract` in a shell share one corpus, and a truncating write
+    leaves a window where the other process reads a half-written file, sees a
+    newer mtime, and trusts it. A corpus that cannot be written to is not
+    worth failing a quote check over.
+    """
     if cache is None:
         return
+    staged = None
     try:
         cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(raw, encoding="utf-8")
+        handle, name = tempfile.mkstemp(dir=cache.parent, prefix=f".{cache.name}.", suffix=".tmp")
+        staged = Path(name)
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(raw)
+        os.replace(staged, cache)
     except OSError:
-        pass
+        if staged is not None:
+            staged.unlink(missing_ok=True)
 
 
 def pdf_text(path: Path, cache: Path | None = None) -> str | None:
@@ -292,14 +306,17 @@ def locate(pdf: Path, quote: str, cache: Path | None = None) -> dict | None:
         return result
     result["repeated"] = score >= 1.0 and text.squashed.find(needle, lo + 1) >= 0
     start, end = text.offsets[lo], text.offsets[hi - 1] + 1
-    # The page the match starts on and the page it ends on: a sentence that
-    # runs over a page break belongs to the reader whole, and a suggestion cut
-    # at the break would be saved as the quote by "use the paper's wording".
-    low = text.page_bounds(start)[0]
-    high = text.page_bounds(end - 1)[1]
-    begin, finish = _sentence_bounds(text.raw, start, end, low, high)
+    # The sentence is not bounded by the page. A quote can run over a page
+    # break, and so can the sentence around one that does not; cut at the
+    # break, "use the paper's wording" would save half a sentence as the
+    # quote. What bounds the search is the span either side, as always.
+    begin, finish = _sentence_bounds(text.raw, start, end, 0, len(text.raw))
     result["page"] = text.page_of(start)
     result["suggestion"] = tidy(text.raw[begin:finish])
+    # The text around it stays on the sentence's own pages: a page further out
+    # is a different part of the paper, and reading it here would mislead.
+    low = text.page_bounds(begin)[0]
+    high = text.page_bounds(max(finish - 1, begin))[1]
     result["before"] = tidy(text.raw[_back(text.raw, begin, low):begin])
     result["after"] = tidy(text.raw[finish:_forward(text.raw, finish, high)])
     return result

@@ -1607,3 +1607,67 @@ def test_citations_do_not_cross_between_workspaces():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_passage_stands_aside_when_the_claim_changes_underneath_it():
+    """Another tab, or the CLI, can edit the claim while the pane is open. The
+    suggestion was worked out from the quote as it was, and offering to write
+    it back would undo that edit."""
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    claim = store.add_claim(key, {
+        "text": "Steered models recover.",
+        "quote": "Steering recovery is path dependant across all scales."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(".claim .qflag").wait_for()
+                await page.get_by_role("button", name="in the paper").click()
+                await page.locator(".qctx .qpassage").wait_for()
+
+                # Edited from outside this page entirely.
+                store.update_claim(key, claim["id"], {"quote": "Recovery under steering"})
+                await page.locator(".qctx", has_text="changed while the passage was open").wait_for()
+                assert await page.get_by_role("button", name="Use the paper's wording").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_paper_arriving_after_the_search_still_turns_up_in_it():
+    from pdfs import minimal_pdf
+
+    _paper("han2026reports", "Introspection in language models", "introspection")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("sandbagging")
+                await page.locator(".pdfhits", has_text="No paper's text holds").wait_for()
+
+                # Imported while the query stands. Filtering the answer against
+                # the corpus can drop a hit that has gone but cannot add one
+                # that has arrived, so the question is asked again.
+                store.save_paper(store.new_paper("wu2026silent", title="A silent paper", year=2026))
+                store.pdf_path("wu2026silent").write_bytes(minimal_pdf([
+                    "A silent paper", "This one discusses sandbagging at length."]))
+                await page.locator('.pdfhits [data-paper="wu2026silent"]').wait_for()
+
+            await browser.close()
+
+    asyncio.run(scenario())
