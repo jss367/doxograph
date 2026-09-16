@@ -1364,3 +1364,41 @@ def test_a_reworded_quote_is_shown_beside_the_paper_and_can_take_its_wording():
     saved = store.load_paper(key)["claims"][0]
     assert saved["quote"].startswith("Recovery under steering is a path-dependent outcome")
     assert (saved["quote_verified"], saved["quote_page"]) == (True, 2)
+
+
+@pytest.mark.browser
+def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    claim = store.add_claim(key, {
+        "text": "Steered models recover.",
+        "quote": "Steering recovery is path dependant across all scales."})
+    assert claim["quote_verified"] is False
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(".claim .qflag").wait_for()
+                await page.get_by_role("button", name="in the paper").click()
+                await page.locator(".qctx .qpassage").wait_for()
+
+                # Correcting the quote by hand makes the passage describe a
+                # claim that no longer exists, so it goes rather than offering
+                # to write the old suggestion back over the new quote.
+                await page.get_by_role("button", name="edit").click()
+                await page.locator('textarea[name="quote"]').fill(
+                    "Recovery under steering is a path-dependent outcome across all scales.")
+                await page.get_by_role("button", name="Save").click()
+                await page.locator(".claim .qflag").wait_for(state="detached")
+                assert await page.locator(".qctx").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())

@@ -708,9 +708,13 @@ function quoteContextHtml(row) {
     : (found.found ? 'Found in the PDF' : 'Closest passage');
   // The locator is the model's own answer to the same question, and it is
   // wrong often enough to be worth showing side by side with the real page.
-  const elsewhere = found.locator_page && found.page && found.locator_page !== found.page
-    ? `<span class="qlocator" title="The claim's locator names a different page.">locator says ${esc(row.locator)}</span>`
-    : '';
+  // Unless the quote is in the paper more than once: then the page shown is
+  // the first of them, and the locator naming another one is no disagreement.
+  const elsewhere = found.repeated
+    ? '<span class="qlocator" title="The passage shown is the first of them.">appears more than once</span>'
+    : (found.locator_page && found.page && found.locator_page !== found.page
+      ? `<span class="qlocator" title="The claim's locator names a different page.">locator says ${esc(row.locator)}</span>`
+      : '');
   const diff = found.diff.length
     ? `<p class="qdiff">${found.diff.map((part) => {
         if (part.op === 'quote') return `<del>${esc(part.text)}</del>`;
@@ -2032,18 +2036,22 @@ async function toggleReviewed(row) {
 }
 
 async function showQuoteContext(paper, claim) {
-  V.quoteContext = { claim, paper, loading: true, error: null, data: null };
+  // The pending request itself is what a late answer has to match, not the
+  // claim id: claim ids are unique per corpus and not across workspaces, so
+  // opening the same id in another workspace before the first read finishes
+  // would otherwise be answered with the other corpus's passage — and "use
+  // the paper's wording" would write it into this one.
+  const pending = { claim, paper, loading: true, error: null, data: null };
+  V.quoteContext = pending;
   renderContent();
   try {
     const data = await api(
       `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/quote-context`);
-    // The pane can have been closed, or another one opened, while the PDF was
-    // being read; a late answer must not reopen it or overwrite the new one.
-    if (V.quoteContext && V.quoteContext.claim === claim) {
+    if (V.quoteContext === pending) {
       V.quoteContext = { claim, paper, loading: false, error: null, data };
     }
   } catch (error) {
-    if (V.quoteContext && V.quoteContext.claim === claim) {
+    if (V.quoteContext === pending) {
       V.quoteContext = { claim, paper, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
     }
   }
@@ -2072,6 +2080,14 @@ async function usePaperWording(paper, claim) {
 }
 
 async function patchClaim(paper, claim, patch) {
+  // An open passage was worked out from the quote and locator as they were.
+  // Saving either makes it describe a claim that no longer exists, and "use
+  // the paper's wording" would then write the old suggestion over the new
+  // quote. Closed rather than refetched: the reviewer just decided what the
+  // quote should say, and reopening it under them would be a surprise.
+  if (('quote' in patch || 'locator' in patch) && V.quoteContext && V.quoteContext.claim === claim) {
+    V.quoteContext = null;
+  }
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

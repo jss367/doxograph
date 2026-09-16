@@ -460,6 +460,11 @@ def publish_pdf(key: str, staging: Path) -> bool:
             staging.unlink(missing_ok=True)
             return False
         os.replace(staging, store.pdf_path(key))
+        # The text stored for the old PDF describes a paper that is no longer
+        # there. `os.replace` carries the staged file's mtime, which can be
+        # older than that text, so the freshness check alone would go on
+        # serving it and quotes would be checked against the wrong paper.
+        store.text_path(key).unlink(missing_ok=True)
         return True
 
 

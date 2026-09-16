@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, extract, quotes, server, store
+from doxograph import __main__, extract, ingest, quotes, server, store
 
 from pdfs import minimal_pdf
 
@@ -348,3 +348,62 @@ def test_deleting_a_paper_takes_its_extracted_text_with_it():
     assert store.text_path(key).exists()
     store.delete_paper(key)
     assert not store.text_path(key).exists()
+
+
+# --- what the passage must not get wrong ----------------------------------
+
+def test_a_sentence_running_over_a_page_break_is_kept_whole(tmp_path):
+    pdf = tmp_path / "split.pdf"
+    pdf.write_bytes(minimal_pdf([
+        "We find that recovery under steering is a path-dependent",
+        "outcome across all three model scales. The effect is smaller at 7B.",
+    ]))
+    found = quotes.locate(pdf, "recovery under steering is a path-dependent outcome")
+    assert found["found"] is True
+    # Cut at the page break, the suggestion would end at "path-dependent" and
+    # taking the paper's wording would save half a sentence as the quote.
+    assert found["suggestion"].endswith("across all three model scales.")
+    assert found["page"] == 1
+
+
+def test_a_quote_that_appears_twice_says_so_rather_than_naming_a_page(tmp_path):
+    line = "Recovery under steering is a path-dependent outcome across all scales."
+    pdf = tmp_path / "twice.pdf"
+    pdf.write_bytes(minimal_pdf([f"First page. {line}", f"Second page. {line}"]))
+    found = quotes.locate(pdf, line)
+    assert (found["found"], found["repeated"], found["page"]) == (True, True, 1)
+    # A quote in one place is not repeated, and its page can be believed.
+    once = quotes.locate(tmp_path / "twice.pdf", "First page.")
+    assert once["repeated"] is False
+
+
+def test_a_replaced_pdf_takes_the_stored_text_with_it(tmp_path):
+    key = "doe2026recovery"
+    store.save_paper(store.new_paper(key, title="Recovery"))
+    store.pdf_path(key).write_bytes(minimal_pdf(SENTENCE))
+    claim = store.add_claim(key, {"text": "A.", "quote": SENTENCE})
+    assert claim["quote_verified"] is True
+    assert store.text_path(key).exists()
+
+    # A PDF published by `os.replace` keeps the staged file's mtime, which can
+    # be older than the text stored for the paper it replaces.
+    staged = tmp_path / "staged.pdf"
+    staged.write_bytes(minimal_pdf("A wholly different paper about penguins."))
+    old = store.text_path(key).stat().st_mtime_ns - 5_000_000
+    os.utime(staged, ns=(old, old))
+    assert ingest.publish_pdf(key, staged) is True
+    assert not store.text_path(key).exists()
+
+    quotes._cache.clear()
+    assert store.verify_quotes(key)["claims"][0]["quote_verified"] is False
+
+
+def test_stored_text_as_old_as_its_pdf_is_not_trusted(tmp_path):
+    pdf, cache = tmp_path / "p.pdf", tmp_path / "text" / "p.txt"
+    pdf.write_bytes(minimal_pdf(SENTENCE))
+    assert quotes.verify(pdf, SENTENCE, cache) is True
+    cache.write_text("penguins", encoding="utf-8")
+    stamp = pdf.stat().st_mtime_ns
+    os.utime(cache, ns=(stamp, stamp))
+    quotes._cache.clear()
+    assert quotes.verify(pdf, SENTENCE, cache) is True    # read from the PDF again
