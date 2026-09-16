@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, ingest, search, server, store
+from doxograph import __main__, ingest, quotes, search, server, store
 
 from pdfs import minimal_pdf
 
@@ -290,3 +290,20 @@ def test_an_accent_is_found_however_the_pdf_spells_it():
 def test_lao_is_a_script_without_spaces_too():
     a_paper_of("lao", "A paper about ພາສາລາວ.")
     assert [hit["key"] for hit in search.search_papers("ລາວ")] == ["lao"]
+
+
+def test_text_older_than_its_pdf_is_read_again(tmp_path):
+    """A paper replaced by hand leaves the old text in place."""
+    import os
+
+    store.save_paper(store.new_paper("swapped", title="Swapped"))
+    store.pdf_path("swapped").write_bytes(minimal_pdf("A paper about sandbagging."))
+    assert [hit["key"] for hit in search.search_papers("sandbagging")] == ["swapped"]
+
+    store.pdf_path("swapped").write_bytes(minimal_pdf("A paper about penguins."))
+    stamp = store.text_path("swapped").stat().st_mtime_ns + 1_000_000
+    os.utime(store.pdf_path("swapped"), ns=(stamp, stamp))
+    search._texts.clear()
+    quotes._cache.clear()
+    assert search.search_papers("sandbagging") == []
+    assert [hit["key"] for hit in search.search_papers("penguins")] == ["swapped"]
