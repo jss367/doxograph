@@ -515,3 +515,37 @@ def test_correcting_a_papers_own_details_is_worth_asking_about_again(monkeypatch
         client.patch("/api/papers/doe2026recovery", json={"title": "Recovery under steering, revisited"})
     assert extract.find_tensions("recovery-rate")["skipped"] is False
     assert len(calls) == 2
+
+
+def test_deleting_a_topic_forgets_the_pass_that_was_run_over_it(monkeypatch):
+    """Recreating the tag over the same claims makes the same signature, so a
+    pass left on file would be skipped and the pairs never get their topic
+    back."""
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    extract.find_tensions("recovery-rate")
+    assert store.tension_rows()[0]["topics"] == ["recovery-rate"]
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    store.delete_tag("recovery-rate")
+    assert store.tension_rows()[0]["topics"] == []
+    store.add_tag("recovery-rate", "How often a model returns to task.")
+    for claim_id, key in ((a, "doe2026recovery"), (b, "li2025steer")):
+        store.update_claim(key, claim_id, {"tags": ["recovery-rate"]})
+
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert store.tension_rows()[0]["topics"] == ["recovery-rate"]
+
+
+def test_a_renamed_topic_keeps_the_pass_that_was_run_over_it(monkeypatch):
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    store.rename_tag("recovery-rate", "task-recovery")
+    # The claims say the same thing under a new name, and the name is in the
+    # signature, so it is asked once more and then left alone.
+    assert extract.find_tensions("task-recovery")["skipped"] is False
+    assert extract.find_tensions("task-recovery")["skipped"] is True
+    assert store.tension_pass("recovery-rate") is None

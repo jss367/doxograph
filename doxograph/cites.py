@@ -29,6 +29,12 @@ from . import config, quotes, search, store
 # Plural on purpose: "referenced" and "references" part company at the eighth
 # letter, so a line of prose beginning "Referenced work…" is not a heading.
 _HEADINGS = ("references", "bibliography", "workscited", "literaturecited")
+# What a heading may carry after the word. A short body line — "References to
+# Figure 2 show…" — begins with one of the words above too, and reading the
+# rest of the paper as a reference list invents citations out of its prose.
+_HEADING_TAIL = ("", "cited", "andnotes", "notes", "andfurtherreading", "andbibliography",
+                 "primary", "primarysources", "secondary", "secondarysources",
+                 "consulted", "list")
 _HEADING_LINE = 40
 
 # How much of a title has to survive squashing before it can be looked for. A
@@ -58,7 +64,8 @@ def reference_text(text: str) -> str:
         if len(line.strip()) > _HEADING_LINE:
             continue
         squashed = quotes.squash(line).lstrip("0123456789")
-        if squashed.startswith(_HEADINGS):
+        head = next((h for h in _HEADINGS if squashed.startswith(h)), None)
+        if head is not None and squashed[len(head):] in _HEADING_TAIL:
             return text[at:]
     return ""
 
@@ -122,22 +129,36 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
     on the same stretch of the list, only the longer is a citation; the shorter
     is part of it.
     """
-    hits: list[tuple[int, int, str]] = []
+    hits: list[tuple[int, int, str, list[int]]] = []
     for other, found in marks.items():
         if other == key:
             continue
         for mark in found:
-            at = listing.find(mark)
-            if at >= 0:
-                hits.append((at, at + len(mark), other))
+            places = _occurrences(listing, mark)
+            if places:
+                hits.append((places[0], places[0] + len(mark), other, places))
                 break
-    # Longest first, so a shorter mark inside one already taken is dropped.
-    cited: list[tuple[int, int, str]] = []
+    # Longest first, so a shorter mark inside one already taken is dropped —
+    # but only where every mention of it is inside one. A list that cites both
+    # papers names the shorter one somewhere on its own.
+    cited: list[tuple[int, int, str, list[int]]] = []
     for span in sorted(hits, key=lambda hit: hit[0] - hit[1]):
-        if any(taken[0] <= span[0] and span[1] <= taken[1] for taken in cited):
+        width = span[1] - span[0]
+        if all(any(taken[0] <= at and at + width <= taken[1] for taken in cited)
+               for at in span[3]):
             continue
         cited.append(span)
-    return sorted(other for _, _, other in cited)
+    return sorted(other for _, _, other, _ in cited)
+
+
+def _occurrences(listing: str, mark: str, cap: int = 20) -> list[int]:
+    """Where a mark falls in a reference list, up to `cap` places."""
+    places = []
+    at = listing.find(mark)
+    while at >= 0 and len(places) < cap:
+        places.append(at)
+        at = listing.find(mark, at + 1)
+    return places
 
 
 def _text_signature() -> str:

@@ -842,6 +842,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
     if not rows:
         return {"written": False, "skipped": False, "claims": 0, "papers": 0}
     tags = store.load_tags() if tags is None else tags
+    basis = store.synthesis_prompt_basis(topic, tags)
     if not force:
         current = next((r for r in store.synthesis_rows(all_rows) if r["topic"] == topic), None)
         # The prompt as well as the claims and tensions: a synthesis written
@@ -849,7 +850,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
         # is worth writing again, and nothing in the corpus changing would
         # ever say so.
         if (current and not current["stale"]
-                and current.get("prompt_basis") == store.synthesis_prompt_basis(topic, tags)):
+                and current.get("prompt_basis") == basis):
             return {"written": False, "skipped": True, "claims": len(rows), "papers": len(papers)}
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
@@ -882,7 +883,8 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
         detail = getattr(response.stop_details, "explanation", "") or ""
         raise RuntimeError(f"synthesis refused for {topic}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
-    record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions, before=before)
+    record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions,
+                                    before=before, basis=basis)
     return {"written": record is not None, "skipped": False,
             "claims": len(rows), "papers": len(papers)}
 

@@ -192,3 +192,18 @@ def test_the_text_is_stored_before_the_papers_lock_is_let_go(monkeypatch, tmp_pa
     # The second publish lands whole, text and all, once the first lets go.
     stored = store.text_path("doe2026study").read_text(encoding="utf-8")
     assert "penguins" in stored and "sandbagging" not in stored
+
+
+def test_a_passage_says_where_its_terms_are():
+    store.save_paper(store.new_paper("strasse", title="Strasse"))
+    store.pdf_path("strasse").write_bytes(minimal_pdf("Die Straße war lang. Die Straße war leer."))
+    passage = search.search_papers("STRASSE")[0]["passages"][0]
+    assert passage["marks"], "the browser cannot find these itself"
+    shown = [passage["text"][a:b] for a, b in passage["marks"]]
+    assert shown == ["Straße", "Straße"]
+
+    # Two terms in one passage come back in order and do not overlap.
+    store.save_paper(store.new_paper("two", title="Two"))
+    store.pdf_path("two").write_bytes(minimal_pdf("Recovery under steering is path-dependent."))
+    passage = search.search_papers("steering recovery")[0]["passages"][0]
+    assert [passage["text"][a:b] for a, b in passage["marks"]] == ["Recovery", "steering"]

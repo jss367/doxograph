@@ -128,3 +128,28 @@ def test_a_title_inside_a_longer_title_is_not_a_citation_of_both():
         "References\n[1] Somebody. Attention is all you need for image restoration. 2026.",
     ])
     assert [edge["to"] for edge in cites.edges() if edge["from"] == "citing"] == ["long"]
+
+
+def test_a_line_of_prose_that_starts_with_the_word_is_not_a_heading():
+    """"References to Figure 2 show…" begins with the word too, and reading the
+    rest of the paper as a reference list invents citations out of its prose."""
+    _paper("cited", ATTENTION, [ATTENTION, "Text."])
+    _paper("prose", "A paper with no bibliography", [
+        "A paper with no bibliography",
+        "References to Figure 2 show\nthat Attention is all you need, as others put it.",
+    ])
+    assert cites.edges() == []
+
+
+def test_both_papers_are_cited_when_the_list_names_both():
+    """The shorter title sits inside the longer one's reference, but it is
+    named on its own further down."""
+    _paper("short", "Attention is all you need", ["Attention is all you need", "Text."])
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Somebody. Attention is all you need for image restoration. 2026.\n"
+        "[2] Vaswani et al. Attention is all you need. 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["long", "short"]
