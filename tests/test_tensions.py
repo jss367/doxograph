@@ -610,3 +610,37 @@ def test_a_topic_deleted_during_the_call_does_not_get_its_pass_recorded(monkeypa
     monkeypatch.setattr(extract, "client", lambda: Client())
     extract.find_tensions("recovery-rate")
     assert store.tension_pass("recovery-rate") is None
+
+
+def test_one_claim_losing_the_topic_mid_call_leaves_the_pass_unrecorded(monkeypatch):
+    """The pair is stored without the topic, so the run that would put it back
+    has to happen when the tag is restored."""
+    a, b, _ = build_corpus()
+    calls = []
+
+    class Text:
+        type = "text"
+        def __init__(self, text): self.text = text
+
+    class Response:
+        stop_reason = "end_turn"
+        content = [Text(json.dumps({"tensions": [{"claims": [a, b], "kind": "tension", "note": "n"}]}))]
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            store.update_claim("li2025steer", b, {"tags": []})     # untagged mid-call
+            return Response()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    extract.find_tensions("recovery-rate")
+    assert store.tension_rows()[0]["topics"] == []
+    assert store.tension_pass("recovery-rate") is None
+
+    store.update_claim("li2025steer", b, {"tags": ["recovery-rate"]})
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert store.tension_rows()[0]["topics"] == ["recovery-rate"]
