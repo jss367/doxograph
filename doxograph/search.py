@@ -19,6 +19,7 @@ import math
 import os
 import re
 import threading
+import unicodedata
 from itertools import islice
 from pathlib import Path
 
@@ -66,7 +67,8 @@ def terms(query: str) -> list[str]:
 
 
 def fold(text: str) -> str:
-    """`text` with the case taken out and its line-broken words put together.
+    """`text` with the case and the accents taken out and its line-broken words
+    put together.
 
     This is the form a query is matched against. `str.casefold` over the whole
     string would do the case half, but one character at a time is what
@@ -95,7 +97,13 @@ def fold_with_offsets(text: str) -> tuple[str, array.array]:
     for at, char in enumerate(text):
         if at in dropped:
             continue
-        for out in char.casefold():
+        for out in unicodedata.normalize("NFKD", char).casefold():
+            # A PDF can give an accented letter whole or as a letter and a
+            # mark, and a query is typed whichever way the keyboard does it.
+            # Decomposing both and dropping the marks makes café and cafe
+            # meet, as `quotes.squash` already has them meet for a quote.
+            if unicodedata.combining(out):
+                continue
             folded.append(out)
             offsets.append(at)
     return "".join(folded), offsets
@@ -162,7 +170,7 @@ def folded_text(key: str) -> str | None:
 # is looked for wherever it falls.
 _UNSEGMENTED = re.compile(
     r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
-    r"\uac00-\ud7af\u0e00-\u0e7f\u1780-\u17ff\u0f00-\u0fff]"
+    r"\uac00-\ud7af\u0e00-\u0eff\u1780-\u17ff\u0f00-\u0fff\u1000-\u109f]"
 )
 
 
@@ -331,6 +339,10 @@ def _parts(shown: str, patterns: list[re.Pattern]) -> list[dict]:
         for match in pattern.finditer(folded):
             begin = offsets[match.start()] if match.start() < len(offsets) else len(shown)
             end = offsets[match.end() - 1] + 1 if match.end() - 1 < len(offsets) else len(shown)
+            # A mark the folding dropped belongs to the letter before it: the
+            # accent on the last letter of a word is part of the word.
+            while end < len(shown) and unicodedata.combining(shown[end]):
+                end += 1
             spans.append([begin, end])
     spans.sort()
     merged: list[list[int]] = []
