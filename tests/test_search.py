@@ -194,16 +194,29 @@ def test_the_text_is_stored_before_the_papers_lock_is_let_go(monkeypatch, tmp_pa
     assert "penguins" in stored and "sandbagging" not in stored
 
 
-def test_a_passage_says_where_its_terms_are():
+def test_a_passage_comes_back_already_cut_around_its_terms():
     store.save_paper(store.new_paper("strasse", title="Strasse"))
     store.pdf_path("strasse").write_bytes(minimal_pdf("Die Straße war lang. Die Straße war leer."))
     passage = search.search_papers("STRASSE")[0]["passages"][0]
-    assert passage["marks"], "the browser cannot find these itself"
-    shown = [passage["text"][a:b] for a, b in passage["marks"]]
-    assert shown == ["Straße", "Straße"]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["Straße", "Straße"]
+    # The pieces are the passage, whole and in order.
+    assert "".join(p["text"] for p in passage["parts"]) == passage["text"]
 
     # Two terms in one passage come back in order and do not overlap.
     store.save_paper(store.new_paper("two", title="Two"))
     store.pdf_path("two").write_bytes(minimal_pdf("Recovery under steering is path-dependent."))
     passage = search.search_papers("steering recovery")[0]["passages"][0]
-    assert [passage["text"][a:b] for a, b in passage["marks"]] == ["Recovery", "steering"]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["Recovery", "steering"]
+
+
+def test_a_word_broken_across_a_line_is_one_word_to_a_search():
+    """A two-column paper breaks words at every line, and `quotes.tidy`
+    already knows to put them back for reading."""
+    store.save_paper(store.new_paper("split", title="Split"))
+    store.pdf_path("split").write_bytes(
+        minimal_pdf("We study the transfor-\nmation of steered activations."))
+    assert [hit["key"] for hit in search.search_papers("transformation")] == ["split"]
+    # And the passage still quotes the paper, hyphen closed up as it is read.
+    passage = search.search_papers("transformation")[0]["passages"][0]
+    assert "transformation" in passage["text"]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["transformation"]
