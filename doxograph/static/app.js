@@ -1638,6 +1638,7 @@ function renderGraphNav() {
 let CITATIONS = [];
 let citationsSeq = 0;
 let citationsFailed = false;
+let citationsInFlight = null;   // the workspace an asking is out for, if any
 
 async function loadCitations() {
   // Whose citations these are, and which asking. A request left in flight when
@@ -1645,7 +1646,13 @@ async function loadCitations() {
   // keys can collide with this one's; two askings in the same workspace can
   // also come back in the other order, the older last. Either way the answer
   // that is not the current question is dropped.
+  // One asking per corpus at a time. Reading a corpus takes as long as it
+  // takes and the poll comes round every two and a half seconds, so without
+  // this a retry after a failure would start another scan on every tick until
+  // one finished. A different corpus is a different question, and asks.
   const workspace = currentWorkspaceId;
+  if (citationsInFlight === workspace) return;
+  citationsInFlight = workspace;
   const seq = ++citationsSeq;
   let edges;
   try {
@@ -1657,6 +1664,8 @@ async function loadCitations() {
     // again, so waiting for it to would leave the map bare for the session.
     citationsFailed = true;
     return;
+  } finally {
+    if (citationsInFlight === workspace) citationsInFlight = null;
   }
   if (seq !== citationsSeq || workspace !== currentWorkspaceId) return;
   citationsFailed = false;

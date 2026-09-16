@@ -38,6 +38,11 @@ _HEADING_TAIL = ("", "cited", "andnotes", "notes", "andfurtherreading", "andbibl
 # How long a heading may be once it is down to its letters.
 _HEADING_LETTERS = 40
 
+# How far apart two things can be printed and still be one reference entry.
+# An entry is an author, a title, a venue and a year; squashed, a couple of
+# hundred characters covers a long one.
+_ENTRY = 300
+
 # How much of a title has to survive squashing before it can be looked for. A
 # title of two short words — "Scaling Laws" — occurs in prose that is not a
 # citation of it; twenty letters does not.
@@ -204,10 +209,21 @@ def _identified(key: str, named: dict[str, bool], marks: dict[str, list[str]],
              if other != key and found and found[-1] == title and named.get(other, False)]
     if not twins:
         return True
-    # One printing of the title, one citation: the identified twin has it.
-    # Several printings mean several entries, and a bibliography that lists
-    # the preprint and the published version names them both.
-    return len(_occurrences(listing, title)) > len(twins)
+    # A printing of the title belongs to an identified twin when that twin's
+    # identifier is printed beside it — inside the same entry, which is all a
+    # reference list gives us to go on. A twin cited by a bare identifier
+    # consumes no printing, and the printing further down is somebody else's.
+    printings = _occurrences(listing, title)
+    spoken_for: set[int] = set()
+    for other in twins:
+        for mark in marks[other][:-1]:          # its identifiers, not its title
+            for where in _occurrences(listing, mark):
+                near = [at for at in printings
+                        if at not in spoken_for and abs(where - at) <= _ENTRY]
+                if near:
+                    # One identifier, one entry, one printing: the nearest.
+                    spoken_for.add(min(near, key=lambda at: abs(where - at)))
+    return len(printings) > len(spoken_for)
 
 
 def _occurrences(listing: str, mark: str, cap: int = 20) -> list[int]:

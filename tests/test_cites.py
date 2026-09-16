@@ -231,3 +231,17 @@ def test_a_heading_is_measured_by_its_letters_not_its_line():
     # A long line of prose is still prose, however it squashes.
     long_prose = "References were consulted for every claim in this section of the paper."
     assert cites.reference_text(f"Body.\n{long_prose}\n[1] A paper.\n") == ""
+
+
+def test_a_twin_cited_by_a_bare_identifier_takes_no_title_printing():
+    """One entry is an arXiv id with no title; the title further down belongs
+    to the other version."""
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] A Vaswani et al. arXiv:1706.03762, 2017.\n"
+        + "Filler to push the entries apart. " * 12
+        + "\n[2] A Vaswani et al. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]
