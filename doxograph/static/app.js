@@ -2357,10 +2357,13 @@ function captureOpenEditor() {
   }
 }
 
+// Answers whether the review was actually taken, which is what the `r` key
+// needs: moving to the next claim after a toggle that did not happen would
+// leave this one unreviewed and nothing on screen to say so.
 async function toggleReviewed(row) {
   // Shared by the review button — including the duplicate cards a claim gets in
   // grouped mode — and the `r` key, so both keep an open editor in step.
-  if (isSaving(row.id)) return;   // a request for it is in flight
+  if (isSaving(row.id)) return false;   // a request for it is in flight
   const reviewed = !row.reviewed;
   if (V.editing === row.id) captureOpenEditor();
   // Freeze the claim's form for the toggle too. A full-form save started
@@ -2381,6 +2384,7 @@ async function toggleReviewed(row) {
   if (stillOpen) captureOpenEditor();
   if (V.drafts[row.id]) V.drafts[row.id] = { ...V.drafts[row.id], reviewed };
   if (stillOpen) renderContent();
+  return true;
 }
 
 // Reviewing is the app's main work and a paper arrives with a dozen claims at
@@ -2399,11 +2403,16 @@ async function reviewWholePaper(paper) {
   // the old checkbox, and landing after the bulk write would put it back.
   const frozen = S.claims.filter((row) => row.paper === paper).map((row) => row.id);
   frozen.forEach((id) => markSaving(id, true));
+  // The claims it names, not "all of them". A claim waiting out a delete is
+  // gone from the page and from the count on the button, but still on file:
+  // reviewing it would be a decision about something nobody can see, and
+  // undoing the delete would bring it back reviewed.
+  const wanted = S.claims.filter((row) => row.paper === paper && !row.reviewed).map((row) => row.id);
   let changed = [];
   try {
     const result = await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reviewed: true }),
+      body: JSON.stringify({ reviewed: true, claims: wanted }),
     });
     changed = result.changed || [];
   } catch (error) {
@@ -2793,9 +2802,11 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'del-synth') {
       const topic = button.dataset.topic;
-      // A draft for the topic would otherwise be put straight back by Undo's
-      // redraw into an editor for a synthesis that is on its way out.
+      // The draft goes with it, open or parked. Kept, it would come back under
+      // a synthesis written later and overwrite it with text belonging to the
+      // one that was deleted.
       if (V.synthEditing === topic) V.synthEditing = null;
+      delete V.synthDrafts[topic];
       await deleteLater('synthesis', topic, `/api/syntheses/${encodeURIComponent(topic)}`,
                         `the synthesis of #${topic}`);
       return;
@@ -3428,8 +3439,8 @@ document.addEventListener('keydown', async (event) => {
     // back does not move: that is a correction, and it is made where it is.
     const marking = !row.reviewed;
     const following = rows[rows.findIndex((other) => other.id === row.id) + 1];
-    await toggleReviewed(row);
-    if (marking && following && visibleClaims().some((other) => other.id === following.id)) {
+    const took = await toggleReviewed(row);
+    if (took && marking && following && visibleClaims().some((other) => other.id === following.id)) {
       V.selectedId = following.id;
       renderContent();
       scrollToSelected();

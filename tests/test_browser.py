@@ -1903,3 +1903,120 @@ def test_a_held_delete_is_sent_once_and_settles_before_its_paper_is_removed():
 
     asyncio.run(scenario())
     assert store.all_papers() == []
+
+
+@pytest.mark.browser
+def test_a_bulk_review_leaves_a_claim_that_is_waiting_out_a_delete_alone():
+    """The button counts the claims on screen, so it has to name them: a claim
+    held in the undo window is not part of what was clicked."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator(f'.claim[data-claim="{one}"] [data-act="del"]').click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+
+                await page.get_by_role("button", name="Mark 1 reviewed").click()
+                await page.locator("#toasts .toast", has_text="1 claim marked reviewed").wait_for()
+
+                # Undoing the delete brings the claim back as it was, not
+                # reviewed by a decision taken while it was off the page.
+                await notice.get_by_role("button", name="Undo").click()
+                await page.locator(f'.claim.unreviewed[data-claim="{one}"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: False, two: True}
+
+
+@pytest.mark.browser
+def test_r_does_not_move_on_when_the_review_did_not_happen():
+    """A save already in flight holds the toggle off. Advancing anyway would
+    leave the claim unreviewed with nothing on screen saying so."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        release = asyncio.Event()
+        started = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_patch(route, request):
+                if request.method == "PATCH":
+                    started.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
+                await page.locator(f'form[data-form="{one}"] textarea[name="text"]').fill("One, edited.")
+                await page.locator(f'form[data-form="{one}"]').get_by_role("button", name="Save").click()
+                await asyncio.wait_for(started.wait(), timeout=5)
+
+                # The save holds the claim; r cannot review it, so it stays put.
+                # Read from the state: while the editor is open the card it
+                # would carry the selection class on is a form instead.
+                await page.keyboard.press("r")
+                await page.wait_for_timeout(300)
+                assert await page.evaluate("V.selectedId") == one
+                release.set()
+                await page.get_by_text("One, edited.").wait_for()
+
+                # Once the save has landed, r works and moves on as usual.
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: True, two: False}
+
+
+@pytest.mark.browser
+def test_a_deleted_synthesis_takes_its_parked_draft_with_it():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    store.record_synthesis("recovery", "Recovery as written.",
+                           {row["id"]: row for row in store.claim_rows()})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                synth = page.locator('.synth[data-topic="recovery"]')
+                await synth.get_by_role("button", name="edit").click()
+                await page.locator('textarea[data-synth="recovery"]').fill("A draft that is parked.")
+
+                # Reading a paper parks the draft; coming back and deleting the
+                # synthesis has to take it too.
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="hidden")
+                await page.locator('#papers [data-paper=""]').click()
+                await synth.wait_for(state="visible")
+                await synth.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the synthesis")
+                await notice.wait_for()
+
+                # Undo brings back what was written, not the draft for the one
+                # that was deleted.
+                await notice.get_by_role("button", name="Undo").click()
+                await synth.wait_for(state="visible")
+                await synth.get_by_role("button", name="edit").click()
+                assert await page.locator('textarea[data-synth="recovery"]').input_value() \
+                    == "Recovery as written."
+            await browser.close()
+
+    asyncio.run(scenario())
