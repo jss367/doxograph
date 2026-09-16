@@ -84,6 +84,7 @@ doxograph extract                     # read every paper that has no claims yet
 doxograph retag                       # reassign topics against the current vocabulary
 doxograph verify                      # check that every quote is in its paper's PDF
 doxograph search steering recovery    # find words in the papers' own text
+doxograph cites                       # which papers cite which, from their reference lists
 doxograph tensions                    # find claims from different papers that disagree
 doxograph tensions --list             # show what has been found, without calling the model
 doxograph tensions --force            # ask again about topics nothing has changed in
@@ -131,7 +132,8 @@ icon go to the workspace currently shown in its window.
 The Tensions entry in the sidebar shows where papers disagree; `Escape`
 returns to the claims. The Map entry draws the papers as a graph: each
 paper is a circle sized by its claims and coloured by its most frequent
-topic, papers whose claims share a topic are joined, tensions are drawn
+topic, papers whose claims share a topic are joined, a paper that cites
+another is joined to it by an arrow, tensions are drawn
 in the warning colour, and your own claims appear as squares joined to the
 papers that support, contradict, refine, or supply a method for them; a
 link marked independent is not drawn. A slider hides topic
@@ -257,6 +259,25 @@ context in the same form.
 Free text describing your research and what makes a paper relevant. It goes
 into the extraction prompt and is the main lever on the quality of the
 `relevance` line and the ledger links.
+
+## Which papers cite which
+
+The map draws a citation as an arrow from a paper to the paper it cites. They
+come from the reference lists in the PDFs: the text after the last
+"References" heading is searched for every other paper's arXiv id, DOI, or
+title, and a hit is an edge. A title has to be at least twenty letters long to
+be looked for, since a short one turns up in prose that is not a citation of
+it. Nothing is fetched from arXiv or Crossref, and a paper no model has read
+is linked like any other.
+
+A citation is a stronger link than a shared tag, so the topic line between two
+papers gives way to the arrow between them. Turn the layer off with
+**citations** above the map. `doxograph cites` lists the same thing in the
+shell.
+
+A paper whose PDF has no "References" heading contributes no citations. That
+is the conservative reading: guessing where the list starts would invent
+links.
 
 ## Asking again
 

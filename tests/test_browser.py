@@ -1441,3 +1441,43 @@ def test_alike_shows_claims_from_other_papers_worded_the_same_way():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_map_draws_a_citation_from_one_paper_to_another():
+    from pdfs import minimal_pdf
+
+    _paper("vas2017attention", "Attention is all you need", "architecture")
+    store.pdf_path("vas2017attention").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+    _paper("roe2026steering", "Steering and recovery in language models", "architecture")
+    store.pdf_path("roe2026steering").write_bytes(minimal_pdf([
+        "Steering and recovery in language models",
+        "References\n[1] A Vaswani et al. Attention is all you need. 2017.",
+    ]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+                await page.wait_for_function(
+                    "window.doxographGraph && window.doxographGraph().edges.some((e) => e.type === 'cite')")
+                edges = await page.evaluate("window.doxographGraph().edges")
+                cite = [e for e in edges if e["type"] == "cite"]
+                assert cite == [{"type": "cite", "a": "p:roe2026steering", "b": "p:vas2017attention",
+                                 "w": None, "n": None, "relation": None}]
+                # The topic link between the same two papers gives way to it.
+                assert not [e for e in edges if e["type"] == "topic"]
+
+                # Turning the layer off takes the arrow with it.
+                await page.locator('[data-graph-opt="cites"]').uncheck()
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.every((e) => e.type !== 'cite')")
+
+            await browser.close()
+
+    asyncio.run(scenario())

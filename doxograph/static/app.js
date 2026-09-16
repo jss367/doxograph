@@ -142,7 +142,7 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-            graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null,
+            graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null };
 
 function blankClaim(paper) {
@@ -294,7 +294,7 @@ function resetWorkspaceView() {
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-    graph: { topics: true, minShared: null, tensions: true, ledger: true },
+    graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
@@ -1493,6 +1493,22 @@ function renderGraphNav() {
     <span class="pm">${papers ? `${papers} papers as a map` : 'nothing to map yet'}</span></li>`;
 }
 
+// Which papers cite which, read off the PDFs by the server. Asked for when the
+// map opens rather than with the rest of the state: nothing else wants it, and
+// answering means reading every paper's reference list. The map draws without
+// them until the answer lands.
+let CITATIONS = [];
+
+async function loadCitations() {
+  try {
+    const found = await api('/api/citations');
+    CITATIONS = found.edges || [];
+  } catch (error) {
+    CITATIONS = [];   // a map without citation links is still worth drawing
+  }
+  if (V.view === 'graph') renderGraph();
+}
+
 function graphCite(p) {
   const who = (p.authors || [])[0] ? p.authors[0].split(' ').pop() : p.key;
   return `${who} ${p.year || ''}`.trim();
@@ -1582,6 +1598,24 @@ function graphData() {
       if (edges[i].type === 'topic' && pairs.has(`${edges[i].a.slice(2)}|${edges[i].b.slice(2)}`)) edges.splice(i, 1);
     }
     edges.push(...pairs.values());
+  }
+  if (opts.cites) {
+    const drawn = new Set();
+    for (const edge of CITATIONS) {
+      if (!byPaper.has(edge.from) || !byPaper.has(edge.to) || edge.from === edge.to) continue;
+      const key = `${edge.from}|${edge.to}`;
+      if (drawn.has(key)) continue;
+      drawn.add(key);
+      edges.push({ type: 'cite', a: `p:${edge.from}`, b: `p:${edge.to}` });
+    }
+    // One paper citing another says more than the two sharing a tag, and the
+    // topic stroke under the arrow would only thicken it. Dropped as a tension
+    // drops one, in either direction, so the link count matches the screen.
+    for (let i = edges.length - 1; i >= 0; i -= 1) {
+      if (edges[i].type !== 'topic') continue;
+      const [a, b] = [edges[i].a.slice(2), edges[i].b.slice(2)];
+      if (drawn.has(`${a}|${b}`) || drawn.has(`${b}|${a}`)) edges.splice(i, 1);
+    }
   }
   if (opts.ledger) {
     const own = new Map((S.ledger || []).map((c) => [c.id, c]));
@@ -1765,6 +1799,13 @@ function graphDraw() {
         const d = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
         ox = (-(b.y - a.y) / d) * 4 * at; oy = ((b.x - a.x) / d) * 4 * at;
       }
+    }
+    if (e.type === 'cite') {
+      ctx.strokeStyle = colors.accent;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      graphArrow(ctx, a, b, colors.accent);
+      continue;
     }
     if (e.type === 'topic') {
       ctx.strokeStyle = colors.muted;
@@ -1972,6 +2013,7 @@ function graphHeader() {
     <div class="graph-legend">
       <span><i></i>claims share a topic</span>
       <span><i class="tension"></i>papers disagree (dashed while open)</span>
+      <span><i class="cite"></i>cites, arrow to the paper cited</span>
       <span><i class="supports"></i>supports my claim</span>
       <span><i class="contradicts"></i>contradicts it</span>
       <span><i class="other"></i>refines it or supplies a method</span>
@@ -1983,10 +2025,31 @@ function graphHeader() {
         <input type="range" min="1" max="${Math.max(1, GRAPH.maxShared || 1)}" value="${GRAPH.minShared || 1}" data-graph-opt="minShared">
         <span data-graph-min>${GRAPH.minShared || 1}</span> shared</label>
       <label><input type="checkbox" data-graph-opt="tensions" ${opts.tensions ? 'checked' : ''}> tensions</label>
+      <label><input type="checkbox" data-graph-opt="cites" ${opts.cites ? 'checked' : ''}> citations</label>
       <label><input type="checkbox" data-graph-opt="ledger" ${opts.ledger ? 'checked' : ''}> my claims</label>
       <span class="hint" data-graph-count style="margin-left:auto"></span>
     </div>
   </div>`;
+}
+
+// A head on the cited paper's end of a citation, just off its edge, so which
+// way the citation runs is readable without hovering.
+function graphArrow(ctx, from, to, color) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const distance = Math.max(Math.hypot(dx, dy), 1);
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const tipX = to.x - ux * (to.r + 1);
+  const tipY = to.y - uy * (to.r + 1);
+  const size = 6;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - ux * size - uy * size * 0.5, tipY - uy * size + ux * size * 0.5);
+  ctx.lineTo(tipX - ux * size + uy * size * 0.5, tipY - uy * size - ux * size * 0.5);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function graphStatus() {
@@ -2042,6 +2105,7 @@ $('graph-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('graph');
   renderAll();
+  loadCitations();
 });
 
 // For the browser tests and anyone poking at the console: where things are.

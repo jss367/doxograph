@@ -1,0 +1,94 @@
+"""Which papers cite which, read out of their reference lists."""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from doxograph import __main__, cites, server, store
+
+from pdfs import minimal_pdf
+
+ATTENTION = "Attention is all you need"
+STEERING = "Steering and recovery in language models"
+
+
+def _paper(key: str, title: str, pages: list[str], **fields) -> None:
+    store.save_paper(store.new_paper(key, title=title, year=2026, **fields))
+    store.pdf_path(key).write_bytes(minimal_pdf(pages))
+
+
+def a_corpus() -> None:
+    _paper("vas2017attention", ATTENTION, [ATTENTION, "We propose the Transformer."],
+           source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("roe2026steering", STEERING, [
+        STEERING + "\nWe build on the Transformer.",
+        "R EFERENCES\n[1] A Vaswani et al. Attention is all you need. arXiv:1706.03762v5, 2017.\n"
+        "[2] Someone Else. A paper that is not in the pile. 2020.",
+    ])
+    _paper("li2025steer", "Steering does not wash out", [
+        "Steering does not wash out",
+        "7. References\nRoe, A. Steering and recovery in language\nmodels. 2026.",
+    ])
+
+
+def test_the_reference_list_is_what_comes_after_the_last_heading():
+    text = "Body mentions references in passing.\n\fReferences\n[1] A paper.\n"
+    assert cites.reference_text(text).strip() == "[1] A paper."
+    # A section number, a small-capitals heading, and a colon are all the same.
+    assert cites.reference_text("x\n7. REFERENCES:\n[1] A paper.\n").strip() == "[1] A paper."
+    assert cites.reference_text("x\nR EFERENCES\n[1] A paper.\n").strip() == "[1] A paper."
+    assert cites.reference_text("A paper with no reference list at all.") == ""
+
+
+def test_a_paper_is_found_by_its_arxiv_id_or_its_title():
+    a_corpus()
+    assert cites.edges() == [
+        {"from": "li2025steer", "to": "roe2026steering"},        # by title, broken across lines
+        {"from": "roe2026steering", "to": "vas2017attention"},   # by arXiv id, version and all
+    ]
+
+
+def test_a_reference_to_something_outside_the_corpus_is_not_an_edge():
+    a_corpus()
+    assert not any(edge["to"] == "someone-else" for edge in cites.edges())
+    assert len(cites.edges()) == 2
+
+
+def test_a_title_too_short_to_be_sure_of_is_not_looked_for():
+    short = {"key": "x", "title": "Scaling laws", "source": {}}
+    assert cites.fingerprints(short) == []
+    enough = {"key": "y", "title": "Scaling laws for neural language models", "source": {}}
+    assert cites.fingerprints(enough) == ["scalinglawsforneurallanguagemodels"]
+
+
+def test_a_doi_in_a_reference_list_counts():
+    _paper("ng2026saes", "Sparse autoencoders find features", ["Sparse autoencoders find features"],
+           doi="10.1234/abcd.5678")
+    _paper("roe2026steering", STEERING, [
+        STEERING,
+        "References\nNg, S. Sparse autoencoders. https://doi.org/10.1234/abcd.5678\n",
+    ])
+    assert cites.edges() == [{"from": "roe2026steering", "to": "ng2026saes"}]
+
+
+def test_a_new_pdf_changes_the_answer_the_cache_gives():
+    a_corpus()
+    assert len(cites.edges()) == 2
+    _paper("wu2026silent", "A silent paper", [
+        "A silent paper",
+        "References\nVaswani, A. Attention is all you need. 2017.",
+    ])
+    assert {"from": "wu2026silent", "to": "vas2017attention"} in cites.edges()
+
+
+def test_the_citations_route_and_command():
+    a_corpus()
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/citations").json()["edges"] == cites.edges()
+    assert __main__.main(["cites"]) == 0
+
+
+def test_the_command_says_so_when_nothing_cites_anything(capsys):
+    _paper("solo2026", "Alone in the corpus", ["Alone in the corpus", "References\nNobody. 1999."])
+    assert __main__.main(["cites"]) == 1
+    assert "no paper's reference list names another" in capsys.readouterr().err

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import bib, config, export, extract, ingest, search, store
+from . import bib, cites, config, export, extract, ingest, search, store
 
 
 def cmd_add(args) -> int:
@@ -147,6 +147,23 @@ def cmd_search(args) -> int:
         print(f"{hit['key']:<32} {hit['occurrences']:>4} mentions  {paper.get('title', '')[:60]}")
         for passage in hit["passages"]:
             print(f"    p. {passage['page']}  …{passage['text']}…")
+    return 0
+
+
+def cmd_cites(args) -> int:
+    """Show which papers in the corpus cite which, from their reference lists."""
+    papers = store.all_papers()
+    titles = {p["key"]: p.get("title", "") for p in papers}
+    edges = cites.edges(papers)
+    if not edges:
+        print("no paper's reference list names another paper in the corpus", file=sys.stderr)
+        return 1
+    for key in sorted({edge["from"] for edge in edges}):
+        print(f"{key}  {titles.get(key, '')[:60]}")
+        for edge in edges:
+            if edge["from"] == key:
+                print(f"    cites {edge['to']:<32} {titles.get(edge['to'], '')[:50]}")
+    print(f"\n{len(edges)} citations between {len(papers)} papers")
     return 0
 
 
@@ -362,6 +379,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("words", nargs="+", help="every word has to appear in the paper")
     p.add_argument("--limit", type=int, default=20, help="how many papers to show")
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("cites", help="show which papers cite which, from their reference lists")
+    p.set_defaults(func=cmd_cites)
 
     p = sub.add_parser("tensions", help="find claims from different papers that disagree")
     p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")
