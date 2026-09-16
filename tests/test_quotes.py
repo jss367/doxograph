@@ -499,3 +499,15 @@ def test_deleting_the_stored_text_makes_the_next_check_read_the_paper_again(tmp_
     cache.unlink()
     assert quotes.verify(pdf, SENTENCE, cache) is True
     assert cache.exists(), "the check wrote the text back"
+
+
+def test_a_word_split_at_the_foot_of_a_page_is_rejoined(tmp_path):
+    """A page break stands where the newline would be, and the passage is what
+    "use the paper's wording" saves."""
+    pdf = tmp_path / "split.pdf"
+    pdf.write_bytes(minimal_pdf([
+        "We measure the transfor-",
+        "mation of steered activations across scales.",
+    ]))
+    found = quotes.locate(pdf, "the transformation of steered activations")
+    assert found["suggestion"] == "We measure the transformation of steered activations across scales."

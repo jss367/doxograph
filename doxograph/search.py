@@ -169,6 +169,17 @@ _UNSEGMENTED = re.compile(
 )
 
 
+def _length(text: str) -> int:
+    """How long a paper is, for the ranking to discount it by.
+
+    In word characters rather than words: Chinese and Japanese put no spaces
+    between theirs, so a paper of ten thousand characters and one of ten would
+    both be one word long and neither would be discounted at all. BM25 only
+    ever compares a length against the average, so the unit is free.
+    """
+    return sum(len(word) for word in _WORD.findall(text)) or 1
+
+
 def _remember(path: Path, identity: tuple[int, int], text: str) -> None:
     """Keep a folded paper, dropping the oldest until the budget is met."""
     global _texts_size
@@ -224,7 +235,7 @@ def search_papers(query: str, limit: int = 20) -> list[dict]:
         if not text:
             continue
         corpus += 1
-        length = len(_WORD.findall(text)) or 1
+        length = _length(text)
         total += length
         found = [len(pattern.findall(text)) for pattern in patterns]
         for i, count in enumerate(found):
