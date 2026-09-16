@@ -1871,3 +1871,39 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_dropped_pdf_brings_its_arrows_while_the_map_is_open():
+    """A drop refreshes through its own handler, which consumes the change
+    and commits its ETag, so the next poll is told nothing happened."""
+    import httpx as _httpx
+
+    from pdfs import minimal_pdf
+
+    _paper("cited", "Attention is all you need", "architecture")
+    store.pdf_path("cited").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+
+                dropped = minimal_pdf([
+                    "The citing paper",
+                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."])
+                response = _httpx.post(f"{url}/api/upload?extract_now=false",
+                                       files={"files": ("citing.pdf", dropped, "application/pdf")},
+                                       timeout=30)
+                assert response.status_code == 200
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
+
+            await browser.close()
+
+    asyncio.run(scenario())

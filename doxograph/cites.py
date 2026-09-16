@@ -129,26 +129,28 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
     on the same stretch of the list, only the longer is a citation; the shorter
     is part of it.
     """
-    hits: list[tuple[int, int, str, list[int]]] = []
+    hits: list[tuple[int, str, list[int]]] = []
     for other, found in marks.items():
         if other == key:
             continue
         for mark in found:
             places = _occurrences(listing, mark)
             if places:
-                hits.append((places[0], places[0] + len(mark), other, places))
+                hits.append((len(mark), other, places))
                 break
     # Longest first, so a shorter mark inside one already taken is dropped —
-    # but only where every mention of it is inside one. A list that cites both
-    # papers names the shorter one somewhere on its own.
-    cited: list[tuple[int, int, str, list[int]]] = []
-    for span in sorted(hits, key=lambda hit: hit[0] - hit[1]):
-        width = span[1] - span[0]
-        if all(any(taken[0] <= at and at + width <= taken[1] for taken in cited)
-               for at in span[3]):
+    # but only where every mention of it is inside one, and against every
+    # place the longer one was printed: a bibliography can name the same paper
+    # in the article's list and again in the supplement's. A list that cites
+    # both papers names the shorter one somewhere on its own.
+    taken: list[tuple[int, int]] = []
+    cited: list[str] = []
+    for width, other, places in sorted(hits, key=lambda hit: -hit[0]):
+        if all(any(begin <= at and at + width <= end for begin, end in taken) for at in places):
             continue
-        cited.append(span)
-    return sorted(other for _, _, other, _ in cited)
+        cited.append(other)
+        taken.extend((at, at + width) for at in places)
+    return sorted(cited)
 
 
 def _occurrences(listing: str, mark: str, cap: int = 20) -> list[int]:

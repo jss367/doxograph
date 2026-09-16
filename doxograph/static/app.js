@@ -253,11 +253,23 @@ async function pull() {
   return Boolean(next);
 }
 
+// What has to be asked again when the corpus moves. Every path that pulls
+// state calls this, not just the poll: a drop or an import refreshes through
+// its own handler, which consumes the change and commits its ETag, so the
+// next poll is told nothing happened.
+function corpusChanged() {
+  rerunTextSearch();     // a paper imported since holds the query's words too
+  V.similar = null;      // and the claims it was compared against have moved
+  // A PDF that arrived while the map is open cites what it cites; the papers
+  // are redrawn from state but the arrows are fetched on their own.
+  if (V.view === 'graph') loadCitations();
+}
+
 async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) { rerunTextSearch(); V.similar = null; }
+  if (changed) corpusChanged();
   render();
 }
 
@@ -270,7 +282,7 @@ async function refreshAll() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) { rerunTextSearch(); V.similar = null; }
+  if (changed) corpusChanged();
   renderAll();
 }
 
@@ -3275,11 +3287,7 @@ async function boot() {
       const changed = await pull();
       renderJobs();
       if (!changed) return;
-      rerunTextSearch();     // a paper imported since holds the query's words too
-      V.similar = null;      // and the claims it was compared against have moved
-      // A PDF that arrived while the map is open cites what it cites; the
-      // poll redraws the papers but the arrows are fetched on their own.
-      if (V.view === 'graph') loadCitations();
+      corpusChanged();
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();

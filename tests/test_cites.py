@@ -153,3 +153,18 @@ def test_both_papers_are_cited_when_the_list_names_both():
         "[2] Vaswani et al. Attention is all you need. 2017.",
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["long", "short"]
+
+
+def test_a_longer_title_printed_twice_keeps_both_of_its_places():
+    """The shorter title sits inside the longer one's second printing, in the
+    supplement's list, and is named on its own nowhere."""
+    _paper("short", "Attention is all you need", ["Attention is all you need", "Text."])
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Somebody. Attention is all you need for image restoration. 2026.",
+        "A Appendix\nMore detail.",
+        "References\n[1] Somebody. Attention is all you need for image restoration. 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["long"]
