@@ -194,3 +194,16 @@ def test_a_paper_named_by_its_id_and_its_title_still_covers_a_shorter_title():
         "arXiv:2401.00001, 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["long"]
+
+
+def test_a_reference_naming_one_of_two_twins_cites_that_one():
+    """A preprint and its published version share a title and differ by
+    identifier; the reference carries the title and one of the identifiers."""
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] A Vaswani et al. Attention is all you need.\n"
+        "https://doi.org/10.5555/3295222.3295349, 2017.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["published"]

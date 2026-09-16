@@ -1004,6 +1004,17 @@ def cite_head(claim: dict) -> str:
     return f"{head} ({claim.get('paper_year') or 'n.d.'}): {claim.get('paper_title') or key}"
 
 
+def _topic_unchanged(topic: str, shown: dict[str, dict], live: dict[str, dict]) -> bool:
+    """Whether a topic still holds the claims a pass was asked about, as it
+    was asked about them. Anything else and the answer describes a question
+    that is no longer being put."""
+    def basis(claims):
+        return {i: claim_fingerprint(c) for i, c in claims.items()
+                if topic in (c.get("tags") or [])}
+    was = basis(shown)
+    return bool(was) and was == basis(live)
+
+
 def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
     """What a per-topic pass was asked about, in one string.
 
@@ -1128,11 +1139,13 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
             by_pair[(a, b)] = record
             added += 1
         data["tensions"] = existing
-        # Recorded only on the way out, so a failed call is asked again — and
-        # only while some live claim still carries the topic. A topic deleted
-        # during the call has had its pass forgotten already, and writing it
-        # back would skip the pass that has to run when the tag comes back.
-        if signature and any(topic in (c.get("tags") or []) for c in live.values()):
+        # Recorded only on the way out, so a failed call is asked again, and
+        # only while the topic still holds the claims it was asked about. A
+        # tag taken off one of them during the call — or off all of them —
+        # means this answer was about a topic that no longer exists in that
+        # shape; writing its signature down would skip the pass that has to
+        # run when the tag comes back.
+        if signature and _topic_unchanged(topic, claims_by_id, live):
             data.setdefault("passes", {})[topic] = signature
         _save_tensions(data)
         return {"added": added, "reopened": reopened, "kept": kept}
@@ -1590,9 +1603,9 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             existing.append(record)
             added += 1
         data["agreements"] = existing
-        # Recorded only on the way out, and only while some live claim still
-        # carries the topic; see `record_tensions`.
-        if signature and any(topic in (c.get("tags") or []) for c in live.values()):
+        # Recorded only on the way out, and only while the topic still holds
+        # the claims it was asked about; see `record_tensions`.
+        if signature and _topic_unchanged(topic, claims_by_id, live):
             data.setdefault("passes", {})[topic] = signature
         _save_agreements(data)
         return {"added": added, "grown": grown, "reopened": reopened, "kept": kept}

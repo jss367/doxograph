@@ -262,3 +262,8 @@ def test_a_paper_without_spaces_is_measured_by_its_characters():
     a_paper_of("long", f"语言模型的{filler * 200}")
     # One mention each: the brief one spends a larger part of itself on it.
     assert [hit["key"] for hit in search.search_papers("模型")] == ["brief", "long"]
+
+
+def test_a_word_split_at_a_page_break_is_one_word_to_a_search():
+    a_paper_of("split", "We measure the transfor-\x0cmation of steered activations.")
+    assert [hit["key"] for hit in search.search_papers("transformation")] == ["split"]

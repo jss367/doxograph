@@ -146,13 +146,18 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
     # carry the arXiv id and the title both, and it is the title's span that
     # covers a shorter title printed inside it.
     hits: list[tuple[int, str, list[int]]] = []
+    named: dict[str, bool] = {}
     for other, found in marks.items():
         if other == key:
             continue
-        for mark in found:
+        for at, mark in enumerate(found):
             places = _occurrences(listing, mark)
             if places:
                 hits.append((len(mark), other, places))
+                # An arXiv id or a DOI, rather than a title: `fingerprints`
+                # puts the identifiers first and the title last.
+                named[other] = named.get(other, False) or at < len(found) - 1
+    hits = [hit for hit in hits if _identified(hit[1], named, marks)]
     # Longest first, so a shorter mark inside one already taken is dropped —
     # but only where every mention of it is inside one, and against every
     # place the longer one was printed: a bibliography can name the same paper
@@ -169,6 +174,21 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
             cited.add(other)
             taken.extend((at, at + width) for at in places)
     return sorted(cited)
+
+
+def _identified(key: str, named: dict[str, bool], marks: dict[str, list[str]]) -> bool:
+    """Whether a paper survives a twin with the same title.
+
+    A preprint and its published version carry one title and two identifiers.
+    A reference to one of them names the title both share and only that one's
+    DOI, so the title alone cannot say which is cited — but the identifier
+    can, and a paper named by one takes the citation from a twin named by
+    nothing but the title they have in common.
+    """
+    title = marks[key][-1] if marks.get(key) else ""
+    twins = [other for other, found in marks.items()
+             if other != key and found and found[-1] == title and other in named]
+    return named.get(key, False) or not any(named[other] for other in twins)
 
 
 def _occurrences(listing: str, mark: str, cap: int = 20) -> list[int]:
