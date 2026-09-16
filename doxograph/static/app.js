@@ -398,6 +398,17 @@ async function flushTrash(wanted = null) {
   await Promise.all(waiting.map((entry) => entry.send()));
 }
 
+// Coming back to a page the browser froze rather than unloaded. `pagehide`
+// sent the held deletes, but the DOM came back as it was: the notices on it
+// offer to undo work that is finished, and their Undo would have nothing to
+// take back. They go, and the corpus is read again from the server.
+window.addEventListener('pageshow', (event) => {
+  if (!event.persisted) return;
+  $('toasts').innerHTML = '';
+  forgetStateTag();
+  refreshAll();
+});
+
 // A tab closed while a delete is still waiting sends it now rather than
 // silently dropping it: the row is already gone from the page, and coming back
 // to find it restored would be the app forgetting what it was told.
@@ -539,10 +550,13 @@ window.addEventListener('popstate', async () => {
       // open the wrong paper, which `dropMissingPaper` cannot catch.
       if (currentWorkspaceId !== wanted) return;
     } else if (workspaceSwitch) {
-      // Already going where this entry lives, but the corpus has not arrived.
-      // Restoring now would check the entry's paper against the old one.
+      // A switch is running and this entry belongs to where the page is now —
+      // but `currentWorkspaceId` only changes once that switch's own flush is
+      // done, so the switch may be on its way somewhere else entirely. Wait
+      // for it, then ask again where it left us.
       await workspaceSwitch;
       if (seq !== popSeq) return;
+      if (currentWorkspaceId !== wanted) return;
     }
     applyHash();
     dropMissingPaper();
@@ -3057,6 +3071,7 @@ $('agreements-nav').addEventListener('click', (event) => {
 
 $('btn-agreements').addEventListener('click', async () => {
   showView('agreements');
+  syncHash(true);
   renderAll();
   await findAgreements();
 });
@@ -3089,6 +3104,7 @@ async function findTensions() {
 
 $('btn-tensions').addEventListener('click', async () => {
   showView('tensions');
+  syncHash(true);
   renderAll();
   await findTensions();
 });
@@ -3097,6 +3113,7 @@ $('btn-synth').addEventListener('click', async () => {
   showView('claims');
   V.group = true;
   $('group-by-tag').checked = true;
+  syncHash(true);
   renderAll();
   await synthesize(null);
 });

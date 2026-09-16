@@ -2434,3 +2434,25 @@ def test_no_undo_is_offered_for_a_delete_that_has_already_been_sent():
 
     asyncio.run(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
+
+
+@pytest.mark.browser
+def test_back_from_the_analysis_views_returns_to_the_claims():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                for button, view in [("#btn-tensions", "tensions"), ("#btn-agreements", "agreements")]:
+                    await page.locator(button).click()
+                    await page.locator(f'#{view}-nav [data-view="{view}"].active').wait_for()
+                    assert f"view={view}" in page.url
+                    await page.go_back()
+                    await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                    assert "view=" not in page.url
+            await browser.close()
+
+    asyncio.run(scenario())
