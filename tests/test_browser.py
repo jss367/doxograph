@@ -1314,3 +1314,53 @@ def test_a_claim_citation_carries_its_paper_title():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_reworded_quote_is_shown_beside_the_paper_and_can_take_its_wording():
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "An introduction that says very little about anything at all.",
+        "We ran the experiment three times.\n"
+        "Recovery under steering is a path-dependent out-\ncome across all three\n"
+        "model scales. The effect is smaller at 7B.",
+    ]))
+    claim = store.add_claim(key, {
+        "text": "Steered models recover.", "locator": "p. 1",
+        "quote": "Steering recovery is path dependant across all three model scales."})
+    assert claim["quote_verified"] is False
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(".claim .qflag").wait_for()
+                await page.get_by_role("button", name="in the paper").click()
+
+                passage = page.locator(".qctx .qpassage mark")
+                await passage.wait_for()
+                assert "path-dependent outcome" in await passage.inner_text()
+                # The page it is really on, against the page the model named.
+                assert "page 2 of 2" in await page.locator(".qctx .qwhere").inner_text()
+                # The badge is styled in capitals, as the not-found flag is.
+                assert "LOCATOR SAYS P. 1" in await page.locator(".qctx .qlocator").inner_text()
+                assert await page.locator(".qdiff del").all_inner_texts() == ["recovery", "path dependant"]
+                assert await page.locator(".qdiff del").all_inner_texts() == ["recovery", "path dependant"]
+                assert "path-dependent outcome" in await page.locator(".qdiff ins").last.inner_text()
+
+                await page.get_by_role("button", name="Use the paper's wording").click()
+                await page.locator(".claim .qflag").wait_for(state="detached")
+                assert await page.locator(".qctx").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+    saved = store.load_paper(key)["claims"][0]
+    assert saved["quote"].startswith("Recovery under steering is a path-dependent outcome")
+    assert (saved["quote_verified"], saved["quote_page"]) == (True, 2)

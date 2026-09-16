@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -164,3 +165,186 @@ def test_verify_route_and_command(capsys):
     # A key that is not a paper fails the run, not just a line on stderr.
     assert __main__.main(["verify", key, "nobody"]) == 1
     assert "nobody: no such paper" in capsys.readouterr().err
+
+
+# --- reading the quote back out of the paper ------------------------------
+
+PAGE_ONE = "An introduction that says very little about anything at all."
+PAGE_TWO = (
+    "We ran the experiment three times.\n"
+    "Recovery under steering is a path-dependent out-\ncome across all three\n"
+    "model scales. The effect is smaller at 7B."
+)
+
+
+def two_page_pdf(tmp_path) -> Path:
+    pdf = tmp_path / "two.pdf"
+    pdf.write_bytes(minimal_pdf([PAGE_ONE, PAGE_TWO]))
+    return pdf
+
+
+def test_the_squashed_text_carries_an_offset_into_the_paper():
+    raw = "Straße — eﬃcient Résumé 42"
+    text = quotes.build(raw)
+    assert text.squashed == quotes.squash(raw)
+    assert len(text.offsets) == len(text.squashed)
+    # The ligature's three letters all point back at the one character.
+    at = text.squashed.index("ffi")
+    assert [raw[text.offsets[i]] for i in (at, at + 1, at + 2)] == ["ﬃ"] * 3
+    assert raw[text.offsets[text.squashed.index("42")]] == "4"
+
+
+def test_locate_gives_the_page_and_the_papers_own_sentence(tmp_path):
+    found = quotes.locate(two_page_pdf(tmp_path), "Recovery under steering is a path-dependent outcome")
+    assert found["found"] is True
+    assert (found["page"], found["pages"]) == (2, 2)
+    # The sentence is whole, and the word broken across two lines is rejoined.
+    assert found["suggestion"] == (
+        "Recovery under steering is a path-dependent outcome across all three model scales."
+    )
+    assert found["before"] == "We ran the experiment three times."
+    assert found["after"] == "The effect is smaller at 7B."
+
+
+def test_a_reworded_quote_still_finds_the_sentence_it_came_from(tmp_path):
+    found = quotes.locate(two_page_pdf(tmp_path),
+                          "Steering recovery is path dependant across all three model scales.")
+    assert found["found"] is False
+    assert found["page"] == 2
+    assert found["suggestion"].startswith("Recovery under steering is a path-dependent")
+
+
+def test_a_quote_from_nowhere_near_the_paper_has_no_passage_to_show(tmp_path):
+    found = quotes.locate(two_page_pdf(tmp_path),
+                          "Emperor penguins in Antarctica huddle to conserve warmth in winter.")
+    assert found["found"] is False
+    assert (found["page"], found["suggestion"], found["before"]) == (None, "", "")
+
+
+def test_locate_has_nothing_to_say_without_a_quote_or_a_pdf(tmp_path):
+    assert quotes.locate(tmp_path / "missing.pdf", SENTENCE) is None
+    assert quotes.locate(two_page_pdf(tmp_path), "   ") is None
+
+
+def test_a_sentence_is_not_cut_at_an_abbreviation(tmp_path):
+    pdf = tmp_path / "abbrev.pdf"
+    pdf.write_bytes(minimal_pdf(
+        "Earlier work disagrees. Following Smith et al. (2024), we hold that the\n"
+        "recovery rate is stable. That is our finding."))
+    found = quotes.locate(pdf, "we hold that the recovery rate is stable")
+    assert found["suggestion"] == (
+        "Following Smith et al. (2024), we hold that the recovery rate is stable."
+    )
+
+
+def test_word_diff_marks_the_wording_and_not_the_punctuation():
+    diff = quotes.word_diff("Steering recovery is path dependant.",
+                            "Steering recovery is path-dependent.")
+    assert [part["op"] for part in diff] == ["equal", "quote", "paper"]
+    assert diff[1]["text"] == "path dependant."
+    assert diff[2]["text"] == "path-dependent."
+    # Case and punctuation drift alone is not a difference worth showing.
+    assert quotes.word_diff("the Model recovers",
+                            "the model recovers") == [{"op": "equal", "text": "the model recovers"}]
+
+
+def test_a_locator_names_a_page_or_it_does_not():
+    assert quotes.locator_page("p. 4") == 4
+    assert quotes.locator_page("pp. 4-5") == 4
+    assert quotes.locator_page("page 12, Sec. 3.1") == 12
+    assert quotes.locator_page("Table 2") is None
+    assert quotes.locator_page("") is None
+
+
+# --- the extracted text is kept between runs ------------------------------
+
+def test_the_text_is_extracted_once_and_read_from_the_cache_after(tmp_path):
+    pdf, cache = two_page_pdf(tmp_path), tmp_path / "text" / "two.txt"
+    assert quotes.verify(pdf, "Recovery under steering", cache) is True
+    assert PAGE_ONE in cache.read_text(encoding="utf-8")
+
+    # A stale cache is what gets read, which is how we can tell it was used.
+    cache.write_text("wholly different text about penguins", encoding="utf-8")
+    quotes._cache.clear()
+    assert quotes.verify(pdf, "Recovery under steering", cache) is False
+
+    # Until the PDF itself is newer, and then the paper is read again.
+    os.utime(pdf, ns=(pdf.stat().st_atime_ns, cache.stat().st_mtime_ns + 1_000_000))
+    quotes._cache.clear()
+    assert quotes.verify(pdf, "Recovery under steering", cache) is True
+
+
+def test_a_scanned_paper_is_not_parsed_again_on_every_claim(tmp_path):
+    pdf, cache = tmp_path / "scan.pdf", tmp_path / "text" / "scan.txt"
+    pdf.write_bytes(minimal_pdf(""))
+    assert quotes.paper_text(pdf, cache) is None
+    assert cache.exists() and not cache.read_text(encoding="utf-8").strip()
+
+
+# --- the passage behind a claim, for the reviewer -------------------------
+
+def paper_with_pages() -> str:
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering"))
+    store.pdf_path(key).write_bytes(minimal_pdf([PAGE_ONE, PAGE_TWO]))
+    return key
+
+
+def test_a_checked_quote_records_the_page_it_was_found_on():
+    key = paper_with_pages()
+    claim = store.add_claim(key, {"text": "A.", "quote": "Recovery under steering is a path-dependent"})
+    assert (claim["quote_verified"], claim["quote_page"]) == (True, 2)
+    # The text is kept for the next claim, and for the next run.
+    assert store.text_path(key).exists()
+    away = store.add_claim(key, {"text": "B.", "quote": "Penguins huddle to conserve warmth in winter."})
+    assert (away["quote_verified"], away["quote_page"]) == (False, None)
+
+
+def test_the_context_offers_the_papers_own_wording():
+    key = paper_with_pages()
+    claim = store.add_claim(key, {
+        "text": "A.", "locator": "p. 1",
+        "quote": "Steering recovery is path dependant across all three model scales."})
+    found = store.quote_context(key, claim["id"])
+    assert found["available"] is True
+    assert found["page"] == 2 and found["locator_page"] == 1
+    assert found["suggestion"].startswith("Recovery under steering is a path-dependent")
+    assert {part["op"] for part in found["diff"]} == {"equal", "quote", "paper"}
+    # Taking the wording is an ordinary edit, and it makes the quote check out.
+    updated = store.update_claim(key, claim["id"], {"quote": found["suggestion"]})
+    assert updated["quote_verified"] is True
+    assert store.quote_context(key, claim["id"])["diff"] == []
+
+
+def test_the_context_says_why_there_is_nothing_to_show():
+    key = paper_with_pages()
+    blank = store.add_claim(key, {"text": "A."})
+    assert store.quote_context(key, blank["id"])["available"] is False
+    assert "no quote" in store.quote_context(key, blank["id"])["reason"]
+
+    store.pdf_path(key).unlink()
+    quoted = store.add_claim(key, {"text": "B.", "quote": SENTENCE})
+    missing = store.quote_context(key, quoted["id"])
+    assert missing["available"] is False and "no PDF" in missing["reason"]
+
+    store.pdf_path(key).write_bytes(minimal_pdf(""))
+    scanned = store.quote_context(key, quoted["id"])
+    assert scanned["available"] is False and "scan" in scanned["reason"]
+
+
+def test_the_context_route_answers_for_a_claim_and_404s_otherwise():
+    key = paper_with_pages()
+    claim = store.add_claim(key, {"text": "A.", "quote": "Recovery under steering"})
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        found = client.get(f"/api/papers/{key}/claims/{claim['id']}/quote-context").json()
+        assert found["page"] == 2 and found["found"] is True
+        assert client.get(f"/api/papers/{key}/claims/nope/quote-context").status_code == 404
+        assert client.get(f"/api/papers/nobody/claims/{claim['id']}/quote-context").status_code == 404
+
+
+def test_deleting_a_paper_takes_its_extracted_text_with_it():
+    key = paper_with_pages()
+    store.add_claim(key, {"text": "A.", "quote": "Recovery under steering"})
+    assert store.text_path(key).exists()
+    store.delete_paper(key)
+    assert not store.text_path(key).exists()
