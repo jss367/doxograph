@@ -250,8 +250,9 @@ async function pull() {
 
 async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
-  await pull();
+  const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
+  if (changed) rerunTextSearch();
   render();
 }
 
@@ -262,8 +263,9 @@ async function refresh() {
 async function refreshAll() {
   captureOpenEditor();
   const requestedWorkspace = currentWorkspaceId;
-  await pull();
+  const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
+  if (changed) rerunTextSearch();
   renderAll();
 }
 
@@ -416,11 +418,24 @@ function dropTextSearch() {
   V.textSearch = null;
 }
 
-async function runTextSearch(query) {
+// A paper imported since the answer came back holds the query's words as much
+// as any other, and one that has just been given its PDF is searchable for the
+// first time. Filtering the answer against the corpus can drop a hit that has
+// gone but cannot add one that has arrived, so the question is asked again.
+function rerunTextSearch() {
+  if (V.textSearch && V.textSearch.q === V.q.trim()) runTextSearch(V.textSearch.q, true);
+}
+
+// `quiet` keeps what is on screen until the new answer lands, for a re-run
+// nobody asked for: a corpus change would otherwise blink the results back to
+// "reading the papers" every time a paper is imported.
+async function runTextSearch(query, quiet = false) {
   const seq = ++textSearchSeq;
   const workspace = currentWorkspaceId;
-  V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
-  renderContent();
+  if (!quiet) {
+    V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
+    renderContent();
+  }
   let next;
   try {
     const found = await api(`/api/search?q=${encodeURIComponent(query)}`);
@@ -3082,6 +3097,7 @@ async function boot() {
       const changed = await pull();
       renderJobs();
       if (!changed) return;
+      rerunTextSearch();     // a paper imported since holds the query's words too
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();

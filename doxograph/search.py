@@ -42,11 +42,17 @@ _TEXT_LIMIT = 400
 
 
 def terms(query: str) -> list[str]:
-    """The words of a query, lowercased, in order and without repeats."""
-    seen: dict[str, None] = {}
-    for word in _WORD.findall((query or "").casefold()):
-        seen.setdefault(word, None)
-    return list(seen)
+    """The words of a query, in order and without repeats.
+
+    As typed, not lowercased: case folding expands some letters — ß becomes
+    ss, İ becomes i and a combining mark — and the papers are searched as they
+    are written, where no amount of `IGNORECASE` puts those back together. A
+    repeat is judged case-insensitively all the same.
+    """
+    seen: dict[str, str] = {}
+    for word in _WORD.findall(query or ""):
+        seen.setdefault(word.casefold(), word)
+    return list(seen.values())
 
 
 def paper_text(key: str) -> str | None:

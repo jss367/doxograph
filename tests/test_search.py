@@ -28,7 +28,7 @@ def a_corpus() -> None:
 
 
 def test_a_query_is_its_words_and_every_one_has_to_be_there():
-    assert search.terms("Steering, recovery -- STEERING") == ["steering", "recovery"]
+    assert search.terms("Steering, recovery -- STEERING") == ["Steering", "recovery"]
     a_corpus()
     both = search.search_papers("steering recovery")
     assert [hit["key"] for hit in both] == ["roe2026steering"]
@@ -128,3 +128,13 @@ def test_a_papers_length_is_weighed_against_the_whole_corpus():
     store.delete_paper("short")
     filler("long", 400)
     assert search.search_papers("sandbagging")[0]["score"] > short
+
+
+def test_a_term_is_searched_as_it_was_typed():
+    """Case folding expands some letters — ß to ss — and the papers are
+    searched as they are written, where IGNORECASE cannot put them back."""
+    assert search.terms("Steering RECOVERY steering") == ["Steering", "RECOVERY"]
+    store.save_paper(store.new_paper("strasse", title="Strasse"))
+    store.pdf_path("strasse").write_bytes(minimal_pdf("Die Straße war lang und leer."))
+    assert [hit["key"] for hit in search.search_papers("Straße")] == ["strasse"]
+    assert [hit["key"] for hit in search.search_papers("straße")] == ["strasse"]
