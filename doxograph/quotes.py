@@ -416,17 +416,21 @@ def _forward(raw: str, at: int, high: int) -> int:
     return end if end == high else _word_end(raw, end)
 
 
-# A word broken across a line by a hyphen is put back together. Only at a line
-# break: "pre- and post-training" is a hyphen followed by a space, and joining
-# that would invent a word. A page break is a line break too — a word split at
-# the foot of a page has a form feed between its halves, not a newline.
-_LINE_HYPHEN = re.compile(rf"(\w)[-‐­][ \t]*[\n{PAGE_BREAK}][ \t\n{PAGE_BREAK}]*(\w)")
+# A word broken across a line by a hyphen is put back together: the hyphen and
+# the break between its halves are what this matches, and they come out. Only
+# at a line break — "pre- and post-training" is a hyphen followed by a space,
+# and joining that would invent a word. A page break is a line break too: a
+# word split at the foot of a page has a form feed between its halves.
+#
+# Public because the search folds its own copy of the papers and has to do the
+# same thing to them; two spellings of this rule would find different words.
+LINE_HYPHEN = re.compile(rf"(?<=\w)[-‐­][ \t]*[\n{PAGE_BREAK}][ \t\n{PAGE_BREAK}]*(?=\w)")
 
 
 def tidy(text: str) -> str:
     """The paper's wording as a line of prose: line breaks closed up, words
     broken across lines rejoined. What a reviewer would paste into a quote."""
-    return re.sub(r"\s+", " ", _LINE_HYPHEN.sub(r"\1\2", text)).strip()
+    return re.sub(r"\s+", " ", LINE_HYPHEN.sub("", text)).strip()
 
 
 _WORD = re.compile(r"\S+\s*")
