@@ -2429,6 +2429,12 @@ async function reviewWholePaper(paper) {
     actions: [{
       label: 'Undo',
       onClick: async () => {
+        // Frozen for the length of the undo as they were for the review
+        // itself: an open form still holds the ticked box, and a Save landing
+        // after the undo would put the review back with nothing left on screen
+        // to say it had.
+        const held = currentWorkspaceId === workspace ? changed : [];
+        held.forEach((id) => markSaving(id, true));
         try {
           await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
             method: 'POST',
@@ -2441,6 +2447,8 @@ async function reviewWholePaper(paper) {
           if (currentWorkspaceId === workspace) syncDraftReviews(changed, false);
         } catch (error) {
           toast(`Could not undo: ${error.message}`, { tone: 'warn' });
+        } finally {
+          held.forEach((id) => markSaving(id, false));
         }
         await refreshAll();
       },

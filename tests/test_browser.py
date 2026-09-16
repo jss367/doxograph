@@ -2020,3 +2020,50 @@ def test_a_deleted_synthesis_takes_its_parked_draft_with_it():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_undoing_a_bulk_review_freezes_the_editors_it_is_undoing():
+    """The forward action freezes them; the undo has to as well, or a Save
+    landing after it puts the review back with nothing left to say so."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_undo(route, request):
+                if request.method == "POST" and b'"reviewed":false' in (request.post_data_buffer or b""):
+                    started.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route("**/api/papers/doe2026study/review", hold_undo)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
+                form = page.locator(f'form[data-form="{one}"]')
+                await form.wait_for()
+
+                await page.get_by_role("button", name="Mark 2 reviewed").click()
+                notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
+                await notice.wait_for()
+                assert await form.locator('[name="reviewed"]').is_checked()
+
+                await notice.get_by_role("button", name="Undo").click()
+                await asyncio.wait_for(started.wait(), timeout=5)
+                assert await form.get_by_role("button", name="Save").is_disabled()
+                release.set()
+
+                await page.locator(f'form[data-form="{one}"] [name="reviewed"]:not(:checked)').wait_for()
+                await form.get_by_role("button", name="Save").click()
+                await form.wait_for(state="detached")
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: False, two: False}
