@@ -168,3 +168,14 @@ def test_a_longer_title_printed_twice_keeps_both_of_its_places():
         "References\n[1] Somebody. Attention is all you need for image restoration. 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["long"]
+
+
+def test_a_section_number_in_roman_comes_off_the_heading_too():
+    """IEEE numbers its sections in Roman, so a bibliography opens with
+    "VI. REFERENCES"."""
+    for heading in ("VI. REFERENCES", "IV. Bibliography", "3. References"):
+        text = f"Body of the paper.\n{heading}\n[1] A paper.\n"
+        assert cites.reference_text(text).strip() == "[1] A paper.", heading
+    # The letters are only taken off when a heading is what is left.
+    assert cites.reference_text("x\nLiterature Cited\n[1] A.\n").strip() == "[1] A."
+    assert cites.reference_text("x\nVivid examples follow.\n[1] A.\n") == ""

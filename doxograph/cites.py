@@ -63,11 +63,24 @@ def reference_text(text: str) -> str:
         at += len(line)
         if len(line.strip()) > _HEADING_LINE:
             continue
-        squashed = quotes.squash(line).lstrip("0123456789")
-        head = next((h for h in _HEADINGS if squashed.startswith(h)), None)
-        if head is not None and squashed[len(head):] in _HEADING_TAIL:
+        if _is_heading(quotes.squash(line)):
             return text[at:]
     return ""
+
+
+def _is_heading(squashed: str) -> bool:
+    """Whether a line's letters say a reference list starts here.
+
+    A section number comes off first, in either notation: IEEE numbers its
+    sections in Roman, so a bibliography can open with "VI. REFERENCES" and
+    squash to "vireferences". The Roman run is only taken off when what is
+    left is a heading, since "literaturecited" starts with one of its letters.
+    """
+    for candidate in (squashed.lstrip("0123456789"), squashed.lstrip("ivxlcdm0123456789")):
+        head = next((h for h in _HEADINGS if candidate.startswith(h)), None)
+        if head is not None and candidate[len(head):] in _HEADING_TAIL:
+            return True
+    return False
 
 
 def fingerprints(paper: dict) -> list[str]:
