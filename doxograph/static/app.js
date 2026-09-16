@@ -2049,6 +2049,10 @@ async function showQuoteContext(paper, claim) {
   // would otherwise be answered with the other corpus's passage — and "use
   // the paper's wording" would write it into this one.
   const pending = { claim, paper, loading: true, error: null, data: null };
+  // Another claim's editor can be open on the same screen, holding text that
+  // exists only in the DOM. Every redraw has to read it first or the passage
+  // opening throws away what somebody was typing.
+  captureOpenEditor();
   V.quoteContext = pending;
   renderContent();
   try {
@@ -2062,6 +2066,7 @@ async function showQuoteContext(paper, claim) {
       V.quoteContext = { claim, paper, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
     }
   }
+  captureOpenEditor();   // an editor may have been opened while the PDF was read
   renderContent();
 }
 

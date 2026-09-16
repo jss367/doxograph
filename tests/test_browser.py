@@ -1437,3 +1437,37 @@ def test_a_passage_stands_aside_when_the_claim_changes_underneath_it():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_opening_a_passage_keeps_what_is_typed_in_another_claims_editor():
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    first = store.add_claim(key, {"text": "First claim.", "quote": "Recovery under steering"})
+    store.add_claim(key, {"text": "Second claim.", "quote": "a path-dependent outcome"})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim[data-claim="{first["id"]}"]').wait_for()
+                await page.locator(f'.claim[data-claim="{first["id"]}"]').get_by_role(
+                    "button", name="edit").click()
+                await page.locator('textarea[name="text"]').fill("Half-typed correction")
+
+                # Opening another card's passage redraws the list under the
+                # open editor, which has to keep what is in it.
+                await page.locator('.claim:not(.edit-wrap)').first.get_by_role(
+                    "button", name="in the paper").click()
+                await page.locator(".qctx .qpassage").wait_for()
+                assert await page.locator('textarea[name="text"]').input_value() == "Half-typed correction"
+
+            await browser.close()
+
+    asyncio.run(scenario())
