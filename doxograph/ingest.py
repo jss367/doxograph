@@ -460,9 +460,14 @@ def publish_pdf(key: str, staging: Path) -> bool:
             staging.unlink(missing_ok=True)
             return False
         os.replace(staging, store.pdf_path(key))
-    # Read the text out of it now, outside the lock. The quote checks and the
-    # search both want it, this is the one moment the PDF is known to be new,
-    # and doing it here keeps it off the first search of a fresh corpus.
+        # The text stored for the old PDF describes a paper that is no longer
+        # there. `os.replace` carries the staged file's mtime, which can be
+        # older than that text, so the freshness check alone would go on
+        # serving it and quotes would be checked against the wrong paper.
+        store.text_path(key).unlink(missing_ok=True)
+    # Read the new text now, outside the lock. The quote checks and the search
+    # both want it, this is the one moment the PDF is known to be new, and
+    # doing it here keeps it off the first search of a fresh corpus.
     search.cache_text(key)
     return True
 
