@@ -1695,3 +1695,88 @@ def test_a_bulk_review_reaches_a_claim_whose_editor_is_open():
     assert reviewed == {one: True, two: True}
     text = {c["id"]: c["text"] for c in store.load_paper("doe2026study")["claims"]}
     assert text[one] == "One, reworded."
+
+
+@pytest.mark.browser
+def test_history_restores_a_paper_only_when_it_still_exists_and_parks_a_new_claim():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator(".paperhead h2", has_text="Paper A").wait_for()
+
+                # A new claim belongs to the paper it was started on, so Back
+                # to another paper parks it instead of offering it there.
+                await page.get_by_role("button", name="Add claim by hand").click()
+                await page.locator('form[data-form="__new__"] textarea[name="text"]').fill(
+                    "A draft that belongs to Paper A.")
+                await page.locator('#papers [data-paper="paper-b"]').click()
+                await page.locator(".paperhead h2", has_text="Paper B").wait_for()
+                await page.go_back()
+                await page.locator(".paperhead h2", has_text="Paper A").wait_for()
+                assert await page.get_by_text("Unsaved new claim", exact=False).count() == 0
+
+                # Paper A is removed while its entry is still in the history.
+                await page.locator('#papers [data-paper="paper-b"]').click()
+                await page.locator(".paperhead h2", has_text="Paper B").wait_for()
+                await page.locator('#papers [data-paper="paper-a"] .pmenu').click()
+                await page.locator("#ctxmenu").get_by_role("button", name="Remove paper").click()
+                await _answer(page, "Remove")
+                await page.locator('#papers [data-paper="paper-a"]').wait_for(state="detached")
+
+                # Back onto the removed paper falls back to the corpus rather
+                # than an empty list under no header. Its key is retired, so
+                # there is nothing for the URL to keep pointing at.
+                await page.go_back()
+                await page.locator('#papers [data-paper=""].active').wait_for()
+                assert await page.locator(".paperhead h2").count() == 0
+                assert "paper=paper-a" not in page.url
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_bulk_review_undo_writes_to_the_workspace_it_was_taken_in():
+    """The same paper imported into two workspaces has the same claim ids in
+    both, so an undo that followed the picker would unreview the wrong corpus."""
+    from doxograph import config
+
+    ids = _paper_with_claims("shared", "A study", ["One.", "Two."], reviewed=False)
+    other = config.create_workspace("Other")
+    with config.use_workspace(other["id"]):
+        _paper_with_claims("shared", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.get_by_role("button", name="Mark 2 reviewed").click()
+                notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
+                await notice.wait_for()
+
+                # The picker moves while the notice is still up. The switch
+                # resets the view, so the paper is opened again over there.
+                await page.locator("#workspace").select_option(label="Other")
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.get_by_role("button", name="Mark 2 reviewed").wait_for()
+
+                await notice.get_by_role("button", name="Undo").click()
+                await page.wait_for_timeout(1500)
+            await browser.close()
+
+    asyncio.run(scenario())
+    # The discriminating assertion: the undo has to have landed in the
+    # workspace the review was taken in, which is the one no longer on screen.
+    assert _reviewed("shared") == {i: False for i in ids}
+    with config.use_workspace(other["id"]):
+        assert _reviewed("shared") == {i: False for i in ids}

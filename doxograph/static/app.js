@@ -95,6 +95,8 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context:
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 let workspaces = [];
 let currentWorkspaceId = null;
+// The workspace change in flight, if any: its corpus is still on its way.
+let workspaceSwitch = null;
 let pendingMutations = 0;
 // The native app can receive a Finder/Dock drop while the first state request
 // is still loading. Publish the remembered choice synchronously so that drop
@@ -312,12 +314,15 @@ function pruneTrashed() {
 async function deleteLater(kind, id, path, label) {
   const token = `${kind}:${id}`;
   if (trash.has(token)) return;
+  const workspace = currentWorkspaceId || 'default';
   let notice = null;
   const send = async () => {
     if (!trash.has(token)) return;   // already sent, or already undone
     if (notice) notice.close();
     try {
-      await api(path, { method: 'DELETE' });
+      // Named rather than implied: `flushTrash` sends these before a switch,
+      // and this makes that a guarantee rather than an ordering to preserve.
+      await api(path, { method: 'DELETE', headers: { 'X-Doxograph-Workspace': workspace } });
     } catch (error) {
       toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
     } finally {
@@ -328,7 +333,7 @@ async function deleteLater(kind, id, path, label) {
     }
     await refreshAll();
   };
-  trash.set(token, { path, send });
+  trash.set(token, { path, workspace, send });
   forgetStateTag();
   pruneTrashed();
   await refreshAll();
@@ -354,7 +359,7 @@ async function flushTrash() {
 // to find it restored would be the app forgetting what it was told.
 window.addEventListener('pagehide', () => {
   trash.forEach((entry) => {
-    const headers = { 'X-Doxograph-Workspace': currentWorkspaceId || 'default' };
+    const headers = { 'X-Doxograph-Workspace': entry.workspace };
     try { fetch(entry.path, { method: 'DELETE', headers, keepalive: true }); } catch (e) { /* leaving anyway */ }
   });
   trash.clear();
@@ -403,6 +408,14 @@ function syncHash(push = false) {
   else history.replaceState(null, '', url);
 }
 
+// A paper named by a URL may have been removed since: at boot from a stale
+// bookmark, or on Back to an entry from before it was removed. Its key is
+// retired, so it will never come back; fall back to the corpus rather than an
+// empty list with nothing saying why.
+function dropMissingPaper() {
+  if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) V.paper = null;
+}
+
 // Sets the view from the URL without drawing it. The controls are set here too:
 // they are the same state, and a filter the page has forgotten to tick is worse
 // than no filter at all.
@@ -421,6 +434,11 @@ function applyHash() {
   V.editing = null;
   V.tensionFocus = null;
   V.agreementFocus = null;
+  // A new claim belongs to the paper it was started on. Arriving at another
+  // paper has to park it, exactly as clicking that paper in the list does, or
+  // it is offered as a draft under a header it does not belong to and saving
+  // it posts to the paper that is no longer on screen.
+  parkNewClaimForNavigation(V.paper);
   $('q').value = V.q;
   $('kind').value = V.kind;
   $('only-unreviewed').checked = V.unreviewed;
@@ -428,7 +446,14 @@ function applyHash() {
   $('group-by-tag').checked = V.group;
 }
 
+// Restoring an entry can wait on a workspace switch, and Back or Forward held
+// down arrives faster than that. Each pop takes a number and the newest one
+// wins: an older one that wakes up afterwards has nothing left to say, and
+// must not draw its entry over the newer one or clear the guard it is using.
+let popSeq = 0;
+
 window.addEventListener('popstate', async () => {
+  const seq = ++popSeq;
   // Moving through history is a view change like any other, and the editors
   // keep their text across it: `applyHash` writes straight to `V`, so the
   // bookkeeping `showView` would have done is done here.
@@ -440,22 +465,44 @@ window.addEventListener('popstate', async () => {
   try {
     // The workspace reset clears the filters; the URL being moved to puts back
     // whatever it holds, which is the whole point of going back to it.
-    if (wanted !== currentWorkspaceId && workspaces.some((w) => w.id === wanted)) {
-      await switchWorkspace(wanted);
+    if (wanted !== currentWorkspaceId) {
+      if (workspaces.some((w) => w.id === wanted)) await switchWorkspace(wanted);
+      if (seq !== popSeq) return;
+    } else if (workspaceSwitch) {
+      // Already going where this entry lives, but the corpus has not arrived.
+      // Restoring now would check the entry's paper against the old one.
+      await workspaceSwitch;
+      if (seq !== popSeq) return;
+      // The switch can be refused — a change still in flight, or the user
+      // keeping their drafts — and an unknown workspace is refused here. The
+      // entry then describes a corpus this page is not in, and applying its
+      // paper and filters to the one it is in would be worse than ignoring it.
+      if (currentWorkspaceId !== wanted) return;
     }
     applyHash();
+    dropMissingPaper();
   } finally {
-    restoringHistory = false;
+    // Every exit redraws, including the refused one, and the redraw writes the
+    // URL back to what is on screen: an entry the page did not take must not
+    // be left standing as the address. A superseded pop does neither — the one
+    // that overtook it owns both.
+    if (seq === popSeq) {
+      restoringHistory = false;
+      renderAll();
+    }
   }
-  // Drawn outside the guard, so a switch the user cancelled at the unsaved-edits
-  // question leaves the URL saying what is actually on screen.
-  renderAll();
 });
 
 async function api(path, options = {}) {
   const request = { ...options };
   const headers = new Headers(request.headers || {});
-  if (currentWorkspaceId) headers.set('X-Doxograph-Workspace', currentWorkspaceId);
+  // A caller that named a workspace meant that one. An undo offered in a
+  // notice can outlive the picker, and finishing it against whatever is
+  // selected by then would write to the wrong corpus — the same paper
+  // imported twice carries the same key and claim ids in both.
+  if (!headers.has('X-Doxograph-Workspace') && currentWorkspaceId) {
+    headers.set('X-Doxograph-Workspace', currentWorkspaceId);
+  }
   request.headers = headers;
   const method = (request.method || 'GET').toUpperCase();
   const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method);
@@ -588,6 +635,20 @@ async function switchWorkspace(workspaceId) {
     renderWorkspacePicker();
     return;
   }
+  const run = loadWorkspace(workspaceId);
+  workspaceSwitch = run;
+  try {
+    await run;
+  } finally {
+    if (workspaceSwitch === run) workspaceSwitch = null;
+  }
+}
+
+// The half of the switch that replaces the corpus, kept separate so that
+// anyone who arrives while it is running can wait for it. `currentWorkspaceId`
+// changes at the start and `S` only when the answer lands, so code that reads
+// both in between would be judging the new workspace by the old corpus.
+async function loadWorkspace(workspaceId) {
   await flushTrash();
   currentWorkspaceId = workspaceId;
   stateEtag = null;   // the tag belongs to the other workspace's corpus
@@ -2306,6 +2367,10 @@ async function toggleReviewed(row) {
 async function reviewWholePaper(paper) {
   captureOpenEditor();
   V.error = null;
+  // The notice outlives the picker, so the undo carries the workspace the
+  // decision was taken in rather than whichever one is selected when it is
+  // clicked: the same paper imported twice has the same claim ids in both.
+  const workspace = currentWorkspaceId;
   let changed = [];
   try {
     const result = await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
@@ -2327,7 +2392,8 @@ async function reviewWholePaper(paper) {
       onClick: async () => {
         try {
           await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
             body: JSON.stringify({ reviewed: false, claims: changed }),
           });
           syncDraftReviews(changed, false);
@@ -3120,6 +3186,10 @@ $('btn-retag').addEventListener('click', async () => {
 
 $('btn-export').addEventListener('click', async () => {
   const selected = currentWorkspace();
+  // As with the review undo: the notice can outlive the picker, and Open must
+  // hand back the file this export wrote, not whatever the workspace selected
+  // by then last exported.
+  const workspace = currentWorkspaceId || 'default';
   let result;
   try {
     result = await api('/api/export', {
@@ -3135,7 +3205,7 @@ $('btn-export').addEventListener('click', async () => {
   toast(`Exported to ${result.path}`, {
     timeout: 12000,
     actions: [
-      { label: 'Open', onClick: () => window.open(`/export?${workspaceQuery()}`, '_blank') },
+      { label: 'Open', onClick: () => window.open(`/export?workspace=${encodeURIComponent(workspace)}`, '_blank') },
       { label: 'Copy path', onClick: () => copyText(result.path, 'Path copied.') },
     ],
   });
@@ -3367,12 +3437,9 @@ async function boot() {
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   $('kind').value = V.kind;   // the kinds arrive with the corpus, after the URL was read
-  // A link to a paper that has since been removed falls back to the corpus,
-  // rather than an empty list with nothing saying why.
-  if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) {
-    V.paper = null;
-    renderAll();
-  }
+  const wanted = V.paper;
+  dropMissingPaper();
+  if (V.paper !== wanted) renderAll();
   setInterval(async () => {
     if (document.hidden) return;
     // Keep settings current while editing; the content guard below preserves
