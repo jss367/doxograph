@@ -16,6 +16,7 @@ which is what separates this module's `Text` from a plain string.
 from __future__ import annotations
 
 import array
+import contextlib
 import difflib
 import os
 import re
@@ -124,7 +125,12 @@ def _extract(path: Path) -> str:
         return ""
 
 
-def paper_text(path: Path, cache: Path | None = None) -> Text | None:
+@contextlib.contextmanager
+def _unguarded():
+    yield
+
+
+def paper_text(path: Path, cache: Path | None = None, guard=None) -> Text | None:
     """The paper's text. None if it cannot be read, or if it has no text: a
     scanned paper opens fine but every page comes back empty, and there is
     nothing to check a quote against.
@@ -133,6 +139,12 @@ def paper_text(path: Path, cache: Path | None = None) -> Text | None:
     long paper with pypdf takes about a second, which is charged once per
     claim without it, and the cached text is the paper in a form the rest of
     the corpus can read. It is used when it is newer than the PDF.
+
+    `guard` is the paper's lock, for the callers that have one. Reading a PDF
+    and storing its text is two steps, and a publish landing between them
+    leaves the text of a paper that is no longer there — stored last, so
+    stored newest, and believed. Held across both steps that cannot happen.
+    The module keeps no `store` of its own, so the lock comes from the caller.
     """
     try:
         st = path.stat()
@@ -145,8 +157,13 @@ def paper_text(path: Path, cache: Path | None = None) -> Text | None:
             return hit[1] if hit[1].squashed else None
     raw = _read_cached(cache, st.st_mtime_ns)
     if raw is None:
-        raw = _extract(path)
-        _write_cached(cache, raw)
+        with (guard or _unguarded)():
+            # Under the lock the PDF may be another paper's by now; the one
+            # read is the one whose text is stored.
+            raw = _read_cached(cache, st.st_mtime_ns)
+            if raw is None:
+                raw = _extract(path)
+                _write_cached(cache, raw)
     text = build(raw)
     with _cache_lock:
         if len(_cache) >= _CACHE_LIMIT:
@@ -197,9 +214,9 @@ def _write_cached(cache: Path | None, raw: str) -> None:
             staged.unlink(missing_ok=True)
 
 
-def pdf_text(path: Path, cache: Path | None = None) -> str | None:
+def pdf_text(path: Path, cache: Path | None = None, guard=None) -> str | None:
     """The whole paper's text, squashed. None when there is none to read."""
-    text = paper_text(path, cache)
+    text = paper_text(path, cache, guard)
     return text.squashed if text else None
 
 
@@ -266,16 +283,16 @@ def _align(quote: str, haystack: str, size: int) -> tuple[float, int, int]:
     return best
 
 
-def verify(pdf: Path, quote: str, cache: Path | None = None) -> bool | None:
+def verify(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> bool | None:
     """Whether `quote` is in the paper at `pdf`.
 
     None when there is nothing to check: no quote, or no readable PDF.
     """
-    found = locate(pdf, quote, cache)
+    found = locate(pdf, quote, cache, guard)
     return None if found is None else found["found"]
 
 
-def locate(pdf: Path, quote: str, cache: Path | None = None) -> dict | None:
+def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict | None:
     """Where `quote` sits in the paper at `pdf`, in the paper's own words.
 
     None when there is nothing to check: no quote, or no readable PDF. A quote
@@ -285,7 +302,7 @@ def locate(pdf: Path, quote: str, cache: Path | None = None) -> dict | None:
     needle = squash(quote)
     if not needle:
         return None
-    text = paper_text(pdf, cache)
+    text = paper_text(pdf, cache, guard)
     if text is None:
         return None
     score, lo, hi = best_match(needle, text.squashed)
@@ -304,7 +321,12 @@ def locate(pdf: Path, quote: str, cache: Path | None = None) -> dict | None:
     }
     if lo < 0 or score < _NEARBY:
         return result
-    result["repeated"] = score >= 1.0 and text.squashed.find(needle, lo + 1) >= 0
+    # The stretch that was matched, not the quote: a match that is not exact
+    # still sits on a passage the paper may print twice, and the page it is on
+    # says as little then as it does for a repeated quote.
+    span = text.squashed[lo:hi]
+    result["repeated"] = bool(span) and (text.squashed.find(span, lo + 1) >= 0
+                                         or text.squashed.rfind(span, 0, lo) >= 0)
     start, end = text.offsets[lo], text.offsets[hi - 1] + 1
     # The sentence is not bounded by the page. A quote can run over a page
     # break, and so can the sentence around one that does not; cut at the
