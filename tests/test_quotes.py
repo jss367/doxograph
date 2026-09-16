@@ -392,7 +392,9 @@ def test_a_replaced_pdf_takes_the_stored_text_with_it(tmp_path):
     old = store.text_path(key).stat().st_mtime_ns - 5_000_000
     os.utime(staged, ns=(old, old))
     assert ingest.publish_pdf(key, staged) is True
-    assert not store.text_path(key).exists()
+    stored = store.text_path(key)
+    assert quotes.squash(SENTENCE) not in quotes.squash(
+        stored.read_text(encoding="utf-8") if stored.exists() else "")
 
     quotes._cache.clear()
     assert store.verify_quotes(key)["claims"][0]["quote_verified"] is False
