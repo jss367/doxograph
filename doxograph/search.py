@@ -277,28 +277,32 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     terms are found in the folded text and read back out of the original.
     """
     text, offsets = fold_with_offsets(raw)
-    found = [[m.start() for m in islice(pattern.finditer(text), PASSAGES)]
+    found = [[(m.start(), m.end()) for m in islice(pattern.finditer(text), PASSAGES)]
              for pattern in patterns]
-    starts: list[int] = []
+    starts: list[tuple[int, int]] = []
     # A term at a time, so a query's second word is shown before the first
     # word's second occurrence.
     for nth in range(PASSAGES):
         for places in found:
             if len(starts) >= PASSAGES:
                 break
-            if nth < len(places) and not any(abs(places[nth] - at) < PASSAGE_SPAN for at in starts):
+            if nth < len(places) and not any(abs(places[nth][0] - at) < PASSAGE_SPAN
+                                             for at, _ in starts):
                 starts.append(places[nth])
     passages = []
-    for folded_at in sorted(starts)[:PASSAGES]:
+    for folded_at, folded_end in sorted(starts)[:PASSAGES]:
         at = offsets[folded_at] if folded_at < len(offsets) else len(raw)
+        stop = offsets[folded_end - 1] + 1 if folded_end - 1 < len(offsets) else len(raw)
         # Kept inside one page: text either side of a page break is the header
         # of the next page or the footer of this one, and a passage running
-        # across the break would be on neither page it claims to be on.
+        # across the break would be on neither page it claims to be on. The
+        # word that matched is the exception — split at the foot of a page, it
+        # is one word, and a passage showing half of it shows nothing.
         low = raw.rfind(quotes.PAGE_BREAK, 0, at) + 1
-        high = raw.find(quotes.PAGE_BREAK, at)
+        high = raw.find(quotes.PAGE_BREAK, max(stop - 1, at))
         high = len(raw) if high < 0 else high
         begin = max(low, at - PASSAGE_SPAN)
-        end = min(high, at + PASSAGE_SPAN)
+        end = max(min(high, at + PASSAGE_SPAN), stop)
         shown = quotes.tidy(raw[begin:end])
         passages.append({
             "text": shown,

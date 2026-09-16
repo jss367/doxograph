@@ -267,3 +267,10 @@ def test_a_paper_without_spaces_is_measured_by_its_characters():
 def test_a_word_split_at_a_page_break_is_one_word_to_a_search():
     a_paper_of("split", "We measure the transfor-\x0cmation of steered activations.")
     assert [hit["key"] for hit in search.search_papers("transformation")] == ["split"]
+
+
+def test_a_passage_keeps_the_word_that_matched_across_a_page_break():
+    a_paper_of("split", "Text before.\x0cWe measure the transfor-\x0cmation of activations.")
+    passage = search.search_papers("transformation")[0]["passages"][0]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["transformation"]
+    assert "transformation" in passage["text"]

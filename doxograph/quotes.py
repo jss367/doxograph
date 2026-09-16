@@ -146,29 +146,30 @@ def paper_text(path: Path, cache: Path | None = None, guard=None) -> Text | None
     stored newest, and believed. Held across both steps that cannot happen.
     The module keeps no `store` of its own, so the lock comes from the caller.
     """
-    try:
-        st = path.stat()
-    except OSError:
-        return None
-    identity = (st.st_size, st.st_mtime_ns, st.st_ino)
-    # The stored text has to be there as well as the PDF unchanged. Deleting
-    # `text/<key>.txt` is how a corpus is told to read its papers again — the
-    # README says so — and a process that had already cached one in memory
-    # would otherwise go on answering from it and never write the file back.
-    if cache is None or cache.exists():
-        with _cache_lock:
-            hit = _cache.get(path)
-            if hit and hit[0] == identity:
-                return hit[1] if hit[1].squashed else None
-    raw = _read_cached(cache, st.st_mtime_ns)
-    if raw is None:
-        with (guard or _unguarded)():
-            # Under the lock the PDF may be another paper's by now; the one
-            # read is the one whose text is stored.
-            raw = _read_cached(cache, st.st_mtime_ns)
-            if raw is None:
-                raw = _extract(path)
-                _write_cached(cache, raw)
+    with (guard or _unguarded)():
+        # Everything from here is about one state of the file, and the lock is
+        # what holds it still: a publish replaces the PDF and drops its stored
+        # text under the same lock, so without it a reading that began before
+        # the replacement could be finished, cached and believed after it.
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        identity = (st.st_size, st.st_mtime_ns, st.st_ino)
+        # The stored text has to be there as well as the PDF unchanged.
+        # Deleting `text/<key>.txt` is how a corpus is told to read its papers
+        # again — the README says so — and a process that had already cached
+        # one in memory would otherwise go on answering from it and never
+        # write the file back.
+        if cache is None or cache.exists():
+            with _cache_lock:
+                hit = _cache.get(path)
+                if hit and hit[0] == identity:
+                    return hit[1] if hit[1].squashed else None
+        raw = _read_cached(cache, st.st_mtime_ns)
+        if raw is None:
+            raw = _extract(path)
+            _write_cached(cache, raw)
     text = build(raw)
     with _cache_lock:
         if len(_cache) >= _CACHE_LIMIT:
