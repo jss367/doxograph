@@ -493,8 +493,28 @@ def test_a_synthesis_from_before_the_version_was_recorded_is_written_again(monke
     store.record_synthesis("recovery-rate", "older than the field", shown("recovery-rate"))
     with store.syntheses_lock():
         data = store._read_syntheses()
-        del data["syntheses"]["recovery-rate"]["pass_version"]
+        del data["syntheses"]["recovery-rate"]["prompt_basis"]
         store._save_syntheses(data)
     monkeypatch.setattr(extract, "client", lambda: FakeClient("fresh"))
     assert extract.synthesize_topic("recovery-rate")["written"] is True
     assert store.synthesis_rows()[0]["text"] == "fresh"
+
+
+def test_renaming_a_topic_or_rewording_it_is_worth_writing_again(monkeypatch):
+    build_corpus()
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("first"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    assert extract.synthesize_topic("recovery-rate")["skipped"] is True
+
+    # The description is in the prompt, right after the topic's name.
+    store.save_tags([{"name": "recovery-rate",
+                      "description": "How often a model returns to task, per run."}])
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("second"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+
+    # And the name itself: the prompt says "Topic: <name>".
+    assert extract.synthesize_topic("recovery-rate")["skipped"] is True
+    store.rename_tag("recovery-rate", "task-recovery")
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("third"))
+    assert extract.synthesize_topic("task-recovery")["written"] is True
+    assert store.synthesis_rows()[0]["text"] == "third"

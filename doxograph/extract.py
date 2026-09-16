@@ -841,15 +841,16 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
     papers = {r["paper"] for r in rows}
     if not rows:
         return {"written": False, "skipped": False, "claims": 0, "papers": 0}
+    tags = store.load_tags() if tags is None else tags
     if not force:
         current = next((r for r in store.synthesis_rows(all_rows) if r["topic"] == topic), None)
-        # The pass version as well as the claims and tensions: a synthesis
-        # written under an older prompt is worth writing again, and nothing in
-        # the corpus changing would ever say so.
+        # The prompt as well as the claims and tensions: a synthesis written
+        # under an older prompt, or under the topic's old name or description,
+        # is worth writing again, and nothing in the corpus changing would
+        # ever say so.
         if (current and not current["stale"]
-                and current.get("pass_version") == config.PASS_VERSION):
+                and current.get("prompt_basis") == store.synthesis_prompt_basis(topic, tags)):
             return {"written": False, "skipped": True, "claims": len(rows), "papers": len(papers)}
-    tags = store.load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
     tensions = store.tension_rows(all_rows)

@@ -500,3 +500,18 @@ def test_a_failed_pass_is_asked_again(monkeypatch):
         with pytest.raises(RuntimeError):
             extract.find_tensions("recovery-rate")
     assert len(calls) == 2
+
+
+def test_correcting_a_papers_own_details_is_worth_asking_about_again(monkeypatch):
+    """The listing names each paper's author, year and title, so a correction
+    to any of them changes what the model was shown."""
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        client.patch("/api/papers/doe2026recovery", json={"title": "Recovery under steering, revisited"})
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(calls) == 2
