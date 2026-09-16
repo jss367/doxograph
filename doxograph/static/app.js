@@ -356,10 +356,22 @@ async function loadWorkspaces() {
 // narrow to that title. Which was meant is decided by the corpus: if the
 // phrase is in it, that is what was wanted, and otherwise the words are all
 // there is to go on. Nothing that used to be findable stops being findable.
+// JavaScript lowercases one character to one character, so ß stays ß however
+// the query was typed and STRASSE never meets Straße. The server folds both
+// sides properly and would find the paper by its text while the page hid the
+// claim. These are the expansions that turn up in a research corpus; the rest
+// of Unicode's case folding is left to the server.
+const FOLD = [[/ß/g, 'ss'], [/ẞ/g, 'ss'], [/İ/g, 'i'], [/ﬀ/g, 'ff'], [/ﬁ/g, 'fi'],
+              [/ﬂ/g, 'fl'], [/ﬃ/g, 'ffi'], [/ﬄ/g, 'ffl'], [/ŉ/g, 'ʼn']];
+
+function fold(text) {
+  return FOLD.reduce((out, [from, to]) => out.replace(from, to), String(text ?? '').toLowerCase());
+}
+
 function queryMatcher() {
-  const query = V.q.trim().toLowerCase();
+  const query = fold(V.q.trim());
   if (!query) return () => true;
-  const phrase = (text) => text.includes(query);
+  const phrase = (text) => fold(text).includes(query);
   if (S.claims.some((row) => phrase(haystack(row)))
       || S.papers.some((paper) => phrase(paperHaystack(paper)))) {
     return phrase;
@@ -369,7 +381,8 @@ function queryMatcher() {
   // nothing is true: it would show the whole corpus for a query the phrase
   // pass has already failed to find. Nothing matches it.
   if (!patterns.length) return () => false;
-  return (text) => patterns.every((pattern) => pattern.test(text));
+  // Both sides folded, so the patterns need no case flag of their own.
+  return (text) => { const folded = fold(text); return patterns.every((p) => p.test(folded)); };
 }
 
 // Scripts that do not put spaces between their words, as `search.py` has
@@ -384,10 +397,10 @@ const UNSEGMENTED = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00
 // filter down. What is left is to consume the character before the word, and
 // to allow the start of the string in its place.
 function queryPatterns(query) {
-  return (query.match(/[\p{L}\p{N}_]+/gu) || [])
+  return (fold(query).match(/[\p{L}\p{N}_]+/gu) || [])
     .map((term) => (UNSEGMENTED.test(term)
-      ? new RegExp(term, 'iu')
-      : new RegExp(`(?:^|[^\\p{L}\\p{N}])${term}`, 'iu')));
+      ? new RegExp(term, 'u')
+      : new RegExp(`(?:^|[^\\p{L}\\p{N}])${term}`, 'u')));
 }
 
 // A claim's searchable text. It carries its paper's key and year as well as
