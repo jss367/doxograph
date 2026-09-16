@@ -337,7 +337,17 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
       try {
         // Named rather than implied: `flushTrash` sends these before a switch,
         // and this makes that a guarantee rather than an ordering to preserve.
-        await api(path, { method: 'DELETE', headers: { 'X-Doxograph-Workspace': workspace } });
+        //
+        // `keepalive` because the page closing stands aside for this request
+        // rather than sending a second one: an ordinary fetch can be abandoned
+        // as the page goes, and the row would come back from a delete the
+        // reader watched happen. A DELETE carries no body, so the size limit
+        // that comes with it costs nothing.
+        await api(path, {
+          method: 'DELETE',
+          keepalive: true,
+          headers: { 'X-Doxograph-Workspace': workspace },
+        });
       } catch (error) {
         toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
       } finally {
