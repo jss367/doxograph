@@ -370,12 +370,15 @@ function queryMatcher() {
   return (text) => patterns.every((pattern) => pattern.test(text));
 }
 
-// A term matches from the start of a word. The lookbehind stands in for \b,
-// which in JavaScript knows only ASCII and so would never match a query
-// written in another script.
+// A term matches from the start of a word. `\b` in JavaScript knows only
+// ASCII and would never match a query written in another script, and a
+// lookbehind is not available: the app supports macOS 13.0, whose WKWebView
+// has none, and the SyntaxError would take the whole filter down. What is
+// left is to consume the character before the word, and to allow the start
+// of the string in its place.
 function queryPatterns(query) {
   return (query.match(/[\p{L}\p{N}_]+/gu) || [])
-    .map((term) => new RegExp(`(?<![\\p{L}\\p{N}])${term}`, 'iu'));
+    .map((term) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${term}`, 'iu'));
 }
 
 // A claim's searchable text. It carries its paper's key and year as well as
@@ -1435,11 +1438,13 @@ function textSearchBlock() {
 // inside an entity `esc` introduced.
 function mark(text, terms) {
   if (!terms.length) return esc(text);
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])(?:${terms.join('|')})[\\p{L}\\p{N}]*`, 'giu');
+  // The character before the word is consumed rather than looked behind, for
+  // the WKWebView that has no lookbehind, and put back outside the mark.
+  const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])((?:${terms.join('|')})[\\p{L}\\p{N}]*)`, 'giu');
   let html = '';
   let last = 0;
   for (const match of text.matchAll(pattern)) {
-    html += esc(text.slice(last, match.index)) + `<mark>${esc(match[0])}</mark>`;
+    html += esc(text.slice(last, match.index)) + esc(match[1]) + `<mark>${esc(match[2])}</mark>`;
     last = match.index + match[0].length;
   }
   return html + esc(text.slice(last));
@@ -2198,6 +2203,10 @@ async function showQuoteContext(paper, claim) {
   // would otherwise be answered with the other corpus's passage — and "use
   // the paper's wording" would write it into this one.
   const pending = { claim, paper, loading: true, error: null, data: null };
+  // Another claim's editor can be open on the same screen, holding text that
+  // exists only in the DOM. Every redraw has to read it first or the passage
+  // opening throws away what somebody was typing.
+  captureOpenEditor();
   V.quoteContext = pending;
   renderContent();
   try {
@@ -2211,6 +2220,7 @@ async function showQuoteContext(paper, claim) {
       V.quoteContext = { claim, paper, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
     }
   }
+  captureOpenEditor();   // an editor may have been opened while the PDF was read
   renderContent();
 }
 

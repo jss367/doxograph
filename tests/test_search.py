@@ -156,3 +156,39 @@ def test_a_folded_position_reads_back_to_the_papers_own_characters():
     assert len(offsets) == len(folded)
     at = folded.index("strasse")
     assert "Die Straße war"[offsets[at]:].startswith("Straße")
+
+
+def test_the_text_is_stored_before_the_papers_lock_is_let_go(monkeypatch, tmp_path):
+    """Two publishes of one key must not interleave: one could read its PDF,
+    the other replace it and store its text, and the first then write the text
+    of a paper that is no longer there. Reading it under the lock says they
+    cannot."""
+    import threading
+
+    from doxograph import ingest
+
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    second = tmp_path / "second.pdf"
+    second.write_bytes(minimal_pdf("The second paper, about penguins."))
+    other = threading.Thread(target=ingest.publish_pdf, args=("doe2026study", second))
+    blocked = []
+    original = search.cache_text
+
+    def cache_text(key: str) -> None:
+        if not blocked:
+            other.start()
+            other.join(timeout=0.3)
+            # Still waiting on the lock this publish holds, which is the point.
+            blocked.append(other.is_alive())
+        original(key)
+
+    monkeypatch.setattr(search, "cache_text", cache_text)
+    first = tmp_path / "first.pdf"
+    first.write_bytes(minimal_pdf("The first paper, about sandbagging."))
+    assert ingest.publish_pdf("doe2026study", first) is True
+    assert blocked == [True]
+
+    other.join(timeout=5)
+    # The second publish lands whole, text and all, once the first lets go.
+    stored = store.text_path("doe2026study").read_text(encoding="utf-8")
+    assert "penguins" in stored and "sandbagging" not in stored

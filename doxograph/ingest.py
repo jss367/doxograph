@@ -465,10 +465,12 @@ def publish_pdf(key: str, staging: Path) -> bool:
         # older than that text, so the freshness check alone would go on
         # serving it and quotes would be checked against the wrong paper.
         store.text_path(key).unlink(missing_ok=True)
-    # Read the new text now, outside the lock. The quote checks and the search
-    # both want it, this is the one moment the PDF is known to be new, and
-    # doing it here keeps it off the first search of a fresh corpus.
-    search.cache_text(key)
+        # Read the new text before letting go of the lock. Two publishes of one
+        # key can interleave otherwise: the first reads its PDF, the second
+        # replaces it and stores its text, and the first then writes the text
+        # of a paper that is no longer there. The lock is this paper's alone,
+        # and the parse is the price of the text being right.
+        search.cache_text(key)
     return True
 
 
