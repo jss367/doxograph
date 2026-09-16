@@ -382,7 +382,11 @@ const FOLD = [[/ß/g, 'ss'], [/ẞ/g, 'ss'], [/İ/g, 'i'], [/ﬀ/g, 'ff'], [/ﬁ
               [/ς/g, 'σ']];
 
 function fold(text) {
-  return FOLD.reduce((out, [from, to]) => out.replace(from, to), String(text ?? '').toLowerCase());
+  // Decomposed and stripped of its marks, as the server folds: a PDF can give
+  // an accented letter whole or as a letter and a mark, and a query is typed
+  // whichever way the keyboard does it.
+  const lowered = String(text ?? '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '');
+  return FOLD.reduce((out, [from, to]) => out.replace(from, to), lowered);
 }
 
 function queryMatcher() {
@@ -405,7 +409,7 @@ function queryMatcher() {
 // Scripts that do not put spaces between their words, as `search.py` has
 // them. A term in one of these is looked for wherever it falls: every
 // character around it is a letter, so a word start never comes.
-const UNSEGMENTED = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\u0e00-\u0e7f\u1780-\u17ff\u0f00-\u0fff]/u;
+const UNSEGMENTED = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\u0e00-\u0eff\u1780-\u17ff\u0f00-\u0fff\u1000-\u109f]/u;
 
 // A term matches from the start of a word, where words have starts. `\b` in
 // JavaScript knows only ASCII and would never match a query written in

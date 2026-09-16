@@ -1297,14 +1297,14 @@ def topic_claims(topic: str, rows: list[dict] | None = None) -> list[dict]:
 def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None) -> str:
     """What a synthesis was asked, apart from its claims and tensions.
 
-    The prompt version, the topic's name, and its description — all three are
-    in front of the model, and none of them is part of what makes a synthesis
-    stale, so without this a rename or a reworded description would never be
-    written again.
+    The prompt version, the model asked, the topic's name, and its description
+    — all of them decide what comes back, and none of them is part of what
+    makes a synthesis stale, so without this a rename, a reworded description
+    or a change of model would never be written again.
     """
     tags = load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
-    return f"{config.PASS_VERSION}\n{topic}\n{description}"
+    return f"{config.PASS_VERSION}\n{config.MODEL}\n{topic}\n{description}"
 
 
 def synthesis_basis(rows: list[dict]) -> dict[str, str]:

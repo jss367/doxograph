@@ -686,8 +686,10 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
 
 
 def _pass_extra(topic: str, description: str) -> str:
-    """Everything a per-topic prompt carries that is not one of its claims."""
-    return f"{config.PASS_VERSION}\n{description}\n{context_block()}"
+    """Everything a per-topic prompt carries that is not one of its claims,
+    and who was asked: a different model is a different answer, so switching
+    `DOXOGRAPH_MODEL` puts every topic back in the queue."""
+    return f"{config.PASS_VERSION}\n{config.MODEL}\n{description}\n{context_block()}"
 
 
 def find_tensions(topic: str, rows: list[dict] | None = None,
