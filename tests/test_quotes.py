@@ -409,3 +409,31 @@ def test_stored_text_as_old_as_its_pdf_is_not_trusted(tmp_path):
     os.utime(cache, ns=(stamp, stamp))
     quotes._cache.clear()
     assert quotes.verify(pdf, SENTENCE, cache) is True    # read from the PDF again
+
+
+def test_a_sentence_finishing_on_the_next_page_is_not_cut_at_the_break(tmp_path):
+    """The match itself need not span the break for its sentence to."""
+    pdf = tmp_path / "edge.pdf"
+    pdf.write_bytes(minimal_pdf([
+        "Earlier text. Recovery under steering is a path-dependent",
+        "outcome across all three model scales.",
+    ]))
+    found = quotes.locate(pdf, "Recovery under steering is a path-dependent")
+    assert found["found"] is True
+    assert found["suggestion"].endswith("across all three model scales.")
+
+    # And in the other direction: a fragment on the second page whose sentence
+    # began on the first.
+    back = quotes.locate(pdf, "outcome across all three model scales")
+    assert back["suggestion"].startswith("Recovery under steering")
+
+
+def test_the_stored_text_is_never_seen_half_written(tmp_path):
+    pdf, cache = tmp_path / "p.pdf", tmp_path / "text" / "p.txt"
+    pdf.write_bytes(minimal_pdf(SENTENCE))
+    quotes._cache.clear()
+    assert quotes.pdf_text(pdf, cache) is not None
+    # Written under another name and moved into place, so a reader either sees
+    # the file that was there or the whole of the new one.
+    assert list(cache.parent.iterdir()) == [cache]
+    assert quotes.squash(SENTENCE) in quotes.squash(cache.read_text(encoding="utf-8"))
