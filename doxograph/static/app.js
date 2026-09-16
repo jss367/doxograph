@@ -122,6 +122,9 @@ const NEW_CLAIM_ID = '__new__';
 // is in GRAPH below.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
+// textSearch is the last answer from the search over the papers' own text:
+// { q, loading, papers, terms, error }. It is keyed by the query it was asked
+// for, so an answer left over from an earlier one is not drawn under a later.
 // quoteContext is the one claim whose quote is being shown in the paper, with
 // the passage the check matched it against: { claim, paper, loading, error,
 // data }. One at a time, since it is read in place of the PDF and two open at
@@ -138,7 +141,7 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null,
-            quoteContext: null };
+            quoteContext: null, textSearch: null };
 
 function blankClaim(paper) {
   return {
@@ -290,7 +293,7 @@ function resetWorkspaceView() {
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     graph: { topics: true, minShared: null, tensions: true, ledger: true },
-    quoteContext: null,
+    quoteContext: null, textSearch: null,
   });
   savingClaims.clear();
   graphReset();
@@ -339,6 +342,35 @@ async function loadWorkspaces() {
 
 // --- filtering ------------------------------------------------------------
 
+// The phrase if the corpus holds it, otherwise the words.
+//
+// One substring over the whole row could not find "recovery under steering"
+// from "steering recovery", which is how anyone types a search. Every word in
+// any order finds it — but it also makes "Paper A" match everything holding
+// "paper" and a word starting with "a", and a title typed into the box should
+// narrow to that title. Which was meant is decided by the corpus: if the
+// phrase is in it, that is what was wanted, and otherwise the words are all
+// there is to go on. Nothing that used to be findable stops being findable.
+function queryMatcher() {
+  const query = V.q.trim().toLowerCase();
+  if (!query) return () => true;
+  const phrase = (text) => text.includes(query);
+  if (S.claims.some((row) => phrase(haystack(row)))
+      || S.papers.some((paper) => phrase(paperHaystack(paper)))) {
+    return phrase;
+  }
+  const patterns = queryPatterns(query);
+  return (text) => patterns.every((pattern) => pattern.test(text));
+}
+
+// A term matches from the start of a word. The lookbehind stands in for \b,
+// which in JavaScript knows only ASCII and so would never match a query
+// written in another script.
+function queryPatterns(query) {
+  return (query.match(/[\p{L}\p{N}_]+/gu) || [])
+    .map((term) => new RegExp(`(?<![\\p{L}\\p{N}])${term}`, 'iu'));
+}
+
 // A claim's searchable text. It carries its paper's key and year as well as
 // the title, so that every query matching a paper also matches that paper's
 // claims: listing a paper in the sidebar and then showing it as empty when
@@ -358,27 +390,60 @@ function paperHaystack(paper) {
     .join(' ').toLowerCase();
 }
 
+// The papers' own text is searched on the server, because that is where it is:
+// every claim is already in the page, but the PDFs never are. Debounced, since
+// this runs on a keystroke, and short queries are not sent at all — every paper
+// holds "a", and reading the corpus to prove it helps nobody.
+let textSearchTimer = null;
+let textSearchSeq = 0;
+const TEXT_SEARCH_MIN = 3;
+
+function scheduleTextSearch() {
+  clearTimeout(textSearchTimer);
+  const query = V.q.trim();
+  if (query.length < TEXT_SEARCH_MIN) { V.textSearch = null; return; }
+  textSearchTimer = setTimeout(() => runTextSearch(query), 250);
+}
+
+async function runTextSearch(query) {
+  const seq = ++textSearchSeq;
+  V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
+  renderContent();
+  let next;
+  try {
+    const found = await api(`/api/search?q=${encodeURIComponent(query)}`);
+    next = { q: query, loading: false, papers: found.papers || [], terms: found.terms || [], error: null };
+  } catch (error) {
+    next = { q: query, loading: false, papers: [], terms: [], error: error.message };
+  }
+  // An answer to a query that is no longer the one on screen is dropped: the
+  // requests are not guaranteed to come back in the order they went out.
+  if (seq !== textSearchSeq) return;
+  V.textSearch = next;
+  renderContent();
+}
+
 // The papers the query matches: directly, or through a claim of theirs. The
 // claim match ignores the selected paper, so narrowing to one paper does not
 // empty the list you would use to leave it.
 function matchingPapers() {
-  const needle = V.q.trim().toLowerCase();
-  if (!needle) return S.papers;
+  if (!V.q.trim()) return S.papers;
+  const matches = queryMatcher();
   const owners = new Set(S.claims
-    .filter((row) => haystack(row).includes(needle))
+    .filter((row) => matches(haystack(row)))
     .map((row) => row.paper));
-  return S.papers.filter((p) => owners.has(p.key) || paperHaystack(p).includes(needle));
+  return S.papers.filter((p) => owners.has(p.key) || matches(paperHaystack(p)));
 }
 
 function visibleClaims() {
-  const needle = V.q.trim().toLowerCase();
+  const matches = queryMatcher();
   return S.claims.filter((row) =>
     (!V.paper || row.paper === V.paper)
     && (!V.tag || (row.tags || []).includes(V.tag))
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)
-    && (!needle || haystack(row).includes(needle)));
+    && matches(haystack(row)));
 }
 
 // --- rendering ------------------------------------------------------------
@@ -1249,7 +1314,7 @@ function renderContent() {
         ? '<p class="empty">No claims match these filters.</p>'
         : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
     }
-    $('content').innerHTML = html;
+    $('content').innerHTML = html + textSearchBlock();
   applySavingState();
     if (main) main.scrollTop = scrollTop;
     return;
@@ -1280,9 +1345,53 @@ function renderContent() {
   } else {
     html += rows.map(card).join('');
   }
-  $('content').innerHTML = html;
+  $('content').innerHTML = html + textSearchBlock();
   applySavingState();
   if (main) main.scrollTop = scrollTop;
+}
+
+// What the query found in the papers themselves, under the claims it found.
+// A paper can hold a word no claim of it mentions, and a paper nothing has
+// been extracted from yet holds all of them.
+function textSearchBlock() {
+  const found = V.textSearch;
+  if (!found || found.q !== V.q.trim()) return '';
+  const head = '<h3>In the PDFs</h3>';
+  if (found.loading) return `<div class="pdfhits">${head}<p class="hint">Reading the papers…</p></div>`;
+  if (found.error) {
+    return `<div class="pdfhits">${head}<p class="hint">Could not search the papers: ${esc(found.error)}</p></div>`;
+  }
+  if (!found.papers.length) {
+    return `<div class="pdfhits">${head}<p class="hint">No paper's text holds every word of that.</p></div>`;
+  }
+  const hits = found.papers.map((hit) => {
+    const cite = `${(hit.authors || [])[0] ? hit.authors[0].split(' ').pop() : hit.key} ${hit.year || ''}`;
+    const passages = (hit.passages || []).map((passage) =>
+      `<p class="pp"><span class="hint">p. ${passage.page}</span> …${mark(passage.text, found.terms)}…</p>`).join('');
+    return `<div class="pdfhit">
+      <div class="ph">
+        <span class="pt" data-act="open-paper" data-paper="${esc(hit.key)}"
+          title="${esc(hit.title || hit.key)}">${esc(cite)}</span>
+        <span class="hint">${esc(hit.title || '')}</span>
+        <span class="hint" style="margin-left:auto">${hit.occurrences} ${hit.occurrences === 1 ? 'mention' : 'mentions'}</span>
+      </div>${passages}</div>`;
+  }).join('');
+  return `<div class="pdfhits">${head}${hits}</div>`;
+}
+
+// The query's words picked out of a passage. Escaping happens either side of
+// each match rather than over the whole string, so a term can never be found
+// inside an entity `esc` introduced.
+function mark(text, terms) {
+  if (!terms.length) return esc(text);
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])(?:${terms.join('|')})[\\p{L}\\p{N}]*`, 'giu');
+  let html = '';
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    html += esc(text.slice(last, match.index)) + `<mark>${esc(match[0])}</mark>`;
+    last = match.index + match[0].length;
+  }
+  return html + esc(text.slice(last));
 }
 
 function renderJobs() {
@@ -2415,7 +2524,7 @@ $('content').addEventListener('click', async (event) => {
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
         if (V.unverified && row.quote_verified !== false) { V.unverified = false; $('only-unverified').checked = false; }
-        if (V.q.trim() && !haystack(row).includes(V.q.trim().toLowerCase())) { V.q = ''; $('q').value = ''; }
+        if (V.q.trim() && !queryMatcher()(haystack(row))) { V.q = ''; $('q').value = ''; }
       }
       V.selectedId = claim;
       renderAll();   // a cleared topic or paper filter changes the sidebar too
@@ -2807,6 +2916,7 @@ function graphOption(field) {
 $('q').addEventListener('input', (e) => {
   captureOpenEditor();
   V.q = e.target.value;
+  scheduleTextSearch();
   renderPapers();   // the query filters the paper list as well as the claims
   renderContent();
 });

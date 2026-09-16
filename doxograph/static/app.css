@@ -152,6 +152,18 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
   border: 1px solid var(--warn); border-radius: 3px; padding: 0 .3rem; color: var(--warn);
   margin-right: .3rem; cursor: help; }
 
+/* What the query found in the papers' own text, under the claims. */
+.pdfhits { margin: 1.2rem 0 0; border-top: 1px solid var(--line); padding-top: .6rem; }
+.pdfhits h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); margin: 0 0 .5rem; font-weight: 600; }
+.pdfhit { padding: .45rem 0; border-bottom: 1px solid var(--line); }
+.pdfhit:last-child { border-bottom: 0; }
+.ph { display: flex; gap: .45rem; align-items: baseline; flex-wrap: wrap; font-size: .85rem; }
+.ph .pt { cursor: pointer; font-weight: 600; }
+.ph .pt:hover { color: var(--accent); }
+.pdfhit .pp { margin: .25rem 0 0; font-size: .84rem; color: var(--muted); }
+.pdfhit .pp mark { background: var(--sel); color: var(--ink); padding: 0 .1rem; }
+
 /* The quote as the paper writes it, opened under the claim. */
 .qshow { font-size: .72rem; padding: 0 .3rem; color: var(--muted); vertical-align: baseline; }
 .qctx { margin: .35rem 0 0 .6rem; padding: .45rem .6rem; background: var(--panel);

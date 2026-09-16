@@ -1364,3 +1364,49 @@ def test_a_reworded_quote_is_shown_beside_the_paper_and_can_take_its_wording():
     saved = store.load_paper(key)["claims"][0]
     assert saved["quote"].startswith("Recovery under steering is a path-dependent outcome")
     assert (saved["quote_verified"], saved["quote_page"]) == (True, 2)
+
+
+@pytest.mark.browser
+def test_the_query_takes_words_in_any_order_and_finds_them_in_the_pdfs():
+    from pdfs import minimal_pdf
+
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    store.update_claim("han2026reports", "han2026reports-c1",
+                       {"text": "Recovery under steering is path dependent."})
+    # A paper with nothing extracted from it, whose PDF is the only place the
+    # word appears at all.
+    store.save_paper(store.new_paper("wu2026silent", title="A silent paper", year=2026))
+    store.pdf_path("wu2026silent").write_bytes(minimal_pdf([
+        "A silent paper",
+        "Nobody has read this one yet, but it discusses sandbagging at length.",
+    ]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+
+                # Two words, in the other order, which no substring search finds.
+                await page.locator("#q").fill("steering recovery")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+                # A word that is in no claim at all, only in a PDF.
+                await page.locator("#q").fill("sandbagging")
+                hit = page.locator('.pdfhits .pdfhit [data-paper="wu2026silent"]')
+                await hit.wait_for()
+                passage = page.locator(".pdfhits .pp mark").first
+                assert await passage.inner_text() == "sandbagging"
+                assert "p. 2" in await page.locator(".pdfhits .pp").first.inner_text()
+
+                # The hit opens its paper, as a citation does.
+                await hit.click()
+                await page.locator("#papers li.active").wait_for()
+                assert await page.locator("#papers li.active").get_attribute("data-paper") == "wu2026silent"
+
+            await browser.close()
+
+    asyncio.run(scenario())

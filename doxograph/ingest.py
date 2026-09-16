@@ -20,7 +20,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from . import config, store
+from . import config, search, store
 
 class PaperRemoved(RuntimeError):
     """The paper was deleted while it was being ingested.
@@ -460,7 +460,11 @@ def publish_pdf(key: str, staging: Path) -> bool:
             staging.unlink(missing_ok=True)
             return False
         os.replace(staging, store.pdf_path(key))
-        return True
+    # Read the text out of it now, outside the lock. The quote checks and the
+    # search both want it, this is the one moment the PDF is known to be new,
+    # and doing it here keeps it off the first search of a fresh corpus.
+    search.cache_text(key)
+    return True
 
 
 def download_pdf(url: str, key: str, client: httpx.Client) -> bool:
