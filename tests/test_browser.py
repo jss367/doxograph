@@ -1571,3 +1571,47 @@ def test_opening_a_passage_keeps_what_is_typed_in_another_claims_editor():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
+    """While an editor is open the poll leaves the content alone, so a passage
+    can outlive the claim it describes without being redrawn."""
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    first = store.add_claim(key, {"text": "First claim.",
+                                  "quote": "Steering recovery is path dependant across all scales."})
+    store.add_claim(key, {"text": "Second claim.", "quote": "a path-dependent outcome"})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator(f'.claim[data-claim="{first["id"]}"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="in the paper").click()
+                await page.locator(".qctx .qpassage").wait_for()
+
+                # An editor open on another claim freezes the content, so the
+                # button stays on screen after the claim behind it moves.
+                await page.locator(f'.claim[data-claim="{key}-c2"]').get_by_role(
+                    "button", name="edit").click()
+                await page.locator('textarea[name="text"]').fill("Half-typed correction")
+                store.update_claim(key, first["id"], {"quote": "Recovery under steering"})
+                await page.wait_for_timeout(3000)      # a poll or two
+
+                await page.get_by_role("button", name="Use the paper's wording").click()
+                await page.locator(".warn", has_text="changed while the passage was open").wait_for()
+                assert await page.locator('textarea[name="text"]').input_value() == "Half-typed correction"
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+    assert store.load_paper(key)["claims"][0]["quote"] == "Recovery under steering"
