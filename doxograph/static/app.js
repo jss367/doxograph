@@ -2075,8 +2075,22 @@ async function showQuoteContext(paper, claim) {
 // from an earlier edit can be, and it holds the old quote: saving it later
 // would put the model's version back.
 async function usePaperWording(paper, claim) {
-  const wording = V.quoteContext && V.quoteContext.data && V.quoteContext.data.suggestion;
+  const found = V.quoteContext && V.quoteContext.data;
+  const wording = found && found.suggestion;
   if (!wording || isSaving(claim)) return;
+  // The passage on screen can be older than the claim: while an editor is
+  // open the poll leaves the content alone, so a quote edited elsewhere
+  // refreshes `S` under a button still offering the old suggestion. Checked
+  // again here, against the row as it stands, rather than trusted because it
+  // is drawn.
+  const row = S.claims.find((c) => c.id === claim);
+  if (!row || found.quote !== row.quote || (found.locator || '') !== (row.locator || '')) {
+    V.quoteContext = null;
+    V.error = 'This claim changed while the passage was open; nothing was written.';
+    captureOpenEditor();
+    renderContent();
+    return;
+  }
   V.error = null;
   markSaving(claim, true);
   try {
@@ -2088,6 +2102,7 @@ async function usePaperWording(paper, claim) {
   } finally {
     markSaving(claim, false);
   }
+  captureOpenEditor();   // another claim's editor may be open and unsaved
   renderContent();
 }
 
