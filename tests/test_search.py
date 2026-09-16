@@ -107,3 +107,24 @@ def test_a_passage_does_not_run_across_a_page_break():
     # The term is in the title on page 1; the passage stops where the page does.
     assert first["page"] == 1
     assert "residual stream" not in first["text"]
+
+
+def test_a_papers_length_is_weighed_against_the_whole_corpus():
+    """BM25 discounts a paper for being longer than the corpus average. Taking
+    that average over the papers that matched would make a paper's score depend
+    on which other papers happened to match, which a ranking must not do."""
+    store.save_paper(store.new_paper("hit", title="hit"))
+    store.pdf_path("hit").write_bytes(minimal_pdf("A paper that mentions sandbagging once."))
+
+    def filler(key: str, words: int) -> None:
+        store.save_paper(store.new_paper(key, title=key))
+        store.pdf_path(key).write_bytes(minimal_pdf(" ".join(["penguin"] * words)))
+
+    filler("short", 5)
+    short = search.search_papers("sandbagging")[0]["score"]
+    # One paper swapped for a longer one holding none of the query's words:
+    # the corpus is the same size and the term is still in one paper, so the
+    # only thing that moved is the average length the hit is measured against.
+    store.delete_paper("short")
+    filler("long", 400)
+    assert search.search_papers("sandbagging")[0]["score"] > short

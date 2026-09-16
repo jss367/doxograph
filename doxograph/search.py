@@ -99,18 +99,23 @@ def search_papers(query: str, limit: int = 20) -> list[dict]:
     patterns = [_pattern(term) for term in wanted]
 
     # One pass over the corpus for everything a ranking needs. Papers missing a
-    # term are still counted, since how rare a term is across the whole pile is
-    # what decides how much it is worth.
+    # term are measured too: how rare a term is across the whole pile, and how
+    # long a paper is against the whole pile, are both what they are whether or
+    # not the paper matched. Averaging the length over the hits alone would let
+    # the ranking depend on which papers happened to match.
     texts: dict[str, str] = {}
     counts: dict[str, list[int]] = {}
     lengths: dict[str, int] = {}
     seen = [0] * len(wanted)
+    total = 0
     corpus = 0
     for key in store.paper_keys():
         text = paper_text(key)
         if not text:
             continue
         corpus += 1
+        length = len(_WORD.findall(text)) or 1
+        total += length
         found = [len(pattern.findall(text)) for pattern in patterns]
         for i, count in enumerate(found):
             if count:
@@ -119,11 +124,11 @@ def search_papers(query: str, limit: int = 20) -> list[dict]:
             continue
         texts[key] = text
         counts[key] = found
-        lengths[key] = len(_WORD.findall(text)) or 1
+        lengths[key] = length
     if not texts:
         return []
 
-    average = sum(lengths.values()) / len(lengths)
+    average = total / corpus
     idf = [math.log(1 + (corpus - df + 0.5) / (df + 0.5)) for df in seen]
     ranked = sorted(
         (

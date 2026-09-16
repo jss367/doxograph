@@ -688,15 +688,9 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
     return "\n\n".join(blocks)
 
 
-# Bumped when a cross-paper prompt or its schema changes enough that the same
-# claims deserve to be asked about again. It is part of every pass signature,
-# so bumping it re-runs every topic once.
-PASS_VERSION = 1
-
-
 def _pass_extra(topic: str, description: str) -> str:
     """Everything a per-topic prompt carries that is not one of its claims."""
-    return f"{PASS_VERSION}\n{description}\n{context_block()}"
+    return f"{config.PASS_VERSION}\n{description}\n{context_block()}"
 
 
 def find_tensions(topic: str, rows: list[dict] | None = None,
@@ -846,7 +840,11 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
         return {"written": False, "skipped": False, "claims": 0, "papers": 0}
     if not force:
         current = next((r for r in store.synthesis_rows(all_rows) if r["topic"] == topic), None)
-        if current and not current["stale"]:
+        # The pass version as well as the claims and tensions: a synthesis
+        # written under an older prompt is worth writing again, and nothing in
+        # the corpus changing would ever say so.
+        if (current and not current["stale"]
+                and current.get("pass_version") == config.PASS_VERSION):
             return {"written": False, "skipped": True, "claims": len(rows), "papers": len(papers)}
     tags = store.load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
