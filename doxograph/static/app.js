@@ -2542,7 +2542,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'similar') {
-      if (similarOpen(claim)) { V.similar = null; renderContent(); return; }
+      if (similarOpen(claim)) { V.similar = null; captureOpenEditor(); renderContent(); return; }
       await showSimilar(paper, claim);
       return;
     }
