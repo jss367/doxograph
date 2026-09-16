@@ -35,7 +35,8 @@ _HEADINGS = ("references", "bibliography", "workscited", "literaturecited")
 _HEADING_TAIL = ("", "cited", "andnotes", "notes", "andfurtherreading", "andbibliography",
                  "primary", "primarysources", "secondary", "secondarysources",
                  "consulted", "list")
-_HEADING_LINE = 40
+# How long a heading may be once it is down to its letters.
+_HEADING_LETTERS = 40
 
 # How much of a title has to survive squashing before it can be looked for. A
 # title of two short words — "Scaling Laws" — occurs in prose that is not a
@@ -61,9 +62,14 @@ def reference_text(text: str) -> str:
     # a page is found like any other.
     for line in text.splitlines(keepends=True):
         at += len(line)
-        if len(line.strip()) > _HEADING_LINE:
+        squashed = quotes.squash(line)
+        # Measured on the letters, not the line: a small-capitals heading can
+        # come out of pypdf with a space between every letter, and "R E F E R
+        # E N C E S  A N D  F U R T H E R  R E A D I N G" is long as a line
+        # and short as a heading.
+        if len(squashed) > _HEADING_LETTERS:
             continue
-        if _is_heading(quotes.squash(line)):
+        if _is_heading(squashed):
             return text[at:]
     return ""
 

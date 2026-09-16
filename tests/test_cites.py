@@ -220,3 +220,14 @@ def test_a_list_that_names_both_twins_cites_both():
         "[2] A Vaswani et al. Attention is all you need. NeurIPS, 2017.",
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]
+
+
+def test_a_heading_is_measured_by_its_letters_not_its_line():
+    """pypdf can put a space between every letter of a small-capitals
+    heading, which makes a short heading a long line."""
+    spaced = "R E F E R E N C E S  A N D  F U R T H E R  R E A D I N G"
+    assert len(spaced) > 40
+    assert cites.reference_text(f"Body.\n{spaced}\n[1] A paper.\n").strip() == "[1] A paper."
+    # A long line of prose is still prose, however it squashes.
+    long_prose = "References were consulted for every claim in this section of the paper."
+    assert cites.reference_text(f"Body.\n{long_prose}\n[1] A paper.\n") == ""
