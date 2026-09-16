@@ -142,7 +142,8 @@ names one, and a quote has a copy button, so checking a quote against the paper
 does not mean going looking for the paper first.
 
 The URL follows what is on screen: the workspace, the paper or topic you are
-in, the view, the query, and the filters. A reload lands where you left off,
+in, the view, the query, and the filters, including the status a tension or
+agreement list is narrowed to. A reload lands where you left off,
 Back walks the papers and topics you went through rather than every keystroke,
 and a link to a topic is something you can keep or send.
 

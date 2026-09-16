@@ -2147,3 +2147,82 @@ def test_moving_forward_withdraws_the_question_back_was_asking():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_status_filter_is_part_of_the_view_the_url_carries():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery", [
+        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "tension", "note": "n"},
+    ], shown)
+    store.set_tension_status(store.tension_rows()[0]["id"], "dismissed")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.locator("#tension-status").select_option("dismissed")
+                await page.locator(".tcard.dismissed").wait_for()
+                assert "tstatus=dismissed" in page.url
+
+                await page.reload()
+                await page.locator(".tcard.dismissed").wait_for()
+                assert await page.locator("#tension-status").input_value() == "dismissed"
+
+                # A status the app does not have is ignored rather than
+                # leaving the view filtered to nothing.
+                await page.goto(f"{url}/#view=tensions&tstatus=wibble")
+                await page.locator(".tcard").wait_for()
+                assert await page.locator("#tension-status").input_value() == ""
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_bulk_review_waits_for_a_save_already_on_its_way():
+    """Freezing the form cannot recall a PATCH already sent: it would land
+    after the bulk write and quietly take the review back off."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_patch(route, request):
+                if request.method == "PATCH":
+                    started.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
+                form = page.locator(f'form[data-form="{one}"]')
+                await form.locator('textarea[name="text"]').fill("One, edited.")
+                await form.get_by_role("button", name="Save").click()
+                await asyncio.wait_for(started.wait(), timeout=5)
+
+                await page.get_by_role("button", name="Mark 2 reviewed").click()
+                await page.locator("#toasts .toast", has_text="Wait for the change in flight").wait_for()
+                release.set()
+                await page.get_by_text("One, edited.").wait_for()
+
+                # Once it has landed, the bulk review goes through as usual.
+                await page.get_by_role("button", name="Mark 2 reviewed").click()
+                await page.locator("#toasts .toast", has_text="2 claims marked reviewed").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: True, two: True}

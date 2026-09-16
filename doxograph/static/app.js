@@ -410,6 +410,8 @@ function currentHash() {
   if (V.unverified) params.set('unverified', '1');
   if (!V.group) params.set('group', '0');
   if (V.view === 'claims' && V.selectedId) params.set('sel', V.selectedId);
+  if (V.tensionStatus) params.set('tstatus', V.tensionStatus);
+  if (V.agreementStatus) params.set('astatus', V.agreementStatus);
   return params.toString();
 }
 
@@ -433,6 +435,14 @@ function syncHash(push = false) {
 // bookmark, or on Back to an entry from before it was removed. Its key is
 // retired, so it will never come back; fall back to the corpus rather than an
 // empty list with nothing saying why.
+// A status out of a URL is checked against the ones that exist, so a hand-edited
+// address cannot leave a view filtered to nothing with no way to see why.
+const STATUSES = ['open', 'confirmed', 'dismissed'];
+
+function readStatus(value) {
+  return STATUSES.includes(value) ? value : '';
+}
+
 function dropMissingPaper() {
   if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) V.paper = null;
 }
@@ -452,7 +462,11 @@ function applyHash() {
   V.unverified = params.get('unverified') === '1';
   V.group = params.get('group') !== '0';
   V.selectedId = params.get('sel') || null;
+  V.tensionStatus = readStatus(params.get('tstatus'));
+  V.agreementStatus = readStatus(params.get('astatus'));
   V.editing = null;
+  // The focus is a drill-down from a claim's marker rather than a filter the
+  // reader chose, so it is not carried; the status they chose is.
   V.tensionFocus = null;
   V.agreementFocus = null;
   // A new claim belongs to the paper it was started on. Arriving at another
@@ -2400,6 +2414,15 @@ async function toggleReviewed(row) {
 async function reviewWholePaper(paper) {
   captureOpenEditor();
   V.error = null;
+  // A claim already saving has a full-form PATCH on its way carrying the old
+  // checkbox. Freezing it here only stops a second submission; it cannot stop
+  // the first from landing after this write and taking the review back off
+  // again. So wait for it, rather than overwrite it and report success.
+  if (S.claims.some((row) => row.paper === paper && isSaving(row.id))) {
+    toast('Wait for the change in flight to finish, then mark the paper reviewed.',
+          { tone: 'warn' });
+    return;
+  }
   // The notice outlives the picker, so the undo carries the workspace the
   // decision was taken in rather than whichever one is selected when it is
   // clicked: the same paper imported twice has the same claim ids in both.
