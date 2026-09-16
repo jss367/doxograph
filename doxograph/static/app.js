@@ -370,6 +370,16 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
 // is asked to work anything out from the corpus: for those eight seconds the
 // row is gone from the page but still on file, and an export or a model pass
 // started meanwhile would take it as live.
+// Settle the held deletes, then say which workspace the action was asked in.
+// The flush ends in a read and a read is not counted as a change in flight, so
+// the picker can move in the gap; anything sent afterwards has to name the
+// corpus the reader was looking at, not the one they have since gone to.
+async function settleDeletes(wanted = null) {
+  const workspace = currentWorkspaceId;
+  await flushTrash(wanted);
+  return { 'X-Doxograph-Workspace': workspace };
+}
+
 async function flushTrash(wanted = null) {
   const waiting = [...trash.values()].filter((entry) => !wanted || wanted(entry));
   await Promise.all(waiting.map((entry) => entry.send()));
@@ -1175,10 +1185,12 @@ function renderAgreements() {
 
 async function findAgreements() {
   V.error = null;
-  await flushTrash();   // the pass reads the corpus; it must not read a deleted claim
+  // The pass reads the corpus, so it must not read a claim the reader has
+  // deleted — and it must read the corpus they were looking at.
+  const workspace = await settleDeletes();
   try {
     const result = await api('/api/agreements', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
     });
     if (!result.queued) {
       V.error = 'No topic has claims from two papers yet, so there is nothing to compare.';
@@ -1543,10 +1555,10 @@ function synthesizeButton(tag) {
 
 async function synthesize(topics) {
   V.error = null;
-  await flushTrash();
+  const workspace = await settleDeletes();
   try {
     const result = await api('/api/syntheses', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
       body: JSON.stringify(topics ? { topics } : {}),
     });
     if (!result.queued) {
@@ -2100,6 +2112,7 @@ function graphOpenPaper(key) {
   closeEditorsNotBelongingTo(key);
   showView('claims');
   V.paper = key; V.tag = null; V.selectedId = null;
+  syncHash(true);   // leaving the map is navigation: Back returns to it
   renderAll();
 }
 
@@ -2454,35 +2467,46 @@ async function reviewWholePaper(paper) {
   syncDraftReviews(changed, true);
   await refreshAll();
   if (!changed.length) return;
-  toast(`${changed.length} ${changed.length === 1 ? 'claim' : 'claims'} marked reviewed.`, {
-    actions: [{
-      label: 'Undo',
-      onClick: async () => {
-        // Frozen for the length of the undo as they were for the review
-        // itself: an open form still holds the ticked box, and a Save landing
-        // after the undo would put the review back with nothing left on screen
-        // to say it had.
-        const held = currentWorkspaceId === workspace ? changed : [];
-        held.forEach((id) => markSaving(id, true));
-        try {
-          await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-            body: JSON.stringify({ reviewed: false, claims: changed }),
-          });
-          // Only where the decision was taken. An editor open on the same
-          // claim id in another corpus is a different claim, and correcting
-          // its checkbox would unreview it when that form is saved.
-          if (currentWorkspaceId === workspace) syncDraftReviews(changed, false);
-        } catch (error) {
-          toast(`Could not undo: ${error.message}`, { tone: 'warn' });
-        } finally {
-          held.forEach((id) => markSaving(id, false));
-        }
-        await refreshAll();
-      },
-    }],
-  });
+
+  // A save already on its way carries the old checkbox and cannot be recalled,
+  // so the undo waits for it rather than being overtaken by it — and the offer
+  // comes back rather than being spent, since the reader did ask to undo.
+  async function undo() {
+    const mine = currentWorkspaceId === workspace;
+    if (mine && changed.some((id) => isSaving(id))) {
+      toast('Wait for the change in flight to finish, then undo.', { tone: 'warn' });
+      offerUndo();
+      return;
+    }
+    // Frozen for the length of the undo as they were for the review itself: an
+    // open form still holds the ticked box, and a Save landing after the undo
+    // would put the review back with nothing left on screen to say it had.
+    const held = mine ? changed : [];
+    held.forEach((id) => markSaving(id, true));
+    try {
+      await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+        body: JSON.stringify({ reviewed: false, claims: changed }),
+      });
+      // Only where the decision was taken. An editor open on the same claim id
+      // in another corpus is a different claim, and correcting its checkbox
+      // would unreview it when that form is saved.
+      if (currentWorkspaceId === workspace) syncDraftReviews(changed, false);
+    } catch (error) {
+      toast(`Could not undo: ${error.message}`, { tone: 'warn' });
+    } finally {
+      held.forEach((id) => markSaving(id, false));
+    }
+    await refreshAll();
+  }
+
+  function offerUndo() {
+    toast(`${changed.length} ${changed.length === 1 ? 'claim' : 'claims'} marked reviewed.`,
+          { actions: [{ label: 'Undo', onClick: undo }] });
+  }
+
+  offerUndo();
 }
 
 // An open editor holds the review flag as it was when the editor was opened.
@@ -2643,11 +2667,9 @@ async function removePaper(paper) {
   // goes. It names the workspace it was asked in: the same paper imported into
   // two corpora has the same key in both, and removing the wrong one is not
   // something an undo could fix.
-  const workspace = currentWorkspaceId;
-  await flushTrash((entry) => entry.paper === paper);
-  await api(`/api/papers/${encodeURIComponent(paper)}`, {
-    method: 'DELETE', headers: { 'X-Doxograph-Workspace': workspace },
-  });
+  const headers = await settleDeletes((entry) => entry.paper === paper);
+  const workspace = headers['X-Doxograph-Workspace'];
+  await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
   // Moved on meanwhile: the view belongs to another corpus now, and the drafts
   // and selection this would tidy up went with `resetWorkspaceView`.
   if (currentWorkspaceId !== workspace) {
@@ -2886,8 +2908,10 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'reextract') {
-      await flushTrash();
-      await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
+      const workspace = await settleDeletes();
+      await api(`/api/papers/${encodeURIComponent(paper)}/extract`, {
+        method: 'POST', headers: workspace,
+      });
       await refresh();
       return;
     }
@@ -2902,9 +2926,9 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'retag-one') {
-      await flushTrash();
+      const workspace = await settleDeletes();
       await api('/api/retag', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
         body: JSON.stringify({ keys: [paper] }),
       });
       await refresh();
@@ -3036,10 +3060,10 @@ $('research-nav').addEventListener('click', (event) => {
 
 async function findTensions() {
   V.error = null;
-  await flushTrash();
+  const workspace = await settleDeletes();
   try {
     const result = await api('/api/tensions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
     });
     if (!result.queued) {
       V.error = 'No topic has claims from two papers yet, so there is nothing to compare.';
@@ -3284,9 +3308,9 @@ $('btn-retag').addEventListener('click', async () => {
     ok: 'Retag all',
   });
   if (!go) return;
-  await flushTrash();
+  const workspace = await settleDeletes();
   await api('/api/retag', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
   });
   await refresh();
 });
@@ -3296,14 +3320,14 @@ $('btn-export').addEventListener('click', async () => {
   // As with the review undo: the notice can outlive the picker, and Open must
   // hand back the file this export wrote, not whatever the workspace selected
   // by then last exported.
-  const workspace = currentWorkspaceId || 'default';
   // The file is written from what is on file, so a delete still waiting out
   // its notice would otherwise be exported as a live claim.
-  await flushTrash();
+  const headers = await settleDeletes();
+  const workspace = headers['X-Doxograph-Workspace'] || 'default';
   let result;
   try {
     result = await api('/api/export', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({ title: selected ? selected.name : 'Doxograph' }),
     });
   } catch (error) {

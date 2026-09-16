@@ -2280,3 +2280,124 @@ def test_removing_a_paper_names_the_workspace_it_was_asked_in():
     assert store.all_papers() == []
     with cfg.use_workspace(other["id"]):
         assert [p["key"] for p in store.all_papers()] == ["shared"]
+
+
+@pytest.mark.browser
+def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
+    """Settling the held deletes ends in a read, and the picker can move in
+    that gap — a pass costs real money in whichever corpus it lands."""
+    from doxograph import config
+
+    _paper_with_claims("paper-a", "Paper A", ["One."], tags=["recovery"])
+    config.create_workspace("Other")
+
+    async def scenario():
+        sent_to = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def move_after_claim_delete(route, request):
+                await route.continue_()
+                if request.method == "DELETE":
+                    await page.evaluate("currentWorkspaceId = workspaces[1].id")
+
+            async def record_pass(route, request):
+                sent_to.append(request.headers.get("x-doxograph-workspace"))
+                await route.fulfill(status=200, json={"queued": 0})
+
+            await page.route("**/api/papers/paper-a/claims/*", move_after_claim_delete)
+            await page.route("**/api/tensions", record_pass)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('.claim[data-claim="paper-a-c1"] [data-act="del"]').click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+                await page.locator("#btn-tensions").click()
+                for _ in range(100):
+                    if sent_to:
+                        break
+                    await page.wait_for_timeout(100)
+            await browser.close()
+
+        assert sent_to == ["default"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_patch(route, request):
+                if request.method == "PATCH":
+                    started.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.get_by_role("button", name="Mark 2 reviewed").click()
+                notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
+                await notice.wait_for()
+
+                # A form saved after the review, then Undo clicked on top of it.
+                await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
+                form = page.locator(f'form[data-form="{one}"]')
+                await form.locator('textarea[name="text"]').fill("One, edited.")
+                await form.get_by_role("button", name="Save").click()
+                await asyncio.wait_for(started.wait(), timeout=5)
+                await notice.get_by_role("button", name="Undo").click()
+                await page.locator("#toasts .toast", has_text="Wait for the change in flight").wait_for()
+
+                # The offer comes back rather than being spent on a refusal.
+                release.set()
+                await page.get_by_text("One, edited.").wait_for()
+                again = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
+                await again.get_by_role("button", name="Undo").click()
+                await page.locator(f'.claim.unreviewed[data-claim="{one}"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: False, two: False}
+
+
+@pytest.mark.browser
+def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1200, "height": 800})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+
+                node = next(n for n in graph["nodes"] if n["id"] == "p:paper-b")
+                box = await page.locator(".graph-wrap canvas").bounding_box()
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                await page.mouse.click(sx, sy)
+                await page.locator(".paperhead h2", has_text="Paper B").wait_for()
+
+                await page.go_back()
+                await page.locator(".graph-wrap canvas").wait_for()
+                assert "view=graph" in page.url
+            await browser.close()
+
+    asyncio.run(scenario())
