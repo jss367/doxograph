@@ -326,12 +326,14 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   // That leaves it visible to a second caller — the notice running out while an
   // export flushes, say — so the request itself is what is shared: one delete,
   // and no second one to come back 404 and leave a failure notice standing.
-  let sending = null;
+  // It lives on the entry rather than in here, because the page closing has to
+  // see it too and has only the entry to look at.
   const send = () => {
-    if (!trash.has(token)) return Promise.resolve();   // already sent, or undone
-    if (sending) return sending;
+    const entry = trash.get(token);
+    if (!entry) return Promise.resolve();   // already sent, or undone
+    if (entry.sending) return entry.sending;
     if (notice) notice.close();
-    sending = (async () => {
+    entry.sending = (async () => {
       try {
         // Named rather than implied: `flushTrash` sends these before a switch,
         // and this makes that a guarantee rather than an ordering to preserve.
@@ -344,9 +346,9 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
       }
       await refreshAll();
     })();
-    return sending;
+    return entry.sending;
   };
-  trash.set(token, { path, workspace, paper, send });
+  trash.set(token, { path, workspace, paper, send, sending: null });
   forgetStateTag();
   pruneTrashed();
   await refreshAll();
@@ -355,7 +357,7 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   // already has. The entry is still in the trash while its request is in
   // flight, which is what keeps the row off the screen, so `sending` is the
   // thing to ask: once it is set there is nothing left to undo.
-  if (!trash.has(token) || sending) return;
+  if (!trash.get(token) || trash.get(token).sending) return;
   notice = toast(`Deleted ${label}.`, {
     timeout: UNDO_MS,
     onExpire: send,
@@ -365,7 +367,7 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
         // Sent between the notice going up and this being clicked. `send`
         // closes the notice, so this is all but unreachable — but an Undo that
         // quietly does nothing is worse than one that says so.
-        if (sending) {
+        if (trash.get(token)?.sending) {
           toast(`That delete has already been sent; ${label} is gone.`, { tone: 'warn' });
           return;
         }
@@ -420,6 +422,9 @@ window.addEventListener('pageshow', (event) => {
 // to find it restored would be the app forgetting what it was told.
 window.addEventListener('pagehide', () => {
   trash.forEach((entry) => {
+    // One already on its way needs nothing: a second request would race it, and
+    // whichever lost would come back 404 over a row that was deleted after all.
+    if (entry.sending) return;
     const headers = { 'X-Doxograph-Workspace': entry.workspace };
     try { fetch(entry.path, { method: 'DELETE', headers, keepalive: true }); } catch (e) { /* leaving anyway */ }
   });
@@ -471,10 +476,6 @@ function syncHash(push = false) {
   else history.replaceState(null, '', url);
 }
 
-// A paper named by a URL may have been removed since: at boot from a stale
-// bookmark, or on Back to an entry from before it was removed. Its key is
-// retired, so it will never come back; fall back to the corpus rather than an
-// empty list with nothing saying why.
 // A status out of a URL is checked against the ones that exist, so a hand-edited
 // address cannot leave a view filtered to nothing with no way to see why.
 const STATUSES = ['open', 'confirmed', 'dismissed'];
@@ -483,8 +484,14 @@ function readStatus(value) {
   return STATUSES.includes(value) ? value : '';
 }
 
-function dropMissingPaper() {
+// A paper or a topic named by a URL may be gone: at boot from a stale bookmark,
+// or on Back to an entry from before it was removed. A paper's key is retired
+// and will never come back; a topic can be renamed away. Either would empty the
+// list with nothing on screen to say why — and a topic the sidebar cannot list
+// leaves nothing to click to get out of it, short of editing the address.
+function dropMissingFilters() {
   if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) V.paper = null;
+  if (V.tag && !Object.hasOwn(S.tag_counts || {}, V.tag)) V.tag = null;
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -553,7 +560,7 @@ window.addEventListener('popstate', async () => {
       // never attempted at all. The entry then describes a corpus the page is
       // not in, and applying its paper and filters to the one it is in would
       // be worse than ignoring it: a key that exists in both corpora would
-      // open the wrong paper, which `dropMissingPaper` cannot catch.
+      // open the wrong paper, which `dropMissingFilters` cannot catch.
       if (currentWorkspaceId !== wanted) return;
     } else if (workspaceSwitch) {
       // A switch is running and this entry belongs to where the page is now —
@@ -565,7 +572,7 @@ window.addEventListener('popstate', async () => {
       if (currentWorkspaceId !== wanted) return;
     }
     applyHash();
-    dropMissingPaper();
+    dropMissingFilters();
   } finally {
     // Every exit redraws, including the refused one, and the redraw writes the
     // URL back to what is on screen: an entry the page did not take must not
@@ -3609,9 +3616,9 @@ async function boot() {
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   $('kind').value = V.kind;   // the kinds arrive with the corpus, after the URL was read
-  const wanted = V.paper;
-  dropMissingPaper();
-  if (V.paper !== wanted) renderAll();
+  const before = [V.paper, V.tag];
+  dropMissingFilters();
+  if (V.paper !== before[0] || V.tag !== before[1]) renderAll();
   setInterval(async () => {
     if (document.hidden) return;
     // Keep settings current while editing; the content guard below preserves

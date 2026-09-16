@@ -2516,3 +2516,78 @@ def test_back_returns_to_the_research_form_after_leaving_it():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_url_naming_a_topic_that_is_gone_falls_back_to_the_corpus():
+    """Filtering to a topic the sidebar cannot list empties the claims with
+    nothing left to click to get out of it."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#tag=gait")
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                assert "tag=gait" not in page.url
+
+                # And a topic that goes while an entry naming it is in history.
+                await page.locator('#tags [data-tag="recovery"]').click()
+                await page.locator('#tags [data-tag="recovery"].active').wait_for()
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                store.rename_tag("recovery", "recovery-rate")
+                await page.wait_for_timeout(3000)   # a poll picks the rename up
+                await page.go_back()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                assert "tag=recovery&" not in page.url and not page.url.endswith("tag=recovery")
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_page_closing_does_not_send_a_delete_that_is_already_on_its_way():
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        deletes = []
+        release = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_delete(route, request):
+                if request.method == "DELETE":
+                    deletes.append(request.url)
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_delete)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim[data-claim="{one}"] [data-act="del"]').click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+                await page.evaluate("void flushTrash()")
+                for _ in range(50):
+                    if deletes:
+                        break
+                    await page.wait_for_timeout(100)
+
+                # The page is put away while that request is still in flight.
+                await page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide'))")
+                await page.wait_for_timeout(500)
+                assert len(deletes) == 1, deletes
+
+                # Let the one request finish before the browser goes away.
+                release.set()
+                for _ in range(50):
+                    if len(store.load_paper("doe2026study")["claims"]) == 1:
+                        break
+                    await page.wait_for_timeout(100)
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
