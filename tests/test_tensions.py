@@ -549,3 +549,18 @@ def test_a_renamed_topic_keeps_the_pass_that_was_run_over_it(monkeypatch):
     assert extract.find_tensions("task-recovery")["skipped"] is False
     assert extract.find_tensions("task-recovery")["skipped"] is True
     assert store.tension_pass("recovery-rate") is None
+
+
+def test_a_coauthor_arriving_changes_the_heading_and_so_the_signature(monkeypatch):
+    """One author is "Doe (2026)"; two is "Doe et al. (2026)". Neither the
+    surname nor the year nor the title moved, but the prompt did."""
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    paper = store.load_paper("doe2026recovery")
+    store.save_paper({**paper, "authors": ["Jane Doe", "Ada Roe"]})
+    assert "et al." in extract._tension_listing(store.claim_rows())
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
