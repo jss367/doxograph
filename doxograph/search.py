@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import array
 import math
+import os
 import re
 import threading
 from itertools import islice
@@ -34,12 +35,22 @@ PASSAGE_SPAN = 140
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 
-# Paper text keyed by file, with the identity it was read at. These are the
-# same files the quote checks write; without this every keystroke would read
-# the whole corpus off the disk again.
+# Folded paper text keyed by file, with the identity it was read at. These are
+# the same files the quote checks write; without this every keystroke would
+# read and fold the whole corpus again.
+#
+# Held to a size rather than a count of papers, since what costs is the
+# characters. A search reads every paper in turn, so evicting the least
+# recently used would throw away exactly what the next query asks for first:
+# the oldest entry goes only when the budget is reached, and a corpus whose
+# text does not fit pays the folding on every query however the cache is kept.
 _texts: dict[Path, tuple[tuple[int, int], str]] = {}
 _texts_lock = threading.Lock()
-_TEXT_LIMIT = 400
+_texts_size = 0
+try:
+    TEXT_BUDGET = int(float(os.environ.get("DOXOGRAPH_TEXT_CACHE_MB", "64")) * 1_000_000)
+except ValueError:
+    TEXT_BUDGET = 64_000_000
 
 
 def terms(query: str) -> list[str]:
@@ -144,18 +155,46 @@ def folded_text(key: str) -> str | None:
         text = fold(path.read_text(encoding="utf-8"))
     except OSError:
         return None
-    with _texts_lock:
-        if len(_texts) >= _TEXT_LIMIT:
-            _texts.pop(next(iter(_texts)))
-        _texts[path] = (identity, text)
+    _remember(path, identity, text)
     return text
 
 
+# Scripts that do not put spaces between their words. A word boundary means
+# nothing inside a run of them — every character is a word character, so
+# `\b模型` only ever matches at the start of a run — and a term in one of them
+# is looked for wherever it falls.
+_UNSEGMENTED = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+    r"\uac00-\ud7af\u0e00-\u0e7f\u1780-\u17ff\u0f00-\u0fff]"
+)
+
+
+def _remember(path: Path, identity: tuple[int, int], text: str) -> None:
+    """Keep a folded paper, dropping the oldest until the budget is met."""
+    global _texts_size
+    with _texts_lock:
+        stale = _texts.pop(path, None)
+        if stale is not None:
+            _texts_size -= len(stale[1])
+        _texts[path] = (identity, text)
+        _texts_size += len(text)
+        while _texts_size > TEXT_BUDGET and len(_texts) > 1:
+            # Insertion order: the oldest reading goes first.
+            dropped = _texts.pop(next(iter(_texts)))
+            _texts_size -= len(dropped[1])
+
+
 def _pattern(term: str) -> re.Pattern:
-    """A term matches from the start of a word. Both the term and the paper are
-    folded before they meet, so case is already out of the question: STRASSE
-    and Straße fold to the same letters, which `IGNORECASE` alone cannot do."""
-    return re.compile(rf"\b{re.escape(fold(term))}\w*", re.UNICODE)
+    """A term matches from the start of a word, where words have starts.
+
+    Both the term and the paper are folded before they meet, so case is
+    already out of the question: STRASSE and Straße fold to the same letters,
+    which `IGNORECASE` alone cannot do.
+    """
+    folded = re.escape(fold(term))
+    if _UNSEGMENTED.search(term):
+        return re.compile(folded, re.UNICODE)
+    return re.compile(rf"\b{folded}\w*", re.UNICODE)
 
 
 def search_papers(query: str, limit: int = 20) -> list[dict]:

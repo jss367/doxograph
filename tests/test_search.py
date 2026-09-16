@@ -220,3 +220,34 @@ def test_a_word_broken_across_a_line_is_one_word_to_a_search():
     passage = search.search_papers("transformation")[0]["passages"][0]
     assert "transformation" in passage["text"]
     assert [p["text"] for p in passage["parts"] if p["mark"]] == ["transformation"]
+
+
+def a_paper_of(key: str, text: str) -> None:
+    """A paper whose text is written straight to the store. The test PDFs
+    carry Latin-1 alone, and the text cache is what a search reads anyway."""
+    store.save_paper(store.new_paper(key, title=key))
+    store.text_path(key).parent.mkdir(parents=True, exist_ok=True)
+    store.text_path(key).write_text(text, encoding="utf-8")
+
+
+def test_a_term_in_a_script_without_spaces_is_found_inside_a_run():
+    """Every character of 语言模型能力 is a word character, so a word boundary
+    only ever matches at the start of the run."""
+    a_paper_of("cjk", "A study of 语言模型能力.")
+    assert [hit["key"] for hit in search.search_papers("模型")] == ["cjk"]
+    passage = search.search_papers("模型")[0]["passages"][0]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["模型"]
+    # A Latin term still has to start a word.
+    a_paper_of("latin", "Steering works.")
+    assert search.search_papers("eering") == []
+
+
+def test_the_folded_text_is_kept_to_a_size_not_a_count(monkeypatch):
+    monkeypatch.setattr(search, "TEXT_BUDGET", 400)
+    for key in ("one", "two", "three"):
+        a_paper_of(key, " ".join(["penguin"] * 40))
+        assert search.folded_text(key)
+    # Three papers of ~320 characters do not fit in 400, and the oldest goes.
+    assert search._texts_size <= 400
+    assert len(search._texts) < 3
+    assert store.text_path("one").exists()      # dropped from memory, not from disk
