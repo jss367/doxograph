@@ -316,7 +316,7 @@ function pruneTrashed() {
   S.syntheses = (S.syntheses || []).filter((row) => !trashed('synthesis', row.topic));
 }
 
-async function deleteLater(kind, id, path, label) {
+async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   const token = `${kind}:${id}`;
   if (trash.has(token)) return;
   const workspace = currentWorkspaceId || 'default';
@@ -346,7 +346,7 @@ async function deleteLater(kind, id, path, label) {
     })();
     return sending;
   };
-  trash.set(token, { path, workspace, send });
+  trash.set(token, { path, workspace, paper, send });
   forgetStateTag();
   pruneTrashed();
   await refreshAll();
@@ -370,8 +370,9 @@ async function deleteLater(kind, id, path, label) {
 // is asked to work anything out from the corpus: for those eight seconds the
 // row is gone from the page but still on file, and an export or a model pass
 // started meanwhile would take it as live.
-async function flushTrash() {
-  await Promise.all([...trash.values()].map((entry) => entry.send()));
+async function flushTrash(wanted = null) {
+  const waiting = [...trash.values()].filter((entry) => !wanted || wanted(entry));
+  await Promise.all(waiting.map((entry) => entry.send()));
 }
 
 // A tab closed while a delete is still waiting sends it now rather than
@@ -474,6 +475,11 @@ let popSeq = 0;
 
 window.addEventListener('popstate', async () => {
   const seq = ++popSeq;
+  // A question still on screen belongs to the move this one supersedes —
+  // Forward pressed while Back was asking about unsaved edits. Answering it
+  // afterwards would switch the corpus for a move that is no longer where the
+  // reader is, so it is withdrawn as a cancel: drafts kept, nothing switched.
+  if (askResolve) settleAsk(null);
   // Moving through history is a view change like any other, and the editors
   // keep their text across it: `applyHash` writes straight to `V`, so the
   // bookkeeping `showView` would have done is done here.
@@ -2605,8 +2611,10 @@ async function removePaper(paper) {
   // A claim of this paper still waiting out its notice has to go first. Left
   // waiting, its Undo would have nothing to restore and its request would
   // arrive under a paper that no longer exists, failing in the reader's face
-  // over a deletion they got what they asked for.
-  await flushTrash();
+  // over a deletion they got what they asked for. Only this paper's, though:
+  // a claim of another paper, or a synthesis, was promised its own eight
+  // seconds and removing something else is no reason to take them away.
+  await flushTrash((entry) => entry.paper === paper);
   await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
   // Close an editor that belonged to the deleted paper, so its form is not
   // captured as a draft for a claim that no longer exists. An editor on some
@@ -2697,7 +2705,7 @@ $('content').addEventListener('click', async (event) => {
       // visible and clickable even when the open editor is a different claim's.
       await deleteLater('claim', claim,
                         `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
-                        'the claim');
+                        'the claim', { paper });
       return;
     }
     if (act === 'open-paper') {

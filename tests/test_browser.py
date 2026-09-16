@@ -2067,3 +2067,83 @@ def test_undoing_a_bulk_review_freezes_the_editors_it_is_undoing():
 
     asyncio.run(scenario())
     assert _reviewed("doe2026study") == {one: False, two: False}
+
+
+@pytest.mark.browser
+def test_removing_a_paper_settles_only_that_papers_deletions():
+    """Another paper's claim was promised its own eight seconds; removing this
+    one is no reason to take them away."""
+    a_one, _a_two = _paper_with_claims("paper-a", "Paper A", ["A one.", "A two."])
+    _paper_with_claims("paper-b", "Paper B", ["B one."])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim[data-claim="{a_one}"] [data-act="del"]').click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+
+                await page.locator('#papers [data-paper="paper-b"] .pmenu').click()
+                await page.locator("#ctxmenu").get_by_role("button", name="Remove paper").click()
+                await _answer(page, "Remove")
+                await page.locator('#papers [data-paper="paper-b"]').wait_for(state="detached")
+
+                # Paper A's claim is still waiting, and still undoable.
+                assert await page.evaluate("trash.size") == 1
+                assert len(store.load_paper("paper-a")["claims"]) == 2
+                await notice.get_by_role("button", name="Undo").click()
+                await page.locator(f'.claim[data-claim="{a_one}"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-a")["claims"]) == 2
+
+
+@pytest.mark.browser
+def test_moving_forward_withdraws_the_question_back_was_asking():
+    """Answering it afterwards would switch the corpus for a move the reader
+    has already left behind."""
+    from doxograph import config
+
+    _paper("shared", "Default paper", "recovery")
+    other = config.create_workspace("Other")
+    with config.use_workspace(other["id"]):
+        _paper("shared", "Other paper", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator(".paperhead h2", has_text="Default paper").wait_for()
+                await page.locator("#workspace").select_option(label="Other")
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator(".paperhead h2", has_text="Other paper").wait_for()
+
+                await page.locator('[data-act="edit"][data-claim="shared-c1"]').click()
+                field = page.locator('form[data-form="shared-c1"] textarea[name="text"]')
+                await field.fill("A draft worth keeping.")
+
+                # One step back stays in this workspace and closes the editor,
+                # keeping its text as a draft. The next crosses the boundary,
+                # so it asks about that draft — and Forward arrives before the
+                # question is answered.
+                await page.go_back()
+                await page.locator('#papers [data-paper=""].active').wait_for()
+                await page.go_back()
+                await page.locator("#ask").wait_for(state="visible")
+                await page.go_forward()
+                await page.locator("#ask").wait_for(state="hidden")
+
+                await page.wait_for_timeout(600)
+                assert await page.locator("#workspace").input_value() == other["id"]
+                assert await page.evaluate("V.drafts['shared-c1'].text") == "A draft worth keeping."
+                assert f"ws={other['id']}" in page.url
+            await browser.close()
+
+    asyncio.run(scenario())
