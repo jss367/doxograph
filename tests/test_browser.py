@@ -1780,3 +1780,47 @@ def test_a_bulk_review_undo_writes_to_the_workspace_it_was_taken_in():
     assert _reviewed("shared") == {i: False for i in ids}
     with config.use_workspace(other["id"]):
         assert _reviewed("shared") == {i: False for i in ids}
+
+
+@pytest.mark.browser
+def test_a_refused_workspace_switch_leaves_the_entry_alone():
+    """Keeping your drafts refuses the switch, and the entry then describes a
+    corpus the page is not in: none of it can be applied, and the address has
+    to go back to saying what is on screen."""
+    from doxograph import config
+
+    _paper("shared", "Default paper", "recovery")
+    other = config.create_workspace("Other")
+    with config.use_workspace(other["id"]):
+        _paper("shared", "Other paper", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator(".paperhead h2", has_text="Default paper").wait_for()
+
+                await page.locator("#workspace").select_option(label="Other")
+                await page.locator(".plist", has_text="Other paper").wait_for()
+
+                # A draft in this workspace, then Back across the boundary.
+                await page.locator('[data-act="edit"][data-claim="shared-c1"]').click()
+                field = page.locator('form[data-form="shared-c1"] textarea[name="text"]')
+                await field.fill("A draft worth keeping.")
+                await page.go_back()
+                await _answer(page, "Cancel")
+
+                # Nothing of the other corpus's entry was applied: the key
+                # exists in both, so the wrong paper would have opened silently.
+                await page.wait_for_timeout(600)
+                assert await page.locator("#workspace").input_value() == other["id"]
+                assert await page.locator(".paperhead h2").count() == 0
+                assert f"ws={other['id']}" in page.url
+                assert "paper=shared" not in page.url
+                assert await field.input_value() == "A draft worth keeping."
+            await browser.close()
+
+    asyncio.run(scenario())

@@ -337,6 +337,10 @@ async function deleteLater(kind, id, path, label) {
   forgetStateTag();
   pruneTrashed();
   await refreshAll();
+  // The wait can end during that refresh — `flushTrash` sends what is waiting
+  // — and a notice raised afterwards would offer to undo a delete the server
+  // already has.
+  if (!trash.has(token)) return;
   notice = toast(`Deleted ${label}.`, {
     timeout: UNDO_MS,
     onExpire: send,
@@ -349,7 +353,10 @@ async function deleteLater(kind, id, path, label) {
 
 // A delete belongs to the workspace it was made in, so leaving one sends what
 // is still waiting rather than carrying it across, where the same claim id can
-// name a different claim.
+// name a different claim. It is also what the server has to be told before it
+// is asked to work anything out from the corpus: for those eight seconds the
+// row is gone from the page but still on file, and an export or a model pass
+// started meanwhile would take it as live.
 async function flushTrash() {
   await Promise.all([...trash.values()].map((entry) => entry.send()));
 }
@@ -468,16 +475,18 @@ window.addEventListener('popstate', async () => {
     if (wanted !== currentWorkspaceId) {
       if (workspaces.some((w) => w.id === wanted)) await switchWorkspace(wanted);
       if (seq !== popSeq) return;
+      // The switch can be refused — a change still in flight, or the reader
+      // keeping their drafts — and a workspace this page does not know is
+      // never attempted at all. The entry then describes a corpus the page is
+      // not in, and applying its paper and filters to the one it is in would
+      // be worse than ignoring it: a key that exists in both corpora would
+      // open the wrong paper, which `dropMissingPaper` cannot catch.
+      if (currentWorkspaceId !== wanted) return;
     } else if (workspaceSwitch) {
       // Already going where this entry lives, but the corpus has not arrived.
       // Restoring now would check the entry's paper against the old one.
       await workspaceSwitch;
       if (seq !== popSeq) return;
-      // The switch can be refused — a change still in flight, or the user
-      // keeping their drafts — and an unknown workspace is refused here. The
-      // entry then describes a corpus this page is not in, and applying its
-      // paper and filters to the one it is in would be worse than ignoring it.
-      if (currentWorkspaceId !== wanted) return;
     }
     applyHash();
     dropMissingPaper();
@@ -1134,6 +1143,7 @@ function renderAgreements() {
 
 async function findAgreements() {
   V.error = null;
+  await flushTrash();   // the pass reads the corpus; it must not read a deleted claim
   try {
     const result = await api('/api/agreements', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
@@ -1501,6 +1511,7 @@ function synthesizeButton(tag) {
 
 async function synthesize(topics) {
   V.error = null;
+  await flushTrash();
   try {
     const result = await api('/api/syntheses', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2371,6 +2382,11 @@ async function reviewWholePaper(paper) {
   // decision was taken in rather than whichever one is selected when it is
   // clicked: the same paper imported twice has the same claim ids in both.
   const workspace = currentWorkspaceId;
+  // An open editor on this paper is frozen for the length of the request, as
+  // one is during a single toggle: a full-form Save started meanwhile carries
+  // the old checkbox, and landing after the bulk write would put it back.
+  const frozen = S.claims.filter((row) => row.paper === paper).map((row) => row.id);
+  frozen.forEach((id) => markSaving(id, true));
   let changed = [];
   try {
     const result = await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
@@ -2382,6 +2398,8 @@ async function reviewWholePaper(paper) {
     V.error = `Could not mark the claims reviewed: ${error.message}`;
     renderContent();
     return;
+  } finally {
+    frozen.forEach((id) => markSaving(id, false));
   }
   syncDraftReviews(changed, true);
   await refreshAll();
@@ -2396,7 +2414,10 @@ async function reviewWholePaper(paper) {
             headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
             body: JSON.stringify({ reviewed: false, claims: changed }),
           });
-          syncDraftReviews(changed, false);
+          // Only where the decision was taken. An editor open on the same
+          // claim id in another corpus is a different claim, and correcting
+          // its checkbox would unreview it when that form is saved.
+          if (currentWorkspaceId === workspace) syncDraftReviews(changed, false);
         } catch (error) {
           toast(`Could not undo: ${error.message}`, { tone: 'warn' });
         }
@@ -2783,6 +2804,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'reextract') {
+      await flushTrash();
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
       await refresh();
       return;
@@ -2798,6 +2820,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'retag-one') {
+      await flushTrash();
       await api('/api/retag', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keys: [paper] }),
@@ -2931,6 +2954,7 @@ $('research-nav').addEventListener('click', (event) => {
 
 async function findTensions() {
   V.error = null;
+  await flushTrash();
   try {
     const result = await api('/api/tensions', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
@@ -3178,6 +3202,7 @@ $('btn-retag').addEventListener('click', async () => {
     ok: 'Retag all',
   });
   if (!go) return;
+  await flushTrash();
   await api('/api/retag', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
@@ -3190,6 +3215,9 @@ $('btn-export').addEventListener('click', async () => {
   // hand back the file this export wrote, not whatever the workspace selected
   // by then last exported.
   const workspace = currentWorkspaceId || 'default';
+  // The file is written from what is on file, so a delete still waiting out
+  // its notice would otherwise be exported as a live claim.
+  await flushTrash();
   let result;
   try {
     result = await api('/api/export', {

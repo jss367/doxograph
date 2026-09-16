@@ -345,4 +345,5 @@ transitions, tag renaming and deletion across claims, the extraction merge
 including the keep-reviewed path, HTML escaping in the export, and BibTeX. In
 the browser it covers the review keys, an undone delete, the URL through a
 reload and the Back button, and the notices that replaced the browser's own
-dialogs. Nothing in it calls the API.
+dialogs. Nothing in it calls the model, and nothing reaches the network:
+the API tests drive the app itself through `TestClient`.
