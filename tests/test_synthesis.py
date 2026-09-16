@@ -555,3 +555,15 @@ def test_a_description_edited_during_the_call_does_not_stamp_the_answer(monkeypa
     monkeypatch.setattr(extract, "client", lambda: FakeClient("written from the new wording"))
     assert extract.synthesize_topic("recovery-rate")["skipped"] is False
     assert store.synthesis_rows()[0]["text"] == "written from the new wording"
+
+
+def test_changing_the_model_writes_the_syntheses_again(monkeypatch):
+    from doxograph import config
+    build_corpus()
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("first"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    assert extract.synthesize_topic("recovery-rate")["skipped"] is True
+
+    monkeypatch.setattr(config, "MODEL", "claude-something-else")
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("second"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True

@@ -267,6 +267,7 @@ records what it was asked — which claims were in the topic and what each one
 said, along with the topic's description and your research context — and skips
 a topic whose answer could not have changed. Add a paper, edit a claim, rename
 a topic, or rewrite the research context and that topic is asked about again.
+Changing `DOXOGRAPH_MODEL` counts too: a different model is a different answer.
 `--force` asks regardless, and is also how to rewrite a synthesis after editing
 the research context, which is not part of what makes one stale. **Rewrite** on
 a synthesis forces it too: it is an instruction, not a request. Bumping

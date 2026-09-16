@@ -669,3 +669,16 @@ def test_a_topic_pruned_by_another_pass_loses_its_recorded_pass(monkeypatch):
     store.update_claim("li2025steer", b, {"tags": ["recovery-rate", "scaling"]})
     assert extract.find_tensions("recovery-rate")["skipped"] is False
     assert "recovery-rate" in store.tension_rows()[0]["topics"]
+
+
+def test_changing_the_model_asks_every_topic_again(monkeypatch):
+    from doxograph import config
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    monkeypatch.setattr(config, "MODEL", "claude-something-else")
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(calls) == 2
