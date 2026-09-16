@@ -932,6 +932,7 @@ def _read_tensions() -> dict:
         raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
     loaded.setdefault("seq", 0)
     loaded.setdefault("tensions", [])
+    loaded.setdefault("passes", {})
     return loaded
 
 
@@ -966,7 +967,31 @@ def claim_fingerprint(claim: dict) -> str:
     return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("kind", "finding")])
 
 
-def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]) -> dict:
+def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
+    """What a per-topic pass was asked about, in one string.
+
+    Everything the prompt carries: which claims are in the topic and what each
+    one says, plus `extra` for the parts that are not claims — the topic's
+    description, the research context, the prompt itself. A pass whose
+    signature is unchanged would be asked exactly what it was asked last time,
+    and the merge would keep the answer it already has, so it is not asked.
+    """
+    payload = [topic, extra] + sorted(f"{r['id']} {claim_fingerprint(r)}" for r in rows)
+    return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()[:16]
+
+
+def tension_pass(topic: str) -> str | None:
+    """The signature of the last tensions pass over `topic`, if any."""
+    return (_read_tensions().get("passes") or {}).get(topic)
+
+
+def agreement_pass(topic: str) -> str | None:
+    """The signature of the last agreements pass over `topic`, if any."""
+    return (_read_agreements().get("passes") or {}).get(topic)
+
+
+def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict],
+                    signature: str | None = None) -> dict:
     """Merge one topic's model output into the file.
 
     `found` is a list of `{"claims": [id, id], "kind", "note"}`; `claims_by_id`
@@ -1062,6 +1087,9 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
             by_pair[(a, b)] = record
             added += 1
         data["tensions"] = existing
+        # Recorded only on the way out, so a failed call is asked again.
+        if signature:
+            data.setdefault("passes", {})[topic] = signature
         _save_tensions(data)
         return {"added": added, "reopened": reopened, "kept": kept}
 
@@ -1377,6 +1405,7 @@ def _read_agreements() -> dict:
         raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
     loaded.setdefault("seq", 0)
     loaded.setdefault("agreements", [])
+    loaded.setdefault("passes", {})
     return loaded
 
 
@@ -1392,7 +1421,8 @@ def _agreement_papers(ids, live: dict[str, dict]) -> set[str]:
     return {live[i].get("paper") for i in ids if i in live}
 
 
-def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dict]) -> dict:
+def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dict],
+                      signature: str | None = None) -> dict:
     """Merge one topic's model output into the file.
 
     `found` is a list of `{"claims": [id, ...], "note"}`. The rules follow
@@ -1484,6 +1514,9 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             existing.append(record)
             added += 1
         data["agreements"] = existing
+        # Recorded only on the way out, so a failed call is asked again.
+        if signature:
+            data.setdefault("passes", {})[topic] = signature
         _save_agreements(data)
         return {"added": added, "grown": grown, "reopened": reopened, "kept": kept}
 

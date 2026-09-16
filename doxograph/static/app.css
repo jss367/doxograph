@@ -152,6 +152,13 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
   border: 1px solid var(--warn); border-radius: 3px; padding: 0 .3rem; color: var(--warn);
   margin-right: .3rem; cursor: help; }
 
+/* Claims from other papers worded like this one. */
+.alike { margin: .35rem 0 0 .6rem; padding: .4rem .6rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 5px; font-size: .84rem; color: var(--muted); }
+.alikerow { padding: .15rem 0; cursor: pointer; }
+.alikerow:hover { color: var(--ink); }
+.alikerow .pt { font-weight: 600; margin-right: .3rem; }
+
 /* What the query found in the papers' own text, under the claims. */
 .pdfhits { margin: 1.2rem 0 0; border-top: 1px solid var(--line); padding-top: .6rem; }
 .pdfhits h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em;

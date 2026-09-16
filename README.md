@@ -86,6 +86,7 @@ doxograph verify                      # check that every quote is in its paper's
 doxograph search steering recovery    # find words in the papers' own text
 doxograph tensions                    # find claims from different papers that disagree
 doxograph tensions --list             # show what has been found, without calling the model
+doxograph tensions --force            # ask again about topics nothing has changed in
 doxograph agreements                  # find claims from different papers that say the same thing
 doxograph synthesize                  # write what the papers hold on each topic
 doxograph synthesize --list           # show the syntheses on file
@@ -256,6 +257,34 @@ context in the same form.
 Free text describing your research and what makes a paper relevant. It goes
 into the extraction prompt and is the main lever on the quality of the
 `relevance` line and the ledger links.
+
+## Asking again
+
+A pass over a topic is one model call, and running `doxograph tensions`,
+`agreements`, or `synthesize` again over a corpus you have not touched used to
+pay for every one of them to arrive at what is already on file. Each pass now
+records what it was asked — which claims were in the topic and what each one
+said, along with the topic's description and your research context — and skips
+a topic whose answer could not have changed. Add a paper, edit a claim, rename
+a topic, or rewrite the research context and that topic is asked about again.
+`--force` asks regardless, and is also how to rewrite a synthesis after editing
+the research context, which is not part of what makes one stale.
+
+This costs nothing in findings: a pair the model does not return is kept
+anyway, so a repeat call over unchanged claims could only re-derive what is
+there. Skipping also leaves a synthesis you corrected by hand alone, where a
+rerun used to write over it.
+
+## Claims worded alike
+
+**alike** on a claim lists claims from other papers that use the same words:
+each claim is its content words weighted by how rare they are across the
+corpus, and the ones that overlap most come back first. It is a reading aid
+and nothing else. It does not decide what the tensions and agreements passes
+are shown — two claims can contradict each other in words that have nothing in
+common, "recovers in 46% of rollouts" against "almost never returns to the
+task", and filtering the prompt by word overlap would quietly throw those
+away.
 
 ## Where papers disagree
 

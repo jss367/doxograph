@@ -1410,3 +1410,34 @@ def test_the_query_takes_words_in_any_order_and_finds_them_in_the_pdfs():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_alike_shows_claims_from_other_papers_worded_the_same_way():
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+
+                row = card.locator(".alike .alikerow")
+                await row.wait_for()
+                assert "about half the time" in await row.inner_text()
+                # Clicking one selects that claim, as a citation does.
+                await row.click()
+                await page.locator('.claim.sel[data-claim="li2025steer-c1"]').wait_for()
+
+            await browser.close()
+
+    asyncio.run(scenario())

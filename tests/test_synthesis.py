@@ -290,7 +290,8 @@ def test_synthesize_topic_leaves_a_correction_made_while_the_model_thought(monke
             return Messages()
 
     monkeypatch.setattr(extract, "client", lambda: EditingClient("late answer"))
-    assert extract.synthesize_topic("recovery-rate") == {"written": False, "claims": 3, "papers": 2}
+    assert extract.synthesize_topic("recovery-rate", force=True) == {
+        "written": False, "skipped": False, "claims": 3, "papers": 2}
     [row] = store.synthesis_rows()
     assert (row["text"], row["source"]) == ("corrected by hand", "hand")
 
@@ -301,7 +302,7 @@ def test_an_empty_answer_is_an_error_and_leaves_the_saved_synthesis_alone(monkey
     store.record_synthesis("recovery-rate", "first draft", shown("recovery-rate"))
     monkeypatch.setattr(extract, "client", lambda: FakeClient("  \n"))
     with pytest.raises(ValueError):
-        extract.synthesize_topic("recovery-rate")
+        extract.synthesize_topic("recovery-rate", force=True)
     [row] = store.synthesis_rows()
     assert (row["text"], row["source"]) == ("first draft", "model")
 
@@ -318,7 +319,8 @@ def test_an_unreadable_file_is_reported_and_never_written_over():
 def test_synthesize_topic_skips_an_empty_topic_without_calling_the_model(monkeypatch):
     build_corpus()
     monkeypatch.setattr(extract, "client", lambda: (_ for _ in ()).throw(AssertionError("called")))
-    assert extract.synthesize_topic("nonesuch") == {"written": False, "claims": 0, "papers": 0}
+    assert extract.synthesize_topic("nonesuch") == {
+        "written": False, "skipped": False, "claims": 0, "papers": 0}
 
 
 def test_synthesize_topic_shows_claims_tensions_and_review_state_and_records_the_answer(monkeypatch):
@@ -336,7 +338,7 @@ def test_synthesize_topic_shows_claims_tensions_and_review_state_and_records_the
         "Doe (2026) finds recovery in 46%% of rollouts [%s], while Li (2025) reports almost none [%s]." % (a, b),
         captured))
     result = extract.synthesize_topic("recovery-rate")
-    assert result == {"written": True, "claims": 3, "papers": 2}
+    assert result == {"written": True, "skipped": False, "claims": 3, "papers": 2}
     prompt = captured["messages"][0]["content"]
     assert "How often a model returns to task." in prompt
     assert a in prompt and b in prompt and c in prompt
@@ -357,7 +359,8 @@ def test_synthesize_topic_shows_claims_tensions_and_review_state_and_records_the
 def test_synthesize_topic_with_one_paper_still_writes(monkeypatch):
     build_corpus()
     monkeypatch.setattr(extract, "client", lambda: FakeClient("Only Li (2025) speaks to scale."))
-    assert extract.synthesize_topic("scaling") == {"written": True, "claims": 1, "papers": 1}
+    assert extract.synthesize_topic("scaling") == {
+        "written": True, "skipped": False, "claims": 1, "papers": 1}
     assert "No disagreements between these claims have been noted yet." in \
         extract._tension_block("scaling", store.tension_rows())
 
@@ -382,7 +385,7 @@ def test_api_state_carries_syntheses_and_they_can_be_edited_and_deleted():
 def test_api_synthesize_defaults_to_two_paper_topics_and_accepts_any_named_topic_with_claims(monkeypatch):
     build_corpus()
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics: submitted.append(topics))
+    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics, force: submitted.append(topics))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/syntheses", json={}).json() == {"queued": 1}
         assert client.post("/api/syntheses", json={"topics": ["nonesuch"]}).json() == {"queued": 0}
@@ -401,11 +404,11 @@ def test_api_synthesize_queues_nothing_for_a_corpus_of_one_paper():
 def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     asked = []
 
-    def synth(topic, rows=None, tags=None):
+    def synth(topic, rows=None, tags=None, force=False):
         asked.append(topic)
         if topic == "recovery-rate":
             raise RuntimeError("synthesis refused for recovery-rate: no")
-        return {"written": True, "claims": 1, "papers": 1}
+        return {"written": True, "skipped": False, "claims": 1, "papers": 1}
 
     monkeypatch.setattr(extract, "synthesize_topic", synth)
     job = server._new_job("synthesis of 2 topics")

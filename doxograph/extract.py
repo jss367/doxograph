@@ -688,8 +688,19 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
     return "\n\n".join(blocks)
 
 
+# Bumped when a cross-paper prompt or its schema changes enough that the same
+# claims deserve to be asked about again. It is part of every pass signature,
+# so bumping it re-runs every topic once.
+PASS_VERSION = 1
+
+
+def _pass_extra(topic: str, description: str) -> str:
+    """Everything a per-topic prompt carries that is not one of its claims."""
+    return f"{PASS_VERSION}\n{description}\n{context_block()}"
+
+
 def find_tensions(topic: str, rows: list[dict] | None = None,
-                  tags: list[dict] | None = None) -> dict:
+                  tags: list[dict] | None = None, force: bool = False) -> dict:
     """Ask the model which claims in `topic` disagree, and record the answer.
 
     Cheap in the way retag is cheap: it sends claim text rather than PDFs. One
@@ -701,9 +712,16 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
     rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
     papers = {r["paper"] for r in rows}
     if len(papers) < 2:
-        return {"added": 0, "reopened": 0, "kept": 0, "returned": 0}
+        return {"added": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": False}
     tags = store.load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
+    # Nothing in the topic has changed since the last pass over it: the model
+    # would be given the same prompt and the merge would keep what it answered
+    # last time, since a pair already on file with unchanged claims is left
+    # alone. The call would cost money to learn nothing.
+    signature = store.pass_signature(topic, rows, _pass_extra(topic, description))
+    if not force and store.tension_pass(topic) == signature:
+        return {"added": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": True}
     # The claims as the prompt shows them, keyed by id. The merge uses this to
     # drop ids the model invented; staleness against later edits is judged
     # separately, from the fingerprints the merge records.
@@ -733,8 +751,9 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
         raise RuntimeError(f"tension pass refused for {topic}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
     found = payload.get("tensions", [])
-    result = store.record_tensions(topic, found, shown)
+    result = store.record_tensions(topic, found, shown, signature=signature)
     result["returned"] = len(found)
+    result["skipped"] = False
     return result
 
 
@@ -798,7 +817,7 @@ def _tension_block(topic: str, tensions: list[dict]) -> str:
 
 
 def synthesize_topic(topic: str, rows: list[dict] | None = None,
-                     tags: list[dict] | None = None) -> dict:
+                     tags: list[dict] | None = None, force: bool = False) -> dict:
     """Ask the model what the papers hold on `topic`, and record the answer.
 
     Cheap in the way the tensions pass is cheap: one call per topic, claim
@@ -806,17 +825,29 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
     default set, `store.synthesis_topics`, is those with two papers or more,
     since one paper's claims add up to little.
 
-    Returns `{"written": bool, "claims": n, "papers": n}`. `written` is False
-    when the topic had no claims, or when it lost them all (or its name) while
-    the model was thinking, or when its synthesis was corrected by hand or
-    deleted meanwhile: that decision is newer than the answer and stands.
+    Returns `{"written": bool, "skipped": bool, "claims": n, "papers": n}`.
+    `written` is False when the topic had no claims, or when it lost them all
+    (or its name) while the model was thinking, or when its synthesis was
+    corrected by hand or deleted meanwhile: that decision is newer than the
+    answer and stands.
+
+    A topic whose synthesis is on file and not stale is skipped: no claim and
+    no tension in it has changed since it was written, so the model would be
+    asked the same question, and a text somebody corrected by hand would be
+    replaced by a model's for nothing. `force` writes it again anyway, which
+    is also how to rewrite after editing the research context, since that is
+    not part of what makes a synthesis stale.
     """
     config.require_ai_enabled()
     all_rows = rows if rows is not None else store.claim_rows()
     rows = store.topic_claims(topic, all_rows)
     papers = {r["paper"] for r in rows}
     if not rows:
-        return {"written": False, "claims": 0, "papers": 0}
+        return {"written": False, "skipped": False, "claims": 0, "papers": 0}
+    if not force:
+        current = next((r for r in store.synthesis_rows(all_rows) if r["topic"] == topic), None)
+        if current and not current["stale"]:
+            return {"written": False, "skipped": True, "claims": len(rows), "papers": len(papers)}
     tags = store.load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
@@ -850,7 +881,8 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
         raise RuntimeError(f"synthesis refused for {topic}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
     record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions, before=before)
-    return {"written": record is not None, "claims": len(rows), "papers": len(papers)}
+    return {"written": record is not None, "skipped": False,
+            "claims": len(rows), "papers": len(papers)}
 
 
 # --- where the papers agree -----------------------------------------------
@@ -901,7 +933,7 @@ AGREEMENT_SCHEMA = {
 
 
 def find_agreements(topic: str, rows: list[dict] | None = None,
-                    tags: list[dict] | None = None) -> dict:
+                    tags: list[dict] | None = None, force: bool = False) -> dict:
     """Ask the model which claims in `topic` assert the same finding, and
     record the answer. One call per topic, claim text rather than PDFs, as the
     tensions pass; `store.tension_topics` lists the topics worth a call."""
@@ -909,9 +941,14 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
     rows = [r for r in (rows if rows is not None else store.claim_rows()) if topic in r.get("tags", [])]
     papers = {r["paper"] for r in rows}
     if len(papers) < 2:
-        return {"added": 0, "grown": 0, "reopened": 0, "kept": 0, "returned": 0}
+        return {"added": 0, "grown": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": False}
     tags = store.load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
+    # As the tensions pass: an unchanged topic would be asked the same question
+    # and the merge would keep the answer it already has.
+    signature = store.pass_signature(topic, rows, _pass_extra(topic, description))
+    if not force and store.agreement_pass(topic) == signature:
+        return {"added": 0, "grown": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": True}
     shown = {r["id"]: r for r in rows}
     api = client()
     response = _create(api, 
@@ -938,6 +975,7 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
         raise RuntimeError(f"agreement pass refused for {topic}: {detail}")
     payload = json.loads(next(b.text for b in response.content if b.type == "text"))
     found = payload.get("agreements", [])
-    result = store.record_agreements(topic, found, shown)
+    result = store.record_agreements(topic, found, shown, signature=signature)
     result["returned"] = len(found)
+    result["skipped"] = False
     return result

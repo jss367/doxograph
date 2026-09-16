@@ -1,5 +1,6 @@
 """Tensions: pairs of claims from different papers that disagree."""
 
+import json
 import threading
 
 import pytest
@@ -285,7 +286,8 @@ def test_status_must_be_known_and_tension_must_exist():
 def test_find_tensions_skips_a_topic_with_one_paper_without_calling_the_model(monkeypatch):
     build_corpus()
     monkeypatch.setattr(extract, "client", lambda: (_ for _ in ()).throw(AssertionError("called")))
-    assert extract.find_tensions("scaling") == {"added": 0, "reopened": 0, "kept": 0, "returned": 0}
+    assert extract.find_tensions("scaling") == {
+        "added": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": False}
 
 
 def test_find_tensions_records_what_the_model_returns(monkeypatch):
@@ -311,7 +313,7 @@ def test_find_tensions_records_what_the_model_returns(monkeypatch):
 
     monkeypatch.setattr(extract, "client", lambda: Client())
     result = extract.find_tensions("recovery-rate")
-    assert result == {"added": 1, "reopened": 0, "kept": 0, "returned": 1}
+    assert result == {"added": 1, "reopened": 0, "kept": 0, "returned": 1, "skipped": False}
     prompt = captured["messages"][0]["content"]
     assert "Doe (2026)" in prompt and "Li et al." not in prompt
     assert a in prompt and b in prompt
@@ -347,7 +349,7 @@ def test_api_find_tensions_queues_nothing_without_two_papers_on_a_topic():
 def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_topics(monkeypatch):
     build_corpus()   # recovery-rate has two papers; scaling has one
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics: submitted.append(topics))
+    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics, force: submitted.append(topics))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/tensions", json={"topics": ["scaling", "nonesuch"]}).json() == {"queued": 0}
         body = {"topics": ["recovery-rate", "scaling", "recovery-rate", "nonesuch"]}
@@ -359,11 +361,11 @@ def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_top
 def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     asked = []
 
-    def find(topic, rows=None, tags=None):
+    def find(topic, rows=None, tags=None, force=False):
         asked.append(topic)
         if topic == "recovery-rate":
             raise RuntimeError("tension pass refused for recovery-rate: no")
-        return {"added": 2, "reopened": 1, "kept": 0, "returned": 3}
+        return {"added": 2, "reopened": 1, "kept": 0, "returned": 3, "skipped": False}
 
     monkeypatch.setattr(extract, "find_tensions", find)
     job = server._new_job("tensions in 2 topics")
@@ -423,3 +425,78 @@ def test_cli_lists_tensions_without_calling_the_model(capsys):
     assert __main__.main(["tensions", "--list", "--all"]) == 0
     out = capsys.readouterr().out
     assert "dismissed" in out and "1 tensions, 0 open" in out
+
+
+# --- a topic nothing has changed in is not asked about again ---------------
+
+def _fake_tensions(monkeypatch, pairs_returned, calls):
+    """A client that answers with `pairs_returned` and counts its calls."""
+    class Text:
+        type = "text"
+        def __init__(self, text): self.text = text
+
+    class Response:
+        stop_reason = "end_turn"
+        content = [Text(json.dumps({"tensions": pairs_returned}))]
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return Response()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+
+
+def test_a_rerun_over_an_unchanged_topic_costs_nothing(monkeypatch):
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+
+    first = extract.find_tensions("recovery-rate")
+    assert (first["added"], first["skipped"]) == (1, False)
+    again = extract.find_tensions("recovery-rate")
+    assert again == {"added": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": True}
+    assert len(calls) == 1
+
+    # Asking anyway is what --force is for.
+    forced = extract.find_tensions("recovery-rate", force=True)
+    assert forced["skipped"] is False and len(calls) == 2
+
+
+def test_editing_a_claim_makes_the_topic_worth_asking_about_again(monkeypatch):
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 4.6% of rollouts."})
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(calls) == 2
+
+    # So does editing the research context, which every prompt carries.
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+    store.save_context("I am studying recovery under steering.")
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+
+
+def test_a_failed_pass_is_asked_again(monkeypatch):
+    build_corpus()
+    calls = []
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("the model is down")
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            extract.find_tensions("recovery-rate")
+    assert len(calls) == 2

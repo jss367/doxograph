@@ -122,6 +122,8 @@ const NEW_CLAIM_ID = '__new__';
 // is in GRAPH below.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
+// similar is the one claim whose lookalikes from other papers are open, in the
+// same shape as quoteContext. Also one at a time, and for the same reason.
 // textSearch is the last answer from the search over the papers' own text:
 // { q, loading, papers, terms, error }. It is keyed by the query it was asked
 // for, so an answer left over from an earlier one is not drawn under a later.
@@ -141,7 +143,7 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null,
-            quoteContext: null, textSearch: null };
+            quoteContext: null, textSearch: null, similar: null };
 
 function blankClaim(paper) {
   return {
@@ -293,7 +295,7 @@ function resetWorkspaceView() {
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     graph: { topics: true, minShared: null, tensions: true, ledger: true },
-    quoteContext: null, textSearch: null,
+    quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
   graphReset();
@@ -729,11 +731,14 @@ function claimCard(row, shown) {
         <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
         <button type="button" data-act="edit" data-claim="${esc(row.id)}">edit</button>
+        <button type="button" data-act="similar" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
+          title="Claims from other papers that use the same words">${similarOpen(row.id) ? 'hide alike' : 'alike'}</button>
         <button type="button" data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row)}
+    ${similarHtml(row)}
     ${links}
   </div>`;
 }
@@ -792,6 +797,29 @@ function quoteContextHtml(row) {
     ${diff}
     <div class="qacts">${replace}</div>
   </div>`;
+}
+
+function similarOpen(claimId) {
+  return Boolean(V.similar && V.similar.claim === claimId);
+}
+
+// Claims from other papers that use the same words as this one. Worked out
+// here rather than by the model, so it costs nothing and says nothing about
+// what the two claims mean: the reader decides whether they bear on each
+// other, and the tensions and agreements passes are not filtered by it.
+function similarHtml(row) {
+  if (!similarOpen(row.id)) return '';
+  const found = V.similar;
+  if (found.loading) return '<div class="alike">Comparing the claims…</div>';
+  if (found.error) return `<div class="alike"><span class="qflag">${esc(found.error)}</span></div>`;
+  if (!found.rows.length) {
+    return '<div class="alike">No claim from another paper is worded much like this one.</div>';
+  }
+  return `<div class="alike">${found.rows.map((hit) => {
+    const cite = `${(hit.paper_authors || [])[0] ? hit.paper_authors[0].split(' ').pop() : hit.paper} ${hit.paper_year || ''}`;
+    return `<div class="alikerow" data-act="goto-claim" data-claim="${esc(hit.claim)}">
+      <span class="pt">${esc(cite)}</span> ${esc(hit.text)}</div>`;
+  }).join('')}</div>`;
 }
 
 function tensionMarker(claimId) {
@@ -2140,6 +2168,22 @@ async function toggleReviewed(row) {
   if (stillOpen) renderContent();
 }
 
+async function showSimilar(paper, claim) {
+  V.similar = { claim, paper, loading: true, error: null, rows: [] };
+  renderContent();
+  let next;
+  try {
+    const found = await api(
+      `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/similar`);
+    next = { claim, paper, loading: false, error: null, rows: found.similar || [] };
+  } catch (error) {
+    next = { claim, paper, loading: false, error: `Could not compare the claims: ${error.message}`, rows: [] };
+  }
+  if (!similarOpen(claim)) return;   // closed, or another opened, while it ran
+  V.similar = next;
+  renderContent();
+}
+
 async function showQuoteContext(paper, claim) {
   V.quoteContext = { claim, paper, loading: true, error: null, data: null };
   renderContent();
@@ -2372,6 +2416,11 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'review') {
       await toggleReviewed(S.claims.find((c) => c.id === claim));
+      return;
+    }
+    if (act === 'similar') {
+      if (similarOpen(claim)) { V.similar = null; renderContent(); return; }
+      await showSimilar(paper, claim);
       return;
     }
     if (act === 'quote-context') {

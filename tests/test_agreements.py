@@ -185,7 +185,7 @@ def test_find_agreements_records_what_the_model_returns(monkeypatch):
 
     monkeypatch.setattr(extract, "client", lambda: type("C", (), {"messages": Messages()})())
     result = extract.find_agreements("recovery-rate")
-    assert result == {"added": 1, "grown": 0, "reopened": 0, "kept": 0, "returned": 1}
+    assert result == {"added": 1, "grown": 0, "reopened": 0, "kept": 0, "returned": 1, "skipped": False}
     assert "Doe (2026)" in calls[0]["messages"][0]["content"]
     assert extract.find_agreements("scaling")["returned"] == 0     # one paper: no call
     assert len(calls) == 1
