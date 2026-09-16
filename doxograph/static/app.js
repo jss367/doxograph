@@ -254,7 +254,7 @@ async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) { rerunTextSearch(); V.similar = null; }
+  if (changed) { rerunTextSearch(); closeSimilar(); }
   render();
 }
 
@@ -267,7 +267,7 @@ async function refreshAll() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) { rerunTextSearch(); V.similar = null; }
+  if (changed) { rerunTextSearch(); closeSimilar(); }
   renderAll();
 }
 
@@ -887,6 +887,20 @@ function quoteContextHtml(row) {
     ${diff}
     <div class="qacts">${replace}</div>
   </div>`;
+}
+
+// Drop the alike panel, taking it off the screen even when no redraw will
+// come: `render` leaves the content alone while an editor is open, and a
+// panel left standing there shows matches worked out from claims that have
+// since moved, under a button that says "hide alike" and would start a new
+// lookup because the state says it is closed.
+function closeSimilar() {
+  if (!V.similar) return;
+  V.similar = null;
+  document.querySelectorAll('#content .alike').forEach((node) => node.remove());
+  document.querySelectorAll('#content [data-act="similar"]').forEach((button) => {
+    button.textContent = 'alike';
+  });
 }
 
 function similarOpen(claimId) {
@@ -2559,7 +2573,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'similar') {
-      if (similarOpen(claim)) { V.similar = null; captureOpenEditor(); renderContent(); return; }
+      if (similarOpen(claim)) { closeSimilar(); captureOpenEditor(); renderContent(); return; }
       await showSimilar(paper, claim);
       return;
     }
@@ -3235,7 +3249,7 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       rerunTextSearch();     // a paper imported since holds the query's words too
-      V.similar = null;      // and the claims it was compared against have moved
+      closeSimilar();        // and the claims it was compared against have moved
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();

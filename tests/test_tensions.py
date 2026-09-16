@@ -644,3 +644,28 @@ def test_one_claim_losing_the_topic_mid_call_leaves_the_pass_unrecorded(monkeypa
     _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
     assert extract.find_tensions("recovery-rate")["skipped"] is False
     assert store.tension_rows()[0]["topics"] == ["recovery-rate"]
+
+
+def test_a_topic_pruned_by_another_pass_loses_its_recorded_pass(monkeypatch):
+    """A pair on two topics: one pass caches X's signature, a later Y pass
+    finds X gone from a claim and prunes it from the record. Restoring X has
+    to run the pass again, or the pair never gets X back."""
+    store.add_tag("scaling", "How results move with size.")
+    a, = _paper("doe2026recovery", "Recovery under steering", "Jane Doe", 2026,
+                ("Llama-3 70B recovers in 46% of rollouts.", ["recovery-rate", "scaling"]))
+    b, = _paper("li2025steer", "Steering does not wash out", "Bo Li", 2025,
+                ("Steered models almost never return to the task.", ["recovery-rate", "scaling"]))
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    extract.find_tensions("recovery-rate")
+    assert store.tension_pass("recovery-rate") is not None
+
+    # The tag comes off one claim, and the other topic's pass prunes it.
+    store.update_claim("li2025steer", b, {"tags": ["scaling"]})
+    extract.find_tensions("scaling")
+    assert store.tension_rows()[0]["topics"] == ["scaling"]
+    assert store.tension_pass("recovery-rate") is None
+
+    store.update_claim("li2025steer", b, {"tags": ["recovery-rate", "scaling"]})
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert "recovery-rate" in store.tension_rows()[0]["topics"]

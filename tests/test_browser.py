@@ -1770,3 +1770,39 @@ def test_the_page_finds_what_the_server_finds_whatever_the_case():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_alike_panel_goes_even_while_an_editor_holds_the_content():
+    """`render` leaves the content alone while an editor is open, so a panel
+    cleared from the state would have stayed on screen and clickable."""
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+                await card.locator(".alike .alikerow").wait_for()
+
+                # An editor open elsewhere freezes the content.
+                await page.locator('.claim[data-claim="li2025steer-c1"]').get_by_role(
+                    "button", name="edit").click()
+                await page.locator('textarea[name="text"]').fill("Half-typed correction")
+                store.add_claim("li2025steer", {"text": "A new claim.", "tags": ["recovery-rate"]})
+
+                await page.locator(".alike").wait_for(state="detached")
+                assert await page.locator('textarea[name="text"]').input_value() == "Half-typed correction"
+
+            await browser.close()
+
+    asyncio.run(scenario())

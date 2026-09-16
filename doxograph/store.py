@@ -1004,6 +1004,14 @@ def cite_head(claim: dict) -> str:
     return f"{head} ({claim.get('paper_year') or 'n.d.'}): {claim.get('paper_title') or key}"
 
 
+def _forget_passes(data: dict, topics: set[str]) -> None:
+    """Drop the recorded pass for each of `topics`. Caller saves."""
+    passes = data.get("passes") or {}
+    for topic in topics:
+        passes.pop(topic, None)
+    data["passes"] = passes
+
+
 def _topic_unchanged(topic: str, shown: dict[str, dict], live: dict[str, dict]) -> bool:
     """Whether a topic still holds the claims a pass was asked about, as it
     was asked about them. Anything else and the answer describes a question
@@ -1091,8 +1099,15 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
         live = {c["id"]: c for c in claim_rows()}
         existing = [t for t in data["tensions"]
                     if len(t.get("claims", [])) == 2 and all(i in live for i in t["claims"])]
+        pruned: set[str] = set()
         for tension in existing:
+            was = set(tension.get("topics") or [])
             tension["topics"] = _shared_topics(tension, live)
+            pruned |= was - set(tension["topics"])
+        # A topic taken off a record here is a topic whose pairs have to be
+        # found again when it comes back. Its recorded pass goes with it, or
+        # restoring the tag would reproduce the signature and skip the run.
+        _forget_passes(data, pruned)
         by_pair = {_pair(t["claims"]): t for t in existing}
         added = reopened = kept = 0
         for item in found:
@@ -1534,14 +1549,20 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
         data = _read_agreements()
         live = {c["id"]: c for c in claim_rows()}
         existing = []
+        pruned: set[str] = set()
         for record in data["agreements"]:
             ids = [i for i in record.get("claims", []) if i in live]
             if len(_agreement_papers(ids, live)) < 2:
                 continue
             record["claims"] = ids
+            was = set(record.get("topics") or [])
             record["topics"] = sorted(t for t in record.get("topics", [])
                                       if all(t in (live[i].get("tags") or []) for i in ids))
+            pruned |= was - set(record["topics"])
             existing.append(record)
+        # As in `record_tensions`: a topic taken off a record here has to be
+        # found again when it comes back, so its recorded pass goes with it.
+        _forget_passes(data, pruned)
         added = grown = reopened = kept = 0
         for item in found:
             ids = sorted({i for i in item.get("claims", []) if i in claims_by_id and i in live})
