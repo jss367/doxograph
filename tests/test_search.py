@@ -274,3 +274,19 @@ def test_a_passage_keeps_the_word_that_matched_across_a_page_break():
     passage = search.search_papers("transformation")[0]["passages"][0]
     assert [p["text"] for p in passage["parts"] if p["mark"]] == ["transformation"]
     assert "transformation" in passage["text"]
+
+
+def test_an_accent_is_found_however_the_pdf_spells_it():
+    """A PDF gives an accented letter whole or as a letter and a mark; a query
+    is typed whichever way the keyboard does it."""
+    a_paper_of("decomposed", "A study of the cafe\u0301 as a workplace.")   # e + acute
+    for query in ("caf\u00e9", "cafe\u0301", "CAF\u00c9", "cafe"):
+        assert [hit["key"] for hit in search.search_papers(query)] == ["decomposed"], repr(query)
+    # And the passage still quotes the paper as it spells it.
+    passage = search.search_papers("caf\u00e9")[0]["passages"][0]
+    assert [part["text"] for part in passage["parts"] if part["mark"]] == ["cafe\u0301"]
+
+
+def test_lao_is_a_script_without_spaces_too():
+    a_paper_of("lao", "A paper about ພາສາລາວ.")
+    assert [hit["key"] for hit in search.search_papers("ລາວ")] == ["lao"]
