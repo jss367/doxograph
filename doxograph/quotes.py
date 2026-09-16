@@ -154,11 +154,16 @@ def paper_text(path: Path, cache: Path | None = None) -> Text | None:
 
 
 def _read_cached(cache: Path | None, pdf_mtime_ns: int) -> str | None:
-    """The stored text, if it was written after the PDF it came from."""
+    """The stored text, if it was written strictly after the PDF it came from.
+
+    Strictly: a PDF replaced by `os.replace` keeps the staged file's mtime,
+    which can equal the stored text's, and reading it as fresh would check
+    quotes against the paper that used to be there.
+    """
     if cache is None:
         return None
     try:
-        if cache.stat().st_mtime_ns < pdf_mtime_ns:
+        if cache.stat().st_mtime_ns <= pdf_mtime_ns:
             return None
         return cache.read_text(encoding="utf-8")
     except OSError:
@@ -278,11 +283,20 @@ def locate(pdf: Path, quote: str, cache: Path | None = None) -> dict | None:
         "before": "",
         "suggestion": "",
         "after": "",
+        # True when the quote occurs in the paper more than once. Then the
+        # passage shown is the first of them and may not be the one the claim
+        # was drawn from, so nothing is concluded from which page it is on.
+        "repeated": False,
     }
     if lo < 0 or score < _NEARBY:
         return result
+    result["repeated"] = score >= 1.0 and text.squashed.find(needle, lo + 1) >= 0
     start, end = text.offsets[lo], text.offsets[hi - 1] + 1
-    low, high = text.page_bounds(start)
+    # The page the match starts on and the page it ends on: a sentence that
+    # runs over a page break belongs to the reader whole, and a suggestion cut
+    # at the break would be saved as the quote by "use the paper's wording".
+    low = text.page_bounds(start)[0]
+    high = text.page_bounds(end - 1)[1]
     begin, finish = _sentence_bounds(text.raw, start, end, low, high)
     result["page"] = text.page_of(start)
     result["suggestion"] = tidy(text.raw[begin:finish])

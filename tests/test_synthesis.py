@@ -471,3 +471,30 @@ def test_cli_synthesize_writes_and_fails_on_an_empty_topic(capsys, monkeypatch):
     assert "recovery-rate: written from 3 claims in 2 papers" in capsys.readouterr().out
     assert __main__.main(["synthesize", "nonesuch"]) == 1
     assert "nonesuch: no claims, nothing written" in capsys.readouterr().err
+
+
+def test_a_synthesis_written_under_an_older_prompt_is_written_again(monkeypatch):
+    from doxograph import config
+    build_corpus()
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("first"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    assert extract.synthesize_topic("recovery-rate")["skipped"] is True
+
+    # Changing the prompt is what bumping the version stands for.
+    monkeypatch.setattr(config, "PASS_VERSION", config.PASS_VERSION + 1)
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("second"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    assert store.synthesis_rows()[0]["text"] == "second"
+    assert extract.synthesize_topic("recovery-rate")["skipped"] is True
+
+
+def test_a_synthesis_from_before_the_version_was_recorded_is_written_again(monkeypatch):
+    build_corpus()
+    store.record_synthesis("recovery-rate", "older than the field", shown("recovery-rate"))
+    with store.syntheses_lock():
+        data = store._read_syntheses()
+        del data["syntheses"]["recovery-rate"]["pass_version"]
+        store._save_syntheses(data)
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("fresh"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    assert store.synthesis_rows()[0]["text"] == "fresh"

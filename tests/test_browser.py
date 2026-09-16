@@ -1481,3 +1481,129 @@ def test_the_map_draws_a_citation_from_one_paper_to_another():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    claim = store.add_claim(key, {
+        "text": "Steered models recover.",
+        "quote": "Steering recovery is path dependant across all scales."})
+    assert claim["quote_verified"] is False
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(".claim .qflag").wait_for()
+                await page.get_by_role("button", name="in the paper").click()
+                await page.locator(".qctx .qpassage").wait_for()
+
+                # Correcting the quote by hand makes the passage describe a
+                # claim that no longer exists, so it goes rather than offering
+                # to write the old suggestion back over the new quote.
+                await page.get_by_role("button", name="edit").click()
+                await page.locator('textarea[name="quote"]').fill(
+                    "Recovery under steering is a path-dependent outcome across all scales.")
+                await page.get_by_role("button", name="Save").click()
+                await page.locator(".claim .qflag").wait_for(state="detached")
+                assert await page.locator(".qctx").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_rewrite_asks_again_even_when_nothing_has_changed():
+    """The pass skips a topic nothing has changed in, so Rewrite has to say
+    so — otherwise it reports a finished job and leaves the text alone."""
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.record_synthesis("recovery-rate", "What the papers hold, as written before.",
+                           {c["id"]: c for c in store.claim_rows()})
+
+    async def scenario():
+        posted = []
+
+        async def capture(route):
+            posted.append(route.request.post_data_json)
+            await route.fulfill(status=200, json={"queued": 1})
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(".synth").wait_for()
+                await page.route("**/api/syntheses", capture)
+                await page.get_by_role("button", name="Rewrite").click()
+                await page.wait_for_function("true")
+                assert posted == [{"topics": ["recovery-rate"], "force": True}]
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_citations_do_not_cross_between_workspaces():
+    """A citation request left in flight when the workspace changes answers
+    with the other corpus's edges, and the paper keys can be the same."""
+    from doxograph import config
+    from pdfs import minimal_pdf
+
+    def corpus(reference: str) -> None:
+        store.save_paper(store.new_paper("cited", title="Attention is all you need", year=2026))
+        store.pdf_path("cited").write_bytes(minimal_pdf(["Attention is all you need", "A paper."]))
+        store.save_paper(store.new_paper("citing", title="The citing paper", year=2026))
+        store.pdf_path("citing").write_bytes(minimal_pdf([
+            "The citing paper", f"References\n[1] Somebody. {reference}. 2026."]))
+
+    corpus("Attention is all you need")          # the default workspace cites
+    other = config.create_workspace("Animal locomotion")
+    with config.use_workspace(other["id"]):
+        corpus("Something else entirely, by someone else")   # this one does not
+
+    async def scenario():
+        held = asyncio.Event()
+        first = []
+        answers = []
+
+        async def hold(route):
+            if not first:
+                first.append(True)
+                await held.wait()
+            await route.continue_()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            page.on("response", lambda r: answers.append(r.url) if "/api/citations" in r.url else None)
+            with _server() as url:
+                await page.goto(url)
+                await page.route("**/api/citations", hold)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await page.wait_for_function("window.doxographWorkspaceId !== 'default'")
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                held.set()                      # the default workspace's answer, late
+                while len(answers) < 2:
+                    await page.wait_for_timeout(50)
+                await page.wait_for_timeout(200)
+
+                edges = await page.evaluate("window.doxographGraph().edges")
+                assert [e for e in edges if e["type"] == "cite"] == []
+
+            await browser.close()
+
+    asyncio.run(scenario())

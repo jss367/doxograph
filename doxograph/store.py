@@ -1299,6 +1299,10 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
             "text": text,
             "source": source,
             "written": now(),
+            # Which cross-paper prompt wrote it. A synthesis from an older one
+            # is rewritten by the next pass; one with none recorded is older
+            # than this field and counts as older than the prompt.
+            "pass_version": config.PASS_VERSION,
             "claims": {i: claim_fingerprint(c) for i, c in claims_by_id.items()
                        if topic in (c.get("tags") or [])},
             "tensions": synthesis_tensions(topic, tension_rows() if tensions is None else tensions),
@@ -1321,6 +1325,7 @@ def set_synthesis_text(topic: str, text: str) -> dict:
             raise KeyError(topic)
         record = data["syntheses"][topic]
         record.update(text=text, source="hand", written=now(),
+                      pass_version=config.PASS_VERSION,
                       claims=synthesis_basis(topic_claims(topic)),
                       tensions=synthesis_tensions(topic, tension_rows()))
         _save_syntheses(data)

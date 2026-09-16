@@ -298,6 +298,8 @@ function resetWorkspaceView() {
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
+  dropTextSearch();
+  CITATIONS = [];
   graphReset();
   $('q').value = '';
   $('kind').value = '';
@@ -407,8 +409,19 @@ function scheduleTextSearch() {
   textSearchTimer = setTimeout(() => runTextSearch(query), 250);
 }
 
+// Strand a debounce that has not fired and any answer still in flight. Called
+// when the workspace changes: the same query in the new corpus is a different
+// question, and the old corpus's papers must not be drawn under it.
+function dropTextSearch() {
+  clearTimeout(textSearchTimer);
+  textSearchTimer = null;
+  textSearchSeq += 1;
+  V.textSearch = null;
+}
+
 async function runTextSearch(query) {
   const seq = ++textSearchSeq;
+  const workspace = currentWorkspaceId;
   V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
   renderContent();
   let next;
@@ -419,8 +432,9 @@ async function runTextSearch(query) {
     next = { q: query, loading: false, papers: [], terms: [], error: error.message };
   }
   // An answer to a query that is no longer the one on screen is dropped: the
-  // requests are not guaranteed to come back in the order they went out.
-  if (seq !== textSearchSeq) return;
+  // requests are not guaranteed to come back in the order they went out, and
+  // the corpus can have changed under the one still running.
+  if (seq !== textSearchSeq || workspace !== currentWorkspaceId) return;
   V.textSearch = next;
   renderContent();
 }
@@ -778,9 +792,13 @@ function quoteContextHtml(row) {
     : (found.found ? 'Found in the PDF' : 'Closest passage');
   // The locator is the model's own answer to the same question, and it is
   // wrong often enough to be worth showing side by side with the real page.
-  const elsewhere = found.locator_page && found.page && found.locator_page !== found.page
-    ? `<span class="qlocator" title="The claim's locator names a different page.">locator says ${esc(row.locator)}</span>`
-    : '';
+  // Unless the quote is in the paper more than once: then the page shown is
+  // the first of them, and the locator naming another one is no disagreement.
+  const elsewhere = found.repeated
+    ? '<span class="qlocator" title="The passage shown is the first of them.">appears more than once</span>'
+    : (found.locator_page && found.page && found.locator_page !== found.page
+      ? `<span class="qlocator" title="The claim's locator names a different page.">locator says ${esc(row.locator)}</span>`
+      : '');
   const diff = found.diff.length
     ? `<p class="qdiff">${found.diff.map((part) => {
         if (part.op === 'quote') return `<del>${esc(part.text)}</del>`;
@@ -1257,7 +1275,7 @@ function synthesisBlock(tag) {
         · ${synth.n_claims} claims in ${synth.n_papers} papers</span>
       ${synth.stale ? '<span class="stale">claims or tensions have changed since</span>' : ''}
       <span class="cact" style="margin-left:auto">
-        <button type="button" data-act="synthesize" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-topic="${esc(tag)}">Rewrite</button>
+        <button type="button" data-act="synthesize" data-force="1" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-topic="${esc(tag)}">Rewrite</button>
         <button type="button" data-act="edit-synth" data-topic="${esc(tag)}">edit</button>
         <button type="button" data-act="del-synth" data-topic="${esc(tag)}">delete</button>
       </span>
@@ -1272,12 +1290,17 @@ function synthesizeButton(tag) {
     title="Ask the model what the papers hold on this topic">synthesize</button>`;
 }
 
-async function synthesize(topics) {
+// `force` is for Rewrite, which is an instruction and not a request: a topic
+// nothing has changed in is skipped by the pass, so without it the button
+// would report a finished job and leave the text exactly as it was. Writing a
+// synthesis that does not exist yet, and the pass over the whole corpus, both
+// mean "where it is worth it" and are left alone.
+async function synthesize(topics, force = false) {
   V.error = null;
   try {
     const result = await api('/api/syntheses', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(topics ? { topics } : {}),
+      body: JSON.stringify({ ...(topics ? { topics } : {}), ...(force ? { force: true } : {}) }),
     });
     if (!result.queued) {
       V.error = topics
@@ -1392,7 +1415,15 @@ function textSearchBlock() {
   if (!found.papers.length) {
     return `<div class="pdfhits">${head}<p class="hint">No paper's text holds every word of that.</p></div>`;
   }
-  const hits = found.papers.map((hit) => {
+  // Drawn against the corpus as it stands, not as it stood when the answer
+  // came back: a paper removed since would otherwise stay listed here and
+  // clicking it would select a paper that is not there.
+  const live = new Set(S.papers.map((paper) => paper.key));
+  const papers = found.papers.filter((hit) => live.has(hit.key));
+  if (!papers.length) {
+    return `<div class="pdfhits">${head}<p class="hint">No paper's text holds every word of that.</p></div>`;
+  }
+  const hits = papers.map((hit) => {
     const cite = `${(hit.authors || [])[0] ? hit.authors[0].split(' ').pop() : hit.key} ${hit.year || ''}`;
     const passages = (hit.passages || []).map((passage) =>
       `<p class="pp"><span class="hint">p. ${passage.page}</span> …${mark(passage.text, found.terms)}…</p>`).join('');
@@ -1500,12 +1531,19 @@ function renderGraphNav() {
 let CITATIONS = [];
 
 async function loadCitations() {
+  // Whose citations these are. A request left in flight when the workspace
+  // changes answers with the other corpus's edges, and its paper keys can
+  // collide with this one's, so a late answer is dropped rather than drawn.
+  const workspace = currentWorkspaceId;
+  let edges;
   try {
     const found = await api('/api/citations');
-    CITATIONS = found.edges || [];
+    edges = found.edges || [];
   } catch (error) {
-    CITATIONS = [];   // a map without citation links is still worth drawing
+    edges = [];   // a map without citation links is still worth drawing
   }
+  if (workspace !== currentWorkspaceId) return;
+  CITATIONS = edges;
   if (V.view === 'graph') renderGraph();
 }
 
@@ -2249,18 +2287,22 @@ async function showSimilar(paper, claim) {
 }
 
 async function showQuoteContext(paper, claim) {
-  V.quoteContext = { claim, paper, loading: true, error: null, data: null };
+  // The pending request itself is what a late answer has to match, not the
+  // claim id: claim ids are unique per corpus and not across workspaces, so
+  // opening the same id in another workspace before the first read finishes
+  // would otherwise be answered with the other corpus's passage — and "use
+  // the paper's wording" would write it into this one.
+  const pending = { claim, paper, loading: true, error: null, data: null };
+  V.quoteContext = pending;
   renderContent();
   try {
     const data = await api(
       `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/quote-context`);
-    // The pane can have been closed, or another one opened, while the PDF was
-    // being read; a late answer must not reopen it or overwrite the new one.
-    if (V.quoteContext && V.quoteContext.claim === claim) {
+    if (V.quoteContext === pending) {
       V.quoteContext = { claim, paper, loading: false, error: null, data };
     }
   } catch (error) {
-    if (V.quoteContext && V.quoteContext.claim === claim) {
+    if (V.quoteContext === pending) {
       V.quoteContext = { claim, paper, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
     }
   }
@@ -2289,6 +2331,14 @@ async function usePaperWording(paper, claim) {
 }
 
 async function patchClaim(paper, claim, patch) {
+  // An open passage was worked out from the quote and locator as they were.
+  // Saving either makes it describe a claim that no longer exists, and "use
+  // the paper's wording" would then write the old suggestion over the new
+  // quote. Closed rather than refetched: the reviewer just decided what the
+  // quote should say, and reopening it under them would be a surprise.
+  if (('quote' in patch || 'locator' in patch) && V.quoteContext && V.quoteContext.claim === claim) {
+    V.quoteContext = null;
+  }
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -2579,7 +2629,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'synthesize') {
-      await synthesize([button.dataset.topic]);
+      await synthesize([button.dataset.topic], button.dataset.force === '1');
       return;
     }
     if (act === 'edit-synth') {
