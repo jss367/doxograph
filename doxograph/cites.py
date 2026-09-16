@@ -142,6 +142,9 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
     on the same stretch of the list, only the longer is a citation; the shorter
     is part of it.
     """
+    # Every mark a paper is named by, not the first that hits: an entry can
+    # carry the arXiv id and the title both, and it is the title's span that
+    # covers a shorter title printed inside it.
     hits: list[tuple[int, str, list[int]]] = []
     for other, found in marks.items():
         if other == key:
@@ -150,19 +153,21 @@ def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
             places = _occurrences(listing, mark)
             if places:
                 hits.append((len(mark), other, places))
-                break
     # Longest first, so a shorter mark inside one already taken is dropped —
     # but only where every mention of it is inside one, and against every
     # place the longer one was printed: a bibliography can name the same paper
     # in the article's list and again in the supplement's. A list that cites
     # both papers names the shorter one somewhere on its own.
     taken: list[tuple[int, int]] = []
-    cited: list[str] = []
+    cited: set[str] = set()
     for width, other, places in sorted(hits, key=lambda hit: -hit[0]):
-        if all(any(begin <= at and at + width <= end for begin, end in taken) for at in places):
-            continue
-        cited.append(other)
-        taken.extend((at, at + width) for at in places)
+        covered = all(any(begin <= at and at + width <= end for begin, end in taken)
+                      for at in places)
+        # A paper already cited keeps contributing its spans — one edge per
+        # paper, whichever of its marks the list happens to carry.
+        if not covered or other in cited:
+            cited.add(other)
+            taken.extend((at, at + width) for at in places)
     return sorted(cited)
 
 

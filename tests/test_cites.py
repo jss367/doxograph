@@ -179,3 +179,18 @@ def test_a_section_number_in_roman_comes_off_the_heading_too():
     # The letters are only taken off when a heading is what is left.
     assert cites.reference_text("x\nLiterature Cited\n[1] A.\n").strip() == "[1] A."
     assert cites.reference_text("x\nVivid examples follow.\n[1] A.\n") == ""
+
+
+def test_a_paper_named_by_its_id_and_its_title_still_covers_a_shorter_title():
+    """The entry carries both, and it is the title's span that covers the
+    shorter title printed inside it."""
+    _paper("short", "Attention is all you need", ["Attention is all you need", "Text."])
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."],
+           source={"kind": "arxiv", "id": "2401.00001"})
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Somebody. Attention is all you need for image restoration.\n"
+        "arXiv:2401.00001, 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["long"]
