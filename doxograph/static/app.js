@@ -809,13 +809,14 @@ function claimCard(row, shown, group = '') {
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
         <button type="button" data-act="edit" data-claim="${esc(row.id)}">edit</button>
         <button type="button" data-act="similar" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
-          title="Claims from other papers that use the same words">${similarOpen(row.id) ? 'hide alike' : 'alike'}</button>
+          data-group="${esc(group)}"
+          title="Claims from other papers that use the same words">${similarOpen(row.id, group) ? 'hide alike' : 'alike'}</button>
         <button type="button" data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
-    ${similarHtml(row)}
+    ${similarHtml(row, group)}
     ${links}
   </div>`;
 }
@@ -907,16 +908,20 @@ function closeSimilar() {
   });
 }
 
-function similarOpen(claimId) {
-  return Boolean(V.similar && V.similar.claim === claimId);
+function similarOpen(claimId, group = '') {
+  return Boolean(V.similar && V.similar.claim === claimId
+    && (V.similar.group || '') === group);
 }
 
 // Claims from other papers that use the same words as this one. Worked out
 // here rather than by the model, so it costs nothing and says nothing about
 // what the two claims mean: the reader decides whether they bear on each
 // other, and the tensions and agreements passes are not filtered by it.
-function similarHtml(row) {
-  if (!similarOpen(row.id)) return '';
+function similarHtml(row, group = '') {
+  // Beside the copy whose button was pressed, as the passage is: a claim with
+  // several tags is drawn under each of them, and in the tensions view it
+  // appears in every pair it is part of.
+  if (!similarOpen(row.id, group)) return '';
   const found = V.similar;
   if (found.loading) return '<div class="alike">Comparing the claims…</div>';
   if (found.error) return `<div class="alike"><span class="qflag">${esc(found.error)}</span></div>`;
@@ -2288,11 +2293,11 @@ async function toggleReviewed(row) {
   if (stillOpen) renderContent();
 }
 
-async function showSimilar(paper, claim) {
+async function showSimilar(paper, claim, group = '') {
   // Matched on the request itself, as the passage is: a claim id is unique
   // per corpus and not across workspaces, and switching is not held back by a
   // read, so the answer to one workspace's question could land in another.
-  const pending = { claim, paper, loading: true, error: null, rows: [] };
+  const pending = { claim, paper, group, loading: true, error: null, rows: [] };
   captureOpenEditor();
   V.similar = pending;
   renderContent();
@@ -2300,9 +2305,9 @@ async function showSimilar(paper, claim) {
   try {
     const found = await api(
       `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/similar`);
-    next = { claim, paper, loading: false, error: null, rows: found.similar || [] };
+    next = { claim, paper, group, loading: false, error: null, rows: found.similar || [] };
   } catch (error) {
-    next = { claim, paper, loading: false, error: `Could not compare the claims: ${error.message}`, rows: [] };
+    next = { claim, paper, group, loading: false, error: `Could not compare the claims: ${error.message}`, rows: [] };
   }
   if (V.similar !== pending) return;   // closed, or another opened, while it ran
   V.similar = next;
@@ -2577,8 +2582,9 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'similar') {
-      if (similarOpen(claim)) { closeSimilar(); captureOpenEditor(); renderContent(); return; }
-      await showSimilar(paper, claim);
+      const group = button.dataset.group || '';
+      if (similarOpen(claim, group)) { closeSimilar(); captureOpenEditor(); renderContent(); return; }
+      await showSimilar(paper, claim, group);
       return;
     }
     if (act === 'quote-context') {
