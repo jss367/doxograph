@@ -479,5 +479,23 @@ def test_the_text_of_a_replaced_pdf_cannot_be_stored_after_the_replacement(tmp_p
     reader.join(timeout=10)
     other.join(timeout=10)
     assert replaced.is_set()
-    stored = store.text_path(key).read_text(encoding="utf-8")
-    assert "penguins" in stored and quotes.squash(SENTENCE) not in quotes.squash(stored)
+    # Either order is allowed; what is not allowed is the old paper's text
+    # outliving the PDF it came from. (Whether a file is there at all depends
+    # on who went last: a publish clears it and a check writes it.)
+    stored = store.text_path(key)
+    if stored.exists():
+        assert quotes.squash(SENTENCE) not in quotes.squash(stored.read_text(encoding="utf-8"))
+    quotes._cache.clear()
+    assert store.check_quote(key, {"quote": SENTENCE}) is False
+    assert "penguins" in store.text_path(key).read_text(encoding="utf-8")
+
+
+def test_deleting_the_stored_text_makes_the_next_check_read_the_paper_again(tmp_path):
+    """The README says a corpus is told to read its papers again by deleting
+    `text/<key>.txt`; a process holding one in memory has to notice."""
+    pdf, cache = tmp_path / "p.pdf", tmp_path / "text" / "p.txt"
+    pdf.write_bytes(minimal_pdf(SENTENCE))
+    assert quotes.verify(pdf, SENTENCE, cache) is True
+    cache.unlink()
+    assert quotes.verify(pdf, SENTENCE, cache) is True
+    assert cache.exists(), "the check wrote the text back"

@@ -182,9 +182,6 @@ function applySavingState() {
   });
 }
 
-// The claims whose passage has been drawn on this pass; see `quoteHtml`.
-let panesDrawn = new Set();
-
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -764,7 +761,11 @@ async function loadProposed(key, wanted) {
 // mode a claim appears once per topic, and emitting a form for each occurrence
 // would put several elements under one `data-form`, so `captureOpenEditor` would
 // read the first while the user typed into another.
-function claimCard(row, shown) {
+// `group` is which drawing of the claim this is: the topic heading it sits
+// under, or the tension it belongs to. A claim with several tags is drawn
+// under each of them, and a passage belongs beside the copy whose button was
+// pressed rather than the first one on the page.
+function claimCard(row, shown, group = '') {
   if (V.editing === row.id && shown && !shown.has(row.id)) {
     shown.add(row.id);
     const draft = V.drafts[row.id];
@@ -779,7 +780,7 @@ function claimCard(row, shown) {
       ${esc(own ? own.text : l.claim)}${l.note ? ' — ' + esc(l.note) : ''}</div>`;
   }).join('');
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'} ${row.id === V.selectedId ? 'sel' : ''}"
-       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
+       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}">
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
@@ -798,7 +799,7 @@ function claimCard(row, shown) {
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${quoteHtml(row)}
+    ${quoteHtml(row, group)}
     ${similarHtml(row)}
     ${links}
   </div>`;
@@ -807,19 +808,20 @@ function claimCard(row, shown) {
 // The quote, flagged when it was not found in the paper's text. A quote the
 // model paraphrased or invented is the commonest extraction error, and this is
 // the one error the machine can catch on its own.
-function quoteHtml(row) {
+function quoteHtml(row, group = '') {
   if (!row.quote) return '';
   const flag = row.quote_verified === false
     ? '<span class="qflag" title="This quote was not found in the PDF text. Check it against the paper.">not found in PDF</span> '
     : '';
-  // Under one copy of the claim, the first drawn. Grouped by topic a claim
-  // with several tags is drawn under each of them, and in the tensions view
-  // it appears in every pair it is part of; opening the passage under all of
-  // them would put the same replacement button on screen several times.
-  const open = V.quoteContext && V.quoteContext.claim === row.id && !panesDrawn.has(row.id);
-  if (open) panesDrawn.add(row.id);
+  // Beside the copy whose button was pressed. Grouped by topic a claim with
+  // several tags is drawn under each of them, and in the tensions view it
+  // appears in every pair it is part of; without the group the passage would
+  // open under all of them, and keyed on the first drawn it would open
+  // somewhere the reader is not looking.
+  const open = Boolean(V.quoteContext && V.quoteContext.claim === row.id
+    && (V.quoteContext.group || '') === group);
   const show = `<button type="button" class="qshow" data-act="quote-context"
-    data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
+    data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}"
     title="Read this quote where it sits in the PDF">${open ? 'hide the paper' : 'in the paper'}</button>`;
   return `<blockquote>${flag}${esc(row.quote)} ${show}</blockquote>
     ${open ? quoteContextHtml(row) : ''}`;
@@ -936,7 +938,7 @@ function agreementCard(a) {
       <span class="cact">${actions.join('')}</span>
     </div>
     ${a.note ? `<p class="tnote">${esc(a.note)}</p>` : ''}
-    <div class="tgroup">${a.claims.map(tensionClaimCard).join('')}</div>
+    <div class="tgroup">${a.claims.map((row) => tensionClaimCard(row, a.id)).join('')}</div>
     ${a.stale ? '<p class="stale">A claim here was edited or removed after this was found. Re-run Find agreements to re-judge it, or decide it yourself.</p>' : ''}
   </div>`;
 }
@@ -1000,7 +1002,10 @@ async function findAgreements() {
 // A claim as it appears inside a tension: the same card, minus the review and
 // edit controls. Editing belongs to the claims view, where the editor's
 // lifecycle is handled; a click on the citation goes there.
-function tensionClaimCard(row) {
+// `group` is the tension or agreement this drawing of the claim belongs to;
+// one claim can be in several, and a passage opens beside the one it was
+// asked for. See `claimCard`.
+function tensionClaimCard(row, group = '') {
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'}" data-tclaim="${esc(row.id)}">
@@ -1012,7 +1017,7 @@ function tensionClaimCard(row) {
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${quoteHtml(row)}
+    ${quoteHtml(row, group)}
   </div>`;
 }
 
@@ -1032,7 +1037,7 @@ function tensionCard(t) {
       ${topics}
       <span class="cact">${actions.join('')}</span>
     </div>
-    <div class="tpair">${t.claims.map(tensionClaimCard).join('')}</div>
+    <div class="tpair">${t.claims.map((row) => tensionClaimCard(row, t.id)).join('')}</div>
     ${t.note ? `<p class="tnote">${esc(t.note)}</p>` : ''}
     ${t.stale ? '<p class="stale">A claim here was edited after this was found. Re-run Find tensions to re-judge it, or decide it yourself.</p>' : ''}
   </div>`;
@@ -1374,7 +1379,6 @@ async function synthesize(topics, force = false) {
 }
 
 function renderContent() {
-  panesDrawn = new Set();   // one passage per claim per drawing; see `quoteHtml`
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (V.view === 'tensions') { renderTensions(); return; }
@@ -1383,7 +1387,7 @@ function renderContent() {
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const shown = new Set();
-  const card = (row) => claimCard(row, shown);
+  const card = (row, group = '') => claimCard(row, shown, group);
   const rows = visibleClaims();
   // An editor for a claim the current filters exclude cannot be drawn, and
   // leaving `V.editing` set would also stop background content updates, which
@@ -1447,11 +1451,11 @@ function renderContent() {
       html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span>${synthesizeButton(tag)}</h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
         + synthesisBlock(tag)
-        + group.map(card).join('') + '</div>';
+        + group.map((row) => card(row, tag)).join('') + '</div>';
     }
     if (untagged.length) {
       html += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
-        + untagged.map(card).join('') + '</div>';
+        + untagged.map((row) => card(row, 'untagged')).join('') + '</div>';
     }
   } else {
     html += rows.map(card).join('');
@@ -2352,13 +2356,13 @@ async function showSimilar(paper, claim) {
   renderContent();
 }
 
-async function showQuoteContext(paper, claim) {
+async function showQuoteContext(paper, claim, group = '') {
   // The pending request itself is what a late answer has to match, not the
   // claim id: claim ids are unique per corpus and not across workspaces, so
   // opening the same id in another workspace before the first read finishes
   // would otherwise be answered with the other corpus's passage — and "use
   // the paper's wording" would write it into this one.
-  const pending = { claim, paper, loading: true, error: null, data: null };
+  const pending = { claim, paper, group, loading: true, error: null, data: null };
   // Another claim's editor can be open on the same screen, holding text that
   // exists only in the DOM. Every redraw has to read it first or the passage
   // opening throws away what somebody was typing.
@@ -2369,11 +2373,11 @@ async function showQuoteContext(paper, claim) {
     const data = await api(
       `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/quote-context`);
     if (V.quoteContext === pending) {
-      V.quoteContext = { claim, paper, loading: false, error: null, data };
+      V.quoteContext = { claim, paper, group, loading: false, error: null, data };
     }
   } catch (error) {
     if (V.quoteContext === pending) {
-      V.quoteContext = { claim, paper, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
+      V.quoteContext = { claim, paper, group, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
     }
   }
   captureOpenEditor();   // an editor may have been opened while the PDF was read
@@ -2624,8 +2628,15 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'quote-context') {
-      if (V.quoteContext && V.quoteContext.claim === claim) { V.quoteContext = null; renderContent(); return; }
-      await showQuoteContext(paper, claim);
+      const group = button.dataset.group || '';
+      if (V.quoteContext && V.quoteContext.claim === claim
+          && (V.quoteContext.group || '') === group) {
+        V.quoteContext = null;
+        captureOpenEditor();
+        renderContent();
+        return;
+      }
+      await showQuoteContext(paper, claim, group);
       return;
     }
     if (act === 'use-wording') {

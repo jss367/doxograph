@@ -151,10 +151,15 @@ def paper_text(path: Path, cache: Path | None = None, guard=None) -> Text | None
     except OSError:
         return None
     identity = (st.st_size, st.st_mtime_ns, st.st_ino)
-    with _cache_lock:
-        hit = _cache.get(path)
-        if hit and hit[0] == identity:
-            return hit[1] if hit[1].squashed else None
+    # The stored text has to be there as well as the PDF unchanged. Deleting
+    # `text/<key>.txt` is how a corpus is told to read its papers again — the
+    # README says so — and a process that had already cached one in memory
+    # would otherwise go on answering from it and never write the file back.
+    if cache is None or cache.exists():
+        with _cache_lock:
+            hit = _cache.get(path)
+            if hit and hit[0] == identity:
+                return hit[1] if hit[1].squashed else None
     raw = _read_cached(cache, st.st_mtime_ns)
     if raw is None:
         with (guard or _unguarded)():

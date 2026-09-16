@@ -564,3 +564,20 @@ def test_a_coauthor_arriving_changes_the_heading_and_so_the_signature(monkeypatc
     store.save_paper({**paper, "authors": ["Jane Doe", "Ada Roe"]})
     assert "et al." in extract._tension_listing(store.claim_rows())
     assert extract.find_tensions("recovery-rate")["skipped"] is False
+
+
+def test_a_corrected_attribution_reaches_the_note(monkeypatch):
+    """The pass runs again when a paper's details change; the merge has to take
+    the answer, or the corrected note is thrown away and the signature cached."""
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "Doe (2026) sees recovery."}], calls)
+    extract.find_tensions("recovery-rate")
+    assert store.tension_rows()[0]["note"] == "Doe (2026) sees recovery."
+
+    paper = store.load_paper("doe2026recovery")
+    store.save_paper({**paper, "authors": ["Jane Doe", "Ada Roe"]})
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension",
+                                  "note": "Doe et al. (2026) see recovery."}], calls)
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert store.tension_rows()[0]["note"] == "Doe et al. (2026) see recovery."
