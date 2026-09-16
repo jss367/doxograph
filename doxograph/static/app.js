@@ -387,7 +387,15 @@ function currentHash() {
   return params.toString();
 }
 
+// Set while a popped entry is being restored. Everything between the pop and
+// the redraw — the workspace reset, its refresh, the render inside it — would
+// otherwise write the state it is passing through back into the URL being read
+// from, so an entry naming another workspace would lose its paper and filters
+// before `applyHash` ever saw them.
+let restoringHistory = false;
+
 function syncHash(push = false) {
+  if (restoringHistory) return;
   const next = currentHash();
   if (next === hashParams().toString()) return;
   const url = `${location.pathname}${location.search}#${next}`;
@@ -428,12 +436,19 @@ window.addEventListener('popstate', async () => {
   captureOpenEditor();
   parkSynthEditor();
   const wanted = hashParams().get('ws') || 'default';
-  if (wanted !== currentWorkspaceId && workspaces.some((w) => w.id === wanted)) {
+  restoringHistory = true;
+  try {
     // The workspace reset clears the filters; the URL being moved to puts back
     // whatever it holds, which is the whole point of going back to it.
-    await switchWorkspace(wanted, { fromHistory: true });
+    if (wanted !== currentWorkspaceId && workspaces.some((w) => w.id === wanted)) {
+      await switchWorkspace(wanted);
+    }
+    applyHash();
+  } finally {
+    restoringHistory = false;
   }
-  applyHash();
+  // Drawn outside the guard, so a switch the user cancelled at the unsaved-edits
+  // question leaves the URL saying what is actually on screen.
   renderAll();
 });
 
@@ -558,7 +573,7 @@ function resetWorkspaceView() {
   closePaperMenu();
 }
 
-async function switchWorkspace(workspaceId, { fromHistory = false } = {}) {
+async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId) return;
   if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
     toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
@@ -579,7 +594,7 @@ async function switchWorkspace(workspaceId, { fromHistory = false } = {}) {
   try { localStorage.setItem('doxograph-workspace', workspaceId); } catch (e) { /* optional */ }
   resetWorkspaceView();
   renderWorkspacePicker();
-  if (!fromHistory) syncHash(true);
+  syncHash(true);   // a no-op while a popped entry is being restored
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((kind) => `<option value="${esc(kind)}">${esc(kind)}</option>`).join('');
@@ -2325,12 +2340,18 @@ async function reviewWholePaper(paper) {
   });
 }
 
-// An open editor's draft holds the review flag as it was when the editor was
-// opened. Saving it afterwards would put the flag back, undoing the bulk
-// decision without anyone asking for that, so the drafts move with it.
+// An open editor holds the review flag as it was when the editor was opened.
+// Saving it afterwards would put the flag back, undoing the bulk decision
+// without anyone asking for that, so the flag moves with it.
+//
+// The form on screen is corrected as well as the stored draft: every redraw
+// reads the open form back first, so a draft corrected on its own is
+// overwritten from the stale checkbox before it is ever used.
 function syncDraftReviews(ids, reviewed) {
   ids.forEach((id) => {
     if (V.drafts[id]) V.drafts[id] = { ...V.drafts[id], reviewed };
+    const box = document.querySelector(`form[data-form="${CSS.escape(id)}"] [name="reviewed"]`);
+    if (box) box.checked = reviewed;
   });
 }
 

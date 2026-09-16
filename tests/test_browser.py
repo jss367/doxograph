@@ -1607,3 +1607,91 @@ def test_the_export_notice_opens_the_file_it_just_wrote():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_back_to_another_workspace_restores_that_entrys_paper_and_filters():
+    """The workspace reset passes through a default view on its way, and that
+    view must not be written into the URL being restored from."""
+    from doxograph import config
+
+    _paper("mind", "A consciousness paper", "qualia")
+    animal = config.create_workspace("Animal locomotion")
+    with config.use_workspace(animal["id"]):
+        _paper("gait", "An animal locomotion paper", "locomotion")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="mind"]').click()
+                await page.locator(".paperhead h2", has_text="A consciousness paper").wait_for()
+
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await page.locator('#papers [data-paper="gait"]').click()
+                await page.locator(".paperhead h2", has_text="An animal locomotion paper").wait_for()
+                assert f"ws={animal['id']}" in page.url and "paper=gait" in page.url
+
+                # One step back is within the workspace: its own entry, before
+                # any paper was opened.
+                await page.go_back()
+                await page.locator('#papers [data-paper=""].active').wait_for()
+                assert await page.locator("#workspace").input_value() == animal["id"]
+
+                # The next crosses the boundary, and that entry's paper comes
+                # back with it rather than being lost to the workspace reset.
+                await page.go_back()
+                await page.locator(".paperhead h2", has_text="A consciousness paper").wait_for()
+                assert await page.locator("#workspace").input_value() == "default"
+                assert "paper=mind" in page.url
+                assert "ws=" not in page.url
+
+                await page.go_forward()
+                await page.go_forward()
+                await page.locator(".paperhead h2", has_text="An animal locomotion paper").wait_for()
+                assert await page.locator("#workspace").input_value() == animal["id"]
+                assert "paper=gait" in page.url
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_bulk_review_reaches_a_claim_whose_editor_is_open():
+    """The open form is read back by every redraw, so a bulk review that only
+    corrected the stored draft would be undone by the next save."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
+                form = page.locator(f'form[data-form="{one}"]')
+                reviewed = form.locator('[name="reviewed"]')
+                await reviewed.wait_for()
+                assert not await reviewed.is_checked()
+                await form.locator('textarea[name="text"]').fill("One, reworded.")
+
+                await page.get_by_role("button", name="Mark 2 reviewed").click()
+                await page.locator("#toasts .toast", has_text="2 claims marked reviewed").wait_for()
+
+                # The editor is still open on the typed text, now ticked, and
+                # saving it does not put the review back.
+                assert await form.locator('textarea[name="text"]').input_value() == "One, reworded."
+                await reviewed.wait_for()
+                assert await reviewed.is_checked()
+                await form.get_by_role("button", name="Save").click()
+                await form.wait_for(state="detached")
+            await browser.close()
+
+    asyncio.run(scenario())
+    reviewed = _reviewed("doe2026study")
+    assert reviewed == {one: True, two: True}
+    text = {c["id"]: c["text"] for c in store.load_paper("doe2026study")["claims"]}
+    assert text[one] == "One, reworded."
