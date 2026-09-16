@@ -1402,3 +1402,38 @@ def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_passage_stands_aside_when_the_claim_changes_underneath_it():
+    """Another tab, or the CLI, can edit the claim while the pane is open. The
+    suggestion was worked out from the quote as it was, and offering to write
+    it back would undo that edit."""
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    claim = store.add_claim(key, {
+        "text": "Steered models recover.",
+        "quote": "Steering recovery is path dependant across all scales."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(".claim .qflag").wait_for()
+                await page.get_by_role("button", name="in the paper").click()
+                await page.locator(".qctx .qpassage").wait_for()
+
+                # Edited from outside this page entirely.
+                store.update_claim(key, claim["id"], {"quote": "Recovery under steering"})
+                await page.locator(".qctx", has_text="changed while the passage was open").wait_for()
+                assert await page.get_by_role("button", name="Use the paper's wording").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())

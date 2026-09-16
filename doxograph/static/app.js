@@ -700,6 +700,13 @@ function quoteContextHtml(row) {
   if (ctx.error) return `<div class="qctx"><span class="qflag">${esc(ctx.error)}</span></div>`;
   const found = ctx.data;
   if (!found.available) return `<div class="qctx">${esc(found.reason)}</div>`;
+  // The passage was worked out from the quote and locator the server held when
+  // it was asked. If they have moved since — another tab, another process, the
+  // CLI — it describes a claim that is no longer there, and offering to write
+  // its suggestion back would undo that edit.
+  if (found.quote !== row.quote || (found.locator || '') !== (row.locator || '')) {
+    return '<div class="qctx">This claim changed while the passage was open. Open it again.</div>';
+  }
   if (!found.suggestion) {
     return '<div class="qctx">No passage in this PDF resembles this quote.</div>';
   }
