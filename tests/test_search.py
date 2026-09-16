@@ -251,3 +251,14 @@ def test_the_folded_text_is_kept_to_a_size_not_a_count(monkeypatch):
     assert search._texts_size <= 400
     assert len(search._texts) < 3
     assert store.text_path("one").exists()      # dropped from memory, not from disk
+
+
+def test_a_paper_without_spaces_is_measured_by_its_characters():
+    """`\\w+` over unspaced text finds one word however long the paper is, so
+    every Chinese paper would be the same length and none discounted."""
+    filler = "能力很强。"                      # says nothing about 模型
+    assert search._length(filler * 50) > search._length(filler)
+    a_paper_of("brief", f"语言模型的{filler}")
+    a_paper_of("long", f"语言模型的{filler * 200}")
+    # One mention each: the brief one spends a larger part of itself on it.
+    assert [hit["key"] for hit in search.search_papers("模型")] == ["brief", "long"]
