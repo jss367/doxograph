@@ -365,6 +365,10 @@ function queryMatcher() {
     return phrase;
   }
   const patterns = queryPatterns(query);
+  // A query of punctuation alone has no words to look for, and `every` over
+  // nothing is true: it would show the whole corpus for a query the phrase
+  // pass has already failed to find. Nothing matches it.
+  if (!patterns.length) return () => false;
   return (text) => patterns.every((pattern) => pattern.test(text));
 }
 
