@@ -177,6 +177,9 @@ function applySavingState() {
   });
 }
 
+// The claims whose passage has been drawn on this pass; see `quoteHtml`.
+let panesDrawn = new Set();
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -681,7 +684,12 @@ function quoteHtml(row) {
   const flag = row.quote_verified === false
     ? '<span class="qflag" title="This quote was not found in the PDF text. Check it against the paper.">not found in PDF</span> '
     : '';
-  const open = V.quoteContext && V.quoteContext.claim === row.id;
+  // Under one copy of the claim, the first drawn. Grouped by topic a claim
+  // with several tags is drawn under each of them, and in the tensions view
+  // it appears in every pair it is part of; opening the passage under all of
+  // them would put the same replacement button on screen several times.
+  const open = V.quoteContext && V.quoteContext.claim === row.id && !panesDrawn.has(row.id);
+  if (open) panesDrawn.add(row.id);
   const show = `<button type="button" class="qshow" data-act="quote-context"
     data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
     title="Read this quote where it sits in the PDF">${open ? 'hide the paper' : 'in the paper'}</button>`;
@@ -1210,6 +1218,7 @@ async function synthesize(topics) {
 }
 
 function renderContent() {
+  panesDrawn = new Set();   // one passage per claim per drawing; see `quoteHtml`
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (V.view === 'tensions') { renderTensions(); return; }

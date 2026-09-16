@@ -1515,3 +1515,34 @@ def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
     asyncio.run(scenario())
 
     assert store.load_paper(key)["claims"][0]["quote"] == "Recovery under steering"
+
+
+@pytest.mark.browser
+def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
+    from pdfs import minimal_pdf
+
+    key = "roe2026steering"
+    store.save_paper(store.new_paper(key, title="Steering and recovery", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    store.add_claim(key, {"text": "Steered models recover.", "reviewed": True,
+                          "tags": ["activation-steering", "recovery-rate"],
+                          "quote": "Recovery under steering"})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                # Grouped by topic, the claim is drawn under both of its tags.
+                await page.locator(".claim").first.wait_for()
+                assert await page.locator(".claim").count() == 2
+
+                await page.get_by_role("button", name="in the paper").first.click()
+                await page.locator(".qctx .qpassage").wait_for()
+                assert await page.locator(".qctx").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
