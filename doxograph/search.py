@@ -110,19 +110,33 @@ def fold_with_offsets(text: str) -> tuple[str, array.array]:
 
 
 def _stored(key: str):
-    """The file holding a paper's text and its identity, extracting it if this
-    is the first time anything has asked. None when there is no text to read."""
+    """The file holding a paper's text and its identity, reading the PDF when
+    there is no text or the text is older than it. None when there is nothing
+    to read.
+
+    The age check is the one `quotes.paper_text` makes, and it is repeated
+    here because a text file can outlive the PDF it came from: a paper
+    replaced or restored by hand leaves the old text in place, and a search
+    would go on answering out of the paper that used to be there.
+    """
     path = store.text_path(key)
+    stored = None
     try:
-        return path, path.stat()
+        stored = path.stat()
     except OSError:
         pass
-    if quotes.paper_text(store.pdf_path(key), path, lambda: store.paper_lock(key)) is None:
-        return None
     try:
-        return path, path.stat()
+        fresh = stored is not None and stored.st_mtime_ns > store.pdf_path(key).stat().st_mtime_ns
     except OSError:
-        return None
+        fresh = stored is not None      # no PDF for it to be older than
+    if not fresh:
+        if quotes.paper_text(store.pdf_path(key), path, lambda: store.paper_lock(key)) is None:
+            return None
+        try:
+            stored = path.stat()
+        except OSError:
+            return None
+    return path, stored
 
 
 def paper_text(key: str) -> str | None:
