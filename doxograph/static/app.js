@@ -176,6 +176,267 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// --- notices and dialogs --------------------------------------------------
+//
+// Native alert, confirm and prompt block the page, cannot be styled, and hold
+// the whole app still while they are up. They also cannot offer anything but
+// OK and Cancel, which rules out the one answer a delete wants: Undo. What the
+// app has to say goes through a notice; what it has to ask goes through one
+// dialog, reused.
+
+function toast(message, { actions = [], timeout = 6000, tone = '', onExpire = null } = {}) {
+  const el = document.createElement('div');
+  el.className = tone ? `toast ${tone}` : 'toast';
+  const text = document.createElement('span');
+  text.className = 'msg';
+  text.textContent = message;
+  el.appendChild(text);
+  let timer = null;
+  const handle = {
+    // `expired` separates running out of being dismissed by an action. A
+    // delete's notice commits the delete on the way out, and Undo is the one
+    // way of closing it that must not.
+    close(expired = false) {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      el.remove();
+      if (expired && onExpire) onExpire();
+    },
+  };
+  actions.forEach((action) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = action.label;
+    button.addEventListener('click', () => { handle.close(); action.onClick(); });
+    el.appendChild(button);
+  });
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'icon-button';
+  dismiss.textContent = '×';
+  dismiss.setAttribute('aria-label', `Dismiss: ${message}`);
+  dismiss.addEventListener('click', () => handle.close(true));
+  el.appendChild(dismiss);
+  if (timeout) timer = setTimeout(() => handle.close(true), timeout);
+  $('toasts').appendChild(el);
+  return handle;
+}
+
+let askResolve = null;
+
+function askDialog({ title, note = '', input = null, ok = 'OK', cancel = 'Cancel' }) {
+  const dialog = $('ask');
+  $('ask-title').textContent = title;
+  $('ask-note').textContent = note;
+  $('ask-note').hidden = !note;
+  const field = $('ask-input');
+  field.hidden = input === null;
+  field.value = input ? (input.value || '') : '';
+  field.placeholder = input ? (input.placeholder || '') : '';
+  $('ask-ok').textContent = ok;
+  $('ask-cancel').textContent = cancel;
+  dialog.showModal();
+  if (input) { field.focus(); field.select(); } else $('ask-ok').focus();
+  return new Promise((resolve) => { askResolve = resolve; });
+}
+
+// Every way out of the dialog lands here. The pending promise is taken first,
+// so closing the element does not settle it a second time with a cancel.
+function settleAsk(value) {
+  const resolve = askResolve;
+  askResolve = null;
+  if ($('ask').open) $('ask').close();
+  if (resolve) resolve(value);
+}
+
+$('ask-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  settleAsk($('ask-input').hidden ? true : $('ask-input').value);
+});
+$('ask-cancel').addEventListener('click', () => settleAsk(null));
+$('ask').addEventListener('cancel', () => settleAsk(null));   // Escape
+$('ask').addEventListener('close', () => settleAsk(null));
+
+const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
+  askDialog({ title, note, ok }).then((answer) => answer === true);
+const askText = (title, { note = '', placeholder = '', value = '' } = {}) =>
+  askDialog({ title, note, input: { placeholder, value } });
+
+// --- deletions, undone by not sending them --------------------------------
+//
+// A delete waits out its notice before it is sent, so Undo is simply not
+// sending it. Deleting at once and recreating on Undo would hand back a
+// different claim: a new id, and the tensions, agreements and syntheses that
+// cite the old one gone for good. Until it is sent, the row is kept out of
+// what the page draws, so the wait is invisible.
+const UNDO_MS = 8000;
+const trash = new Map();   // "kind:id" -> the request that is waiting
+
+function trashed(kind, id) {
+  return trash.has(`${kind}:${id}`);
+}
+
+// `pruneTrashed` takes rows out of the state the page is holding, so that
+// state no longer matches the tag the server gave it. Undoing a delete the
+// server never heard about changes nothing on its side, and the next poll
+// would be answered "not modified" and leave the row missing for good.
+function forgetStateTag() {
+  stateEtag = null;
+}
+
+// Takes the waiting rows out of `S`. Called wherever `S` is replaced, and
+// written to be safe to run twice on the same state: the per-paper counts are
+// recounted from the claims that are left rather than decremented.
+function pruneTrashed() {
+  if (!trash.size) return;
+  const kept = (S.claims || []).filter((row) => !trashed('claim', row.id));
+  if (kept.length !== (S.claims || []).length) {
+    S.claims = kept;
+    const counts = new Map();
+    kept.forEach((row) => {
+      const count = counts.get(row.paper) || { claims: 0, unreviewed: 0 };
+      count.claims += 1;
+      if (!row.reviewed) count.unreviewed += 1;
+      counts.set(row.paper, count);
+    });
+    (S.papers || []).forEach((paper) => {
+      const count = counts.get(paper.key) || { claims: 0, unreviewed: 0 };
+      paper.n_claims = count.claims;
+      paper.n_unreviewed = count.unreviewed;
+    });
+  }
+  S.agreements = (S.agreements || []).filter((row) => !trashed('agreement', row.id));
+  S.syntheses = (S.syntheses || []).filter((row) => !trashed('synthesis', row.topic));
+}
+
+async function deleteLater(kind, id, path, label) {
+  const token = `${kind}:${id}`;
+  if (trash.has(token)) return;
+  let notice = null;
+  const send = async () => {
+    if (!trash.has(token)) return;   // already sent, or already undone
+    if (notice) notice.close();
+    try {
+      await api(path, { method: 'DELETE' });
+    } catch (error) {
+      toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
+    } finally {
+      // Held until the request settles, so the row does not flash back on
+      // screen between the notice fading and the server answering.
+      trash.delete(token);
+      forgetStateTag();
+    }
+    await refreshAll();
+  };
+  trash.set(token, { path, send });
+  forgetStateTag();
+  pruneTrashed();
+  await refreshAll();
+  notice = toast(`Deleted ${label}.`, {
+    timeout: UNDO_MS,
+    onExpire: send,
+    actions: [{
+      label: 'Undo',
+      onClick: async () => { trash.delete(token); forgetStateTag(); await refreshAll(); },
+    }],
+  });
+}
+
+// A delete belongs to the workspace it was made in, so leaving one sends what
+// is still waiting rather than carrying it across, where the same claim id can
+// name a different claim.
+async function flushTrash() {
+  await Promise.all([...trash.values()].map((entry) => entry.send()));
+}
+
+// A tab closed while a delete is still waiting sends it now rather than
+// silently dropping it: the row is already gone from the page, and coming back
+// to find it restored would be the app forgetting what it was told.
+window.addEventListener('pagehide', () => {
+  trash.forEach((entry) => {
+    const headers = { 'X-Doxograph-Workspace': currentWorkspaceId || 'default' };
+    try { fetch(entry.path, { method: 'DELETE', headers, keepalive: true }); } catch (e) { /* leaving anyway */ }
+  });
+  trash.clear();
+});
+
+// --- the URL says what is on screen ---------------------------------------
+//
+// Without this a reload lands back on the whole corpus, Back leaves the app,
+// and there is no way to hand someone a link to one topic. Navigation pushes a
+// history entry; a filter or a selection replaces one, so Back does not have to
+// walk through every keystroke.
+const HASH_VIEWS = ['claims', 'tensions', 'agreements', 'research', 'graph'];
+
+function hashParams() {
+  return new URLSearchParams((location.hash || '').replace(/^#/, ''));
+}
+
+function currentHash() {
+  const params = new URLSearchParams();
+  if (currentWorkspaceId && currentWorkspaceId !== 'default') params.set('ws', currentWorkspaceId);
+  if (V.view !== 'claims') params.set('view', V.view);
+  if (V.paper) params.set('paper', V.paper);
+  if (V.tag) params.set('tag', V.tag);
+  if (V.q.trim()) params.set('q', V.q);
+  if (V.kind) params.set('kind', V.kind);
+  if (V.unreviewed) params.set('unreviewed', '1');
+  if (V.unverified) params.set('unverified', '1');
+  if (!V.group) params.set('group', '0');
+  if (V.view === 'claims' && V.selectedId) params.set('sel', V.selectedId);
+  return params.toString();
+}
+
+function syncHash(push = false) {
+  const next = currentHash();
+  if (next === hashParams().toString()) return;
+  const url = `${location.pathname}${location.search}#${next}`;
+  if (push) history.pushState(null, '', url);
+  else history.replaceState(null, '', url);
+}
+
+// Sets the view from the URL without drawing it. The controls are set here too:
+// they are the same state, and a filter the page has forgotten to tick is worse
+// than no filter at all.
+function applyHash() {
+  const params = hashParams();
+  const view = params.get('view') || 'claims';
+  V.view = HASH_VIEWS.includes(view) ? view : 'claims';
+  V.paper = params.get('paper') || null;
+  V.tag = params.get('tag') || null;
+  V.q = params.get('q') || '';
+  V.kind = params.get('kind') || '';
+  V.unreviewed = params.get('unreviewed') === '1';
+  V.unverified = params.get('unverified') === '1';
+  V.group = params.get('group') !== '0';
+  V.selectedId = params.get('sel') || null;
+  V.editing = null;
+  V.tensionFocus = null;
+  V.agreementFocus = null;
+  $('q').value = V.q;
+  $('kind').value = V.kind;
+  $('only-unreviewed').checked = V.unreviewed;
+  $('only-unverified').checked = V.unverified;
+  $('group-by-tag').checked = V.group;
+}
+
+window.addEventListener('popstate', async () => {
+  // Moving through history is a view change like any other, and the editors
+  // keep their text across it: `applyHash` writes straight to `V`, so the
+  // bookkeeping `showView` would have done is done here.
+  if (V.view === 'research') captureResearchDraft();
+  captureOpenEditor();
+  parkSynthEditor();
+  const wanted = hashParams().get('ws') || 'default';
+  if (wanted !== currentWorkspaceId && workspaces.some((w) => w.id === wanted)) {
+    // The workspace reset clears the filters; the URL being moved to puts back
+    // whatever it holds, which is the whole point of going back to it.
+    await switchWorkspace(wanted, { fromHistory: true });
+  }
+  applyHash();
+  renderAll();
+});
+
 async function api(path, options = {}) {
   const request = { ...options };
   const headers = new Headers(request.headers || {});
@@ -237,6 +498,7 @@ async function pull() {
   } else {
     S.jobs = jobs;
   }
+  pruneTrashed();   // a delete that has not been sent yet is already gone here
   return Boolean(next);
 }
 
@@ -296,25 +558,28 @@ function resetWorkspaceView() {
   closePaperMenu();
 }
 
-async function switchWorkspace(workspaceId) {
+async function switchWorkspace(workspaceId, { fromHistory = false } = {}) {
   if (workspaceId === currentWorkspaceId) return;
   if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
-    alert('Wait for the current change to finish before switching workspaces.');
+    toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
     renderWorkspacePicker();
     return;
   }
   const hasDraft = V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || researchFormDirty();
-  if (hasDraft && !confirm('Switch workspaces and discard unsaved edits in this workspace?')) {
+  if (hasDraft && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
+                                       { ok: 'Discard and switch' })) {
     renderWorkspacePicker();
     return;
   }
+  await flushTrash();
   currentWorkspaceId = workspaceId;
   stateEtag = null;   // the tag belongs to the other workspace's corpus
   try { localStorage.setItem('doxograph-workspace', workspaceId); } catch (e) { /* optional */ }
   resetWorkspaceView();
   renderWorkspacePicker();
+  if (!fromHistory) syncHash(true);
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((kind) => `<option value="${esc(kind)}">${esc(kind)}</option>`).join('');
@@ -326,8 +591,11 @@ async function loadWorkspaces() {
   workspaces = (await response.json()).workspaces || [];
   let remembered = null;
   try { remembered = localStorage.getItem('doxograph-workspace'); } catch (e) { /* optional */ }
-  currentWorkspaceId = workspaces.some((workspace) => workspace.id === remembered)
-    ? remembered : 'default';
+  // A link that names a workspace wins over the one this browser was last on:
+  // landing where the link points is the whole of what it is for.
+  const wanted = hashParams().get('ws') || remembered;
+  currentWorkspaceId = workspaces.some((workspace) => workspace.id === wanted) ? wanted : 'default';
+  try { localStorage.setItem('doxograph-workspace', currentWorkspaceId); } catch (e) { /* optional */ }
   renderWorkspacePicker();
 }
 
@@ -408,6 +676,7 @@ function renderAll() {
   renderContent();
   renderJobs();
   syncAnalysisControls();
+  syncHash();
 }
 
 function renderStats() {
@@ -494,6 +763,8 @@ function renderPapers() {
       <span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
         ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
+      <button type="button" class="pmenu" data-menu="${esc(p.key)}"
+        aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
 }
 
@@ -575,6 +846,8 @@ function paperHeader(key) {
       <button type="button" data-act="reextract" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Re-read paper</button>
       <button type="button" data-act="retag-one" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Retag claims</button>
       ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
+      ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
+        title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
@@ -652,6 +925,7 @@ function claimCard(row, shown) {
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer"
         title="${esc(row.paper_title || row.paper)}">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
+      ${claimPdfLink(row)}
       ${tensionMarker(row.id)}
       ${agreementMarker(row.id)}
       <span class="cact">
@@ -667,6 +941,25 @@ function claimCard(row, shown) {
   </div>`;
 }
 
+// Checking a quote means reading the paper, so the paper is one click from the
+// claim, at the page its locator names when it names one.
+function claimPdfLink(row) {
+  const paper = S.papers.find((p) => p.key === row.paper);
+  if (!paper || !paper.has_pdf) return '';
+  const page = pdfPage(row.locator);
+  const href = `/pdf/${encodeURIComponent(row.paper)}?${workspaceQuery()}&inline=1${page ? `#page=${page}` : ''}`;
+  return `<a class="pdflink" href="${esc(href)}" target="_blank" rel="noopener"
+    title="${page ? `Open the PDF at page ${page}` : 'Open the PDF'}">PDF${page ? ' p.' + esc(page) : ''}</a>`;
+}
+
+// 'p. 4' and 'pp. 4-5' name a page. 'Table 2' and 'Sec. 3.1' do not, and a
+// section number followed as a page number would land the reader somewhere
+// else in the paper with nothing to say it had gone wrong.
+function pdfPage(locator) {
+  const match = /(?:^|[^a-z])p{1,2}\.?\s*(\d{1,4})|(?:^|[^a-z])pages?\s*(\d{1,4})/i.exec(locator || '');
+  return match ? (match[1] || match[2]) : null;
+}
+
 // The quote, flagged when it was not found in the paper's text. A quote the
 // model paraphrased or invented is the commonest extraction error, and this is
 // the one error the machine can catch on its own.
@@ -675,7 +968,9 @@ function quoteHtml(row) {
   const flag = row.quote_verified === false
     ? '<span class="qflag" title="This quote was not found in the PDF text. Check it against the paper.">not found in PDF</span> '
     : '';
-  return `<blockquote>${flag}${esc(row.quote)}</blockquote>`;
+  return `<blockquote>${flag}${esc(row.quote)}
+    <button type="button" class="copy" data-act="copy-quote" data-claim="${esc(row.id)}"
+      title="Copy the quote">copy</button></blockquote>`;
 }
 
 function tensionMarker(claimId) {
@@ -1147,7 +1442,15 @@ async function synthesize(topics) {
   if (V.error) renderContent();
 }
 
+// Every path through the draw settles `V` first — the fallback selection, the
+// parked editors — so the URL is written once the drawing is done rather than
+// once per branch.
 function renderContent() {
+  drawContent();
+  syncHash();
+}
+
+function drawContent() {
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (V.view === 'tensions') { renderTensions(); return; }
@@ -1253,7 +1556,7 @@ $('jobs').addEventListener('click', async (event) => {
     await refresh();
   } catch (error) {
     button.disabled = false;
-    alert(`Could not dismiss notification: ${error.message}`);
+    toast(`Could not dismiss notification: ${error.message}`, { tone: 'warn' });
   }
 });
 
@@ -1853,6 +2156,7 @@ function renderGraph() {
 $('graph-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('graph');
+  syncHash(true);
   renderAll();
 });
 
@@ -1980,6 +2284,56 @@ async function toggleReviewed(row) {
   if (stillOpen) renderContent();
 }
 
+// Reviewing is the app's main work and a paper arrives with a dozen claims at
+// once, so it is worth one request and one undo rather than a dozen clicks.
+// The undo unreviews only what this actually changed: a claim reviewed
+// earlier is not part of the decision being taken back.
+async function reviewWholePaper(paper) {
+  captureOpenEditor();
+  V.error = null;
+  let changed = [];
+  try {
+    const result = await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewed: true }),
+    });
+    changed = result.changed || [];
+  } catch (error) {
+    V.error = `Could not mark the claims reviewed: ${error.message}`;
+    renderContent();
+    return;
+  }
+  syncDraftReviews(changed, true);
+  await refreshAll();
+  if (!changed.length) return;
+  toast(`${changed.length} ${changed.length === 1 ? 'claim' : 'claims'} marked reviewed.`, {
+    actions: [{
+      label: 'Undo',
+      onClick: async () => {
+        try {
+          await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reviewed: false, claims: changed }),
+          });
+          syncDraftReviews(changed, false);
+        } catch (error) {
+          toast(`Could not undo: ${error.message}`, { tone: 'warn' });
+        }
+        await refreshAll();
+      },
+    }],
+  });
+}
+
+// An open editor's draft holds the review flag as it was when the editor was
+// opened. Saving it afterwards would put the flag back, undoing the bulk
+// decision without anyone asking for that, so the drafts move with it.
+function syncDraftReviews(ids, reviewed) {
+  ids.forEach((id) => {
+    if (V.drafts[id]) V.drafts[id] = { ...V.drafts[id], reviewed };
+  });
+}
+
 async function patchClaim(paper, claim, patch) {
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
@@ -2104,7 +2458,13 @@ async function saveClaim(wrap, patch) {
 // the paper list, so the menu can remove a paper that is not the one on screen.
 async function removePaper(paper) {
   const p = S.papers.find((x) => x.key === paper);
-  if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
+  // The one delete with no undo: a removed paper's key is retired for good, so
+  // adding it again would make a different paper. Hence a question first.
+  const go = await confirmDialog(`Remove ${p ? p.title || paper : paper} and its claims?`, {
+    note: 'The PDF and every claim on it go with it, and the key is never reissued.',
+    ok: 'Remove',
+  });
+  if (!go) return;
   await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
   // Close an editor that belonged to the deleted paper, so its form is not
   // captured as a draft for a claim that no longer exists. An editor on some
@@ -2174,10 +2534,16 @@ $('content').addEventListener('click', async (event) => {
       await toggleReviewed(S.claims.find((c) => c.id === claim));
       return;
     }
+    if (act === 'copy-quote') {
+      const row = S.claims.find((c) => c.id === claim);
+      if (row) await copyText(row.quote, 'Quote copied.');
+      return;
+    }
+    if (act === 'review-all') {
+      await reviewWholePaper(paper);
+      return;
+    }
     if (act === 'del') {
-      if (!confirm('Delete this claim?')) return;
-      await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
-                { method: 'DELETE' });
       // In grouped mode the same claim can be an editor in one topic group and
       // a plain card with a Delete button in another. Leaving `V.editing` set
       // would keep the deleted claim's form on screen, because `render()` skips
@@ -2185,10 +2551,11 @@ $('content').addEventListener('click', async (event) => {
       delete V.drafts[claim];
       if (V.editing === claim) { V.editing = null; V.error = null; }
       if (V.selectedId === claim) V.selectedId = null;
-      // Deleting any claim changes the list, including when the open editor
-      // belongs to a different one; without a content rebuild the deleted card
-      // stays visible and clickable and the next action on it 404s.
-      await refreshAll();
+      // `deleteLater` rebuilds the list: without it the deleted card stays
+      // visible and clickable even when the open editor is a different claim's.
+      await deleteLater('claim', claim,
+                        `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
+                        'the claim');
       return;
     }
     if (act === 'open-paper') {
@@ -2196,6 +2563,7 @@ $('content').addEventListener('click', async (event) => {
       closeEditorsNotBelongingTo(paper);
       showView('claims');
       V.paper = paper; V.tag = null; V.selectedId = null;
+      syncHash(true);
       renderAll();
       return;
     }
@@ -2203,6 +2571,7 @@ $('content').addEventListener('click', async (event) => {
       showView('tensions');
       V.tensionFocus = claim;
       V.tensionStatus = '';
+      syncHash(true);
       renderAll();
       return;
     }
@@ -2228,6 +2597,7 @@ $('content').addEventListener('click', async (event) => {
       showView('agreements');
       V.agreementFocus = claim;
       V.agreementStatus = '';
+      syncHash(true);
       renderAll();
       return;
     }
@@ -2246,9 +2616,8 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'agreement-delete') {
-      if (!confirm('Delete this agreement?')) return;
-      await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, { method: 'DELETE' });
-      await refreshAll();
+      const id = button.dataset.agreement;
+      await deleteLater('agreement', id, `/api/agreements/${encodeURIComponent(id)}`, 'the agreement');
       return;
     }
     if (act === 'find-agreements') { await findAgreements(); return; }
@@ -2298,9 +2667,12 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'del-synth') {
-      if (!confirm('Delete this synthesis?')) return;
-      await api(`/api/syntheses/${encodeURIComponent(button.dataset.topic)}`, { method: 'DELETE' });
-      await refreshAll();
+      const topic = button.dataset.topic;
+      // A draft for the topic would otherwise be put straight back by Undo's
+      // redraw into an editor for a synthesis that is on its way out.
+      if (V.synthEditing === topic) V.synthEditing = null;
+      await deleteLater('synthesis', topic, `/api/syntheses/${encodeURIComponent(topic)}`,
+                        `the synthesis of #${topic}`);
       return;
     }
     if (act === 'goto-claim') {
@@ -2318,6 +2690,7 @@ $('content').addEventListener('click', async (event) => {
         if (V.q.trim() && !haystack(row).includes(V.q.trim().toLowerCase())) { V.q = ''; $('q').value = ''; }
       }
       V.selectedId = claim;
+      syncHash(true);
       renderAll();   // a cleared topic or paper filter changes the sidebar too
       scrollToSelected();
       return;
@@ -2394,6 +2767,7 @@ $('content').addEventListener('click', async (event) => {
   const tagEl = event.target.closest('[data-tag]');
   if (tagEl && !tagEl.dataset.act) {
     V.tag = V.tag === tagEl.dataset.tag ? null : tagEl.dataset.tag;
+    syncHash(true);
     renderAll();
     return;
   }
@@ -2408,6 +2782,13 @@ $('content').addEventListener('click', async (event) => {
 });
 
 $('papers').addEventListener('click', (event) => {
+  // The same menu the right-click opens, for the people who never try one.
+  const menuButton = event.target.closest('[data-menu]');
+  if (menuButton) {
+    const box = menuButton.getBoundingClientRect();
+    openPaperMenu(menuButton.dataset.menu, box.left, box.bottom + 4);
+    return;
+  }
   const li = event.target.closest('[data-paper]');
   if (!li) return;
   const next = li.dataset.paper || null;
@@ -2415,7 +2796,7 @@ $('papers').addEventListener('click', (event) => {
   // whole abandon path anyway, which threw away a new claim being written.
   // From the tensions view it is navigation: back to that paper's claims.
   if (next === V.paper && V.view === 'claims') return;
-  if (next === V.paper) { showView('claims'); renderAll(); return; }
+  if (next === V.paper) { showView('claims'); syncHash(true); renderAll(); return; }
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
   // that one was never persisted and belongs to the paper being left. A
   // synthesis being edited is parked too: `render` skips the list while one
@@ -2427,18 +2808,21 @@ $('papers').addEventListener('click', (event) => {
   V.paper = next;
   V.selectedId = null;
   V.editing = null;
+  syncHash(true);   // going to a paper is navigation: Back comes back here
   render();   // the editors are closed here, so render redraws the list anyway
 });
 
 $('tensions-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('tensions');
+  syncHash(true);
   renderAll();
 });
 
 $('agreements-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('agreements');
+  syncHash(true);
   renderAll();
 });
 
@@ -2454,6 +2838,7 @@ $('research-nav').addEventListener('click', (event) => {
   // rebuild the form from `S` and throw away whatever has been typed into it.
   if (V.view === 'research') return;
   showView('research');
+  syncHash(true);
   renderAll();
 });
 
@@ -2574,6 +2959,7 @@ function openPaperMenu(paper, x, y) {
   const menu = $('ctxmenu');
   menu.innerHTML = `
     <li class="mh">${esc(p ? p.title || paper : paper)}</li>
+    ${p && p.has_pdf ? `<li><button type="button" data-act="open-pdf" data-paper="${esc(paper)}">Open the PDF</button></li>` : ''}
     <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
   menu.hidden = false;
   // Measure after showing, then keep the whole menu inside the window.
@@ -2597,7 +2983,11 @@ $('ctxmenu').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
   if (!button) return;
   closePaperMenu();
-  if (button.dataset.act === 'del-paper') await removePaper(button.dataset.paper);
+  const paper = button.dataset.paper;
+  if (button.dataset.act === 'del-paper') await removePaper(paper);
+  if (button.dataset.act === 'open-pdf') {
+    window.open(`/pdf/${encodeURIComponent(paper)}?${workspaceQuery()}&inline=1`, '_blank');
+  }
 });
 
 // A press anywhere outside the menu dismisses it. Right-clicking another paper
@@ -2614,13 +3004,17 @@ $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
   if (!li) return;
   V.tag = V.tag === li.dataset.tag ? null : li.dataset.tag;
+  syncHash(true);
   renderAll();
 });
 
 $('workspace').addEventListener('change', (event) => switchWorkspace(event.target.value));
 
 $('btn-workspace-add').addEventListener('click', async () => {
-  const name = prompt('Name this workspace (for example, Consciousness or Animal locomotion):');
+  const name = await askText('Name this workspace', {
+    note: 'A workspace is an independent corpus: its own papers, topics, and exports.',
+    placeholder: 'Consciousness, or Animal locomotion',
+  });
   if (!name || !name.trim()) return;
   try {
     const result = await api('/api/workspaces', {
@@ -2631,22 +3025,52 @@ $('btn-workspace-add').addEventListener('click', async () => {
     renderWorkspacePicker();
     await switchWorkspace(result.workspace.id);
   } catch (error) {
-    alert(`Could not create workspace: ${error.message}`);
+    toast(`Could not create workspace: ${error.message}`, { tone: 'warn' });
   }
 });
 
-$('btn-add').addEventListener('click', async () => {
+async function addReferences() {
   const text = $('refs').value.trim();
   if (!text) return;
-  const result = await api('/api/ingest', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, extract: $('auto-extract').checked }),
-  });
-  $('refs').value = (result.unknown || []).join('\n');
-  if (result.unknown && result.unknown.length) {
-    alert(`Could not read ${result.unknown.length} reference(s); they are still in the box.`);
+  let result;
+  try {
+    result = await api('/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, extract: $('auto-extract').checked }),
+    });
+  } catch (error) {
+    // What was pasted stays in the box either way: a refused request is a
+    // reason to try again, not a reason to lose the list.
+    toast(`Could not add these references: ${error.message}`, { tone: 'warn' });
+    return;
   }
+  const unknown = result.unknown || [];
+  $('refs').value = unknown.join('\n');
+  // Which lines failed, not how many: a count leaves the reader to work out
+  // for themselves which of what they pasted is the problem.
+  showRefWarning(unknown);
   await refresh();
+}
+
+function showRefWarning(unknown) {
+  const warning = $('ref-warn');
+  warning.hidden = !unknown.length;
+  if (!unknown.length) return;
+  const shown = unknown.slice(0, 3).map((line) => `“${line}”`).join(', ');
+  const rest = unknown.length > 3 ? `, and ${unknown.length - 3} more` : '';
+  warning.textContent = `Nothing identifies ${shown}${rest}. `
+    + 'They are still in the box; paste an arXiv ID, a DOI, or a direct PDF link.';
+}
+
+$('btn-add').addEventListener('click', addReferences);
+
+// The box is where references are typed, so it takes the usual way of saying
+// "done": the button is a long way from the cursor otherwise.
+$('refs').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    addReferences();
+  }
 });
 
 $('btn-tag').addEventListener('click', async () => {
@@ -2661,7 +3085,12 @@ $('btn-tag').addEventListener('click', async () => {
 });
 
 $('btn-retag').addEventListener('click', async () => {
-  if (!confirm('Reassign topics on every paper against the current vocabulary?')) return;
+  const go = await confirmDialog('Reassign topics on every paper?', {
+    note: 'Every paper with claims is sent to the model again against the current vocabulary. '
+      + 'Claim text you have edited is left alone.',
+    ok: 'Retag all',
+  });
+  if (!go) return;
   await api('/api/retag', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
@@ -2670,12 +3099,35 @@ $('btn-retag').addEventListener('click', async () => {
 
 $('btn-export').addEventListener('click', async () => {
   const selected = currentWorkspace();
-  const result = await api('/api/export', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: selected ? selected.name : 'Doxograph' }),
+  let result;
+  try {
+    result = await api('/api/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: selected ? selected.name : 'Doxograph' }),
+    });
+  } catch (error) {
+    toast(`Could not export: ${error.message}`, { tone: 'warn' });
+    return;
+  }
+  // The path on its own is something to go and find. What the reader wants is
+  // the file, or the path where they can paste it.
+  toast(`Exported to ${result.path}`, {
+    timeout: 12000,
+    actions: [
+      { label: 'Open', onClick: () => window.open(`/export?${workspaceQuery()}`, '_blank') },
+      { label: 'Copy path', onClick: () => copyText(result.path, 'Path copied.') },
+    ],
   });
-  alert(`Written to ${result.path}`);
 });
+
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(done, { timeout: 2500 });
+  } catch (error) {
+    toast(`Could not copy: ${error.message}`, { tone: 'warn' });
+  }
+}
 
 $('btn-bib').addEventListener('click', () => window.open(`/api/bibtex?${workspaceQuery()}`, '_blank'));
 
@@ -2704,12 +3156,18 @@ function graphOption(field) {
   }
   if (V.view === 'graph') renderGraph();
 }
-$('q').addEventListener('input', (e) => {
+function applyQuery(value) {
   captureOpenEditor();
-  V.q = e.target.value;
+  V.q = value;
   renderPapers();   // the query filters the paper list as well as the claims
   renderContent();
-});
+}
+
+function clearQuery() {
+  applyQuery('');
+}
+
+$('q').addEventListener('input', (e) => applyQuery(e.target.value));
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
 $('paper-sort').addEventListener('change', (e) => {
   V.paperSort = PAPER_SORTS.includes(e.target.value) ? e.target.value : PAPER_SORTS[0];
@@ -2737,7 +3195,41 @@ function moveSelection(rows, step) {
   scrollToSelected();
 }
 
+// The next claim nobody has reviewed, wrapping round the end: review runs to
+// the bottom of the list and then wants the ones passed over on the way.
+function selectNextUnreviewed(rows) {
+  if (!rows.length) return;
+  const at = rows.findIndex((row) => row.id === V.selectedId);
+  const ordered = rows.slice(at + 1).concat(rows.slice(0, at + 1));
+  const next = ordered.find((row) => !row.reviewed);
+  if (!next) {
+    toast('Every claim on screen has been reviewed.', { timeout: 2500 });
+    return;
+  }
+  captureOpenEditor();
+  V.selectedId = next.id;
+  renderContent();
+  scrollToSelected();
+}
+
+function openHelp() {
+  closePaperMenu();
+  closeSettings();
+  if (!$('help').open) $('help').showModal();
+}
+
+$('btn-help').addEventListener('click', openHelp);
+$('btn-close-help').addEventListener('click', () => $('help').close());
+// A click on the backdrop is the element itself: the sheet is something to
+// glance at, so anywhere off it puts it away.
+$('help').addEventListener('click', (event) => {
+  if (event.target === $('help')) $('help').close();
+});
+
 document.addEventListener('keydown', async (event) => {
+  // A modal owns the keyboard while it is up, Escape included: the dialog
+  // closes itself, and the editor branches below must not also fire.
+  if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape' && !$('settings-menu').hidden) {
     closeSettings({ restoreFocus: true });
     return;
@@ -2749,6 +3241,13 @@ document.addEventListener('keydown', async (event) => {
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key !== 'Escape') return;
+    // In the search box Escape belongs to the search: clear it, or leave it if
+    // it is already empty. It is the way back to the whole corpus, and it must
+    // not reach past the box and cancel an editor further down the page.
+    if (event.target.id === 'q') {
+      if (V.q) { $('q').value = ''; clearQuery(); } else $('q').blur();
+      return;
+    }
     // Only the editor holding the cursor is cancelled. With a claim editor and
     // a synthesis editor open together, cancelling both would drop a draft
     // the user never meant to give up.
@@ -2759,8 +3258,20 @@ document.addEventListener('keydown', async (event) => {
     }
     return;
   }
+  // The shortcuts nobody can see are the ones nobody uses, so the list is a
+  // keystroke away from anywhere.
+  if (event.key === '?') { event.preventDefault(); openHelp(); return; }
+  if (event.key === '/') {
+    // The box filters the claims, so it belongs to that view: reaching for it
+    // from the map or the tensions is a way of asking to go back.
+    event.preventDefault();
+    if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
+    $('q').focus();
+    $('q').select();
+    return;
+  }
   if (V.view !== 'claims') {
-    if (event.key === 'Escape') { showView('claims'); renderAll(); }
+    if (event.key === 'Escape') { showView('claims'); syncHash(true); renderAll(); }
     return;
   }
   const rows = visibleClaims();
@@ -2768,12 +3279,25 @@ document.addEventListener('keydown', async (event) => {
     moveSelection(rows, 1);
   } else if (event.key === 'k' || event.key === 'ArrowUp') {
     moveSelection(rows, -1);
+  } else if (event.key === 'n') {
+    selectNextUnreviewed(rows);
   } else if (event.key === 'e') {
     const row = selectedRow(rows);
     if (row) { captureOpenEditor(); V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
     const row = selectedRow(rows);
-    if (row) await toggleReviewed(row);
+    if (!row) return;
+    // Marking one reviewed moves to the next, so a paper is reviewed by
+    // holding one key rather than alternating between two. Taking a review
+    // back does not move: that is a correction, and it is made where it is.
+    const marking = !row.reviewed;
+    const following = rows[rows.findIndex((other) => other.id === row.id) + 1];
+    await toggleReviewed(row);
+    if (marking && following && visibleClaims().some((other) => other.id === following.id)) {
+      V.selectedId = following.id;
+      renderContent();
+      scrollToSelected();
+    }
   } else if (event.key === 'Escape') {
     cancelEdit();
   }
@@ -2817,9 +3341,17 @@ document.addEventListener('drop', async (event) => {
 
 async function boot() {
   await loadWorkspaces();
+  applyHash();
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  $('kind').value = V.kind;   // the kinds arrive with the corpus, after the URL was read
+  // A link to a paper that has since been removed falls back to the corpus,
+  // rather than an empty list with nothing saying why.
+  if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) {
+    V.paper = null;
+    renderAll();
+  }
   setInterval(async () => {
     if (document.hidden) return;
     // Keep settings current while editing; the content guard below preserves

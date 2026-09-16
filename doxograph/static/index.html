@@ -20,6 +20,8 @@
     <button type="button" id="btn-retag" data-ai-action disabled title="Reassign tags on every paper against the current vocabulary">Retag all</button>
     <button type="button" id="btn-bib">BibTeX</button>
     <button type="button" id="btn-export" class="primary">Export HTML</button>
+    <button type="button" id="btn-help" aria-haspopup="dialog"
+      title="Keyboard shortcuts (?)">Shortcuts</button>
     <div class="settings-wrap">
       <button type="button" id="btn-settings" aria-haspopup="dialog" aria-expanded="false"
         aria-controls="settings-menu">Settings</button>
@@ -106,6 +108,7 @@
       <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
       <button type="button" id="btn-add" class="primary" style="margin-left:auto">Add</button>
     </div>
+    <p class="warn" id="ref-warn" hidden></p>
 
     <div class="sec">
       <div class="sechead">
@@ -173,7 +176,39 @@
 </div>
 
 <div class="jobs" id="jobs"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <ul class="ctxmenu" id="ctxmenu" hidden></ul>
+
+<dialog id="help" class="sheet" aria-labelledby="help-title">
+  <div class="sheet-head">
+    <h2 id="help-title">Keyboard shortcuts</h2>
+    <button type="button" class="icon-button" id="btn-close-help" aria-label="Close shortcuts">×</button>
+  </div>
+  <dl class="keys">
+    <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>move down and up the claims</dd>
+    <dt><kbd>r</kbd></dt><dd>mark the claim reviewed and move to the next one</dd>
+    <dt><kbd>n</kbd></dt><dd>jump to the next claim nobody has reviewed</dd>
+    <dt><kbd>e</kbd></dt><dd>edit the claim</dd>
+    <dt><kbd>/</kbd></dt><dd>search; <kbd>Esc</kbd> there clears it</dd>
+    <dt><kbd>Esc</kbd></dt><dd>cancel an editor, or leave the view you are in</dd>
+    <dt><kbd>?</kbd></dt><dd>this list</dd>
+  </dl>
+  <p class="hint">A deleted claim, agreement, or synthesis can be brought back from the
+    notice in the corner until it fades.</p>
+</dialog>
+
+<dialog id="ask" class="sheet" aria-labelledby="ask-title">
+  <form id="ask-form">
+    <h2 id="ask-title"></h2>
+    <p class="hint" id="ask-note"></p>
+    <input id="ask-input" aria-labelledby="ask-title">
+    <div class="row right">
+      <button type="button" id="ask-cancel">Cancel</button>
+      <button type="submit" id="ask-ok" class="primary">OK</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="/app.js"></script>
 </body>
 </html>

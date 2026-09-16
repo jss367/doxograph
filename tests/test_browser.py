@@ -64,6 +64,16 @@ def _server():
             process.wait(timeout=5)
 
 
+async def _answer(page, button: str, text: str | None = None) -> None:
+    """Answer the app's own dialog, which stands in for confirm and prompt."""
+    dialog = page.locator("#ask")
+    await dialog.wait_for(state="visible")
+    if text is not None:
+        await page.locator("#ask-input").fill(text)
+    await dialog.get_by_role("button", name=button, exact=True).click()
+    await dialog.wait_for(state="hidden")
+
+
 def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
     paper = store.new_paper(key, title=title, year=year)
     paper["claims"] = [
@@ -114,11 +124,9 @@ def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
                     await route.fulfill(status=500, json={"detail": "Try again"})
 
                 await page.route("**/api/jobs/*", reject_delete)
-                async with page.expect_event("dialog") as dialog_info:
-                    await dismiss.click()
-                dialog = await dialog_info.value
-                assert "Could not dismiss notification: Try again" in dialog.message
-                await dialog.accept()
+                await dismiss.click()
+                await page.locator("#toasts .toast",
+                                   has_text="Could not dismiss notification: Try again").wait_for()
                 assert await page.locator("#jobs .job.error").count() == 1
                 await page.unroute("**/api/jobs/*", reject_delete)
 
@@ -177,7 +185,6 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
     async def scenario():
         delete_started = asyncio.Event()
         release_delete = asyncio.Event()
-        messages = []
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch()
@@ -189,21 +196,18 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
                     await release_delete.wait()
                 await route.continue_()
 
-            async def accept_dialog(dialog):
-                messages.append(dialog.message)
-                await dialog.accept()
-
-            page.on("dialog", accept_dialog)
             await page.route("**/api/papers/shared", delay_delete)
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers [data-paper="shared"]').click()
-                await page.get_by_role("button", name="Remove").click()
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
                 await asyncio.wait_for(delete_started.wait(), timeout=5)
 
                 await page.locator("#workspace").select_option(label="Animal locomotion")
                 assert await page.locator("#workspace").input_value() == "default"
-                assert "Wait for the current change" in messages[-1]
+                await page.locator("#toasts .toast",
+                                   has_text="Wait for the current change").wait_for()
 
                 release_delete.set()
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
@@ -243,11 +247,8 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
                 assert await page.locator("#workspace").input_value() == animal["id"]
                 assert "A consciousness paper" not in await papers.inner_text()
 
-                async def name_workspace(dialog):
-                    await dialog.accept("Embodied cognition")
-
-                page.once("dialog", name_workspace)
                 await page.locator("#btn-workspace-add").click()
+                await _answer(page, "OK", "Embodied cognition")
                 await page.locator("#workspace").select_option(label="Embodied cognition")
                 await page.get_by_text("Nothing here yet", exact=False).wait_for()
                 assert "An animal locomotion paper" not in await papers.inner_text()
@@ -350,17 +351,9 @@ def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
     _paper("paper-b", "Paper B")
 
     async def scenario():
-        prompts = []
-
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch()
             page = await browser.new_page()
-
-            async def accept(dialog):
-                prompts.append(dialog.message)
-                await dialog.accept()
-
-            page.on("dialog", accept)
             with _server() as url:
                 await page.goto(url)
                 menu = page.locator("#ctxmenu")
@@ -383,9 +376,11 @@ def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
                 await menu.wait_for(state="visible")
                 assert "Paper A" in await menu.inner_text()
                 await menu.get_by_role("button", name="Remove paper").click()
+                assert await page.locator("#ask-title").text_content() == \
+                    "Remove Paper A and its claims?"
+                await _answer(page, "Remove")
                 await paper_a.wait_for(state="detached")
 
-                assert prompts == ["Remove Paper A and its claims?"]
                 assert await menu.is_hidden()
                 assert "active" in (await paper_b.get_attribute("class") or "")
                 assert "Paper B" in await page.locator(".paperhead h2").inner_text()
@@ -440,7 +435,6 @@ def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch()
             page = await browser.new_page()
-            page.on("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
             with _server() as url:
                 await page.goto(url)
                 menu = page.locator("#ctxmenu")
@@ -452,6 +446,7 @@ def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
 
                 await page.locator('#papers [data-paper="paper-a"]').click(button="right")
                 await menu.get_by_role("button", name="Remove paper").click()
+                await _answer(page, "Remove")
                 await page.locator('#papers [data-paper="paper-a"]').wait_for(state="detached")
 
                 # Paper A's cards leave with it even though Paper B's editor is open,
@@ -1311,6 +1306,304 @@ def test_a_claim_citation_carries_its_paper_title():
                 await cite.wait_for()
                 assert await cite.get_attribute("title") == "Introspection in language models"
 
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+def _paper_with_claims(key: str, title: str, texts: list[str], **fields) -> list[str]:
+    store.save_paper(store.new_paper(key, title=title))
+    return [store.add_claim(key, {"text": text, **fields})["id"] for text in texts]
+
+
+def _reviewed(key: str) -> dict[str, bool]:
+    return {c["id"]: c["reviewed"] for c in store.load_paper(key)["claims"]}
+
+
+@pytest.mark.browser
+def test_reviewing_by_keyboard_advances_and_n_jumps_to_the_next_unreviewed():
+    """Review is the app's main work: r marks and moves on, so a paper goes by
+    under one key rather than two."""
+    one, two, three = _paper_with_claims(
+        "doe2026study", "A study", ["One.", "Two.", "Three."], reviewed=False)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
+                assert (await page.locator(f'.claim[data-claim="{one}"] [data-act="review"]'
+                                           ).text_content()).strip() == "reviewed"
+
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel[data-claim="{three}"]').wait_for()
+
+                # Taking a review back is a correction, made where it is: the
+                # selection stays on the claim being corrected.
+                await page.keyboard.press("k")
+                await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel.unreviewed[data-claim="{two}"]').wait_for()
+
+                # n goes to the next one nobody has reviewed, and wraps.
+                await page.keyboard.press("n")
+                await page.locator(f'.claim.sel[data-claim="{three}"]').wait_for()
+                await page.keyboard.press("n")
+                await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
+
+                # With nothing left unreviewed, n says so and stays put.
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel[data-claim="{three}"]').wait_for()
+                await page.locator(f'.claim[data-claim="{two}"]:not(.unreviewed)').wait_for()
+                await page.keyboard.press("r")
+                await page.locator(f'.claim[data-claim="{three}"]:not(.unreviewed)').wait_for()
+                await page.keyboard.press("n")
+                await page.locator("#toasts .toast", has_text="has been reviewed").wait_for()
+                assert await page.locator(f'.claim.sel[data-claim="{three}"]').count() == 1
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: True, two: True, three: True}
+
+
+@pytest.mark.browser
+def test_marking_a_whole_paper_reviewed_can_be_undone():
+    one, two, three = _paper_with_claims(
+        "doe2026study", "A study", ["One.", "Two.", "Three."], reviewed=False)
+    store.update_claim("doe2026study", two, {"reviewed": True})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                button = page.get_by_role("button", name="Mark 2 reviewed")
+                await button.click()
+                notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
+                await notice.wait_for()
+                await button.wait_for(state="detached")
+                assert _reviewed("doe2026study") == {one: True, two: True, three: True}
+
+                # Undo takes back this decision only: the claim reviewed before
+                # it was not part of what was just done.
+                await notice.get_by_role("button", name="Undo").click()
+                await page.get_by_role("button", name="Mark 2 reviewed").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: False, two: True, three: False}
+
+
+@pytest.mark.browser
+def test_a_deleted_claim_waits_for_its_notice_and_can_be_brought_back():
+    """Undo is the delete never being sent, so the claim comes back as itself:
+    same id, and the tensions and syntheses citing it intact."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator(f'.claim[data-claim="{one}"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+                await card.wait_for(state="detached")
+                # Off the page, but nothing has been sent yet.
+                assert len(store.load_paper("doe2026study")["claims"]) == 2
+
+                await notice.get_by_role("button", name="Undo").click()
+                await card.wait_for()
+                assert len(store.load_paper("doe2026study")["claims"]) == 2
+
+                # Dismissing the notice sends it rather than dropping it.
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+                await notice.get_by_role("button", name="Dismiss: Deleted the claim.").click()
+                await page.wait_for_function(
+                    "() => S.claims.length === 1", timeout=10000)
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
+
+
+@pytest.mark.browser
+def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
+    _paper("doe2026study", "A study", "recovery")
+    _paper("ling2025gait", "Quadruped gait", "locomotion")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator(".paperhead h2", has_text="A study").wait_for()
+                assert "paper=doe2026study" in page.url
+
+                await page.locator('#tags [data-tag="locomotion"]').click()
+                assert "tag=locomotion" in page.url
+
+                # A reload lands where the URL says, filters and all.
+                await page.reload()
+                await page.locator('#tags [data-tag="locomotion"].active').wait_for()
+                assert await page.locator('#papers [data-paper="doe2026study"].active').count() == 1
+
+                # Typing replaces the entry rather than adding one per letter,
+                # so Back walks the navigation and not the keystrokes.
+                await page.fill("#q", "gait")
+                await page.wait_for_function("() => location.hash.includes('q=gait')")
+                await page.go_back()
+                await page.wait_for_function("() => !location.hash.includes('q=gait')")
+                assert await page.input_value("#q") == ""
+                assert await page.locator('#tags [data-tag="locomotion"].active').count() == 0
+                assert "paper=doe2026study" in page.url
+
+                await page.go_back()
+                await page.locator('#papers [data-paper=""].active').wait_for()
+                assert "paper=" not in page.url
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_slash_reaches_the_search_box_and_question_mark_shows_the_shortcuts():
+    _paper("doe2026study", "A study", "recovery")
+    _paper("ling2025gait", "Quadruped gait", "locomotion")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+
+                await page.keyboard.press("/")
+                assert await page.evaluate("document.activeElement.id") == "q"
+                await page.keyboard.type("gait")
+                await page.locator('#papers [data-paper="doe2026study"]').wait_for(state="detached")
+
+                # Escape in the box belongs to the box: it clears the query and
+                # does not reach the editor below.
+                await page.keyboard.press("Escape")
+                assert await page.input_value("#q") == ""
+                await page.locator('#papers [data-paper="doe2026study"]').wait_for()
+
+                # From another view it goes back to the claims, which is what
+                # the box filters.
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+                await page.keyboard.press("/")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.evaluate("document.activeElement.id") == "q"
+
+                await page.keyboard.press("Escape")   # out of the box first
+                await page.keyboard.press("?")
+                help_sheet = page.locator("#help")
+                await help_sheet.wait_for(state="visible")
+                assert "mark the claim reviewed" in await help_sheet.inner_text()
+                await page.keyboard.press("Escape")
+                await help_sheet.wait_for(state="hidden")
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_claim_links_to_its_own_page_of_the_pdf_and_the_paper_menu_has_a_button():
+    from pdfs import minimal_pdf
+
+    _paper_with_claims("doe2026study", "A study", ["On page three."],
+                       locator="p. 3", quote="On page three.")
+    _paper_with_claims("ling2025gait", "Quadruped gait", ["In table two."], locator="Table 2")
+    store.pdf_path("doe2026study").write_bytes(minimal_pdf("On page three."))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                link = page.locator('.claim[data-claim="doe2026study-c1"] .pdflink')
+                await link.wait_for()
+                assert await link.text_content() == "PDF p.3"
+                assert "#page=3" in await link.get_attribute("href")
+
+                # A section or a table is not a page, and is not followed as one.
+                assert await page.locator('.claim[data-claim="ling2025gait-c1"] .pdflink').count() == 0
+
+                # The menu the right-click opens has a button of its own now.
+                menu = page.locator("#ctxmenu")
+                await page.locator('#papers [data-paper="doe2026study"] .pmenu').click()
+                await menu.wait_for(state="visible")
+                assert "A study" in await menu.inner_text()
+                assert await menu.get_by_role("button", name="Open the PDF").count() == 1
+                # ...and a paper with no PDF is not offered one.
+                await page.keyboard.press("Escape")
+                await page.locator('#papers [data-paper="ling2025gait"] .pmenu').click()
+                await menu.wait_for(state="visible")
+                assert await menu.get_by_role("button", name="Open the PDF").count() == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_references_that_could_not_be_read_are_named_where_they_were_pasted():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.fill("#refs", "wibble flimflam")
+                await page.locator("#btn-add").click()
+                warning = page.locator("#ref-warn")
+                await warning.wait_for(state="visible")
+                text = await warning.inner_text()
+                assert "“wibble”" in text and "“flimflam”" in text
+                assert await page.input_value("#refs") == "wibble\nflimflam"
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_export_notice_opens_the_file_it_just_wrote():
+    _paper("doe2026study", "A study", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            context = await browser.new_context()
+            page = await context.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role("button", name="Export HTML").click()
+                notice = page.locator("#toasts .toast", has_text="Exported to")
+                await notice.wait_for()
+                assert "doxograph.html" in await notice.inner_text()
+
+                async with context.expect_page() as opened:
+                    await notice.get_by_role("button", name="Open", exact=True).click()
+                exported = await opened.value
+                await exported.wait_for_load_state()
+                assert "A claim from A study" in await exported.inner_text("body")
             await browser.close()
 
     asyncio.run(scenario())

@@ -568,6 +568,34 @@ def add_claim(key: str, patch: dict) -> dict:
 
 
 @_locked
+def review_claims(key: str, reviewed: bool, claim_ids: list[str] | None = None) -> list[str]:
+    """Mark a paper's claims reviewed, or unreviewed, in one write.
+
+    Returns the ids it actually changed, which is what an undo needs: setting
+    them back must not also unreview a claim the person had already reviewed
+    before. `claim_ids` is that undo's other half — a list restricts the change
+    to those claims, and one not on the paper is ignored rather than refused,
+    since the alternative is failing a bulk action over a claim deleted
+    meanwhile.
+    """
+    paper = load_paper(key)
+    wanted = set(claim_ids) if claim_ids is not None else None
+    changed = []
+    for claim in paper.get("claims", []):
+        if wanted is not None and claim.get("id") not in wanted:
+            continue
+        if bool(claim.get("reviewed")) == reviewed:
+            continue
+        claim["reviewed"] = reviewed
+        claim["updated"] = now()
+        changed.append(claim["id"])
+    if changed:
+        refresh_status(paper)
+        save_paper(paper)
+    return changed
+
+
+@_locked
 def delete_claim(key: str, claim_id: str) -> None:
     paper = load_paper(key)
     before = len(paper.get("claims", []))
