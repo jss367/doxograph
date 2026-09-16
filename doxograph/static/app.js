@@ -410,11 +410,19 @@ function paperHaystack(paper) {
 let textSearchTimer = null;
 let textSearchSeq = 0;
 const TEXT_SEARCH_MIN = 3;
+// Three letters of a Latin query says little; two characters of Chinese or
+// Japanese is a whole word. A query carrying anything outside the Latin
+// scripts is asked whatever its length.
+const COMPACT_SCRIPT = /[^\p{Script=Latin}\p{N}\p{P}\p{Z}\p{C}]/u;
+
+function worthAsking(query) {
+  return query.length >= TEXT_SEARCH_MIN || (query.length > 0 && COMPACT_SCRIPT.test(query));
+}
 
 function scheduleTextSearch() {
   clearTimeout(textSearchTimer);
   const query = V.q.trim();
-  if (query.length < TEXT_SEARCH_MIN) { V.textSearch = null; return; }
+  if (!worthAsking(query)) { V.textSearch = null; return; }
   textSearchTimer = setTimeout(() => runTextSearch(query), 250);
 }
 
@@ -1444,20 +1452,15 @@ function textSearchBlock() {
   return `<div class="pdfhits">${head}${hits}</div>`;
 }
 
-// The query's words picked out of a passage, at the offsets the server gives:
-// it is the one that knows how the text was folded to find them, and a
-// browser's own case-insensitive matching cannot expand ß to ss, so it would
-// find nothing to mark in a passage that was found for exactly that reason.
+// A passage as the server cut it: it is the one that knows how the text was
+// folded to find the terms, and a browser's own case-insensitive matching
+// cannot expand ß to ss, so it would find nothing to mark in a passage that
+// was found for exactly that reason. Pieces rather than offsets, since an
+// offset into a Python string is not an offset into a JavaScript one.
 function mark(passage) {
-  const text = passage.text || '';
-  let html = '';
-  let last = 0;
-  for (const [begin, end] of passage.marks || []) {
-    if (begin < last || end > text.length) continue;
-    html += esc(text.slice(last, begin)) + `<mark>${esc(text.slice(begin, end))}</mark>`;
-    last = end;
-  }
-  return html + esc(text.slice(last));
+  const parts = passage.parts;
+  if (!parts || !parts.length) return esc(passage.text || '');
+  return parts.map((part) => (part.mark ? `<mark>${esc(part.text)}</mark>` : esc(part.text))).join('');
 }
 
 function renderJobs() {

@@ -54,26 +54,39 @@ def terms(query: str) -> list[str]:
     return list(seen.values())
 
 
-def fold(text: str) -> str:
-    """`text` with the case taken out of it, character by character.
+# A word broken across a line by a hyphen, as `quotes.tidy` puts it back
+# together for reading. A search has to see one word there too, or the
+# commonest word in a two-column paper is the one it cannot find.
+_LINE_HYPHEN = re.compile(r"(?<=\w)[-‐­][ \t]*\n[ \t]*(?=\w)")
 
-    `str.casefold` over the whole string would do the same, but one character
-    at a time is what `fold_with_offsets` needs and the two must agree.
+
+def fold(text: str) -> str:
+    """`text` with the case taken out and its line-broken words put together.
+
+    This is the form a query is matched against. `str.casefold` over the whole
+    string would do the case half, but one character at a time is what
+    `fold_with_offsets` needs, and the two must agree.
     """
-    return "".join(char.casefold() for char in text)
+    return fold_with_offsets(text)[0]
 
 
 def fold_with_offsets(text: str) -> tuple[str, array.array]:
     """`fold(text)`, with the index in `text` each folded character came from.
 
     Folding is not one character in, one out: ß folds to ss, İ to an i and a
-    combining dot. Matching the folded forms against each other is the only
-    way a search for STRASSE finds Straße, and this is what carries a position
-    in the folded text back to the paper's own characters.
+    combining dot, and a hyphen at a line break folds to nothing at all.
+    Matching the folded forms against each other is the only way a search for
+    STRASSE finds Straße, or one for transformation finds `transfor-\nmation`,
+    and this is what carries a position in the folded text back to the paper's
+    own characters.
     """
+    dropped = {at for match in _LINE_HYPHEN.finditer(text)
+               for at in range(match.start(), match.end())}
     folded: list[str] = []
     offsets = array.array("i")
     for at, char in enumerate(text):
+        if at in dropped:
+            continue
         for out in char.casefold():
             folded.append(out)
             offsets.append(at)
@@ -88,7 +101,7 @@ def _stored(key: str):
         return path, path.stat()
     except OSError:
         pass
-    if quotes.paper_text(store.pdf_path(key), path) is None:
+    if quotes.paper_text(store.pdf_path(key), path, lambda: store.paper_lock(key)) is None:
         return None
     try:
         return path, path.stat()
@@ -243,18 +256,24 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
         passages.append({
             "text": shown,
             "page": raw.count(quotes.PAGE_BREAK, 0, at) + 1,
-            # Where the terms are in what is shown. Worked out here because
-            # here is where the folding is known: a browser's own
-            # case-insensitive matching cannot expand ß to ss, so it would
-            # find nothing to mark in the passage that was found for it.
-            "marks": _marks(shown, patterns),
+            # The passage already cut into pieces, the matched ones flagged.
+            # Cut here because here is where the folding is known: a browser's
+            # own case-insensitive matching cannot expand ß to ss, so it would
+            # find nothing to mark in the passage that was found for it. Cut
+            # rather than numbered because an offset into a Python string is
+            # not an offset into a JavaScript one — anything outside the basic
+            # plane counts once here and twice there.
+            "parts": _parts(shown, patterns),
         })
     return passages
 
 
-def _marks(shown: str, patterns: list[re.Pattern]) -> list[list[int]]:
-    """Where each term falls in a passage, as [start, end] pairs that do not
-    overlap, in order. The offsets are into the text as it is shown."""
+def _parts(shown: str, patterns: list[re.Pattern]) -> list[dict]:
+    """A passage as alternating pieces: `{"text": ..., "mark": bool}`.
+
+    The marked ones are where the terms are. Overlapping matches are merged,
+    and a piece is only emitted when it has something in it.
+    """
     folded, offsets = fold_with_offsets(shown)
     spans: list[list[int]] = []
     for pattern in patterns:
@@ -269,7 +288,16 @@ def _marks(shown: str, patterns: list[re.Pattern]) -> list[list[int]]:
             merged[-1][1] = max(merged[-1][1], span[1])
         else:
             merged.append(span)
-    return merged
+    parts: list[dict] = []
+    last = 0
+    for begin, end in merged:
+        if begin > last:
+            parts.append({"text": shown[last:begin], "mark": False})
+        parts.append({"text": shown[begin:end], "mark": True})
+        last = end
+    if last < len(shown):
+        parts.append({"text": shown[last:], "mark": False})
+    return parts
 
 
 def cache_text(key: str) -> None:
