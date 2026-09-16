@@ -1634,3 +1634,35 @@ def test_opening_a_passage_keeps_what_is_typed_in_another_claims_editor():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+                await card.locator(".alike .alikerow").wait_for()
+
+                # The matches were worked out from the claims as they read
+                # then; once any of them changes the panel is not an answer to
+                # anything, so it closes rather than going quietly stale.
+                store.update_claim("li2025steer", "li2025steer-c1",
+                                   {"text": "Something else entirely, about penguins."})
+                await page.locator(".alike").wait_for(state="detached")
+
+            await browser.close()
+
+    asyncio.run(scenario())

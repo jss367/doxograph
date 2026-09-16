@@ -254,7 +254,7 @@ async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) rerunTextSearch();
+  if (changed) { rerunTextSearch(); V.similar = null; }
   render();
 }
 
@@ -267,7 +267,7 @@ async function refreshAll() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) rerunTextSearch();
+  if (changed) { rerunTextSearch(); V.similar = null; }
   renderAll();
 }
 
@@ -2230,7 +2230,12 @@ async function toggleReviewed(row) {
 }
 
 async function showSimilar(paper, claim) {
-  V.similar = { claim, paper, loading: true, error: null, rows: [] };
+  // Matched on the request itself, as the passage is: a claim id is unique
+  // per corpus and not across workspaces, and switching is not held back by a
+  // read, so the answer to one workspace's question could land in another.
+  const pending = { claim, paper, loading: true, error: null, rows: [] };
+  captureOpenEditor();
+  V.similar = pending;
   renderContent();
   let next;
   try {
@@ -2240,8 +2245,9 @@ async function showSimilar(paper, claim) {
   } catch (error) {
     next = { claim, paper, loading: false, error: `Could not compare the claims: ${error.message}`, rows: [] };
   }
-  if (!similarOpen(claim)) return;   // closed, or another opened, while it ran
+  if (V.similar !== pending) return;   // closed, or another opened, while it ran
   V.similar = next;
+  captureOpenEditor();
   renderContent();
 }
 
@@ -3166,6 +3172,7 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       rerunTextSearch();     // a paper imported since holds the query's words too
+      V.similar = null;      // and the claims it was compared against have moved
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();

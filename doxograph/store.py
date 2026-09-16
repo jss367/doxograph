@@ -970,13 +970,19 @@ def claim_fingerprint(claim: dict) -> str:
 def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
     """What a per-topic pass was asked about, in one string.
 
-    Everything the prompt carries: which claims are in the topic and what each
-    one says, plus `extra` for the parts that are not claims — the topic's
+    Everything the prompt carries: which claims are in the topic, what each one
+    says, and which paper it is from — the listing names the authors, year and
+    title, and correcting any of those is a correction the model should see —
+    plus `extra` for the parts that are not claims at all: the topic's
     description, the research context, the prompt itself. A pass whose
     signature is unchanged would be asked exactly what it was asked last time,
     and the merge would keep the answer it already has, so it is not asked.
     """
-    payload = [topic, extra] + sorted(f"{r['id']} {claim_fingerprint(r)}" for r in rows)
+    payload = [topic, extra] + sorted(
+        f"{r['id']} {r.get('paper')} {cite_surname(r.get('paper_authors'), r.get('paper') or '')}"
+        f" {r.get('paper_year')} {r.get('paper_title')} {claim_fingerprint(r)}"
+        for r in rows
+    )
     return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()[:16]
 
 
@@ -1222,6 +1228,19 @@ def topic_claims(topic: str, rows: list[dict] | None = None) -> list[dict]:
     return [r for r in (rows if rows is not None else claim_rows()) if topic in (r.get("tags") or [])]
 
 
+def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None) -> str:
+    """What a synthesis was asked, apart from its claims and tensions.
+
+    The prompt version, the topic's name, and its description — all three are
+    in front of the model, and none of them is part of what makes a synthesis
+    stale, so without this a rename or a reworded description would never be
+    written again.
+    """
+    tags = load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
+    return f"{config.PASS_VERSION}\n{topic}\n{description}"
+
+
 def synthesis_basis(rows: list[dict]) -> dict[str, str]:
     """Half of what a synthesis rests on: the set of claims and what each
     said. A claim added, removed, or edited (text, evidence, kind) changes it.
@@ -1299,10 +1318,12 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
             "text": text,
             "source": source,
             "written": now(),
-            # Which cross-paper prompt wrote it. A synthesis from an older one
-            # is rewritten by the next pass; one with none recorded is older
-            # than this field and counts as older than the prompt.
-            "pass_version": config.PASS_VERSION,
+            # The prompt it was written under, topic name and description
+            # included: both are in what the model was given, and a rename or
+            # a reworded description changes the question. A record with none
+            # of this is older than the field and counts as older than the
+            # prompt.
+            "prompt_basis": synthesis_prompt_basis(topic),
             "claims": {i: claim_fingerprint(c) for i, c in claims_by_id.items()
                        if topic in (c.get("tags") or [])},
             "tensions": synthesis_tensions(topic, tension_rows() if tensions is None else tensions),
@@ -1325,7 +1346,7 @@ def set_synthesis_text(topic: str, text: str) -> dict:
             raise KeyError(topic)
         record = data["syntheses"][topic]
         record.update(text=text, source="hand", written=now(),
-                      pass_version=config.PASS_VERSION,
+                      prompt_basis=synthesis_prompt_basis(topic),
                       claims=synthesis_basis(topic_claims(topic)),
                       tensions=synthesis_tensions(topic, tension_rows()))
         _save_syntheses(data)
