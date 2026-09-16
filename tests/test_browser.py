@@ -1734,9 +1734,12 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
                 await page.locator(".claim").first.wait_for()
                 assert await page.locator(".claim").count() == 2
 
-                await page.get_by_role("button", name="in the paper").first.click()
+                # Beside the copy that was clicked, and only that one.
+                await page.get_by_role("button", name="in the paper").nth(1).click()
                 await page.locator(".qctx .qpassage").wait_for()
                 assert await page.locator(".qctx").count() == 1
+                second = page.locator(".claim").nth(1)
+                assert await second.locator(".qctx").count() == 1
 
             await browser.close()
 

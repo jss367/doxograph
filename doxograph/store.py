@@ -980,9 +980,12 @@ def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
 
 def claim_fingerprint(claim: dict) -> str:
     """What a tension's judgment rests on: everything `_tension_listing` shows
-    the model about a claim. If the text, evidence or kind changes, the
-    judgment was made about a claim that no longer exists."""
-    return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("kind", "finding")])
+    the model about a claim, whose paper included. If the text, evidence or
+    kind changes the judgment was made about a claim that no longer exists,
+    and if the paper's author, year or title changes the note the model wrote
+    may name the wrong people."""
+    return json.dumps([claim.get("text", ""), claim.get("evidence", ""),
+                       claim.get("kind", "finding"), cite_head(claim)])
 
 
 def cite_head(claim: dict) -> str:
@@ -1013,7 +1016,7 @@ def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
     and the merge would keep the answer it already has, so it is not asked.
     """
     payload = [topic, extra] + sorted(
-        f"{r['id']} {r.get('paper')} {cite_head(r)} {claim_fingerprint(r)}" for r in rows
+        f"{r['id']} {r.get('paper')} {claim_fingerprint(r)}" for r in rows
     )
     return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()[:16]
 
@@ -1286,8 +1289,9 @@ def synthesis_basis(rows: list[dict]) -> dict[str, str]:
 
 
 def synthesis_claim_basis(claim: dict) -> str:
-    """One claim as a synthesis rests on it: what it says, and whose paper it is."""
-    return f"{cite_head(claim)} {claim_fingerprint(claim)}"
+    """One claim as a synthesis rests on it: what it says, and whose paper it
+    is. The same string the tensions merge compares."""
+    return claim_fingerprint(claim)
 
 
 def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
