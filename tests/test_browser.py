@@ -1762,3 +1762,37 @@ def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_map_picks_up_a_paper_that_arrives_while_it_is_open():
+    from pdfs import minimal_pdf
+
+    _paper("cited", "Attention is all you need", "architecture")
+    store.pdf_path("cited").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+                assert await page.evaluate(
+                    "window.doxographGraph().edges.filter((e) => e.type === 'cite').length") == 0
+
+                # Imported with the map on screen: the poll redraws the papers,
+                # and the arrows are fetched on their own, so they have to be
+                # fetched again too.
+                store.save_paper(store.new_paper("citing", title="The citing paper", year=2026))
+                store.pdf_path("citing").write_bytes(minimal_pdf([
+                    "The citing paper",
+                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."]))
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=15000)
+
+            await browser.close()
+
+    asyncio.run(scenario())

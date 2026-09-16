@@ -92,3 +92,39 @@ def test_the_command_says_so_when_nothing_cites_anything(capsys):
     _paper("solo2026", "Alone in the corpus", ["Alone in the corpus", "References\nNobody. 1999."])
     assert __main__.main(["cites"]) == 1
     assert "no paper's reference list names another" in capsys.readouterr().err
+
+
+def test_a_heading_may_say_more_than_the_word():
+    for heading in ("References and Notes", "REFERENCES CITED", "7. Bibliography (Primary)",
+                    "R EFERENCES", "References:"):
+        text = f"Body of the paper.\n{heading}\n[1] A paper.\n"
+        assert cites.reference_text(text).strip() == "[1] A paper.", heading
+    # But not a line that only begins with the letters by accident.
+    assert cites.reference_text("x\nReferenced below.\n[1] A.\n") == ""
+
+
+def test_the_article_s_own_bibliography_is_not_lost_to_the_supplement_s():
+    """A paper with an appendix has two reference lists. Taking only the last
+    drops every work the article itself cites."""
+    _paper("cited", ATTENTION, [ATTENTION, "A paper."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("appendix-only", "A paper cited only in the appendix",
+           ["A paper cited only in the appendix", "Text."])
+    _paper("roe2026steering", STEERING, [
+        STEERING,
+        "References\n[1] A Vaswani et al. Attention is all you need. 2017.",
+        "A Appendix\nMore detail.",
+        "References\n[2] Somebody. A paper cited only in the appendix. 2026.",
+    ])
+    assert {edge["to"] for edge in cites.edges() if edge["from"] == "roe2026steering"} == {
+        "cited", "appendix-only"}
+
+
+def test_a_title_inside_a_longer_title_is_not_a_citation_of_both():
+    _paper("short", "Attention is all you need", ["Attention is all you need", "Text."])
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Somebody. Attention is all you need for image restoration. 2026.",
+    ])
+    assert [edge["to"] for edge in cites.edges() if edge["from"] == "citing"] == ["long"]

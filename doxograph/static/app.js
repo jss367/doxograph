@@ -1560,12 +1560,16 @@ function renderGraphNav() {
 // answering means reading every paper's reference list. The map draws without
 // them until the answer lands.
 let CITATIONS = [];
+let citationsSeq = 0;
 
 async function loadCitations() {
-  // Whose citations these are. A request left in flight when the workspace
-  // changes answers with the other corpus's edges, and its paper keys can
-  // collide with this one's, so a late answer is dropped rather than drawn.
+  // Whose citations these are, and which asking. A request left in flight when
+  // the workspace changes answers with the other corpus's edges, and its paper
+  // keys can collide with this one's; two askings in the same workspace can
+  // also come back in the other order, the older last. Either way the answer
+  // that is not the current question is dropped.
   const workspace = currentWorkspaceId;
+  const seq = ++citationsSeq;
   let edges;
   try {
     const found = await api('/api/citations');
@@ -1573,7 +1577,7 @@ async function loadCitations() {
   } catch (error) {
     edges = [];   // a map without citation links is still worth drawing
   }
-  if (workspace !== currentWorkspaceId) return;
+  if (seq !== citationsSeq || workspace !== currentWorkspaceId) return;
   CITATIONS = edges;
   if (V.view === 'graph') renderGraph();
 }
@@ -3245,6 +3249,9 @@ async function boot() {
       if (!changed) return;
       rerunTextSearch();     // a paper imported since holds the query's words too
       V.similar = null;      // and the claims it was compared against have moved
+      // A PDF that arrived while the map is open cites what it cites; the
+      // poll redraws the papers but the arrows are fetched on their own.
+      if (V.view === 'graph') loadCitations();
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();

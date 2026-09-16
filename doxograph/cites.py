@@ -23,8 +23,12 @@ from . import config, quotes, search, store
 # A line that says the references start. Matched on its letters alone, which
 # takes care of a section number in front of it, a colon after it, the case,
 # and the spaces pypdf leaves inside a small-capitals heading — "R EFERENCES"
-# is how half the conference papers come out.
-_HEADINGS = {"references", "bibliography", "workscited", "literaturecited"}
+# is how half the conference papers come out. A heading may carry more than
+# the word: "References and Notes", "References Cited", "Bibliography (Primary
+# Sources)" all start a reference list, so the word only has to begin the line.
+# Plural on purpose: "referenced" and "references" part company at the eighth
+# letter, so a line of prose beginning "Referenced work…" is not a heading.
+_HEADINGS = ("references", "bibliography", "workscited", "literaturecited")
 _HEADING_LINE = 40
 
 # How much of a title has to survive squashing before it can be looked for. A
@@ -37,13 +41,15 @@ _cache_lock = threading.Lock()
 
 
 def reference_text(text: str) -> str:
-    """Everything after the last references heading, or empty when there is none.
+    """Everything after the first references heading, or empty when there is none.
 
-    The last one: a paper can mention its references in the text, and what is
-    wanted is the list itself. Appendices after it are kept — a title turning
-    up in an appendix is not a false citation worth guarding against.
+    The first: a paper with a supplement has a bibliography for the article and
+    another for the appendix, and taking only the last would drop every work
+    the article itself cites. What lies between them is the appendix, and a
+    title turning up in an appendix is not a false citation worth guarding
+    against — over-reading here costs nothing that under-reading does not cost
+    twice.
     """
-    last = None
     at = 0
     # `splitlines` breaks on the page separator too, so a heading at the top of
     # a page is found like any other.
@@ -51,9 +57,10 @@ def reference_text(text: str) -> str:
         at += len(line)
         if len(line.strip()) > _HEADING_LINE:
             continue
-        if quotes.squash(line).lstrip("0123456789") in _HEADINGS:
-            last = at
-    return text[last:] if last is not None else ""
+        squashed = quotes.squash(line).lstrip("0123456789")
+        if squashed.startswith(_HEADINGS):
+            return text[at:]
+    return ""
 
 
 def fingerprints(paper: dict) -> list[str]:
@@ -97,16 +104,40 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         listing = quotes.squash(reference_text(text))
         if not listing:
             continue
-        for other in papers:
-            if other["key"] == paper["key"]:
-                continue
-            if any(mark in listing for mark in marks[other["key"]]):
-                found.append({"from": paper["key"], "to": other["key"]})
+        for other in _cited(paper["key"], listing, marks):
+            found.append({"from": paper["key"], "to": other})
     found.sort(key=lambda edge: (edge["from"], edge["to"]))
     with _cache_lock:
         _cache.clear()      # one corpus at a time is all the map ever asks for
         _cache[signature] = found
     return found
+
+
+def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
+    """Which papers this reference list names, longest title first.
+
+    One title can sit inside another — "Attention is all you need" inside
+    "Attention is all you need for image restoration" — and a reference to the
+    longer would otherwise be read as a citation of both. Where two marks land
+    on the same stretch of the list, only the longer is a citation; the shorter
+    is part of it.
+    """
+    hits: list[tuple[int, int, str]] = []
+    for other, found in marks.items():
+        if other == key:
+            continue
+        for mark in found:
+            at = listing.find(mark)
+            if at >= 0:
+                hits.append((at, at + len(mark), other))
+                break
+    # Longest first, so a shorter mark inside one already taken is dropped.
+    cited: list[tuple[int, int, str]] = []
+    for span in sorted(hits, key=lambda hit: hit[0] - hit[1]):
+        if any(taken[0] <= span[0] and span[1] <= taken[1] for taken in cited):
+            continue
+        cited.append(span)
+    return sorted(other for _, _, other in cited)
 
 
 def _text_signature() -> str:

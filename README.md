@@ -263,9 +263,12 @@ into the extraction prompt and is the main lever on the quality of the
 ## Which papers cite which
 
 The map draws a citation as an arrow from a paper to the paper it cites. They
-come from the reference lists in the PDFs: the text after the last
-"References" heading is searched for every other paper's arXiv id, DOI, or
-title, and a hit is an edge. A title has to be at least twenty letters long to
+come from the reference lists in the PDFs: the text after the first
+"References" heading — a paper with a supplement has two, and the article's own
+is the first — is searched for every other paper's arXiv id, DOI, or title, and
+a hit is an edge. Where one title sits inside another, only the longer counts,
+so a reference to "Attention is all you need for image restoration" is not also
+read as a citation of "Attention is all you need". A title has to be at least twenty letters long to
 be looked for, since a short one turns up in prose that is not a citation of
 it. Nothing is fetched from arXiv or Crossref, and a paper no model has read
 is linked like any other.
@@ -275,7 +278,9 @@ papers gives way to the arrow between them. Turn the layer off with
 **citations** above the map. `doxograph cites` lists the same thing in the
 shell.
 
-A paper whose PDF has no "References" heading contributes no citations. That
+A heading only has to begin with the word, so "References and Notes" and
+"Bibliography (Primary Sources)" are found too. A paper whose PDF has no
+"References" heading at all contributes no citations. That
 is the conservative reading: guessing where the list starts would invent
 links.
 
