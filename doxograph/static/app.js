@@ -2637,8 +2637,23 @@ async function removePaper(paper) {
   // over a deletion they got what they asked for. Only this paper's, though:
   // a claim of another paper, or a synthesis, was promised its own eight
   // seconds and removing something else is no reason to take them away.
+  //
+  // That flush ends in a read, and nothing counts a read as a change in
+  // flight, so the picker can move in the gap before the paper's own request
+  // goes. It names the workspace it was asked in: the same paper imported into
+  // two corpora has the same key in both, and removing the wrong one is not
+  // something an undo could fix.
+  const workspace = currentWorkspaceId;
   await flushTrash((entry) => entry.paper === paper);
-  await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
+  await api(`/api/papers/${encodeURIComponent(paper)}`, {
+    method: 'DELETE', headers: { 'X-Doxograph-Workspace': workspace },
+  });
+  // Moved on meanwhile: the view belongs to another corpus now, and the drafts
+  // and selection this would tidy up went with `resetWorkspaceView`.
+  if (currentWorkspaceId !== workspace) {
+    await refreshAll();
+    return;
+  }
   // Close an editor that belonged to the deleted paper, so its form is not
   // captured as a draft for a claim that no longer exists. An editor on some
   // other paper's claim stays open, which is why this ends in `refreshAll`:

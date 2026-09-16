@@ -2226,3 +2226,57 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
 
     asyncio.run(scenario())
     assert _reviewed("doe2026study") == {one: True, two: True}
+
+
+@pytest.mark.browser
+def test_removing_a_paper_names_the_workspace_it_was_asked_in():
+    """Settling the paper's held deletes ends in a read, and nothing counts a
+    read as a change in flight, so the picker can move in the gap."""
+    from doxograph import config
+
+    _paper_with_claims("shared", "Default paper", ["One."])
+    other = config.create_workspace("Other")
+    with config.use_workspace(other["id"]):
+        _paper_with_claims("shared", "Other paper", ["One."])
+
+    async def scenario():
+        sent_to = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def move_after_claim_delete(route, request):
+                await route.continue_()
+                if request.method == "DELETE":
+                    # The switch lands in the gap the flush's read leaves open.
+                    await page.evaluate(f"currentWorkspaceId = '{other['id']}'")
+
+            async def record_paper_delete(route, request):
+                if request.method == "DELETE":
+                    sent_to.append(request.headers.get("x-doxograph-workspace"))
+                await route.continue_()
+
+            await page.route("**/api/papers/shared/claims/*", move_after_claim_delete)
+            await page.route("**/api/papers/shared", record_paper_delete)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                for _ in range(100):
+                    if sent_to:
+                        break
+                    await page.wait_for_timeout(100)
+            await browser.close()
+
+        assert sent_to == ["default"]
+
+    asyncio.run(scenario())
+    from doxograph import config as cfg
+    assert store.all_papers() == []
+    with cfg.use_workspace(other["id"]):
+        assert [p["key"] for p in store.all_papers()] == ["shared"]
