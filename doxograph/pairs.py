@@ -46,10 +46,14 @@ def stem(word: str) -> str:
     elif len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
         word = word[:-1]
     if len(word) > 5 and word.endswith("ing"):
-        return word[:-3]
-    if len(word) > 4 and word.endswith("ed"):
-        return word[:-2]
-    return word
+        word = word[:-3]
+    elif len(word) > 4 and word.endswith("ed"):
+        word = word[:-2]
+    # A silent e goes last, from every word alike. Only stripping it after
+    # "ed" would leave `scaled` as `scal` beside `scale`; taking it off both
+    # is wrong about the word and right about the pair, which is all this
+    # measure is for.
+    return word[:-1] if len(word) > 3 and word.endswith("e") else word
 
 
 def words(row: dict) -> frozenset[str]:

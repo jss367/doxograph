@@ -64,3 +64,9 @@ def test_the_similar_route_names_the_papers_and_404s_for_a_stranger():
         # The claim has to be on the paper it is asked for.
         assert client.get(f"/api/papers/ng2026saes/claims/{a}/similar").status_code == 404
         assert client.get("/api/papers/doe2026recovery/claims/nope/similar").status_code == 404
+
+
+def test_a_verb_and_its_past_tense_meet():
+    for word, other in (("scaled", "scale"), ("scales", "scaled"), ("refined", "refines"),
+                        ("recovered", "recovers"), ("steering", "steer")):
+        assert pairs.stem(word) == pairs.stem(other), (word, other)

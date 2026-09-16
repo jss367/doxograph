@@ -518,3 +518,40 @@ def test_renaming_a_topic_or_rewording_it_is_worth_writing_again(monkeypatch):
     monkeypatch.setattr(extract, "client", lambda: FakeClient("third"))
     assert extract.synthesize_topic("task-recovery")["written"] is True
     assert store.synthesis_rows()[0]["text"] == "third"
+
+
+def test_correcting_a_papers_details_makes_its_synthesis_stale(monkeypatch):
+    """The listing names the author, year and title, and the model is told to
+    cite papers by author and year."""
+    build_corpus()
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("first"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    assert store.synthesis_rows()[0]["stale"] is False
+
+    store.save_paper({**store.load_paper("doe2026recovery"), "year": 2025})
+    assert store.synthesis_rows()[0]["stale"] is True
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("second"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+
+
+def test_a_description_edited_during_the_call_does_not_stamp_the_answer(monkeypatch):
+    """The answer was written from the description as it was; recording the
+    new one would make the next run treat it as current."""
+    build_corpus()
+
+    class EditingClient(FakeClient):
+        @property
+        def messages(self):
+            inner = super().messages
+
+            class Messages:
+                def create(self, **kwargs):
+                    store.save_tags([{"name": "recovery-rate", "description": "Reworded mid-call."}])
+                    return inner.create(**kwargs)
+            return Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: EditingClient("written from the old wording"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("written from the new wording"))
+    assert extract.synthesize_topic("recovery-rate")["skipped"] is False
+    assert store.synthesis_rows()[0]["text"] == "written from the new wording"

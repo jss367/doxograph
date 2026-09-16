@@ -442,6 +442,7 @@ async function runTextSearch(query, quiet = false) {
   const seq = ++textSearchSeq;
   const workspace = currentWorkspaceId;
   if (!quiet) {
+    captureOpenEditor();   // the redraw rebuilds any open form from state
     V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
     renderContent();
   }
@@ -457,6 +458,7 @@ async function runTextSearch(query, quiet = false) {
   // the corpus can have changed under the one still running.
   if (seq !== textSearchSeq || workspace !== currentWorkspaceId) return;
   V.textSearch = next;
+  captureOpenEditor();
   renderContent();
 }
 
@@ -1454,7 +1456,7 @@ function textSearchBlock() {
   const hits = papers.map((hit) => {
     const cite = `${(hit.authors || [])[0] ? hit.authors[0].split(' ').pop() : hit.key} ${hit.year || ''}`;
     const passages = (hit.passages || []).map((passage) =>
-      `<p class="pp"><span class="hint">p. ${passage.page}</span> …${mark(passage.text, found.terms)}…</p>`).join('');
+      `<p class="pp"><span class="hint">p. ${passage.page}</span> …${mark(passage)}…</p>`).join('');
     return `<div class="pdfhit">
       <div class="ph">
         <span class="pt" data-act="open-paper" data-paper="${esc(hit.key)}"
@@ -1466,19 +1468,18 @@ function textSearchBlock() {
   return `<div class="pdfhits">${head}${hits}</div>`;
 }
 
-// The query's words picked out of a passage. Escaping happens either side of
-// each match rather than over the whole string, so a term can never be found
-// inside an entity `esc` introduced.
-function mark(text, terms) {
-  if (!terms.length) return esc(text);
-  // The character before the word is consumed rather than looked behind, for
-  // the WKWebView that has no lookbehind, and put back outside the mark.
-  const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])((?:${terms.join('|')})[\\p{L}\\p{N}]*)`, 'giu');
+// The query's words picked out of a passage, at the offsets the server gives:
+// it is the one that knows how the text was folded to find them, and a
+// browser's own case-insensitive matching cannot expand ß to ss, so it would
+// find nothing to mark in a passage that was found for exactly that reason.
+function mark(passage) {
+  const text = passage.text || '';
   let html = '';
   let last = 0;
-  for (const match of text.matchAll(pattern)) {
-    html += esc(text.slice(last, match.index)) + esc(match[1]) + `<mark>${esc(match[2])}</mark>`;
-    last = match.index + match[0].length;
+  for (const [begin, end] of passage.marks || []) {
+    if (begin < last || end > text.length) continue;
+    html += esc(text.slice(last, begin)) + `<mark>${esc(text.slice(begin, end))}</mark>`;
+    last = end;
   }
   return html + esc(text.slice(last));
 }
@@ -2284,8 +2285,22 @@ async function showQuoteContext(paper, claim) {
 // from an earlier edit can be, and it holds the old quote: saving it later
 // would put the model's version back.
 async function usePaperWording(paper, claim) {
-  const wording = V.quoteContext && V.quoteContext.data && V.quoteContext.data.suggestion;
+  const found = V.quoteContext && V.quoteContext.data;
+  const wording = found && found.suggestion;
   if (!wording || isSaving(claim)) return;
+  // The passage on screen can be older than the claim: while an editor is
+  // open the poll leaves the content alone, so a quote edited elsewhere
+  // refreshes `S` under a button still offering the old suggestion. Checked
+  // again here, against the row as it stands, rather than trusted because it
+  // is drawn.
+  const row = S.claims.find((c) => c.id === claim);
+  if (!row || found.quote !== row.quote || (found.locator || '') !== (row.locator || '')) {
+    V.quoteContext = null;
+    V.error = 'This claim changed while the passage was open; nothing was written.';
+    captureOpenEditor();
+    renderContent();
+    return;
+  }
   V.error = null;
   markSaving(claim, true);
   try {
@@ -2297,6 +2312,7 @@ async function usePaperWording(paper, claim) {
   } finally {
     markSaving(claim, false);
   }
+  captureOpenEditor();   // another claim's editor may be open and unsaved
   renderContent();
 }
 

@@ -691,6 +691,23 @@ def rename_tag(old: str, new: str) -> None:
         _retag_all(old, new)
 
 
+def _move_pass(data: dict, old: str, new: str | None) -> bool:
+    """Carry a topic's recorded pass to its new name, or drop it with the topic.
+
+    A deleted topic loses the pairs it was attached to. Recreating the tag over
+    the same unchanged claims produces the same signature, so a pass left on
+    file would be skipped and the topic never put back on those pairs.
+    """
+    passes = data.get("passes") or {}
+    if old not in passes:
+        return False
+    signature = passes.pop(old)
+    if new:
+        passes[new] = signature
+    data["passes"] = passes
+    return True
+
+
 def _retag_all(old: str, new: str | None) -> None:
     """Rewrite or drop a tag across every paper, every tension's topics, and
     the syntheses. Called holding `vocab_lock`; takes `tensions_lock` and then
@@ -722,7 +739,7 @@ def _retag_all(old: str, new: str | None) -> None:
                 save_paper(paper)
     with tensions_lock():
         data = _read_tensions()
-        touched = False
+        touched = _move_pass(data, old, new)
         for tension in data["tensions"]:
             if old not in tension.get("topics", []):
                 continue
@@ -735,7 +752,7 @@ def _retag_all(old: str, new: str | None) -> None:
             _save_tensions(data)
     with agreements_lock():
         data = _read_agreements()
-        touched = False
+        touched = _move_pass(data, old, new)
         for record in data["agreements"]:
             if old not in record.get("topics", []):
                 continue
@@ -1242,12 +1259,21 @@ def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None) -> str:
 
 
 def synthesis_basis(rows: list[dict]) -> dict[str, str]:
-    """Half of what a synthesis rests on: the set of claims and what each
-    said. A claim added, removed, or edited (text, evidence, kind) changes it.
-    Reviewing a claim does not: the prompt marks unreviewed claims, but a
-    review pass over a corpus does not change what any claim says, and staling
-    every synthesis while it runs would leave the mark meaning nothing."""
-    return {r["id"]: claim_fingerprint(r) for r in rows}
+    """Half of what a synthesis rests on: the set of claims, what each said,
+    and which paper it came from. A claim added, removed, or edited (text,
+    evidence, kind) changes it, and so does a correction to the author, year
+    or title — the listing names those and the model is told to cite papers by
+    author and year. Reviewing a claim does not: the prompt marks unreviewed
+    claims, but a review pass over a corpus does not change what any claim
+    says, and staling every synthesis while it runs would leave the mark
+    meaning nothing."""
+    return {r["id"]: synthesis_claim_basis(r) for r in rows}
+
+
+def synthesis_claim_basis(claim: dict) -> str:
+    """One claim as a synthesis rests on it: what it says, and whose paper it is."""
+    return (f"{cite_surname(claim.get('paper_authors'), claim.get('paper') or '')}"
+            f" {claim.get('paper_year')} {claim.get('paper_title')} {claim_fingerprint(claim)}")
 
 
 def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
@@ -1272,7 +1298,8 @@ UNCHECKED = object()
 
 def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
                      tensions: list[dict] | None = None, source: str = "model",
-                     before: dict | None | object = UNCHECKED) -> dict | None:
+                     before: dict | None | object = UNCHECKED,
+                     basis: str | None = None) -> dict | None:
     """Write one topic's synthesis.
 
     `claims_by_id` is every claim the model was shown, as it stood when the
@@ -1320,11 +1347,13 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
             "written": now(),
             # The prompt it was written under, topic name and description
             # included: both are in what the model was given, and a rename or
-            # a reworded description changes the question. A record with none
-            # of this is older than the field and counts as older than the
-            # prompt.
-            "prompt_basis": synthesis_prompt_basis(topic),
-            "claims": {i: claim_fingerprint(c) for i, c in claims_by_id.items()
+            # a reworded description changes the question. Taken as the prompt
+            # was built, not as things stand now — a description edited during
+            # the call describes a question this answer was never asked. A
+            # record with none of this is older than the field and counts as
+            # older than the prompt.
+            "prompt_basis": basis if basis is not None else synthesis_prompt_basis(topic),
+            "claims": {i: synthesis_claim_basis(c) for i, c in claims_by_id.items()
                        if topic in (c.get("tags") or [])},
             "tensions": synthesis_tensions(topic, tension_rows() if tensions is None else tensions),
         }
