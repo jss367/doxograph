@@ -14,6 +14,7 @@ of a word, so `steer` finds steering and steered.
 
 from __future__ import annotations
 
+import array
 import math
 import re
 import threading
@@ -42,12 +43,10 @@ _TEXT_LIMIT = 400
 
 
 def terms(query: str) -> list[str]:
-    """The words of a query, in order and without repeats.
+    """The words of a query, in order and without repeats, as they were typed.
 
-    As typed, not lowercased: case folding expands some letters — ß becomes
-    ss, İ becomes i and a combining mark — and the papers are searched as they
-    are written, where no amount of `IGNORECASE` puts those back together. A
-    repeat is judged case-insensitively all the same.
+    Kept as typed so the passages can quote them back; the matching itself is
+    done on the folded form of both sides, by `fold`.
     """
     seen: dict[str, str] = {}
     for word in _WORD.findall(query or ""):
@@ -55,30 +54,81 @@ def terms(query: str) -> list[str]:
     return list(seen.values())
 
 
-def paper_text(key: str) -> str | None:
-    """A paper's text, or None if there is none to search.
+def fold(text: str) -> str:
+    """`text` with the case taken out of it, character by character.
 
-    Read from the cache the quote checks write. A paper whose text has never
-    been extracted — one added before this existed, or one nothing has been
-    read from yet — is extracted here, once.
+    `str.casefold` over the whole string would do the same, but one character
+    at a time is what `fold_with_offsets` needs and the two must agree.
     """
+    return "".join(char.casefold() for char in text)
+
+
+def fold_with_offsets(text: str) -> tuple[str, array.array]:
+    """`fold(text)`, with the index in `text` each folded character came from.
+
+    Folding is not one character in, one out: ß folds to ss, İ to an i and a
+    combining dot. Matching the folded forms against each other is the only
+    way a search for STRASSE finds Straße, and this is what carries a position
+    in the folded text back to the paper's own characters.
+    """
+    folded: list[str] = []
+    offsets = array.array("i")
+    for at, char in enumerate(text):
+        for out in char.casefold():
+            folded.append(out)
+            offsets.append(at)
+    return "".join(folded), offsets
+
+
+def _stored(key: str):
+    """The file holding a paper's text and its identity, extracting it if this
+    is the first time anything has asked. None when there is no text to read."""
     path = store.text_path(key)
     try:
-        st = path.stat()
+        return path, path.stat()
     except OSError:
-        if quotes.paper_text(store.pdf_path(key), path) is None:
-            return None
-        try:
-            st = path.stat()
-        except OSError:
-            return None
+        pass
+    if quotes.paper_text(store.pdf_path(key), path) is None:
+        return None
+    try:
+        return path, path.stat()
+    except OSError:
+        return None
+
+
+def paper_text(key: str) -> str | None:
+    """A paper's text as the PDF has it. None when there is none to read.
+
+    Read from the file the quote checks write, without keeping it: what a
+    search holds on to is the folded form below, and the only callers of this
+    one want a handful of papers at a time.
+    """
+    stored = _stored(key)
+    if stored is None:
+        return None
+    try:
+        return stored[0].read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def folded_text(key: str) -> str | None:
+    """A paper's text with the case taken out, which is what a query meets.
+
+    Kept between queries: a search reads the whole corpus, and folding it on
+    every keystroke is the expensive half.
+    """
+    stored = _stored(key)
+    if stored is None:
+        return None
+    path, st = stored
     identity = (st.st_size, st.st_mtime_ns)
     with _texts_lock:
         hit = _texts.get(path)
         if hit and hit[0] == identity:
             return hit[1]
     try:
-        text = path.read_text(encoding="utf-8")
+        text = fold(path.read_text(encoding="utf-8"))
     except OSError:
         return None
     with _texts_lock:
@@ -89,8 +139,10 @@ def paper_text(key: str) -> str | None:
 
 
 def _pattern(term: str) -> re.Pattern:
-    """A term matches from the start of a word, whatever its case."""
-    return re.compile(rf"\b{re.escape(term)}\w*", re.IGNORECASE | re.UNICODE)
+    """A term matches from the start of a word. Both the term and the paper are
+    folded before they meet, so case is already out of the question: STRASSE
+    and Straße fold to the same letters, which `IGNORECASE` alone cannot do."""
+    return re.compile(rf"\b{re.escape(fold(term))}\w*", re.UNICODE)
 
 
 def search_papers(query: str, limit: int = 20) -> list[dict]:
@@ -109,14 +161,14 @@ def search_papers(query: str, limit: int = 20) -> list[dict]:
     # long a paper is against the whole pile, are both what they are whether or
     # not the paper matched. Averaging the length over the hits alone would let
     # the ranking depend on which papers happened to match.
-    texts: dict[str, str] = {}
+    matched: list[str] = []
     counts: dict[str, list[int]] = {}
     lengths: dict[str, int] = {}
     seen = [0] * len(wanted)
     total = 0
     corpus = 0
     for key in store.paper_keys():
-        text = paper_text(key)
+        text = folded_text(key)
         if not text:
             continue
         corpus += 1
@@ -128,10 +180,10 @@ def search_papers(query: str, limit: int = 20) -> list[dict]:
                 seen[i] += 1
         if not all(found):
             continue
-        texts[key] = text
+        matched.append(key)
         counts[key] = found
         lengths[key] = length
-    if not texts:
+    if not matched:
         return []
 
     average = total / corpus
@@ -141,26 +193,30 @@ def search_papers(query: str, limit: int = 20) -> list[dict]:
             (-sum(weight * (count * (K1 + 1))
                   / (count + K1 * (1 - B + B * lengths[key] / average))
                   for weight, count in zip(idf, counts[key])), key)
-            for key in texts
+            for key in matched
         )
     )
+    # The paper's own text is read again for the few that are shown, rather
+    # than every folded corpus being kept beside its original all session.
     return [
         {
             "key": key,
             "score": round(-score, 3),
             "occurrences": sum(counts[key]),
-            "passages": _passages(texts[key], patterns),
+            "passages": _passages(paper_text(key) or "", patterns),
         }
         for score, key in ranked[:limit]
     ]
 
 
-def _passages(text: str, patterns: list[re.Pattern]) -> list[dict]:
+def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     """A few places in the paper where the terms are, in the paper's own words.
 
     The earliest occurrences, dropping one that lands inside a passage already
-    shown, so two terms in the same sentence are one passage and not two.
+    shown, so two terms in the same sentence are one passage and not two. The
+    terms are found in the folded text and read back out of the original.
     """
+    text, offsets = fold_with_offsets(raw)
     found = [[m.start() for m in islice(pattern.finditer(text), PASSAGES)]
              for pattern in patterns]
     starts: list[int] = []
@@ -173,18 +229,19 @@ def _passages(text: str, patterns: list[re.Pattern]) -> list[dict]:
             if nth < len(places) and not any(abs(places[nth] - at) < PASSAGE_SPAN for at in starts):
                 starts.append(places[nth])
     passages = []
-    for at in sorted(starts)[:PASSAGES]:
+    for folded_at in sorted(starts)[:PASSAGES]:
+        at = offsets[folded_at] if folded_at < len(offsets) else len(raw)
         # Kept inside one page: text either side of a page break is the header
         # of the next page or the footer of this one, and a passage running
         # across the break would be on neither page it claims to be on.
-        low = text.rfind(quotes.PAGE_BREAK, 0, at) + 1
-        high = text.find(quotes.PAGE_BREAK, at)
-        high = len(text) if high < 0 else high
+        low = raw.rfind(quotes.PAGE_BREAK, 0, at) + 1
+        high = raw.find(quotes.PAGE_BREAK, at)
+        high = len(raw) if high < 0 else high
         begin = max(low, at - PASSAGE_SPAN)
         end = min(high, at + PASSAGE_SPAN)
         passages.append({
-            "text": quotes.tidy(text[begin:end]),
-            "page": text.count(quotes.PAGE_BREAK, 0, at) + 1,
+            "text": quotes.tidy(raw[begin:end]),
+            "page": raw.count(quotes.PAGE_BREAK, 0, at) + 1,
         })
     return passages
 

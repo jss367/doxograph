@@ -138,3 +138,21 @@ def test_a_term_is_searched_as_it_was_typed():
     store.pdf_path("strasse").write_bytes(minimal_pdf("Die Straße war lang und leer."))
     assert [hit["key"] for hit in search.search_papers("Straße")] == ["strasse"]
     assert [hit["key"] for hit in search.search_papers("straße")] == ["strasse"]
+
+
+def test_case_is_out_of_the_question_on_both_sides():
+    """`re.IGNORECASE` cannot map SS to ß: both sides are folded instead."""
+    store.save_paper(store.new_paper("strasse", title="Strasse"))
+    store.pdf_path("strasse").write_bytes(minimal_pdf("Die Straße war lang und leer."))
+    for query in ("Straße", "straße", "STRASSE", "strasse"):
+        assert [hit["key"] for hit in search.search_papers(query)] == ["strasse"], query
+    # And the passage is quoted as the paper writes it, not as it was folded.
+    assert "Straße" in search.search_papers("STRASSE")[0]["passages"][0]["text"]
+
+
+def test_a_folded_position_reads_back_to_the_papers_own_characters():
+    folded, offsets = search.fold_with_offsets("Die Straße war")
+    assert folded == search.fold("Die Straße war")
+    assert len(offsets) == len(folded)
+    at = folded.index("strasse")
+    assert "Die Straße war"[offsets[at]:].startswith("Straße")
