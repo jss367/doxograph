@@ -2351,6 +2351,73 @@ def test_removing_a_paper_names_the_workspace_it_was_asked_in():
 
 
 @pytest.mark.browser
+def test_a_claim_cannot_be_deleted_while_its_paper_is_being_removed():
+    """The paper's cards stay on screen and clickable until its DELETE comes
+    back. A claim held for deletion in that window is held after the flush that
+    was meant to clear them: its Undo would have nothing to restore, and its
+    own request would arrive under a paper the server has already dropped."""
+    one, _two = _paper_with_claims("shared", "Shared paper", ["One.", "Two."])
+
+    async def scenario():
+        in_flight = asyncio.Event()
+        release = asyncio.Event()
+        claim_deletes = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_paper_delete(route, request):
+                if request.method == "DELETE":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            async def record_claim_delete(route, request):
+                if request.method == "DELETE":
+                    claim_deletes.append(request.url)
+                await route.continue_()
+
+            await page.route("**/api/papers/shared", hold_paper_delete)
+            await page.route("**/api/papers/shared/claims/*", record_claim_delete)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                card = page.locator(f'.claim[data-claim="{one}"]')
+                await card.wait_for()
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                # The button is still there to be clicked, and it refuses.
+                await card.locator('[data-act="del"]').click()
+                await page.locator(
+                    "#toasts .toast", has_text="Wait for the change in flight"
+                ).wait_for()
+                assert await page.locator(
+                    "#toasts .toast", has_text="Deleted the claim."
+                ).count() == 0
+                assert await card.count() == 1
+
+                release.set()
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+                # Nothing was left holding a delete for a claim that has gone
+                # with its paper, so no request goes out under it and no
+                # failure notice stands over a deletion that did happen.
+                await page.wait_for_timeout(200)
+                assert await page.locator(
+                    "#toasts .toast", has_text="Could not delete"
+                ).count() == 0
+            await browser.close()
+
+        assert claim_deletes == []
+
+    asyncio.run(scenario())
+    assert store.all_papers() == []
+
+
+@pytest.mark.browser
 def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
     """Settling the held deletes ends in a read, and the picker can move in
     that gap — a pass costs real money in whichever corpus it lands."""

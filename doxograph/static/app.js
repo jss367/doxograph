@@ -3208,35 +3208,52 @@ async function removePaper(paper) {
   // a notice that said the claim could not be deleted — so nothing happens.
   if (!headers) return;
   const workspace = headers['X-Doxograph-Workspace'];
-  await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
-  // Moved on meanwhile: the view belongs to another corpus now, and the drafts
-  // and selection this would tidy up went with `resetWorkspaceView`.
-  if (currentWorkspaceId !== workspace) {
+  // The paper's cards stay on screen, and clickable, until this request comes
+  // back and the redraw takes them away. A claim deleted in that window is
+  // held for its own eight seconds under a paper that is already gone: the
+  // flush above has finished, so nothing sends it early, its Undo would have
+  // nothing to restore, and letting the notice run out sends a DELETE under a
+  // paper the server no longer has — a failure notice over a deletion the
+  // reader did ask for. They are frozen for the length of the removal, the
+  // same freeze a save or a bulk review puts on the claims it is writing.
+  const frozen = S.claims.filter((c) => c.paper === paper).map((c) => c.id);
+  frozen.forEach((id) => markSaving(id, true));
+  try {
+    await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
+    // Moved on meanwhile: the view belongs to another corpus now, and the drafts
+    // and selection this would tidy up went with `resetWorkspaceView`.
+    if (currentWorkspaceId !== workspace) {
+      await refreshAll();
+      return;
+    }
+    // Close an editor that belonged to the deleted paper, so its form is not
+    // captured as a draft for a claim that no longer exists. An editor on some
+    // other paper's claim stays open, which is why this ends in `refreshAll`:
+    // `refresh` would leave the claim list alone while an editor is open and
+    // the deleted paper's cards would stay on screen with buttons that 404.
+    S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
+    if (V.editing && V.editing !== NEW_CLAIM_ID) {
+      const row = S.claims.find((c) => c.id === V.editing);
+      if (!row || row.paper === paper) V.editing = null;
+    }
+    if (V.newClaim && V.newClaim.paper === paper) {
+      V.newClaim = null;
+      if (V.editing === NEW_CLAIM_ID) V.editing = null;
+    }
+    delete V.failedNewClaims[paper];
+    // Removing a paper from the list while reading another one keeps that one
+    // open; only a paper that was itself on screen falls back to "All papers".
+    if (V.paper === paper) V.paper = null;
+    const selected = S.claims.find((c) => c.id === V.selectedId);
+    if (!selected || selected.paper === paper) V.selectedId = null;
+    V.error = null;
     await refreshAll();
-    return;
+  } finally {
+    // In a `finally` so a removal that fails does not leave the paper's claims
+    // frozen with nothing left to unfreeze them: the cards are still there and
+    // the reader has to be able to work on them again.
+    frozen.forEach((id) => markSaving(id, false));
   }
-  // Close an editor that belonged to the deleted paper, so its form is not
-  // captured as a draft for a claim that no longer exists. An editor on some
-  // other paper's claim stays open, which is why this ends in `refreshAll`:
-  // `refresh` would leave the claim list alone while an editor is open and
-  // the deleted paper's cards would stay on screen with buttons that 404.
-  S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
-  if (V.editing && V.editing !== NEW_CLAIM_ID) {
-    const row = S.claims.find((c) => c.id === V.editing);
-    if (!row || row.paper === paper) V.editing = null;
-  }
-  if (V.newClaim && V.newClaim.paper === paper) {
-    V.newClaim = null;
-    if (V.editing === NEW_CLAIM_ID) V.editing = null;
-  }
-  delete V.failedNewClaims[paper];
-  // Removing a paper from the list while reading another one keeps that one
-  // open; only a paper that was itself on screen falls back to "All papers".
-  if (V.paper === paper) V.paper = null;
-  const selected = S.claims.find((c) => c.id === V.selectedId);
-  if (!selected || selected.paper === paper) V.selectedId = null;
-  V.error = null;
-  await refreshAll();
 }
 
 $('content').addEventListener('click', async (event) => {
@@ -3310,6 +3327,16 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'del') {
+      // Frozen means a request for this claim is already in flight — a save, a
+      // review toggle, or the removal of the paper it belongs to. Holding a
+      // delete for it now would put a row in the trash that the request coming
+      // back will contradict: an Undo with nothing to restore, and a DELETE
+      // sent eight seconds later against a claim that has since gone.
+      if (isSaving(claim)) {
+        toast('Wait for the change in flight to finish, then delete the claim.',
+              { tone: 'warn' });
+        return;
+      }
       // In grouped mode the same claim can be an editor in one topic group and
       // a plain card with a Delete button in another. Leaving `V.editing` set
       // would keep the deleted claim's form on screen, because `render()` skips
