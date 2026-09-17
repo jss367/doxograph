@@ -3389,43 +3389,75 @@ async function removePaper(paper) {
     ok: 'Remove',
   });
   if (!go) return;
-  // A claim of this paper still waiting out its notice has to go first. Left
-  // waiting, its Undo would have nothing to restore and its request would
-  // arrive under a paper that no longer exists, failing in the reader's face
-  // over a deletion they got what they asked for. Only this paper's, though:
-  // a claim of another paper, or a synthesis, was promised its own eight
-  // seconds and removing something else is no reason to take them away.
-  //
-  // That flush ends in a read, and nothing counts a read as a change in
-  // flight, so the picker can move in the gap before the paper's own request
-  // goes. It names the workspace it was asked in: the same paper imported into
-  // two corpora has the same key in both, and removing the wrong one is not
-  // something an undo could fix.
-  const headers = await settleDeletes((entry) => entry.paper === paper);
-  // That claim's delete failed. Removing the paper would take it anyway, under
-  // a notice that said the claim could not be deleted — so nothing happens.
-  if (!headers) return;
-  const workspace = headers['X-Doxograph-Workspace'];
-  // The paper's cards stay on screen, and clickable, until this request comes
-  // back and the redraw takes them away. A claim deleted in that window is
-  // held for its own eight seconds under a paper that is already gone: the
-  // flush above has finished, so nothing sends it early, its Undo would have
-  // nothing to restore, and letting the notice run out sends a DELETE under a
-  // paper the server no longer has — a failure notice over a deletion the
-  // reader did ask for. They are frozen for the length of the removal, the
-  // same freeze a save or a bulk review puts on the claims it is writing.
-  const frozen = S.claims.filter((c) => c.paper === paper).map((c) => c.id);
-  // A claim being written by hand is not among them: it has no id on the
-  // server, only the `__new__` the form is drawn under. Frozen by that name
-  // when it belongs to this paper, so the form goes read-only like the rest
-  // rather than staying open over a paper that is going. The set below is what
-  // actually refuses the save — the draft can be parked and restored by moving
-  // between papers, and a form restored after this was worked out would not be
-  // covered by it.
-  if (V.newClaim && V.newClaim.paper === paper) frozen.push(NEW_CLAIM_ID);
-  frozen.forEach((id) => markSaving(id, true));
+  // The question is a wait like any other, and the header and the paper list
+  // stay live across it: a second Remove could have been answered first, and
+  // this one would ask the server for a paper that is already going.
+  if (refuseWhileRemoving(paper, 'a second removal')) return;
+  // A write already on its way cannot be recalled. It carries no claim id this
+  // could freeze — a re-read, a quote check, a retag and an accepted topic all
+  // write the paper itself — and whichever way it races the DELETE it ends
+  // badly: landing first it is thrown away under a page that reported it
+  // saved, landing second it is a 404 over a removal the reader did ask for.
+  // The guard below stops the next one; this is the one already in flight.
+  if (pendingMutations) {
+    toast('Wait for the change in flight to finish, then remove the paper.', { tone: 'warn' });
+    return;
+  }
+  // Nothing else may be written to this paper from here on, and "here" is
+  // before the flush below rather than after it: the flush ends in a read of
+  // the whole corpus, long enough for a claim to be saved, a re-read started
+  // or a topic accepted, and the guard is no use to the DELETE if it goes up
+  // only once that window has closed. It is dropped in the `finally` at the
+  // end, so it covers the whole attempt and not just the request.
   removingPapers.add(paper);
+  // Frozen claim ids, filled in once the flush has settled and the corpus is
+  // known. Declared out here so the `finally` can hand them back on the way
+  // out of a flush that failed too.
+  let frozen = [];
   try {
+    // A claim of this paper still waiting out its notice has to go first. Left
+    // waiting, its Undo would have nothing to restore and its request would
+    // arrive under a paper that no longer exists, failing in the reader's face
+    // over a deletion they got what they asked for. Only this paper's, though:
+    // a claim of another paper, or a synthesis, was promised its own eight
+    // seconds and removing something else is no reason to take them away.
+    //
+    // That flush ends in a read, and nothing counts a read as a change in
+    // flight, so the picker can move in the gap before the paper's own request
+    // goes. It names the workspace it was asked in: the same paper imported
+    // into two corpora has the same key in both, and removing the wrong one is
+    // not something an undo could fix.
+    const headers = await settleDeletes((entry) => entry.paper === paper);
+    // That claim's delete failed. Removing the paper would take it anyway,
+    // under a notice that said the claim could not be deleted — so nothing
+    // happens. The `finally` drops the guard, handing the paper back to the
+    // reader who still has it on screen.
+    if (!headers) return;
+    const workspace = headers['X-Doxograph-Workspace'];
+    // The paper's cards stay on screen, and clickable, until this request comes
+    // back and the redraw takes them away. A claim deleted in that window is
+    // held for its own eight seconds under a paper that is already gone: the
+    // flush above has finished, so nothing sends it early, its Undo would have
+    // nothing to restore, and letting the notice run out sends a DELETE under a
+    // paper the server no longer has — a failure notice over a deletion the
+    // reader did ask for. They are frozen for the length of the removal, the
+    // same freeze a save or a bulk review puts on the claims it is writing.
+    //
+    // Worked out after the flush rather than before it, because the flush ends
+    // in a read and the claims the paper has once that lands are the ones the
+    // DELETE is about to take. Nothing can be clicked in between — there is no
+    // await between the read and this freeze — and the guard above held the
+    // paper for the whole of the flush itself.
+    frozen = S.claims.filter((c) => c.paper === paper).map((c) => c.id);
+    // A claim being written by hand is not among them: it has no id on the
+    // server, only the `__new__` the form is drawn under. Frozen by that name
+    // when it belongs to this paper, so the form goes read-only like the rest
+    // rather than staying open over a paper that is going. The set below is what
+    // actually refuses the save — the draft can be parked and restored by moving
+    // between papers, and a form restored after this was worked out would not be
+    // covered by it.
+    if (V.newClaim && V.newClaim.paper === paper) frozen.push(NEW_CLAIM_ID);
+    frozen.forEach((id) => markSaving(id, true));
     await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
     // Moved on meanwhile: the view belongs to another corpus now, and the drafts
     // and selection this would tidy up went with `resetWorkspaceView`.
@@ -3456,9 +3488,10 @@ async function removePaper(paper) {
     V.error = null;
     await refreshAll();
   } finally {
-    // In a `finally` so a removal that fails does not leave the paper's claims
-    // frozen with nothing left to unfreeze them: the cards are still there and
-    // the reader has to be able to work on them again.
+    // In a `finally` so a removal that fails — or one called off by a held
+    // delete that would not go — does not leave the paper frozen with nothing
+    // left to unfreeze it: the cards are still there and the reader has to be
+    // able to work on them again.
     frozen.forEach((id) => markSaving(id, false));
     removingPapers.delete(paper);
   }
@@ -3550,6 +3583,12 @@ $('content').addEventListener('click', async (event) => {
               { tone: 'warn' });
         return;
       }
+      // The freeze above names the claims the paper had when its removal
+      // settled its held deletes. A claim the poll has brought in since — a
+      // re-read that finished while the DELETE was in flight — is not among
+      // them, and holding a delete for it would leave a notice offering to
+      // undo a claim that its paper is about to take anyway.
+      if (refuseWhileRemoving(paper, 'the delete it would hold')) return;
       // In grouped mode the same claim can be an editor in one topic group and
       // a plain card with a Delete button in another. Leaving `V.editing` set
       // would keep the deleted claim's form on screen, because `render()` skips
@@ -3742,6 +3781,11 @@ $('content').addEventListener('click', async (event) => {
       if (refuseWhileRemoving(paper, 'the claims it reads out')) return;
       const workspace = await settleDeletes();
       if (!workspace) return;   // the delete failed; the pass would read the claim
+      // The flush is a wait, and the header stays live across it: a removal
+      // answered during it holds the paper from before its own flush, and the
+      // check above is too old to have seen it. Asked again, against the guard
+      // as it stands now.
+      if (refuseWhileRemoving(paper, 'the claims it reads out')) return;
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, {
         method: 'POST', headers: workspace,
       });
@@ -3763,6 +3807,9 @@ $('content').addEventListener('click', async (event) => {
       if (refuseWhileRemoving(paper, 'the topics it writes on the claims')) return;
       const workspace = await settleDeletes();
       if (!workspace) return;   // the delete failed; the pass would read the claim
+      // Asked again on the far side of the flush, as the re-read does: a
+      // removal answered while it ran took the paper after the check above.
+      if (refuseWhileRemoving(paper, 'the topics it writes on the claims')) return;
       await api('/api/retag', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
         body: JSON.stringify({ keys: [paper] }),

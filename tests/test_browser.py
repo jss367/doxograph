@@ -4261,3 +4261,132 @@ def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
     assert "midswitch" in store.tag_names()
     with cfg.use_workspace(other["id"]):
         assert "midswitch" not in store.tag_names()
+
+
+@pytest.mark.browser
+def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
+    """The removal begins by sending the claim deletes this paper was holding,
+    and that flush ends in a read of the whole corpus. The header stays on
+    screen and clickable for all of it, so the freeze has to be up before the
+    flush rather than after it: a claim written or a pass started in that
+    window races the DELETE that follows."""
+    from pdfs import minimal_pdf
+
+    _paper_with_claims("shared", "Shared paper", ["One.", "Two."])
+    store.pdf_path("shared").write_bytes(minimal_pdf("One."))
+
+    async def scenario():
+        in_flight = asyncio.Event()
+        release = asyncio.Event()
+        wrote = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_claim_delete(route, request):
+                if request.method == "DELETE":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            async def record_write(route, request):
+                if request.method == "POST":
+                    wrote.append(request.url)
+                await route.continue_()
+
+            await page.route("**/api/papers/shared/claims/*", hold_claim_delete)
+            await page.route("**/api/papers/shared/claims", record_write)
+            await page.route("**/api/papers/shared/verify", record_write)
+            await page.route("**/api/papers/shared/extract", record_write)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+
+                add = page.get_by_role("button", name="Add claim by hand")
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                # Stopped on the held claim's delete, with the paper's own
+                # request still to come.
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                await add.click()
+                await page.locator("#toasts .toast",
+                                   has_text="That paper is being removed").wait_for()
+                assert await page.locator('form[data-form="__new__"]').count() == 0
+
+                await page.get_by_role("button", name="Check quotes").click()
+                await page.locator(
+                    "#toasts .toast",
+                    has_text="the check it writes on each quote").wait_for()
+
+                release.set()
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+            await browser.close()
+
+        assert wrote == []
+
+    asyncio.run(scenario())
+    assert store.all_papers() == []
+
+
+@pytest.mark.browser
+def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
+    """A write already in flight carries no claim id the removal could freeze,
+    and it cannot be recalled: landing before the DELETE it is thrown away
+    under a page that reported it saved, landing after it is a 404 over a
+    removal the reader did ask for. So the removal waits to be asked again."""
+    _paper_with_claims("shared", "Shared paper", ["One."])
+
+    async def scenario():
+        in_flight = asyncio.Event()
+        release = asyncio.Event()
+        paper_deletes = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_claim_patch(route, request):
+                if request.method == "PATCH":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            async def record_paper_delete(route, request):
+                if request.method == "DELETE":
+                    paper_deletes.append(request.url)
+                await route.continue_()
+
+            await page.route("**/api/papers/shared/claims/*", hold_claim_patch)
+            await page.route("**/api/papers/shared", record_paper_delete)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                # A review toggle is a PATCH on the claim; hold it in flight.
+                await page.locator('.claim[data-claim="shared-c1"] [data-act="review"]').click()
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await page.locator(
+                    "#toasts .toast",
+                    has_text="Wait for the change in flight to finish, then remove the paper",
+                ).wait_for()
+
+                release.set()
+                await page.wait_for_timeout(300)
+                assert paper_deletes == []
+
+                # Asked again once the page is quiet, it goes through.
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+            await browser.close()
+
+        assert len(paper_deletes) == 1
+
+    asyncio.run(scenario())
+    assert store.all_papers() == []
