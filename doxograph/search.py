@@ -54,6 +54,26 @@ except ValueError:
     TEXT_BUDGET = 64_000_000
 
 
+def _query_words(text: str):
+    r"""The words of a query, counting a mark as part of the word it sits on.
+
+    `\w` does not match a combining mark, and in a script whose vowels are
+    marks that cuts one written word into its consonants — किताब into three
+    terms, each of which any paper might hold. Done a character at a time
+    rather than by pattern because the categories are what say which is
+    which, and a query is short enough not to care.
+    """
+    word: list[str] = []
+    for char in text:
+        if char.isalnum() or char == "_" or unicodedata.category(char)[0] == "M":
+            word.append(char)
+        elif word:
+            yield "".join(word)
+            word = []
+    if word:
+        yield "".join(word)
+
+
 def terms(query: str) -> list[str]:
     """The words of a query, folded, in order and without repeats.
 
@@ -65,7 +85,7 @@ def terms(query: str) -> list[str]:
     mention would be counted twice and weighed twice in the ranking.
     """
     seen: dict[str, None] = {}
-    for word in _WORD.findall(fold(query or "")):
+    for word in _query_words(fold(query or "")):
         seen.setdefault(word, None)
     return list(seen)
 
@@ -200,6 +220,9 @@ def _length(text: str) -> int:
     both be one word long and neither would be discounted at all. BM25 only
     ever compares a length against the average, so the unit is free.
     """
+    # By pattern rather than character by character: this runs over every
+    # paper in the corpus, and a mark counted or not counted is a rounding
+    # error in a length.
     return sum(len(word) for word in _WORD.findall(text)) or 1
 
 

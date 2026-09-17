@@ -2107,3 +2107,28 @@ def test_the_page_folds_a_greek_iota_subscript_as_the_server_does():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_keeps_a_vowel_sign_the_server_keeps():
+    """A vowel sign in Devanagari is a letter of the word, not an accent: the
+    page must not fold काल and कल together where the papers do not."""
+    _paper("sharma2026kaal", "काल और समय", "introspection")
+    store.update_claim("sharma2026kaal", "sharma2026kaal-c1", {"text": "यह काल है।"})
+    _paper("verma2026kal", "कल और आज", "introspection")
+    store.update_claim("verma2026kal", "verma2026kal-c1", {"text": "यह कल है।"})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("काल")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())

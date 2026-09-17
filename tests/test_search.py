@@ -365,3 +365,12 @@ def test_a_mark_inside_a_word_does_not_cut_the_query_in_two():
     a_paper_of("naive", "A naive baseline recovers half the time.")
     for query in ("naïve", "naïve", "naive"):
         assert [hit["key"] for hit in search.search_papers(query)] == ["naive"], repr(query)
+
+
+def test_a_word_whose_vowels_are_marks_is_one_term():
+    """`\\w` does not match a combining mark, and in Devanagari that cuts a
+    word into its consonants — each of which any paper might hold."""
+    assert search.terms("किताब") == ["किताब"]
+    a_paper_of("hindi", "यह एक किताब है।")
+    a_paper_of("other", "बात की कहानी।")
+    assert [hit["key"] for hit in search.search_papers("किताब")] == ["hindi"]
