@@ -429,3 +429,21 @@ def test_a_heading_is_built_out_of_heading_words():
         assert cites.reference_text(text).strip() == "[1] A paper.", heading
     for prose in ("References to Figure 2 show", "Referenced work", "No references"):
         assert cites.reference_text(f"Body.\n{prose}\n[1] A.\n") == "", prose
+
+
+def test_a_bare_identifier_in_an_uncut_list_leaves_the_title_to_its_twin():
+    """No entry markers, a bare arXiv id for the preprint, and one printing of
+    the shared title for the published version."""
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nVaswani, A. arXiv:1706.03762, 2017.\n"
+        "Vaswani, A. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]
+
+
+def test_an_entry_marker_at_the_top_of_a_page_starts_an_entry():
+    assert cites.entries("[1] A paper. 2017.\x0c[2] Another paper. 2018.") == [
+        "apaper2017", "anotherpaper2018"]

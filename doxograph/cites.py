@@ -62,7 +62,7 @@ _cache_lock = threading.Lock()
 # Where a reference list numbers its entries. A bibliography that does not is
 # one entry as far as this is concerned, which is where this started.
 _ENTRY_MARK = re.compile(
-    r"(?m)^[ \t]*(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)])(?=[ \t]|$)")
+    r"(?m)(?:^|(?<=\f))[ \t]*(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)])(?=[ \t\f]|$)")
 
 
 def entries(listing: str) -> list[str]:
@@ -191,10 +191,15 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         text = search.paper_text(paper["key"])
         if not text:
             continue
-        listing = entries(reference_text(text))
+        references = reference_text(text)
+        listing = entries(references)
         if not listing:
             continue
-        for other in _cited(paper["key"], listing, marks):
+        # A list that numbers nothing is one long stretch, and a paper named
+        # by an identifier there has no entry to tie it to a printing of a
+        # title somebody else may have cited.
+        uncut = not _ENTRY_MARK.search(references)
+        for other in _cited(paper["key"], listing, marks, uncut):
             found.append({"from": paper["key"], "to": other})
     found.sort(key=lambda edge: (edge["from"], edge["to"]))
     # Only if the corpus stood still while it was being read. A paper added or
@@ -208,7 +213,8 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     return found
 
 
-def _cited(key: str, entries: list[str], marks: dict[str, list[str]]) -> list[str]:
+def _cited(key: str, entries: list[str], marks: dict[str, list[str]],
+           uncut: bool = False) -> list[str]:
     """Which papers a reference list names, one entry at a time.
 
     An entry names one work. Within it the longest mark wins, so a title
@@ -221,11 +227,12 @@ def _cited(key: str, entries: list[str], marks: dict[str, list[str]]) -> list[st
     """
     cited: set[str] = set()
     for entry in entries:
-        cited |= _cited_in(key, entry, marks)
+        cited |= _cited_in(key, entry, marks, uncut)
     return sorted(cited)
 
 
-def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
+def _cited_in(key: str, entry: str, marks: dict[str, list[str]],
+              uncut: bool = False) -> set[str]:
     """The papers one stretch of a reference list names.
 
     A paper claims the places its title is printed, or — where the entry names
@@ -245,7 +252,11 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
         # `fingerprints` puts a paper's identifiers first and its title last.
         title = found[-1] if found else ""
         by_identifier = next((mark for mark in found[:-1] if mark in entry), "")
-        named_by = title if title and title in entry else by_identifier
+        # Where the list is one stretch, an identifier is the only thing that
+        # points at this paper and nobody else's: a title printed somewhere in
+        # a page of references may be somebody's citation of its twin.
+        named_by = (by_identifier if uncut and by_identifier
+                    else (title if title and title in entry else by_identifier))
         if not named_by:
             continue
         claims[other] = (_occurrences(entry, named_by), len(named_by), bool(by_identifier))
