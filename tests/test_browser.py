@@ -1440,6 +1440,51 @@ def test_reviewing_by_keyboard_advances_and_n_jumps_to_the_next_unreviewed():
 
 
 @pytest.mark.browser
+def test_reviewing_leaves_a_claim_picked_while_the_review_was_in_flight():
+    """r moves on when the review lands, but a claim chosen while the request
+    was still running is the later decision: advancing on top of it would pull
+    the selection back to where the review started."""
+    one, two, three = _paper_with_claims(
+        "doe2026study", "A study", ["One.", "Two.", "Three."], reviewed=False)
+
+    async def scenario():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_patch(route, request):
+                if request.method == "PATCH":
+                    started.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+
+                await page.keyboard.press("r")
+                await asyncio.wait_for(started.wait(), timeout=5)
+                await page.keyboard.press("j")
+                await page.keyboard.press("j")
+                await page.locator(f'.claim.sel[data-claim="{three}"]').wait_for()
+
+                release.set()
+                await page.locator(f'.claim[data-claim="{one}"]:not(.unreviewed)').wait_for()
+                # The auto-advance would have landed on the second claim.
+                await page.wait_for_timeout(300)
+                assert await page.locator(f'.claim.sel[data-claim="{three}"]').count() == 1
+                assert await page.locator(f'.claim.sel[data-claim="{two}"]').count() == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: True, two: False, three: False}
+
+
+@pytest.mark.browser
 def test_marking_a_whole_paper_reviewed_can_be_undone():
     one, two, three = _paper_with_claims(
         "doe2026study", "A study", ["One.", "Two.", "Three."], reviewed=False)

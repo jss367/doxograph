@@ -158,6 +158,20 @@ function blankClaim(paper) {
   };
 }
 
+// Counts the claims the user picks by hand: j/k, n, a click on a card, a jump
+// to a linked one. The `r` key reads it either side of its request, because a
+// claim chosen while the review PATCH is in flight is a newer choice than the
+// auto-advance and must not be overwritten by it. A count rather than a check
+// of `V.selectedId`, which moves on its own: the redraw after a toggle drops
+// the claim just reviewed out of an "only unreviewed" list and the selection
+// lands somewhere else without the user touching anything.
+let handPicked = 0;
+
+function selectClaim(id) {
+  V.selectedId = id;
+  handPicked += 1;
+}
+
 // Claims with a save in flight. Their form is read-only until the request
 // settles: text typed after Save was clicked is not in the request and would be
 // thrown away by the redraw that follows it, and a second click would post the
@@ -3484,7 +3498,7 @@ $('content').addEventListener('click', async (event) => {
         if (V.unverified && row.quote_verified !== false) { V.unverified = false; $('only-unverified').checked = false; }
         if (V.q.trim() && !queryMatcher()(haystack(row))) { V.q = ''; $('q').value = ''; }
       }
-      V.selectedId = claim;
+      selectClaim(claim);
       syncHash(true);
       renderAll();   // a cleared topic or paper filter changes the sidebar too
       scrollToSelected();
@@ -3577,7 +3591,7 @@ $('content').addEventListener('click', async (event) => {
     // Selecting another claim redraws the list, which would rebuild an open
     // editor from the server row; keep what is typed in it first.
     captureOpenEditor();
-    V.selectedId = card.dataset.claim;
+    selectClaim(card.dataset.claim);
     renderContent();
   }
 });
@@ -4009,7 +4023,7 @@ function moveSelection(rows, step) {
   captureOpenEditor();
   const at = rows.findIndex((row) => row.id === V.selectedId);
   const next = at < 0 ? 0 : Math.min(Math.max(at + step, 0), rows.length - 1);
-  V.selectedId = rows[next].id;
+  selectClaim(rows[next].id);
   renderContent();
   scrollToSelected();
 }
@@ -4026,7 +4040,7 @@ function selectNextUnreviewed(rows) {
     return;
   }
   captureOpenEditor();
-  V.selectedId = next.id;
+  selectClaim(next.id);
   renderContent();
   scrollToSelected();
 }
@@ -4111,8 +4125,13 @@ document.addEventListener('keydown', async (event) => {
     // back does not move: that is a correction, and it is made where it is.
     const marking = !row.reviewed;
     const following = rows[rows.findIndex((other) => other.id === row.id) + 1];
+    // The request is slow enough to press j again or click another claim while
+    // it runs, and that is the later decision: advancing on top of it would
+    // pull the selection back to where this review started.
+    const picked = handPicked;
     const took = await toggleReviewed(row);
-    if (took && marking && following && visibleClaims().some((other) => other.id === following.id)) {
+    if (took && marking && following && handPicked === picked
+        && visibleClaims().some((other) => other.id === following.id)) {
       V.selectedId = following.id;
       renderContent();
       scrollToSelected();
