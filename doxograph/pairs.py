@@ -140,8 +140,15 @@ def weights(rows: Iterable[dict]) -> dict[str, float]:
     """How much each word counts: rarer across the corpus, worth more.
 
     Over the whole corpus rather than one topic, so a word that is everywhere
-    — the topic's own name, most of all — weighs next to nothing wherever it
-    turns up.
+    — the topic's own name, most of all — weighs little against a word that is
+    not, and two claims sharing nothing else fall under the floor.
+
+    Little rather than nothing: a word in every row still weighs log(2), and
+    zeroing it would empty a small corpus, where every shared word is in every
+    row and a reader most wants the suggestion. The floor is what keeps the
+    corpus-wide word from carrying a pair on its own, and it does — in a pile
+    of fifty, two claims of four words each sharing only that one come to
+    0.027 against a floor of 0.08.
     """
     counts: dict[str, int] = {}
     total = 0
