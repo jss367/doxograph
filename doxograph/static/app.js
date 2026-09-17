@@ -320,7 +320,25 @@ function pruneTrashed() {
       paper.n_unreviewed = count.unreviewed;
     });
   }
-  S.agreements = (S.agreements || []).filter((row) => !trashed('agreement', row.id));
+  // The analysis views hold the server's own join: each tension and agreement
+  // carries the claim rows it cites, not their ids. Taking a held claim out of
+  // `S.claims` alone would leave those copies on screen, still open to a
+  // decision or a quote, so they are filtered the way `tension_rows` and
+  // `agreement_rows` filter them — a tension needs both of its claims, an
+  // agreement needs members from two papers. Their `topics` stand: every
+  // member left still carries them.
+  S.tensions = (S.tensions || []).filter(
+    (row) => !(row.claims || []).some((claim) => trashed('claim', claim.id)));
+  S.agreements = (S.agreements || [])
+    .filter((row) => !trashed('agreement', row.id))
+    .map((row) => {
+      const members = (row.claims || []).filter((claim) => !trashed('claim', claim.id));
+      if (members.length === (row.claims || []).length) return row;
+      // Stale, as on the server: the note and the decision on file were about
+      // a group that is not the one on screen.
+      return { ...row, claims: members, n_papers: new Set(members.map((c) => c.paper)).size, stale: true };
+    })
+    .filter((row) => new Set((row.claims || []).map((claim) => claim.paper)).size >= 2);
   S.syntheses = (S.syntheses || []).filter((row) => !trashed('synthesis', row.topic));
 }
 

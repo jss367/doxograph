@@ -3327,3 +3327,58 @@ def test_a_url_naming_the_research_view_draws_it_at_boot():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
+    """A claim waiting out its undo window is off the page, joined copies and
+    all. The tension it holds up goes with it, as it would on the server, and
+    the agreement drops it and counts the papers that are left. Undo brings
+    both back, since the delete was never sent."""
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    _paper("paper-c", "Paper C", "recovery")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery", [
+        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "tension", "note": "n"},
+    ], shown)
+    store.record_agreements("recovery", [{"claims": ["paper-a-c1", "paper-b-c1", "paper-c-c1"],
+                                          "note": "All three report it."}], shown)
+    tid = store.tension_rows()[0]["id"]
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                card = page.locator('.claim[data-claim="paper-a-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+
+                # The tension needs both its claims, so it is not shown at all.
+                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.locator(".paperhead h2", has_text="Where papers disagree").wait_for()
+                assert await page.locator(f'.tcard[data-tension="{tid}"]').count() == 0
+
+                # The agreement keeps the members that are left, and says so.
+                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                group = page.locator('.tcard[data-agreement="a1"]')
+                await group.wait_for()
+                assert await group.locator(".kind.agreement").text_content() == "2 papers"
+                assert await group.locator('[data-tclaim="paper-a-c1"]').count() == 0
+                assert await group.locator(".tgroup .claim").count() == 2
+
+                # Undo puts the claim back where it was cited.
+                await notice.get_by_role("button", name="Undo").click()
+                await group.locator('[data-tclaim="paper-a-c1"]').wait_for()
+                assert await group.locator(".kind.agreement").text_content() == "3 papers"
+                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.locator(f'.tcard[data-tension="{tid}"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-a")["claims"]) == 1
