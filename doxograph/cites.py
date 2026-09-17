@@ -594,11 +594,21 @@ _DOI_HEAD = re.compile(r"10\.\d{4,9}/")
 
 
 def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
-    """Whether a title is printed at `at` with a word ending either side of it.
+    """Whether a title is printed at `at` as the whole of a title.
 
     Squashing takes the spaces out, so a title reads straight through a longer
     word at either end: `Understanding neural network` is inside
     `Understanding neural networks`, and the two are different papers.
+
+    And through a longer title: an entry citing `Attention is all you need for
+    image restoration` is not citing `Attention is all you need`, whether or
+    not the longer paper is in the corpus to say so. A title has to end where
+    the entry stops writing it — at the full stop, the comma or the quotation
+    mark that every citation style puts after a title — so a word after it
+    with nothing but a space between is more of the same title.
+
+    Only at the end. What comes before a title is the authors, and a space is
+    what an entry puts between them and it.
     """
     begin = entry.offsets[at]
     stop = entry.offsets[at + width - 1] + 1
@@ -613,6 +623,8 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     after = entry.raw[stop:stop + 12]
     before = entry.raw[max(begin - 12, 0):begin]
     if after[:1].isalnum() or before[-1:].isalnum():
+        return False
+    if after[:1].isspace():
         return False
     # A hyphen the entry wrapped at stands before the indentation of the line
     # the word goes on to: `Network-\n  based` is one word, and a title that

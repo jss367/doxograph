@@ -643,6 +643,24 @@ def test_an_arxiv_id_is_cited_with_or_without_its_version():
     assert cites._whole(entry, entry.squashed.find(mark), len(mark), True, "1706.03762")
 
 
+def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
+    """The longer work need not be in the corpus for the entry to be citing
+    it: a title that the entry goes on writing is a title of its own."""
+    _paper("attention", ATTENTION, [ATTENTION, "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Nobody. Attention is all you need for image "
+        "restoration. 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+    # And the paper itself is still cited where the entry stops at its title.
+    _paper("citing2", "Another citing paper", [
+        "Another citing paper",
+        "References\n[1] A Vaswani et al. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing2"] == ["attention"]
+
+
 def test_a_title_inside_a_longer_word_is_not_a_citation():
     """`Understanding neural network` reads straight through `Understanding
     neural networks` once the spaces are gone, and the two are different
@@ -670,8 +688,9 @@ def test_a_title_inside_a_longer_word_is_not_a_citation():
                  "Nobody. Understanding neural network\u2019s reach. 2026."):
         entry = quotes.build(text)
         assert not cites._bounded(entry, entry.squashed.find(mark), len(mark)), text
-    # But a title at the end of a line is an entry ending, not a word going on.
-    entry = quotes.build("Nobody. Understanding neural network\nSmith, J. Another. 2026.")
+    # But a title that ends where the entry stops writing it is bounded,
+    # wherever the line breaks after it.
+    entry = quotes.build("Nobody. Understanding neural network.\nSmith, J. Another. 2026.")
     assert cites._bounded(entry, entry.squashed.find(mark), len(mark))
 
     # The same either side: a title that starts where a wrapped word goes on
