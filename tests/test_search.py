@@ -264,6 +264,15 @@ def test_a_paper_without_spaces_is_measured_by_its_characters():
     assert [hit["key"] for hit in search.search_papers("模型")] == ["brief", "long"]
 
 
+def test_a_term_in_an_unspaced_script_can_meet_itself():
+    """哈哈 occurs twice in 哈哈哈. Counting the second one is what tells the
+    two papers apart: matching once and moving past it makes them say it
+    equally often, and the shorter paper wins on length alone."""
+    a_paper_of("doubled", "他说哈哈哈了。")
+    a_paper_of("single", "他说哈哈了。")
+    assert [hit["key"] for hit in search.search_papers("哈哈")] == ["doubled", "single"]
+
+
 def test_a_word_split_at_a_page_break_is_one_word_to_a_search():
     a_paper_of("split", "We measure the transfor-\x0cmation of steered activations.")
     assert [hit["key"] for hit in search.search_papers("transformation")] == ["split"]

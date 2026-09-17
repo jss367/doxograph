@@ -270,11 +270,17 @@ def _pattern(term: str) -> re.Pattern:
     Both the term and the paper are folded before they meet, so case is
     already out of the question: STRASSE and Straße fold to the same letters,
     which `IGNORECASE` alone cannot do.
+
+    The term itself is group 1, which is what every caller measures and marks.
+    In a script that writes without spaces the pattern is a lookahead, so a
+    term can meet itself: 哈哈 occurs twice in 哈哈哈, and a match that ate the
+    first two characters would find one occurrence and rank the paper as
+    though it had said the word once.
     """
     folded = re.escape(fold(term))
     if _UNSEGMENTED.search(term):
-        return re.compile(folded, re.UNICODE)
-    return re.compile(rf"(?<!{_IN_WORD}){folded}{_IN_WORD}*", re.UNICODE)
+        return re.compile(rf"(?=({folded}))", re.UNICODE)
+    return re.compile(rf"(?<!{_IN_WORD})({folded}{_IN_WORD}*)", re.UNICODE)
 
 
 def search_papers(query: str, limit: int = 20) -> list[dict]:
@@ -362,7 +368,7 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
             match = next(found[which], None)
             if match is None:
                 return None
-            taken[which].append((match.start(), match.end()))
+            taken[which].append(match.span(1))
         return taken[which][nth]
     starts: list[tuple[int, int]] = []
 
@@ -436,8 +442,9 @@ def _parts(shown: str, patterns: list[re.Pattern]) -> list[dict]:
     spans: list[list[int]] = []
     for pattern in patterns:
         for match in pattern.finditer(folded):
-            begin = offsets[match.start()] if match.start() < len(offsets) else len(shown)
-            end = offsets[match.end() - 1] + 1 if match.end() - 1 < len(offsets) else len(shown)
+            at, stop = match.span(1)
+            begin = offsets[at] if at < len(offsets) else len(shown)
+            end = offsets[stop - 1] + 1 if stop - 1 < len(offsets) else len(shown)
             # A mark the folding dropped belongs to the letter before it: the
             # accent on the last letter of a word is part of the word.
             while end < len(shown) and unicodedata.combining(shown[end]):
