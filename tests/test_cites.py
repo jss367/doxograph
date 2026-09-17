@@ -802,6 +802,12 @@ def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
         inside = quotes.build(raw)
         assert not cites._whole(inside, inside.squashed.find(arxiv), len(arxiv),
                                 True, "1706.03762"), raw
+    # But one entry ending in a DOI and the next beginning with an arXiv id
+    # are two entries, and the break between them is not part of either.
+    apart = quotes.build("Somebody. Another work. https://doi.org/10.9999/foo\n"
+                         "1706.03762, 2017.")
+    assert cites._whole(apart, apart.squashed.find(arxiv), len(arxiv),
+                        True, "1706.03762")
     # And a dash the entry writes is where the identifier goes on, so a
     # shorter DOI does not end inside a longer one.
     longer = quotes.build("Nobody. A work. https://doi.org/10.1234/foo\u2013bar, 2026.")

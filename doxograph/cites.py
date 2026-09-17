@@ -777,12 +777,21 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     # a DOI is part of that run and is not a DOI itself.
     # Read through a wrap on the way back, since an identifier the page split
     # is one identifier: `10.9999/abc/\n  1706.03762` is that DOI and not the
-    # arXiv id at the end of it.
-    joined = _WRAP.sub("", lead)
-    start = len(joined)
-    while start and _IDENTIFIER_CHAR.match(joined[start - 1]):
-        start -= 1
-    return not _DOI_HEAD.search(joined[start:])
+    # arXiv id at the end of it. Only where what stands before the break joins
+    # what follows it — a slash, a dot — since a line of an unnumbered
+    # bibliography ending in one identifier and the next beginning with
+    # another are two entries and not one long identifier.
+    run = lead
+    while True:
+        if run and _IDENTIFIER_CHAR.match(run[-1]):
+            run = run[:-1]
+            continue
+        wrap = _WRAP_END.search(run)
+        if wrap and wrap.start() and run[wrap.start() - 1] in _JOINS:
+            run = run[:wrap.start()]
+            continue
+        break
+    return not _DOI_HEAD.search(lead[len(run):])
 
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
