@@ -682,3 +682,18 @@ def test_changing_the_model_asks_every_topic_again(monkeypatch):
     monkeypatch.setattr(config, "MODEL", "claude-something-else")
     assert extract.find_tensions("recovery-rate")["skipped"] is False
     assert len(calls) == 2
+
+
+def test_a_deleted_tension_can_be_found_again(monkeypatch):
+    """Deleting is not dismissing: the pair is gone, and the pass that found
+    it has to be able to find it again."""
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    store.delete_tension(store.tension_rows()[0]["id"])
+    assert store.tension_pass("recovery-rate") is None
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(store.tension_rows()) == 1

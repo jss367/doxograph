@@ -1194,12 +1194,21 @@ def set_tension_status(tension_id: str, status: str) -> dict:
 
 
 def delete_tension(tension_id: str) -> None:
+    """Remove a tension, and forget the passes that found it.
+
+    Deleting is not dismissing: a dismissed pair stays on file and a repeat
+    pass leaves the decision alone, but a deleted one is gone, and the topics
+    it was found under have to be asked again for it to come back. Their
+    signatures would otherwise match and the pass would skip them.
+    """
     with tensions_lock():
         data = _read_tensions()
         before = len(data["tensions"])
+        gone = [t for t in data["tensions"] if t.get("id") == tension_id]
         data["tensions"] = [t for t in data["tensions"] if t.get("id") != tension_id]
         if len(data["tensions"]) == before:
             raise KeyError(tension_id)
+        _forget_passes(data, {topic for t in gone for topic in (t.get("topics") or [])})
         _save_tensions(data)
 
 
@@ -1657,12 +1666,16 @@ def set_agreement_status(agreement_id: str, status: str) -> dict:
 
 
 def delete_agreement(agreement_id: str) -> None:
+    """Remove an agreement, and forget the passes that found it; see
+    `delete_tension` for why."""
     with agreements_lock():
         data = _read_agreements()
         before = len(data["agreements"])
+        gone = [r for r in data["agreements"] if r.get("id") == agreement_id]
         data["agreements"] = [r for r in data["agreements"] if r.get("id") != agreement_id]
         if len(data["agreements"]) == before:
             raise KeyError(agreement_id)
+        _forget_passes(data, {topic for r in gone for topic in (r.get("topics") or [])})
         _save_agreements(data)
 
 

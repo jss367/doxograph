@@ -55,19 +55,19 @@ except ValueError:
 
 
 def terms(query: str) -> list[str]:
-    """The words of a query, in order and without repeats, as they were typed.
+    """The words of a query, folded, in order and without repeats.
 
-    Kept as typed so the passages can quote them back; the matching itself is
-    done on the folded form of both sides, by `fold`.
+    Folded before it is cut into words, not after: a combining mark is no part
+    of a word, so a query typed as `nai` + a diaeresis + `ve` would otherwise
+    be two terms where `naïve` is one, and neither of them would find the word
+    the reader meant. Folding is what the papers are matched against anyway,
+    and one word spelled two ways — `café cafe` — is one term, or a single
+    mention would be counted twice and weighed twice in the ranking.
     """
-    seen: dict[str, str] = {}
-    for word in _WORD.findall(query or ""):
-        # Keyed on the form the matching uses, not merely the lowercase one:
-        # `café cafe` is one term to a search that folds accents away, and
-        # counting it twice would report two mentions of one and weigh it
-        # twice in the ranking.
-        seen.setdefault(fold(word), word)
-    return list(seen.values())
+    seen: dict[str, None] = {}
+    for word in _WORD.findall(fold(query or "")):
+        seen.setdefault(word, None)
+    return list(seen)
 
 
 def fold(text: str) -> str:

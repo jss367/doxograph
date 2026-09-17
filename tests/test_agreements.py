@@ -230,3 +230,14 @@ def test_a_group_that_grows_on_a_stale_answer_is_left_alone():
     assert result == {"added": 0, "grown": 0, "reopened": 0, "kept": 1}
     [row] = store.agreement_rows()
     assert row["status"] == "confirmed" and row["n_papers"] == 2 and row["note"] == "two"
+
+
+def test_a_deleted_agreement_can_be_found_again():
+    """The pass that found it has to be able to find it again; the web app
+    has no force to fall back on."""
+    a, b, *_ = build_corpus()
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "n"}], shown(),
+                            signature="a-signature")
+    assert store.agreement_pass("recovery-rate") == "a-signature"
+    store.delete_agreement(store.agreement_rows()[0]["id"])
+    assert store.agreement_pass("recovery-rate") is None
