@@ -763,8 +763,34 @@ function resetWorkspaceView() {
   closePaperMenu();
 }
 
+// Bumped by every selection, so a switch that stopped to wait for an earlier
+// one can tell it has since been overtaken and stand down rather than load a
+// workspace the reader has already moved on from.
+let switchSeq = 0;
+
 async function switchWorkspace(workspaceId) {
-  if (workspaceId === currentWorkspaceId) return;
+  if (workspaceId === currentWorkspaceId && !workspaceSwitch) return;
+  const seq = ++switchSeq;
+  // A switch spans several awaits, and the first of them sends the held
+  // deletes — a flush that ends in a read, which is not counted as a change in
+  // flight. The picker stays live for that stretch, so a second selection can
+  // arrive mid-switch. Two loads running together write `currentWorkspaceId`
+  // and `S` in whatever order their requests land, and the newer one can be
+  // overwritten by the older one finishing behind it: the page settles in the
+  // workspace that was superseded. So the switch already running finishes
+  // first, and only the newest selection goes on from there.
+  while (workspaceSwitch) {
+    // A switch that failed still ends this one's wait; its own caller reports it.
+    await workspaceSwitch.catch(() => {});
+    // Overtaken while waiting. The selection that overtook this one owns the
+    // picker from here, including putting it back if it refuses too.
+    if (seq !== switchSeq) return;
+  }
+  // The switch that just finished may have landed where this one was headed.
+  if (workspaceId === currentWorkspaceId) {
+    renderWorkspacePicker();
+    return;
+  }
   if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
     toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
     renderWorkspacePicker();
@@ -778,6 +804,8 @@ async function switchWorkspace(workspaceId) {
     renderWorkspacePicker();
     return;
   }
+  // The dialog is another await the picker is live across.
+  if (seq !== switchSeq) return;
   const run = loadWorkspace(workspaceId);
   workspaceSwitch = run;
   try {

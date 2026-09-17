@@ -220,6 +220,74 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
 
 
 @pytest.mark.browser
+def test_a_second_workspace_selection_waits_for_the_one_already_running():
+    """A switch starts by sending the held deletes, and that flush ends in a
+    read — which is not counted as a change in flight, so the picker stays live
+    across it. A second selection made in that gap used to start its own load
+    beside the first, and the two then wrote the workspace in whatever order
+    their answers landed: the older one finishing last left the page in the
+    corpus the reader had already moved off. The newest selection wins."""
+    from doxograph import config
+
+    one, _two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+    animal = config.create_workspace("Animal locomotion")
+    with config.use_workspace(animal["id"]):
+        _paper("gait", "An animal locomotion paper")
+    embodied = config.create_workspace("Embodied cognition")
+    with config.use_workspace(embodied["id"]):
+        _paper("mind", "An embodied cognition paper")
+
+    async def scenario():
+        armed = asyncio.Event()
+        reading = asyncio.Event()
+        release_read = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def arm_on_delete(route, request):
+                # Armed as the delete goes out, so the read the flush ends in —
+                # the gap this is about — is one of the ones held below.
+                if request.method == "DELETE":
+                    armed.set()
+                await route.continue_()
+
+            async def hold_read(route, request):
+                if armed.is_set():
+                    reading.set()
+                    await release_read.wait()
+                await route.continue_()
+
+            await page.route("**/api/papers/*/claims/*", arm_on_delete)
+            await page.route("**/api/state", hold_read)
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator(f'.claim[data-claim="{one}"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="delete").click()
+                await page.locator("#toasts .toast",
+                                   has_text="Deleted the claim.").wait_for()
+
+                # The delete waits in the trash for its notice; leaving the
+                # workspace is what sends it, and the read it ends in is held.
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await asyncio.wait_for(reading.wait(), timeout=10)
+
+                # Nothing is counted as in flight here, so the picker takes this.
+                await page.locator("#workspace").select_option(label="Embodied cognition")
+                release_read.set()
+
+                await page.get_by_text("An embodied cognition paper", exact=True).wait_for()
+                assert await page.locator("#workspace").input_value() == embodied["id"]
+                assert "An animal locomotion paper" not in await page.locator("#papers").inner_text()
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_switching_workspaces_hides_other_research_and_survives_reload():
     _paper("mind", "A consciousness paper")
     from doxograph import config
