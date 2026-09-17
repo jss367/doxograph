@@ -377,7 +377,11 @@ function fold(text) {
   // marks come off, or ᾳ folds to α here and αι on the server.
   const lowered = String(text ?? '').toLowerCase().normalize('NFKD')
     .replace(/\u0345/gu, 'ι')
-    .replace(/\p{M}/gu, '').toLowerCase();
+    // The accent blocks, not every mark: a vowel sign in Devanagari or Arabic
+    // is a letter of the word, and the server keeps it — dropping it here
+    // would match काल to कल on the page and not in the papers.
+    .replace(/[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20f0\ufe20-\ufe2f]/gu, '')
+    .toLowerCase();
   return FOLD.reduce((out, [from, to]) => out.replace(from, to), lowered);
 }
 
