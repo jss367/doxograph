@@ -110,7 +110,9 @@ bibliography is not treated as the page's identity, since that would ingest a
 cited paper instead of the one you pasted. When nothing identifies the page,
 paste the arXiv ID, the DOI, or a direct PDF link.
 
-The search box takes a phrase or a set of words. If the corpus holds what you
+The search box takes a phrase or a set of words. Two characters are enough to
+ask the papers — `AI` and `RL` are words here — and a query in a script that
+writes without spaces is asked whatever its length. If the corpus holds what you
 typed as a phrase, that is what it finds; otherwise every word has to be there,
 in any order and at the start of a word, so `steering recovery` finds a claim
 that says "recovery under steering". Under the claims it matched, **In the

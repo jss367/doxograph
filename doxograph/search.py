@@ -45,7 +45,7 @@ _WORD = re.compile(r"\w+", re.UNICODE)
 # recently used would throw away exactly what the next query asks for first:
 # the oldest entry goes only when the budget is reached, and a corpus whose
 # text does not fit pays the folding on every query however the cache is kept.
-_texts: dict[Path, tuple[tuple[int, int], str]] = {}
+_texts: dict[Path, tuple[tuple[int, int, int], str]] = {}
 _texts_lock = threading.Lock()
 _texts_size = 0
 try:
@@ -169,7 +169,7 @@ def folded_text(key: str) -> str | None:
     if stored is None:
         return None
     path, st = stored
-    identity = (st.st_size, st.st_mtime_ns)
+    identity = (st.st_size, st.st_mtime_ns, st.st_ino)
     with _texts_lock:
         hit = _texts.get(path)
         if hit and hit[0] == identity:
@@ -203,7 +203,7 @@ def _length(text: str) -> int:
     return sum(len(word) for word in _WORD.findall(text)) or 1
 
 
-def _remember(path: Path, identity: tuple[int, int], text: str) -> None:
+def _remember(path: Path, identity: tuple[int, int, int], text: str) -> None:
     """Keep a folded paper, dropping the oldest until the budget is met."""
     global _texts_size
     with _texts_lock:
@@ -306,15 +306,26 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     found = [[(m.start(), m.end()) for m in islice(pattern.finditer(text), PASSAGES)]
              for pattern in patterns]
     starts: list[tuple[int, int]] = []
+
+    def page_of(folded_at: int) -> int:
+        at = offsets[folded_at] if folded_at < len(offsets) else len(raw)
+        return raw.count(quotes.PAGE_BREAK, 0, at)
+
     # A term at a time, so a query's second word is shown before the first
-    # word's second occurrence.
+    # word's second occurrence. Near enough to be one passage means near
+    # enough and on the same page: a passage is cut to one page, so two terms
+    # either side of a break cannot both be shown in one.
     for nth in range(PASSAGES):
         for places in found:
             if len(starts) >= PASSAGES:
                 break
-            if nth < len(places) and not any(abs(places[nth][0] - at) < PASSAGE_SPAN
-                                             for at, _ in starts):
-                starts.append(places[nth])
+            if nth >= len(places):
+                continue
+            where = places[nth][0]
+            if any(abs(where - at) < PASSAGE_SPAN and page_of(where) == page_of(at)
+                   for at, _ in starts):
+                continue
+            starts.append(places[nth])
     passages = []
     for folded_at, folded_end in sorted(starts)[:PASSAGES]:
         at = offsets[folded_at] if folded_at < len(offsets) else len(raw)
