@@ -670,8 +670,10 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
                 or (before[-1:] in _WORD_JOINS and _WRAP.sub("", before[:-1])[-1:].isalnum()))
 
 
-# What stands between a title and the subtitle it goes on with.
-_SUBTITLE = ":\uff1a"
+# What stands between a title and the subtitle it goes on with: a colon, or a
+# dash with room around it. A dash with none is inside a word, which
+# `_WORD_JOINS` reads.
+_SUBTITLE = ":\uff1a" + _DASHES
 # What an identifier finishes with where it does not finish with a letter.
 _FINISH = re.compile(r"[^0-9A-Za-z]*$")
 # The marks a sentence never ends with, so an entry printing one straight after
@@ -773,10 +775,14 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     # DOI rather than the paper the id belongs to. Only as far back as the
     # run of identifier characters the match sits in — `doi.org/` in front of
     # a DOI is part of that run and is not a DOI itself.
-    start = len(lead)
-    while start and _IDENTIFIER_CHAR.match(lead[start - 1]):
+    # Read through a wrap on the way back, since an identifier the page split
+    # is one identifier: `10.9999/abc/\n  1706.03762` is that DOI and not the
+    # arXiv id at the end of it.
+    joined = _WRAP.sub("", lead)
+    start = len(joined)
+    while start and _IDENTIFIER_CHAR.match(joined[start - 1]):
         start -= 1
-    return not _DOI_HEAD.search(lead[start:])
+    return not _DOI_HEAD.search(joined[start:])
 
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:

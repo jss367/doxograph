@@ -678,9 +678,12 @@ def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
                 "Nobody. Attention is all you need\n. NeurIPS, 2017."):
         spaced = quotes.build(raw)
         assert cites._bounded(spaced, spaced.squashed.find(title), len(title)), raw
-    # But a colon and a subtitle is the title going on, spaced or not.
-    spaced = quotes.build("Nobody. Attention is all you need :  for image restoration.")
-    assert not cites._bounded(spaced, spaced.squashed.find(title), len(title))
+    # But a colon and a subtitle is the title going on, spaced or not, and so
+    # is a dash with room around it.
+    for raw in ("Nobody. Attention is all you need :  for image restoration.",
+                "Nobody. Attention is all you need \u2014 for image restoration."):
+        spaced = quotes.build(raw)
+        assert not cites._bounded(spaced, spaced.squashed.find(title), len(title)), raw
     # And the paper itself is still cited where the entry stops at its title,
     # with a full stop after it or with the break before the next entry.
     _paper("citing2", "Another citing paper", [
@@ -792,6 +795,13 @@ def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
     office = quotes.squash("10.1234/office")
     assert cites._whole(ligature, ligature.squashed.find(office), len(office),
                         printed="10.1234/office")
+    # An arXiv id at the end of a DOI is that DOI, wrapped or not.
+    arxiv = quotes.squash("1706.03762")
+    for raw in ("Nobody. A work. https://doi.org/10.9999/abc/1706.03762, 2026.",
+                "Nobody. A work. https://doi.org/10.9999/abc/\n  1706.03762, 2026."):
+        inside = quotes.build(raw)
+        assert not cites._whole(inside, inside.squashed.find(arxiv), len(arxiv),
+                                True, "1706.03762"), raw
     # And a dash the entry writes is where the identifier goes on, so a
     # shorter DOI does not end inside a longer one.
     longer = quotes.build("Nobody. A work. https://doi.org/10.1234/foo\u2013bar, 2026.")
