@@ -1003,6 +1003,18 @@ let switchSeq = 0;
 async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId && !workspaceSwitch) return;
   const seq = ++switchSeq;
+  // The picker is a native select, so the browser has already moved it to the
+  // new name by the time this runs — and nothing here moves the corpus for a
+  // while yet. Every step below is a wait: an earlier switch to finish, the
+  // question about unsaved edits, and then the flush of held deletes inside
+  // `loadWorkspace`. `currentWorkspaceId` and `window.doxographWorkspaceId`
+  // name the workspace being left for all of it, and the rest of the page
+  // stays live, so a reference added, a PDF dropped, an export or a Dock
+  // upload made in that window would go to the corpus the picker had stopped
+  // showing. It is put back to the one that is actually live, and only moves
+  // when `loadWorkspace` has moved it — which is also what the refusals below
+  // used to each have to do for themselves.
+  renderWorkspacePicker();
   // A switch spans several awaits, and the first of them sends the held
   // deletes — a flush that ends in a read, which is not counted as a change in
   // flight. The picker stays live for that stretch, so a second selection can
@@ -1019,23 +1031,16 @@ async function switchWorkspace(workspaceId) {
     if (seq !== switchSeq) return;
   }
   // The switch that just finished may have landed where this one was headed.
-  if (workspaceId === currentWorkspaceId) {
-    renderWorkspacePicker();
-    return;
-  }
+  if (workspaceId === currentWorkspaceId) return;
   if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
     toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
-    renderWorkspacePicker();
     return;
   }
   const hasDraft = V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || researchFormDirty();
   if (hasDraft && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
-                                       { ok: 'Discard and switch' })) {
-    renderWorkspacePicker();
-    return;
-  }
+                                       { ok: 'Discard and switch' })) return;
   // The dialog is another await the picker is live across.
   if (seq !== switchSeq) return;
   const run = loadWorkspace(workspaceId);

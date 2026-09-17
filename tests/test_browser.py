@@ -4187,3 +4187,77 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
 
     asyncio.run(scenario())
     assert store.all_papers() == []
+
+
+@pytest.mark.browser
+def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
+    """Selecting another workspace moves the native select at once, but the
+    corpus only changes once the switch has sent the deletes this one was
+    holding. Everything written in between goes to the workspace being left,
+    so that is the one the picker has to go on naming."""
+    from doxograph import config
+
+    _paper_with_claims("shared", "Default paper", ["One."])
+    other = config.create_workspace("Other")
+
+    async def scenario():
+        in_flight = asyncio.Event()
+        release = asyncio.Event()
+        wrote_to = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_claim_delete(route, request):
+                if request.method == "DELETE":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            async def record_tag_write(route, request):
+                if request.method == "POST":
+                    wrote_to.append(request.headers.get("x-doxograph-workspace"))
+                await route.continue_()
+
+            await page.route("**/api/papers/shared/claims/*", hold_claim_delete)
+            await page.route("**/api/tags", record_tag_write)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+
+                # The switch stops on the flush of that held delete.
+                await page.locator("#workspace").select_option(label="Other")
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                # The page is still in the Default corpus, and says so.
+                assert await page.locator("#workspace").input_value() == "default"
+                assert await page.evaluate("currentWorkspaceId") == "default"
+                assert await page.evaluate("window.doxographWorkspaceId") == "default"
+
+                # And a write made in that window lands where the picker says.
+                await page.locator("#new-tag").fill("midswitch")
+                await page.locator("#btn-tag").click()
+                for _ in range(100):
+                    if wrote_to:
+                        break
+                    await page.wait_for_timeout(100)
+                assert wrote_to == ["default"]
+
+                release.set()
+                for _ in range(100):
+                    if await page.locator("#workspace").input_value() == other["id"]:
+                        break
+                    await page.wait_for_timeout(100)
+                assert await page.locator("#workspace").input_value() == other["id"]
+                assert await page.evaluate("window.doxographWorkspaceId") == other["id"]
+            await browser.close()
+
+    asyncio.run(scenario())
+    from doxograph import config as cfg
+
+    assert "midswitch" in store.tag_names()
+    with cfg.use_workspace(other["id"]):
+        assert "midswitch" not in store.tag_names()
