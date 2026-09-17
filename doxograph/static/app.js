@@ -318,8 +318,9 @@ function forgetStateTag() {
 // recounted from the claims that are left rather than decremented.
 function pruneTrashed() {
   if (!trash.size) return;
-  const kept = (S.claims || []).filter((row) => !trashed('claim', row.id));
-  if (kept.length !== (S.claims || []).length) {
+  const all = S.claims || [];
+  const kept = all.filter((row) => !trashed('claim', row.id));
+  if (kept.length !== all.length) {
     S.claims = kept;
     const counts = new Map();
     kept.forEach((row) => {
@@ -364,7 +365,34 @@ function pruneTrashed() {
       return { ...row, claims: members, n_papers: new Set(members.map((c) => c.paper)).size, stale: true };
     })
     .filter((row) => new Set((row.claims || []).map((claim) => claim.paper)).size >= 2);
-  S.syntheses = (S.syntheses || []).filter((row) => !trashed('synthesis', row.topic));
+  // A synthesis is the same kind of derived row: `synthesis_rows` works out the
+  // counts and the stale flag from the claims its topic has now, not from the
+  // ids on file, and drops a topic that has none left. Held claims were taken
+  // out of only the syntheses deleted by topic, so a topic one of them carried
+  // went on claiming more claims and papers than it still had, reading as
+  // written-against-current, and citing a claim the page no longer knows —
+  // `citeHtml` leaves that bracket as written, a bare `[paper-a-c1]`. So the
+  // rows a held claim touches are rebuilt the way the server builds them: no
+  // claims left and the card goes, otherwise recount and read stale, since the
+  // text on file was written about a set of claims that is not the one on
+  // screen. (When the held claim was not in the basis on file, the row was
+  // already stale for carrying a claim the synthesis never saw, so the flag
+  // only ever stands still or turns on.) Undo is still the delete never being
+  // sent, so the next refresh brings the row back as the server has it.
+  const heldTopics = new Set();
+  all.forEach((row) => {
+    if (trashed('claim', row.id)) (row.tags || []).forEach((tag) => heldTopics.add(tag));
+  });
+  S.syntheses = (S.syntheses || [])
+    .filter((row) => !trashed('synthesis', row.topic))
+    .map((row) => {
+      if (!heldTopics.has(row.topic)) return row;
+      const live = kept.filter((claim) => (claim.tags || []).includes(row.topic));
+      if (!live.length) return null;
+      return { ...row, n_claims: live.length,
+               n_papers: new Set(live.map((claim) => claim.paper)).size, stale: true };
+    })
+    .filter(Boolean);
 }
 
 async function deleteLater(kind, id, path, label, { paper = null } = {}) {

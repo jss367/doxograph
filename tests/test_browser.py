@@ -3631,3 +3631,66 @@ def test_a_deleted_row_leaves_the_screen_when_the_redraw_after_it_fails():
 
     asyncio.run(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
+
+
+@pytest.mark.browser
+def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone():
+    """A synthesis card is the server's read of the claims its topic has now:
+    how many, across how many papers, and whether they have changed since the
+    text was written. A claim waiting out its undo window is off the page, so it
+    is out of that read too — and a topic whose last claim is held loses its
+    card entirely, as the server drops a synthesis with no claims under it. Undo
+    brings both back, since the delete was never sent."""
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    _paper("paper-c", "Paper C", "recovery")
+    _paper("paper-d", "Paper D", "solo")
+    store.record_synthesis("recovery", "All three report it [paper-a-c1].",
+                           {r["id"]: r for r in store.topic_claims("recovery")})
+    store.record_synthesis("solo", "One paper reports it [paper-d-c1].",
+                           {r["id"]: r for r in store.topic_claims("solo")})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+
+                # The topic whose only claim is held: the server would stop
+                # showing that synthesis, so the card goes rather than standing
+                # over a topic with nothing left under it.
+                await page.locator('#tags [data-tag="solo"]').click()
+                solo = page.locator('.synth[data-topic="solo"]')
+                await solo.wait_for()
+                await page.locator('.claim[data-claim="paper-d-c1"]').get_by_role(
+                    "button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+                await solo.wait_for(state="detached", timeout=3000)
+                await notice.get_by_role("button", name="Undo").click()
+                await solo.wait_for()
+
+                # A topic with claims left recounts, and reads stale: the text on
+                # file was written about a set of claims that is not this one.
+                await page.locator('#tags [data-tag="recovery"]').click()
+                card = page.locator('.synth[data-topic="recovery"]')
+                await card.wait_for()
+                assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
+                assert await card.locator(".stale").count() == 0
+
+                await page.locator('.claim[data-claim="paper-a-c1"]').get_by_role(
+                    "button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+                await card.locator(".stale").wait_for(timeout=3000)
+                assert "2 claims in 2 papers" in await card.locator(".smeta").text_content()
+
+                await notice.get_by_role("button", name="Undo").click()
+                await card.locator(".stale").wait_for(state="detached")
+                assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-a")["claims"]) == 1
+    assert len(store.load_paper("paper-d")["claims"]) == 1
