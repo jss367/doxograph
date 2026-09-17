@@ -69,5 +69,7 @@ def test_the_similar_route_names_the_papers_and_404s_for_a_stranger():
 def test_a_verb_and_its_past_tense_meet():
     for word, other in (("scaled", "scale"), ("scales", "scaled"), ("refined", "refines"),
                         ("recovered", "recovers"), ("steering", "steer"),
-                        ("studied", "studies"), ("applied", "applies")):
+                        ("studied", "studies"), ("applied", "applies"),
+                        ("controlled", "controls"), ("mapped", "maps"),
+                        ("planned", "plans"), ("added", "adds")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)

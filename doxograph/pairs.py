@@ -53,11 +53,16 @@ def stem(word: str) -> str:
         word = word[:-3] + "y"
     elif len(word) > 4 and word.endswith("ed"):
         word = word[:-2]
-    # A silent e goes last, from every word alike. Only stripping it after
-    # "ed" would leave `scaled` as `scal` beside `scale`; taking it off both
-    # is wrong about the word and right about the pair, which is all this
-    # measure is for.
-    return word[:-1] if len(word) > 3 and word.endswith("e") else word
+    # A silent e goes last, from every word alike, and so does a doubled final
+    # consonant. Only stripping them after a suffix would leave `scaled` as
+    # `scal` beside `scale` and `controlled` as `controll` beside `control`;
+    # taking them off both is wrong about the word and right about the pair,
+    # which is all this measure is for.
+    if len(word) > 3 and word.endswith("e"):
+        word = word[:-1]
+    if len(word) > 3 and word[-1] == word[-2] and word[-1].isalpha():
+        word = word[:-1]
+    return word
 
 
 def words(row: dict) -> frozenset[str]:
