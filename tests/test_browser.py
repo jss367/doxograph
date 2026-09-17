@@ -3593,6 +3593,49 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
 
 
 @pytest.mark.browser
+def test_a_focused_tension_keeps_its_way_out_when_the_claim_it_names_goes():
+    """The focus is a claim, and that claim can go while the view is standing —
+    a delete made in another window. Every tension citing it goes with it, so
+    the focus then filters the list to nothing: "show all" has to survive the
+    claim it was drawn beside or there is no way back to the other tensions."""
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    _paper("paper-c", "Paper C", "recovery")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery", [
+        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "tension", "note": "one"},
+        {"claims": ["paper-b-c1", "paper-c-c1"], "kind": "tension", "note": "two"},
+    ], shown)
+    found = {tuple(c["id"] for c in t["claims"]): t["id"] for t in store.tension_rows()}
+    first = found[("paper-a-c1", "paper-b-c1")]
+    second = found[("paper-b-c1", "paper-c-c1")]
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="paper-a-c1"]')
+                await card.wait_for()
+                await card.locator(".tmark").click()
+                await page.locator(f'.tcard[data-tension="{first}"]').wait_for()
+                assert await page.locator(f'.tcard[data-tension="{second}"]').count() == 0
+
+                store.delete_claim("paper-a", "paper-a-c1")
+                await page.locator(f'.tcard[data-tension="{first}"]').wait_for(
+                    state="detached", timeout=5000)   # a poll picks the delete up
+
+                escape = page.get_by_role("button", name="show all")
+                await escape.click()
+                await page.locator(f'.tcard[data-tension="{second}"]').wait_for()
+                assert await escape.count() == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
     """The redraw that takes the row off the page can fail — a server restarting
     under the click — and the notice raised after it is what carries the timer

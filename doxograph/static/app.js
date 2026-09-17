@@ -1737,6 +1737,8 @@ function renderAgreements() {
   const scrollTop = main ? main.scrollTop : 0;
   const rows = visibleAgreements();
   const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+  // Drawn off `V`, as in `renderTensions`: the claim a focus names can go, and
+  // the way out of the focus must not go with it.
   const focus = V.agreementFocus ? S.claims.find((c) => c.id === V.agreementFocus) : null;
   let html = `<div class="paperhead">
     <h2>Where papers agree</h2>
@@ -1749,7 +1751,9 @@ function renderAgreements() {
         ${statuses.map((st) => `<option value="${esc(st)}" ${V.agreementStatus === st ? 'selected' : ''}>${esc(st)}</option>`).join('')}
       </select>
       ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
-      ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
+      ${V.agreementFocus ? `<span class="hint">${focus
+          ? `involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em>`
+          : 'involving a claim that is no longer here'}</span>
                  <button type="button" data-act="agreement-unfocus">show all</button>` : ''}
       <button type="button" data-act="find-agreements" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} style="margin-left:auto">Find agreements</button>
     </div>
@@ -1841,6 +1845,12 @@ function renderTensions() {
   const scrollTop = main ? main.scrollTop : 0;
   const rows = visibleTensions();
   const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+  // The claim a focus names can go while this view is standing: a delete made
+  // in another window, or a re-read of its paper landing behind a poll. The
+  // focus goes on filtering either way — every tension citing it has gone with
+  // it, so the list is empty — which is why "show all" is drawn off `V` rather
+  // than off the row it found. Keyed to the row, it would disappear at exactly
+  // the moment it is the only thing left to click.
   const focus = V.tensionFocus ? S.claims.find((c) => c.id === V.tensionFocus) : null;
   let html = `<div class="paperhead">
     <h2>Where papers disagree</h2>
@@ -1854,7 +1864,9 @@ function renderTensions() {
         ${statuses.map((st) => `<option value="${esc(st)}" ${V.tensionStatus === st ? 'selected' : ''}>${esc(st)}</option>`).join('')}
       </select>
       ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
-      ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
+      ${V.tensionFocus ? `<span class="hint">${focus
+          ? `involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em>`
+          : 'involving a claim that is no longer here'}</span>
                  <button type="button" data-act="tension-unfocus">show all</button>` : ''}
       <button type="button" data-act="find-tensions" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} style="margin-left:auto">Find tensions</button>
     </div>
