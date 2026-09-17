@@ -335,6 +335,11 @@ def pdf_path(key: str) -> Path:
     return config.pdfs_dir() / f"{key}.pdf"
 
 
+def text_path(key: str) -> Path:
+    """Where the paper's extracted text is kept between runs."""
+    return config.text_dir() / f"{key}.txt"
+
+
 def write_atomic(path: Path, text: str) -> None:
     """Replace a file's contents in one step.
 
@@ -405,6 +410,7 @@ def delete_paper(key: str) -> None:
     retire_key(key)
     paper_path(key).unlink(missing_ok=True)
     pdf_path(key).unlink(missing_ok=True)
+    text_path(key).unlink(missing_ok=True)
 
 
 def new_paper(key: str, **fields) -> dict:
@@ -479,6 +485,9 @@ def new_claim(paper: dict, **fields) -> dict:
         # True when the quote was found in the PDF, False when it was not, None
         # when there was nothing to check (no quote, or no readable PDF).
         "quote_verified": None,
+        # The page the quote was found on, counted from the front of the file,
+        # which is what a reviewer needs to check a locator against.
+        "quote_page": None,
         "added": now(),
     }
     claim.update(fields)
@@ -486,9 +495,47 @@ def new_claim(paper: dict, **fields) -> dict:
 
 
 def check_quote(key: str, claim: dict) -> bool | None:
-    """Set and return `quote_verified` for one claim against the paper's PDF."""
-    claim["quote_verified"] = quotes.verify(pdf_path(key), claim.get("quote") or "")
+    """Set and return `quote_verified` for one claim against the paper's PDF.
+
+    The search knows where it found the quote, so the page comes along for
+    free and is recorded too.
+    """
+    found = quotes.locate(pdf_path(key), claim.get("quote") or "", text_path(key),
+                          guard=lambda: paper_lock(key))
+    claim["quote_verified"] = found["found"] if found else None
+    claim["quote_page"] = found["page"] if found else None
     return claim["quote_verified"]
+
+
+def quote_context(key: str, claim_id: str) -> dict:
+    """Where a claim's quote sits in the paper, in the paper's own words.
+
+    The answer to "this quote was not found — then what does the paper say?",
+    which is otherwise a hunt through the PDF. It is drawn from the same
+    alignment that checks the quote, so the passage it shows is the one the
+    check scored.
+    """
+    paper = load_paper(key)
+    claim = next((c for c in paper.get("claims", []) if c.get("id") == claim_id), None)
+    if claim is None:
+        raise KeyError(claim_id)
+    quote = claim.get("quote") or ""
+    locator = claim.get("locator") or ""
+    context = {
+        "claim": claim_id, "quote": quote, "locator": locator,
+        "locator_page": quotes.locator_page(locator), "diff": [],
+    }
+    if not quote.strip():
+        return {**context, "available": False, "reason": "This claim has no quote."}
+    found = quotes.locate(pdf_path(key), quote, text_path(key), guard=lambda: paper_lock(key))
+    if found is None:
+        reason = ("This paper has no PDF to check against."
+                  if not pdf_path(key).exists()
+                  else "No text could be read from this PDF; it may be a scan.")
+        return {**context, "available": False, "reason": reason}
+    if found["suggestion"] and found["suggestion"] != quote:
+        context["diff"] = quotes.word_diff(quote, found["suggestion"])
+    return {**context, **found, "available": True, "reason": ""}
 
 
 @_locked

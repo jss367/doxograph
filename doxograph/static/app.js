@@ -129,6 +129,13 @@ const NEW_CLAIM_ID = '__new__';
 // is in GRAPH below.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
+// textSearch is the last answer from the search over the papers' own text:
+// { q, loading, papers, terms, error }. It is keyed by the query it was asked
+// for, so an answer left over from an earlier one is not drawn under a later.
+// quoteContext is the one claim whose quote is being shown in the paper, with
+// the passage the check matched it against: { claim, paper, loading, error,
+// data }. One at a time, since it is read in place of the PDF and two open at
+// once would only push the claims apart.
 // synthEditing is the topic whose synthesis is open for correction by hand, and
 // synthDrafts what has been typed into each, by topic, kept across redraws and
 // navigation like claim drafts. A map for the same reason `drafts` is: opening
@@ -140,7 +147,8 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-            graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null };
+            graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null,
+            quoteContext: null, textSearch: null };
 
 function blankClaim(paper) {
   return {
@@ -532,6 +540,10 @@ function applyHash() {
   // it posts to the paper that is no longer on screen.
   parkNewClaimForNavigation(V.paper);
   $('q').value = V.q;
+  // Typing is not the only way to arrive at a query: a bookmark or Back can
+  // put one on screen, and the search over the papers' own text belongs to the
+  // query rather than to the keystroke that happened to produce it.
+  scheduleTextSearch();
   $('kind').value = V.kind;
   $('only-unreviewed').checked = V.unreviewed;
   $('only-unverified').checked = V.unverified;
@@ -668,8 +680,9 @@ async function pull() {
 
 async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
-  await pull();
+  const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
+  if (changed) rerunTextSearch();
   render();
 }
 
@@ -680,8 +693,9 @@ async function refresh() {
 async function refreshAll() {
   captureOpenEditor();
   const requestedWorkspace = currentWorkspaceId;
-  await pull();
+  const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
+  if (changed) rerunTextSearch();
   renderAll();
 }
 
@@ -711,8 +725,10 @@ function resetWorkspaceView() {
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     graph: { topics: true, minShared: null, tensions: true, ledger: true },
+    quoteContext: null, textSearch: null,
   });
   savingClaims.clear();
+  dropTextSearch();
   graphReset();
   $('q').value = '';
   $('kind').value = '';
@@ -778,6 +794,94 @@ async function loadWorkspaces() {
 
 // --- filtering ------------------------------------------------------------
 
+// The phrase if the corpus holds it, otherwise the words.
+//
+// One substring over the whole row could not find "recovery under steering"
+// from "steering recovery", which is how anyone types a search. Every word in
+// any order finds it — but it also makes "Paper A" match everything holding
+// "paper" and a word starting with "a", and a title typed into the box should
+// narrow to that title. Which was meant is decided by the corpus: if the
+// phrase is in it, that is what was wanted, and otherwise the words are all
+// there is to go on. Nothing that used to be findable stops being findable.
+// The page has to fold exactly as the server does, or a query finds a paper
+// by its text and hides the claim that says the same thing. JavaScript's
+// `toLowerCase` is not `casefold`: it lowercases one character to one, so ß
+// stays ß, and it knows where a Greek word ends where `casefold` does not.
+// Both tables below are the differences, written out rather than guessed at —
+// a narrowing that suited one script has been wrong for the next one twice.
+//
+// CASEFOLD: every code point whose `casefold` differs from its `lower`.
+//   python -c "print([c for c in map(chr, range(0x110000)) if c.casefold() != c.lower()])"
+// COMBINING: every code point with a combining class that is an accent — not
+//   a nukta, a kana voicing mark or a virama, each of which changes the word
+//   — which is what the server drops.
+//   python -c "import unicodedata; print([c for c in map(chr, range(0x110000))
+//              if unicodedata.combining(c) not in (0, 7, 8, 9)])"
+const CASEFOLD = {'\u00b5':'\u03bc','\u00df':'\u0073\u0073','\u0149':'\u02bc\u006e','\u017f':'\u0073','\u01f0':'\u006a\u030c','\u0345':'\u03b9','\u0390':'\u03b9\u0308\u0301','\u03b0':'\u03c5\u0308\u0301','\u03c2':'\u03c3','\u03d0':'\u03b2','\u03d1':'\u03b8','\u03d5':'\u03c6','\u03d6':'\u03c0','\u03f0':'\u03ba','\u03f1':'\u03c1','\u03f5':'\u03b5','\u0587':'\u0565\u0582','\u13a0':'\u13a0','\u13a1':'\u13a1','\u13a2':'\u13a2','\u13a3':'\u13a3','\u13a4':'\u13a4','\u13a5':'\u13a5','\u13a6':'\u13a6','\u13a7':'\u13a7','\u13a8':'\u13a8','\u13a9':'\u13a9','\u13aa':'\u13aa','\u13ab':'\u13ab','\u13ac':'\u13ac','\u13ad':'\u13ad','\u13ae':'\u13ae','\u13af':'\u13af','\u13b0':'\u13b0','\u13b1':'\u13b1','\u13b2':'\u13b2','\u13b3':'\u13b3','\u13b4':'\u13b4','\u13b5':'\u13b5','\u13b6':'\u13b6','\u13b7':'\u13b7','\u13b8':'\u13b8','\u13b9':'\u13b9','\u13ba':'\u13ba','\u13bb':'\u13bb','\u13bc':'\u13bc','\u13bd':'\u13bd','\u13be':'\u13be','\u13bf':'\u13bf','\u13c0':'\u13c0','\u13c1':'\u13c1','\u13c2':'\u13c2','\u13c3':'\u13c3','\u13c4':'\u13c4','\u13c5':'\u13c5','\u13c6':'\u13c6','\u13c7':'\u13c7','\u13c8':'\u13c8','\u13c9':'\u13c9','\u13ca':'\u13ca','\u13cb':'\u13cb','\u13cc':'\u13cc','\u13cd':'\u13cd','\u13ce':'\u13ce','\u13cf':'\u13cf','\u13d0':'\u13d0','\u13d1':'\u13d1','\u13d2':'\u13d2','\u13d3':'\u13d3','\u13d4':'\u13d4','\u13d5':'\u13d5','\u13d6':'\u13d6','\u13d7':'\u13d7','\u13d8':'\u13d8','\u13d9':'\u13d9','\u13da':'\u13da','\u13db':'\u13db','\u13dc':'\u13dc','\u13dd':'\u13dd','\u13de':'\u13de','\u13df':'\u13df','\u13e0':'\u13e0','\u13e1':'\u13e1','\u13e2':'\u13e2','\u13e3':'\u13e3','\u13e4':'\u13e4','\u13e5':'\u13e5','\u13e6':'\u13e6','\u13e7':'\u13e7','\u13e8':'\u13e8','\u13e9':'\u13e9','\u13ea':'\u13ea','\u13eb':'\u13eb','\u13ec':'\u13ec','\u13ed':'\u13ed','\u13ee':'\u13ee','\u13ef':'\u13ef','\u13f0':'\u13f0','\u13f1':'\u13f1','\u13f2':'\u13f2','\u13f3':'\u13f3','\u13f4':'\u13f4','\u13f5':'\u13f5','\u13f8':'\u13f0','\u13f9':'\u13f1','\u13fa':'\u13f2','\u13fb':'\u13f3','\u13fc':'\u13f4','\u13fd':'\u13f5','\u1c80':'\u0432','\u1c81':'\u0434','\u1c82':'\u043e','\u1c83':'\u0441','\u1c84':'\u0442','\u1c85':'\u0442','\u1c86':'\u044a','\u1c87':'\u0463','\u1c88':'\ua64b','\u1e96':'\u0068\u0331','\u1e97':'\u0074\u0308','\u1e98':'\u0077\u030a','\u1e99':'\u0079\u030a','\u1e9a':'\u0061\u02be','\u1e9b':'\u1e61','\u1e9e':'\u0073\u0073','\u1f50':'\u03c5\u0313','\u1f52':'\u03c5\u0313\u0300','\u1f54':'\u03c5\u0313\u0301','\u1f56':'\u03c5\u0313\u0342','\u1f80':'\u1f00\u03b9','\u1f81':'\u1f01\u03b9','\u1f82':'\u1f02\u03b9','\u1f83':'\u1f03\u03b9','\u1f84':'\u1f04\u03b9','\u1f85':'\u1f05\u03b9','\u1f86':'\u1f06\u03b9','\u1f87':'\u1f07\u03b9','\u1f88':'\u1f00\u03b9','\u1f89':'\u1f01\u03b9','\u1f8a':'\u1f02\u03b9','\u1f8b':'\u1f03\u03b9','\u1f8c':'\u1f04\u03b9','\u1f8d':'\u1f05\u03b9','\u1f8e':'\u1f06\u03b9','\u1f8f':'\u1f07\u03b9','\u1f90':'\u1f20\u03b9','\u1f91':'\u1f21\u03b9','\u1f92':'\u1f22\u03b9','\u1f93':'\u1f23\u03b9','\u1f94':'\u1f24\u03b9','\u1f95':'\u1f25\u03b9','\u1f96':'\u1f26\u03b9','\u1f97':'\u1f27\u03b9','\u1f98':'\u1f20\u03b9','\u1f99':'\u1f21\u03b9','\u1f9a':'\u1f22\u03b9','\u1f9b':'\u1f23\u03b9','\u1f9c':'\u1f24\u03b9','\u1f9d':'\u1f25\u03b9','\u1f9e':'\u1f26\u03b9','\u1f9f':'\u1f27\u03b9','\u1fa0':'\u1f60\u03b9','\u1fa1':'\u1f61\u03b9','\u1fa2':'\u1f62\u03b9','\u1fa3':'\u1f63\u03b9','\u1fa4':'\u1f64\u03b9','\u1fa5':'\u1f65\u03b9','\u1fa6':'\u1f66\u03b9','\u1fa7':'\u1f67\u03b9','\u1fa8':'\u1f60\u03b9','\u1fa9':'\u1f61\u03b9','\u1faa':'\u1f62\u03b9','\u1fab':'\u1f63\u03b9','\u1fac':'\u1f64\u03b9','\u1fad':'\u1f65\u03b9','\u1fae':'\u1f66\u03b9','\u1faf':'\u1f67\u03b9','\u1fb2':'\u1f70\u03b9','\u1fb3':'\u03b1\u03b9','\u1fb4':'\u03ac\u03b9','\u1fb6':'\u03b1\u0342','\u1fb7':'\u03b1\u0342\u03b9','\u1fbc':'\u03b1\u03b9','\u1fbe':'\u03b9','\u1fc2':'\u1f74\u03b9','\u1fc3':'\u03b7\u03b9','\u1fc4':'\u03ae\u03b9','\u1fc6':'\u03b7\u0342','\u1fc7':'\u03b7\u0342\u03b9','\u1fcc':'\u03b7\u03b9','\u1fd2':'\u03b9\u0308\u0300','\u1fd3':'\u03b9\u0308\u0301','\u1fd6':'\u03b9\u0342','\u1fd7':'\u03b9\u0308\u0342','\u1fe2':'\u03c5\u0308\u0300','\u1fe3':'\u03c5\u0308\u0301','\u1fe4':'\u03c1\u0313','\u1fe6':'\u03c5\u0342','\u1fe7':'\u03c5\u0308\u0342','\u1ff2':'\u1f7c\u03b9','\u1ff3':'\u03c9\u03b9','\u1ff4':'\u03ce\u03b9','\u1ff6':'\u03c9\u0342','\u1ff7':'\u03c9\u0342\u03b9','\u1ffc':'\u03c9\u03b9','\uab70':'\u13a0','\uab71':'\u13a1','\uab72':'\u13a2','\uab73':'\u13a3','\uab74':'\u13a4','\uab75':'\u13a5','\uab76':'\u13a6','\uab77':'\u13a7','\uab78':'\u13a8','\uab79':'\u13a9','\uab7a':'\u13aa','\uab7b':'\u13ab','\uab7c':'\u13ac','\uab7d':'\u13ad','\uab7e':'\u13ae','\uab7f':'\u13af','\uab80':'\u13b0','\uab81':'\u13b1','\uab82':'\u13b2','\uab83':'\u13b3','\uab84':'\u13b4','\uab85':'\u13b5','\uab86':'\u13b6','\uab87':'\u13b7','\uab88':'\u13b8','\uab89':'\u13b9','\uab8a':'\u13ba','\uab8b':'\u13bb','\uab8c':'\u13bc','\uab8d':'\u13bd','\uab8e':'\u13be','\uab8f':'\u13bf','\uab90':'\u13c0','\uab91':'\u13c1','\uab92':'\u13c2','\uab93':'\u13c3','\uab94':'\u13c4','\uab95':'\u13c5','\uab96':'\u13c6','\uab97':'\u13c7','\uab98':'\u13c8','\uab99':'\u13c9','\uab9a':'\u13ca','\uab9b':'\u13cb','\uab9c':'\u13cc','\uab9d':'\u13cd','\uab9e':'\u13ce','\uab9f':'\u13cf','\uaba0':'\u13d0','\uaba1':'\u13d1','\uaba2':'\u13d2','\uaba3':'\u13d3','\uaba4':'\u13d4','\uaba5':'\u13d5','\uaba6':'\u13d6','\uaba7':'\u13d7','\uaba8':'\u13d8','\uaba9':'\u13d9','\uabaa':'\u13da','\uabab':'\u13db','\uabac':'\u13dc','\uabad':'\u13dd','\uabae':'\u13de','\uabaf':'\u13df','\uabb0':'\u13e0','\uabb1':'\u13e1','\uabb2':'\u13e2','\uabb3':'\u13e3','\uabb4':'\u13e4','\uabb5':'\u13e5','\uabb6':'\u13e6','\uabb7':'\u13e7','\uabb8':'\u13e8','\uabb9':'\u13e9','\uabba':'\u13ea','\uabbb':'\u13eb','\uabbc':'\u13ec','\uabbd':'\u13ed','\uabbe':'\u13ee','\uabbf':'\u13ef','\ufb00':'\u0066\u0066','\ufb01':'\u0066\u0069','\ufb02':'\u0066\u006c','\ufb03':'\u0066\u0066\u0069','\ufb04':'\u0066\u0066\u006c','\ufb05':'\u0073\u0074','\ufb06':'\u0073\u0074','\ufb13':'\u0574\u0576','\ufb14':'\u0574\u0565','\ufb15':'\u0574\u056b','\ufb16':'\u057e\u0576','\ufb17':'\u0574\u056d'};
+const COMBINING = /[\u0300-\u034e\u0350-\u036f\u0483-\u0487\u0591-\u05bd\u05bf\u05c1-\u05c2\u05c4-\u05c5\u05c7\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7-\u06e8\u06ea-\u06ed\u0711\u0730-\u074a\u07eb-\u07f3\u07fd\u0816-\u0819\u081b-\u0823\u0825-\u0827\u0829-\u082d\u0859-\u085b\u0897-\u089f\u08ca-\u08e1\u08e3-\u08ff\u0951-\u0954\u09fe\u0c55-\u0c56\u0e38-\u0e39\u0e48-\u0e4b\u0eb8-\u0eb9\u0ec8-\u0ecb\u0f18-\u0f19\u0f35\u0f37\u0f39\u0f71-\u0f72\u0f74\u0f7a-\u0f7d\u0f80\u0f82-\u0f83\u0f86-\u0f87\u0fc6\u108d\u135d-\u135f\u17dd\u18a9\u1939-\u193b\u1a17-\u1a18\u1a75-\u1a7c\u1a7f\u1ab0-\u1abd\u1abf-\u1ace\u1b6b-\u1b73\u1cd0-\u1cd2\u1cd4-\u1ce0\u1ce2-\u1ce8\u1ced\u1cf4\u1cf8-\u1cf9\u1dc0-\u1dff\u20d0-\u20dc\u20e1\u20e5-\u20f0\u2cef-\u2cf1\u2de0-\u2dff\u302a-\u302f\ua66f\ua674-\ua67d\ua69e-\ua69f\ua6f0-\ua6f1\ua8e0-\ua8f1\ua92b-\ua92d\uaab0\uaab2-\uaab4\uaab7-\uaab8\uaabe-\uaabf\uaac1\ufb1e\ufe20-\ufe2f\u{101fd}\u{102e0}\u{10376}-\u{1037a}\u{10a0d}\u{10a0f}\u{10a38}-\u{10a3a}\u{10ae5}-\u{10ae6}\u{10d24}-\u{10d27}\u{10d69}-\u{10d6d}\u{10eab}-\u{10eac}\u{10efd}-\u{10eff}\u{10f46}-\u{10f50}\u{10f82}-\u{10f85}\u{11100}-\u{11102}\u{11366}-\u{1136c}\u{11370}-\u{11374}\u{1145e}\u{16af0}-\u{16af4}\u{16b30}-\u{16b36}\u{16ff0}-\u{16ff1}\u{1bc9e}\u{1d165}-\u{1d169}\u{1d16d}-\u{1d172}\u{1d17b}-\u{1d182}\u{1d185}-\u{1d18b}\u{1d1aa}-\u{1d1ad}\u{1d242}-\u{1d244}\u{1e000}-\u{1e006}\u{1e008}-\u{1e018}\u{1e01b}-\u{1e021}\u{1e023}-\u{1e024}\u{1e026}-\u{1e02a}\u{1e08f}\u{1e130}-\u{1e136}\u{1e2ae}\u{1e2ec}-\u{1e2ef}\u{1e4ec}-\u{1e4ef}\u{1e5ee}-\u{1e5ef}\u{1e8d0}-\u{1e8d6}\u{1e944}-\u{1e949}]/gu;
+const CASEFOLD_RE = /[\u00b5\u00df\u0149\u017f\u01f0\u0345\u0390\u03b0\u03c2\u03d0\u03d1\u03d5\u03d6\u03f0\u03f1\u03f5\u0587\u13a0\u13a1\u13a2\u13a3\u13a4\u13a5\u13a6\u13a7\u13a8\u13a9\u13aa\u13ab\u13ac\u13ad\u13ae\u13af\u13b0\u13b1\u13b2\u13b3\u13b4\u13b5\u13b6\u13b7\u13b8\u13b9\u13ba\u13bb\u13bc\u13bd\u13be\u13bf\u13c0\u13c1\u13c2\u13c3\u13c4\u13c5\u13c6\u13c7\u13c8\u13c9\u13ca\u13cb\u13cc\u13cd\u13ce\u13cf\u13d0\u13d1\u13d2\u13d3\u13d4\u13d5\u13d6\u13d7\u13d8\u13d9\u13da\u13db\u13dc\u13dd\u13de\u13df\u13e0\u13e1\u13e2\u13e3\u13e4\u13e5\u13e6\u13e7\u13e8\u13e9\u13ea\u13eb\u13ec\u13ed\u13ee\u13ef\u13f0\u13f1\u13f2\u13f3\u13f4\u13f5\u13f8\u13f9\u13fa\u13fb\u13fc\u13fd\u1c80\u1c81\u1c82\u1c83\u1c84\u1c85\u1c86\u1c87\u1c88\u1e96\u1e97\u1e98\u1e99\u1e9a\u1e9b\u1e9e\u1f50\u1f52\u1f54\u1f56\u1f80\u1f81\u1f82\u1f83\u1f84\u1f85\u1f86\u1f87\u1f88\u1f89\u1f8a\u1f8b\u1f8c\u1f8d\u1f8e\u1f8f\u1f90\u1f91\u1f92\u1f93\u1f94\u1f95\u1f96\u1f97\u1f98\u1f99\u1f9a\u1f9b\u1f9c\u1f9d\u1f9e\u1f9f\u1fa0\u1fa1\u1fa2\u1fa3\u1fa4\u1fa5\u1fa6\u1fa7\u1fa8\u1fa9\u1faa\u1fab\u1fac\u1fad\u1fae\u1faf\u1fb2\u1fb3\u1fb4\u1fb6\u1fb7\u1fbc\u1fbe\u1fc2\u1fc3\u1fc4\u1fc6\u1fc7\u1fcc\u1fd2\u1fd3\u1fd6\u1fd7\u1fe2\u1fe3\u1fe4\u1fe6\u1fe7\u1ff2\u1ff3\u1ff4\u1ff6\u1ff7\u1ffc\uab70\uab71\uab72\uab73\uab74\uab75\uab76\uab77\uab78\uab79\uab7a\uab7b\uab7c\uab7d\uab7e\uab7f\uab80\uab81\uab82\uab83\uab84\uab85\uab86\uab87\uab88\uab89\uab8a\uab8b\uab8c\uab8d\uab8e\uab8f\uab90\uab91\uab92\uab93\uab94\uab95\uab96\uab97\uab98\uab99\uab9a\uab9b\uab9c\uab9d\uab9e\uab9f\uaba0\uaba1\uaba2\uaba3\uaba4\uaba5\uaba6\uaba7\uaba8\uaba9\uabaa\uabab\uabac\uabad\uabae\uabaf\uabb0\uabb1\uabb2\uabb3\uabb4\uabb5\uabb6\uabb7\uabb8\uabb9\uabba\uabbb\uabbc\uabbd\uabbe\uabbf\ufb00\ufb01\ufb02\ufb03\ufb04\ufb05\ufb06\ufb13\ufb14\ufb15\ufb16\ufb17]/gu;
+
+function fold(text) {
+  // Lowercased, then folded, then decomposed and stripped of the marks that
+  // are accents, then lowercased again: a compatibility capital has no
+  // lowercase of its own, and NFKD turns it into a plain uppercase letter the
+  // first pass never saw.
+  // Folded on both sides of the decomposition: a compatibility character can
+  // decompose into one that folds — mathematical bold final sigma comes out
+  // as ς, which is σ to `casefold` and itself to `toLowerCase`.
+  // A soft hyphen goes with them: it says where a word may be broken, and a
+  // word carrying one is the word, as the server reads it too.
+  return String(text ?? '').toLowerCase()
+    .replace(/\u00ad/g, '')
+    .replace(CASEFOLD_RE, (ch) => CASEFOLD[ch])
+    .normalize('NFKD')
+    .replace(CASEFOLD_RE, (ch) => CASEFOLD[ch])
+    .replace(COMBINING, '')
+    .toLowerCase();
+}
+
+function queryMatcher() {
+  const query = fold(V.q.trim());
+  if (!query) return () => true;
+  const phrase = (text) => fold(text).includes(query);
+  if (S.claims.some((row) => phrase(haystack(row)))
+      || S.papers.some((paper) => phrase(paperHaystack(paper)))) {
+    return phrase;
+  }
+  const patterns = queryPatterns(query);
+  // A query of punctuation alone has no words to look for, and `every` over
+  // nothing is true: it would show the whole corpus for a query the phrase
+  // pass has already failed to find. Nothing matches it.
+  if (!patterns.length) return () => false;
+  // Both sides folded, so the patterns need no case flag of their own.
+  return (text) => { const folded = fold(text); return patterns.every((p) => p.test(folded)); };
+}
+
+// Scripts that do not put spaces between their words, as `search.py` has
+// them. A term in one of these is looked for wherever it falls: every
+// character around it is a letter, so a word start never comes.
+const UNSEGMENTED = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\u0e00-\u0eff\u1780-\u17ff\u0f00-\u0fff\u1000-\u109f\ua980-\ua9df\u1b00-\u1b7f\u1b80-\u1bbf\u1a20-\u1aaf\uaa00-\uaa5f]/u;
+
+// A term matches from the start of a word, where words have starts. `\b` in
+// JavaScript knows only ASCII and would never match a query written in
+// another script, and a lookbehind is not available: the app supports macOS
+// 13.0, whose WKWebView has none, and the SyntaxError would take the whole
+// filter down. What is left is to consume the character before the word, and
+// to allow the start of the string in its place.
+function queryPatterns(query) {
+  // Marks count as part of the word they sit on: in a script whose vowels are
+  // marks, splitting on them cuts one written word into its consonants, and
+  // the server does not.
+  return (fold(query).match(/[\p{L}\p{N}_\p{M}]+/gu) || [])
+    .map((term) => (UNSEGMENTED.test(term)
+      ? new RegExp(term, 'u')
+      // The underscore is a word character to the server's `\w`, so it is one
+      // here: `bar` does not start a word in `foo_bar` on either side. So is
+      // a mark the folding kept — a vowel sign is part of the word it sits
+      // in, and a boundary inside किताब would find ताब there.
+      : new RegExp(`(?:^|[^\\p{L}\\p{N}_\\p{M}])${term}`, 'u')));
+}
+
 // A claim's searchable text. It carries its paper's key and year as well as
 // the title, so that every query matching a paper also matches that paper's
 // claims: listing a paper in the sidebar and then showing it as empty when
@@ -797,27 +901,105 @@ function paperHaystack(paper) {
     .join(' ').toLowerCase();
 }
 
+// The papers' own text is searched on the server, because that is where it is:
+// every claim is already in the page, but the PDFs never are. Debounced, since
+// this runs on a keystroke, and short queries are not sent at all — every paper
+// holds "a", and reading the corpus to prove it helps nobody.
+let textSearchTimer = null;
+let textSearchSeq = 0;
+// Two characters: AI, RL and R2 are what a reader of this corpus searches
+// for, and one character is every paper in it.
+const TEXT_SEARCH_MIN = 2;
+// Three letters of a Latin query says little; two characters of Chinese or
+// Japanese is a whole word. A query carrying anything outside the Latin
+// scripts is asked whatever its length.
+const COMPACT_SCRIPT = /[^\p{Script=Latin}\p{N}\p{P}\p{Z}\p{C}]/u;
+
+function worthAsking(query) {
+  return query.length >= TEXT_SEARCH_MIN || (query.length > 0 && COMPACT_SCRIPT.test(query));
+}
+
+function scheduleTextSearch() {
+  clearTimeout(textSearchTimer);
+  const query = V.q.trim();
+  if (!worthAsking(query)) { V.textSearch = null; return; }
+  textSearchTimer = setTimeout(() => runTextSearch(query), 250);
+}
+
+// Strand a debounce that has not fired and any answer still in flight. Called
+// when the workspace changes: the same query in the new corpus is a different
+// question, and the old corpus's papers must not be drawn under it.
+function dropTextSearch() {
+  clearTimeout(textSearchTimer);
+  textSearchTimer = null;
+  textSearchSeq += 1;
+  V.textSearch = null;
+}
+
+// A paper imported since the answer came back holds the query's words as much
+// as any other, and one that has just been given its PDF is searchable for the
+// first time. Filtering the answer against the corpus can drop a hit that has
+// gone but cannot add one that has arrived, so the question is asked again.
+function rerunTextSearch() {
+  if (V.textSearch && V.textSearch.q === V.q.trim()) runTextSearch(V.textSearch.q, true);
+}
+
+// `quiet` keeps what is on screen until the new answer lands, for a re-run
+// nobody asked for: a corpus change would otherwise blink the results back to
+// "reading the papers" every time a paper is imported.
+async function runTextSearch(query, quiet = false) {
+  const seq = ++textSearchSeq;
+  const workspace = currentWorkspaceId;
+  if (!quiet) {
+    captureOpenEditor();   // the redraw rebuilds any open form from state
+    V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
+    drawSearchProgress();
+  }
+  let next;
+  try {
+    const found = await api(`/api/search?q=${encodeURIComponent(query)}`);
+    next = { q: query, loading: false, papers: found.papers || [], terms: found.terms || [], error: null };
+  } catch (error) {
+    next = { q: query, loading: false, papers: [], terms: [], error: error.message };
+  }
+  // An answer to a query that is no longer the one on screen is dropped: the
+  // requests are not guaranteed to come back in the order they went out, and
+  // the corpus can have changed under the one still running.
+  if (seq !== textSearchSeq || workspace !== currentWorkspaceId) return;
+  V.textSearch = next;
+  captureOpenEditor();
+  drawSearchProgress();
+}
+
+// The results live under the claims, so the research form never shows them —
+// and redrawing it would replace a form frozen mid-save with an enabled one,
+// which is how typing into the replacement gets thrown away when the save
+// lands. `render` stands off the research view for the same reason.
+function drawSearchProgress() {
+  if (V.view !== 'research') renderContent();
+}
+
 // The papers the query matches: directly, or through a claim of theirs. The
 // claim match ignores the selected paper, so narrowing to one paper does not
 // empty the list you would use to leave it.
 function matchingPapers() {
-  const needle = V.q.trim().toLowerCase();
-  if (!needle) return S.papers;
+  if (!V.q.trim()) return S.papers;
+  const matches = queryMatcher();
   const owners = new Set(S.claims
-    .filter((row) => haystack(row).includes(needle))
+    .filter((row) => matches(haystack(row)))
     .map((row) => row.paper));
-  return S.papers.filter((p) => owners.has(p.key) || paperHaystack(p).includes(needle));
+  return S.papers.filter((p) => owners.has(p.key) || matches(paperHaystack(p)));
 }
 
 function visibleClaims() {
-  const needle = V.q.trim().toLowerCase();
+  const matches = queryMatcher();
   return S.claims.filter((row) =>
     (!V.paper || row.paper === V.paper)
     && (!V.tag || (row.tags || []).includes(V.tag))
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)
-    && (!needle || haystack(row).includes(needle)));
+    && matches(haystack(row)));
 }
 
 // --- rendering ------------------------------------------------------------
@@ -1080,7 +1262,11 @@ async function loadProposed(key, wanted) {
 // mode a claim appears once per topic, and emitting a form for each occurrence
 // would put several elements under one `data-form`, so `captureOpenEditor` would
 // read the first while the user typed into another.
-function claimCard(row, shown) {
+// `group` is which drawing of the claim this is: the topic heading it sits
+// under, or the tension it belongs to. A claim with several tags is drawn
+// under each of them, and a passage belongs beside the copy whose button was
+// pressed rather than the first one on the page.
+function claimCard(row, shown, group = '') {
   if (V.editing === row.id && shown && !shown.has(row.id)) {
     shown.add(row.id);
     const draft = V.drafts[row.id];
@@ -1095,7 +1281,7 @@ function claimCard(row, shown) {
       ${esc(own ? own.text : l.claim)}${l.note ? ' — ' + esc(l.note) : ''}</div>`;
   }).join('');
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'} ${row.id === V.selectedId ? 'sel' : ''}"
-       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
+       data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}">
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
@@ -1113,7 +1299,7 @@ function claimCard(row, shown) {
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${quoteHtml(row)}
+    ${quoteHtml(row, group)}
     ${links}
   </div>`;
 }
@@ -1140,14 +1326,76 @@ function pdfPage(locator) {
 // The quote, flagged when it was not found in the paper's text. A quote the
 // model paraphrased or invented is the commonest extraction error, and this is
 // the one error the machine can catch on its own.
-function quoteHtml(row) {
+function quoteHtml(row, group = '') {
   if (!row.quote) return '';
   const flag = row.quote_verified === false
     ? '<span class="qflag" title="This quote was not found in the PDF text. Check it against the paper.">not found in PDF</span> '
     : '';
-  return `<blockquote>${flag}${esc(row.quote)}
-    <button type="button" class="copy" data-act="copy-quote" data-claim="${esc(row.id)}"
-      title="Copy the quote">copy</button></blockquote>`;
+  // Beside the copy whose button was pressed. Grouped by topic a claim with
+  // several tags is drawn under each of them, and in the tensions view it
+  // appears in every pair it is part of; without the group the passage would
+  // open under all of them, and keyed on the first drawn it would open
+  // somewhere the reader is not looking.
+  const open = Boolean(V.quoteContext && V.quoteContext.claim === row.id
+    && (V.quoteContext.group || '') === group);
+  const show = `<button type="button" class="qshow" data-act="quote-context"
+    data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}"
+    title="Read this quote where it sits in the PDF">${open ? 'hide the paper' : 'in the paper'}</button>`;
+  const copy = `<button type="button" class="copy" data-act="copy-quote" data-claim="${esc(row.id)}"
+    title="Copy the quote">copy</button>`;
+  return `<blockquote>${flag}${esc(row.quote)} ${show}${copy}</blockquote>
+    ${open ? quoteContextHtml(row) : ''}`;
+}
+
+// The passage of the PDF the quote was matched against, read out of the text
+// already extracted for the check. A quote the model reworded is the commonest
+// extraction error and the slowest to correct by hand, so the paper's own
+// sentence is offered as a replacement rather than left to be copied out of
+// the PDF.
+function quoteContextHtml(row) {
+  const ctx = V.quoteContext;
+  if (ctx.loading) return '<div class="qctx">Reading the PDF…</div>';
+  if (ctx.error) return `<div class="qctx"><span class="qflag">${esc(ctx.error)}</span></div>`;
+  const found = ctx.data;
+  if (!found.available) return `<div class="qctx">${esc(found.reason)}</div>`;
+  // The passage was worked out from the quote and locator the server held when
+  // it was asked. If they have moved since — another tab, another process, the
+  // CLI — it describes a claim that is no longer there, and offering to write
+  // its suggestion back would undo that edit.
+  if (found.quote !== row.quote || (found.locator || '') !== (row.locator || '')) {
+    return '<div class="qctx">This claim changed while the passage was open. Open it again.</div>';
+  }
+  if (!found.suggestion) {
+    return '<div class="qctx">No passage in this PDF resembles this quote.</div>';
+  }
+  const where = found.page
+    ? `${found.found ? 'Found on' : 'Closest passage,'} page ${found.page} of ${found.pages}`
+    : (found.found ? 'Found in the PDF' : 'Closest passage');
+  // The locator is the model's own answer to the same question, and it is
+  // wrong often enough to be worth showing side by side with the real page.
+  // Unless the quote is in the paper more than once: then the page shown is
+  // the first of them, and the locator naming another one is no disagreement.
+  const elsewhere = found.repeated
+    ? '<span class="qlocator" title="The passage shown is the first of them.">appears more than once</span>'
+    : (found.locator_page && found.page && found.locator_page !== found.page
+      ? `<span class="qlocator" title="The claim's locator names a different page.">locator says ${esc(row.locator)}</span>`
+      : '');
+  const diff = found.diff.length
+    ? `<p class="qdiff">${found.diff.map((part) => {
+        if (part.op === 'quote') return `<del>${esc(part.text)}</del>`;
+        if (part.op === 'paper') return `<ins>${esc(part.text)}</ins>`;
+        return esc(part.text);
+      }).join(' ')}</p>`
+    : '';
+  const replace = found.suggestion === row.quote ? '' : `<button type="button" class="primary"
+    data-act="use-wording" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
+    title="Replace the quote with the sentence as the paper writes it">Use the paper's wording</button>`;
+  return `<div class="qctx">
+    <div class="qwhere">${esc(where)} ${elsewhere}</div>
+    <p class="qpassage">${esc(found.before)} <mark>${esc(found.suggestion)}</mark> ${esc(found.after)}</p>
+    ${diff}
+    <div class="qacts">${replace}</div>
+  </div>`;
 }
 
 function tensionMarker(claimId) {
@@ -1187,7 +1435,7 @@ function agreementCard(a) {
       <span class="cact">${actions.join('')}</span>
     </div>
     ${a.note ? `<p class="tnote">${esc(a.note)}</p>` : ''}
-    <div class="tgroup">${a.claims.map(tensionClaimCard).join('')}</div>
+    <div class="tgroup">${a.claims.map((row) => tensionClaimCard(row, a.id)).join('')}</div>
     ${a.stale ? '<p class="stale">A claim here was edited or removed after this was found. Re-run Find agreements to re-judge it, or decide it yourself.</p>' : ''}
   </div>`;
 }
@@ -1254,7 +1502,10 @@ async function findAgreements() {
 // A claim as it appears inside a tension: the same card, minus the review and
 // edit controls. Editing belongs to the claims view, where the editor's
 // lifecycle is handled; a click on the citation goes there.
-function tensionClaimCard(row) {
+// `group` is the tension or agreement this drawing of the claim belongs to;
+// one claim can be in several, and a passage opens beside the one it was
+// asked for. See `claimCard`.
+function tensionClaimCard(row, group = '') {
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'}" data-tclaim="${esc(row.id)}">
@@ -1266,7 +1517,7 @@ function tensionClaimCard(row) {
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
-    ${quoteHtml(row)}
+    ${quoteHtml(row, group)}
   </div>`;
 }
 
@@ -1286,7 +1537,7 @@ function tensionCard(t) {
       ${topics}
       <span class="cact">${actions.join('')}</span>
     </div>
-    <div class="tpair">${t.claims.map(tensionClaimCard).join('')}</div>
+    <div class="tpair">${t.claims.map((row) => tensionClaimCard(row, t.id)).join('')}</div>
     ${t.note ? `<p class="tnote">${esc(t.note)}</p>` : ''}
     ${t.stale ? '<p class="stale">A claim here was edited after this was found. Re-run Find tensions to re-judge it, or decide it yourself.</p>' : ''}
   </div>`;
@@ -1641,7 +1892,7 @@ function drawContent() {
   const main = $('main');
   const scrollTop = main ? main.scrollTop : 0;
   const shown = new Set();
-  const card = (row) => claimCard(row, shown);
+  const card = (row, group = '') => claimCard(row, shown, group);
   const rows = visibleClaims();
   // An editor for a claim the current filters exclude cannot be drawn, and
   // leaving `V.editing` set would also stop background content updates, which
@@ -1683,7 +1934,7 @@ function drawContent() {
         ? '<p class="empty">No claims match these filters.</p>'
         : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
     }
-    $('content').innerHTML = html;
+    $('content').innerHTML = html + textSearchBlock();
   applySavingState();
     if (main) main.scrollTop = scrollTop;
     return;
@@ -1705,18 +1956,66 @@ function drawContent() {
       html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span>${synthesizeButton(tag)}</h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
         + synthesisBlock(tag)
-        + group.map(card).join('') + '</div>';
+        + group.map((row) => card(row, tag)).join('') + '</div>';
     }
     if (untagged.length) {
       html += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
-        + untagged.map(card).join('') + '</div>';
+        + untagged.map((row) => card(row, 'untagged')).join('') + '</div>';
     }
   } else {
     html += rows.map(card).join('');
   }
-  $('content').innerHTML = html;
+  $('content').innerHTML = html + textSearchBlock();
   applySavingState();
   if (main) main.scrollTop = scrollTop;
+}
+
+// What the query found in the papers themselves, under the claims it found.
+// A paper can hold a word no claim of it mentions, and a paper nothing has
+// been extracted from yet holds all of them.
+function textSearchBlock() {
+  const found = V.textSearch;
+  if (!found || found.q !== V.q.trim()) return '';
+  const head = '<h3>In the PDFs</h3>';
+  if (found.loading) return `<div class="pdfhits">${head}<p class="hint">Reading the papers…</p></div>`;
+  if (found.error) {
+    return `<div class="pdfhits">${head}<p class="hint">Could not search the papers: ${esc(found.error)}</p></div>`;
+  }
+  if (!found.papers.length) {
+    return `<div class="pdfhits">${head}<p class="hint">No paper's text holds every word of that.</p></div>`;
+  }
+  // Drawn against the corpus as it stands, not as it stood when the answer
+  // came back: a paper removed since would otherwise stay listed here and
+  // clicking it would select a paper that is not there.
+  const live = new Set(S.papers.map((paper) => paper.key));
+  const papers = found.papers.filter((hit) => live.has(hit.key));
+  if (!papers.length) {
+    return `<div class="pdfhits">${head}<p class="hint">No paper's text holds every word of that.</p></div>`;
+  }
+  const hits = papers.map((hit) => {
+    const cite = `${(hit.authors || [])[0] ? hit.authors[0].split(' ').pop() : hit.key} ${hit.year || ''}`;
+    const passages = (hit.passages || []).map((passage) =>
+      `<p class="pp"><span class="hint">p. ${passage.page}</span> …${mark(passage)}…</p>`).join('');
+    return `<div class="pdfhit">
+      <div class="ph">
+        <button type="button" class="pt" data-act="open-paper" data-paper="${esc(hit.key)}"
+          title="${esc(hit.title || hit.key)}">${esc(cite)}</button>
+        <span class="hint">${esc(hit.title || '')}</span>
+        <span class="hint" style="margin-left:auto">${hit.occurrences} ${hit.occurrences === 1 ? 'mention' : 'mentions'}</span>
+      </div>${passages}</div>`;
+  }).join('');
+  return `<div class="pdfhits">${head}${hits}</div>`;
+}
+
+// A passage as the server cut it: it is the one that knows how the text was
+// folded to find the terms, and a browser's own case-insensitive matching
+// cannot expand ß to ss, so it would find nothing to mark in a passage that
+// was found for exactly that reason. Pieces rather than offsets, since an
+// offset into a Python string is not an offset into a JavaScript one.
+function mark(passage) {
+  const parts = passage.parts;
+  if (!parts || !parts.length) return esc(passage.text || '');
+  return parts.map((part) => (part.mark ? `<mark>${esc(part.text)}</mark>` : esc(part.text))).join('');
 }
 
 function renderJobs() {
@@ -2575,7 +2874,79 @@ function syncDraftReviews(ids, reviewed) {
   });
 }
 
+async function showQuoteContext(paper, claim, group = '') {
+  // The pending request itself is what a late answer has to match, not the
+  // claim id: claim ids are unique per corpus and not across workspaces, so
+  // opening the same id in another workspace before the first read finishes
+  // would otherwise be answered with the other corpus's passage — and "use
+  // the paper's wording" would write it into this one.
+  const pending = { claim, paper, group, loading: true, error: null, data: null };
+  // Another claim's editor can be open on the same screen, holding text that
+  // exists only in the DOM. Every redraw has to read it first or the passage
+  // opening throws away what somebody was typing.
+  captureOpenEditor();
+  V.quoteContext = pending;
+  renderContent();
+  try {
+    const data = await api(
+      `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/quote-context`);
+    if (V.quoteContext === pending) {
+      V.quoteContext = { claim, paper, group, loading: false, error: null, data };
+    }
+  } catch (error) {
+    if (V.quoteContext === pending) {
+      V.quoteContext = { claim, paper, group, loading: false, error: `Could not read the PDF: ${error.message}`, data: null };
+    }
+  }
+  captureOpenEditor();   // an editor may have been opened while the PDF was read
+  renderContent();
+}
+
+// Take the paper's wording for a quote. The claim's editor is never open while
+// the passage is on screen — the card is replaced by the form — but a draft
+// from an earlier edit can be, and it holds the old quote: saving it later
+// would put the model's version back.
+async function usePaperWording(paper, claim) {
+  const found = V.quoteContext && V.quoteContext.data;
+  const wording = found && found.suggestion;
+  if (!wording || isSaving(claim)) return;
+  // The passage on screen can be older than the claim: while an editor is
+  // open the poll leaves the content alone, so a quote edited elsewhere
+  // refreshes `S` under a button still offering the old suggestion. Checked
+  // again here, against the row as it stands, rather than trusted because it
+  // is drawn.
+  const row = S.claims.find((c) => c.id === claim);
+  if (!row || found.quote !== row.quote || (found.locator || '') !== (row.locator || '')) {
+    V.quoteContext = null;
+    V.error = 'This claim changed while the passage was open; nothing was written.';
+    captureOpenEditor();
+    renderContent();
+    return;
+  }
+  V.error = null;
+  markSaving(claim, true);
+  try {
+    await patchClaim(paper, claim, { quote: wording });
+    if (V.drafts[claim]) V.drafts[claim] = { ...V.drafts[claim], quote: wording };
+    V.quoteContext = null;
+  } catch (error) {
+    V.error = `Could not replace the quote: ${error.message}`;
+  } finally {
+    markSaving(claim, false);
+  }
+  captureOpenEditor();   // another claim's editor may be open and unsaved
+  renderContent();
+}
+
 async function patchClaim(paper, claim, patch) {
+  // An open passage was worked out from the quote and locator as they were.
+  // Saving either makes it describe a claim that no longer exists, and "use
+  // the paper's wording" would then write the old suggestion over the new
+  // quote. Closed rather than refetched: the reviewer just decided what the
+  // quote should say, and reopening it under them would be a surprise.
+  if (('quote' in patch || 'locator' in patch) && V.quoteContext && V.quoteContext.claim === claim) {
+    V.quoteContext = null;
+  }
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -2801,6 +3172,22 @@ $('content').addEventListener('click', async (event) => {
       if (row) await copyText(row.quote, 'Quote copied.');
       return;
     }
+    if (act === 'quote-context') {
+      const group = button.dataset.group || '';
+      if (V.quoteContext && V.quoteContext.claim === claim
+          && (V.quoteContext.group || '') === group) {
+        V.quoteContext = null;
+        captureOpenEditor();
+        renderContent();
+        return;
+      }
+      await showQuoteContext(paper, claim, group);
+      return;
+    }
+    if (act === 'use-wording') {
+      await usePaperWording(paper, claim);
+      return;
+    }
     if (act === 'review-all') {
       await reviewWholePaper(paper);
       return;
@@ -2951,7 +3338,7 @@ $('content').addEventListener('click', async (event) => {
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
         if (V.unverified && row.quote_verified !== false) { V.unverified = false; $('only-unverified').checked = false; }
-        if (V.q.trim() && !haystack(row).includes(V.q.trim().toLowerCase())) { V.q = ''; $('q').value = ''; }
+        if (V.q.trim() && !queryMatcher()(haystack(row))) { V.q = ''; $('q').value = ''; }
       }
       V.selectedId = claim;
       syncHash(true);
@@ -3439,6 +3826,7 @@ function graphOption(field) {
 function applyQuery(value) {
   captureOpenEditor();
   V.q = value;
+  scheduleTextSearch();
   renderPapers();   // the query filters the paper list as well as the claims
   renderContent();
 }
@@ -3637,6 +4025,7 @@ async function boot() {
       const changed = await pull();
       renderJobs();
       if (!changed) return;
+      rerunTextSearch();     // a paper imported since holds the query's words too
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();

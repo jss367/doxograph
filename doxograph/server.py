@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
-from . import __version__, bib, config, export, extract, ingest, store
+from . import __version__, bib, config, export, extract, ingest, search, store
 
 STATIC = Path(__file__).parent / "static"
 
@@ -968,6 +968,42 @@ def verify_quotes(key: str) -> dict:
     except KeyError:
         raise HTTPException(404, f"no paper {key}")
     return {"key": key, "n_unverified": store.summarize(paper)["n_unverified"]}
+
+
+@app.get("/api/search")
+def search_text(q: str = "", limit: int = 20) -> dict:
+    """The papers whose own text holds every word of the query.
+
+    The claims are searched in the page, which needs no server at all. This is
+    the other half: a word in a paper that no claim mentions, and a paper
+    nothing has been extracted from yet.
+    """
+    hits = search.search_papers(q, limit=max(1, min(limit, 100)))
+    known = {paper["key"]: paper for paper in store.all_papers()}
+    return {
+        "q": q,
+        "terms": search.terms(q),
+        "papers": [
+            {
+                **hit,
+                "title": known[hit["key"]].get("title", ""),
+                "authors": known[hit["key"]].get("authors", []),
+                "year": known[hit["key"]].get("year"),
+            }
+            for hit in hits if hit["key"] in known
+        ],
+    }
+
+
+@app.get("/api/papers/{key}/claims/{claim_id}/quote-context")
+def quote_context(key: str, claim_id: str) -> dict:
+    """The passage of the PDF a claim's quote was matched against."""
+    if not store.paper_path(key).exists():
+        raise HTTPException(404, f"no paper {key}")
+    try:
+        return store.quote_context(key, claim_id)
+    except KeyError:
+        raise HTTPException(404, f"no claim {claim_id} on {key}")
 
 
 @app.post("/api/retag")

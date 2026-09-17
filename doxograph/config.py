@@ -272,6 +272,11 @@ def ledger_path() -> Path:
     return data_dir() / "ledger.yaml"
 
 
+def text_dir() -> Path:
+    """Text extracted from the PDFs, one file per paper."""
+    return data_dir() / "text"
+
+
 def locks_dir() -> Path:
     return data_dir() / "locks"
 
@@ -284,7 +289,7 @@ def export_path() -> Path:
 
 
 def ensure_dirs() -> None:
-    for d in (papers_dir(), pdfs_dir(), locks_dir(), export_path().parent):
+    for d in (papers_dir(), pdfs_dir(), text_dir(), locks_dir(), export_path().parent):
         d.mkdir(parents=True, exist_ok=True)
 
 
