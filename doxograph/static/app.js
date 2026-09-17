@@ -412,7 +412,9 @@ function queryPatterns(query) {
   return (fold(query).match(/[\p{L}\p{N}_]+/gu) || [])
     .map((term) => (UNSEGMENTED.test(term)
       ? new RegExp(term, 'u')
-      : new RegExp(`(?:^|[^\\p{L}\\p{N}])${term}`, 'u')));
+      // The underscore is a word character to the server's `\w`, so it is one
+      // here: `bar` does not start a word in `foo_bar` on either side.
+      : new RegExp(`(?:^|[^\\p{L}\\p{N}_])${term}`, 'u')));
 }
 
 // A claim's searchable text. It carries its paper's key and year as well as
