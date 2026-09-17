@@ -150,7 +150,9 @@ def _points_at_a_page(lines: list[str], start: int, page: int) -> bool:
     second heading for the loop below to fall back to, so having another
     heading says nothing about which of the two this is.
     """
-    for line in lines[start:start + 3]:
+    for line in lines[start:]:
+        if quotes.PAGE_BREAK in line:
+            return False        # over the page, and no longer under the heading
         if not line.strip():
             continue
         number = _PAGE_NUMBER.match(line.rstrip("\n\r\f"))

@@ -488,6 +488,14 @@ def test_a_contents_page_is_not_where_the_reference_list_starts():
         "References\nNobody. A work nobody wrote. 1999.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+    # However much room is left between the entry and the page it points at.
+    # Written out rather than read from a PDF: pypdf gives back no blank line
+    # however many the page has.
+    assert cites.reference_text(
+        "Contents\nIntroduction\n1\nReferences\n\n\n\n\n12\n"
+        "\fIntroduction\nWe build on Attention is all you need.\n"
+        "\fReferences\nNobody. A work nobody wrote. 1999.\n"
+    ) == "Nobody. A work nobody wrote. 1999.\n"
 
 
 def test_a_supplement_does_not_make_the_main_list_a_contents_entry():
