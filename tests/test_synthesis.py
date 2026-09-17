@@ -1,5 +1,7 @@
 """Syntheses: what the papers, taken together, hold on a topic."""
 
+import hashlib
+
 from fastapi.testclient import TestClient
 
 from doxograph import export, extract, server, store, __main__
@@ -53,6 +55,11 @@ class FakeClient:
         return Messages()
 
 
+def _note(text: str) -> str:
+    """The digest the synthesis basis keeps a tension's note by."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
 def test_default_topics_need_two_papers_but_any_topic_with_a_claim_can_be_named():
     build_corpus()
     assert store.synthesis_topics() == ["recovery-rate"]
@@ -98,7 +105,22 @@ def test_the_basis_is_what_the_model_was_shown_not_what_is_on_disk():
     tensions = store.tension_rows()
     store.set_tension_status(tensions[0]["id"], "confirmed")
     record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"), tensions)
-    assert record["tensions"] == {tensions[0]["id"]: ["contradiction", "open", False]}
+    assert record["tensions"] == {tensions[0]["id"]: ["contradiction", "open", False, _note("Doe vs Li.")]}
+    assert store.synthesis_rows()[0]["stale"] is True
+
+
+def test_a_tension_reworded_by_a_rerun_makes_the_synthesis_stale():
+    """The prompt carries the note, so a rerun that says the same disagreement
+    in different words is a different thing to write a synthesis from."""
+    a, b, _ = build_corpus()
+    live = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery-rate", [
+        {"claims": [a, b], "kind": "contradiction", "note": "Doe vs Li."}], live)
+    store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
+    assert store.synthesis_rows()[0]["stale"] is False
+
+    store.record_tensions("recovery-rate", [
+        {"claims": [a, b], "kind": "contradiction", "note": "Doe and Li disagree about rollouts."}], live)
     assert store.synthesis_rows()[0]["stale"] is True
 
 
@@ -110,7 +132,7 @@ def test_a_tension_decided_or_found_in_the_topic_makes_the_synthesis_stale():
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "contradiction", "note": "Doe vs Li."}], live)
     [found] = store.tension_rows()
     record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
-    assert record["tensions"] == {found["id"]: ["contradiction", "open", False]}
+    assert record["tensions"] == {found["id"]: ["contradiction", "open", False, _note("Doe vs Li.")]}
     assert store.synthesis_rows()[0]["stale"] is False
 
     # Confirming it is a judgment the synthesis was written without.
@@ -147,7 +169,7 @@ def test_a_tension_judged_against_earlier_text_is_said_so_and_re_judging_it_chan
     assert "[confirmed, a claim changed since] contradiction between" in \
         extract._tension_block("recovery-rate", store.tension_rows())
     record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
-    assert record["tensions"] == {found["id"]: ["contradiction", "confirmed", True]}
+    assert record["tensions"] == {found["id"]: ["contradiction", "confirmed", True, _note("Doe vs Li.")]}
     assert store.synthesis_rows()[0]["stale"] is False
 
     # Confirming it again, against the new text, is a judgment the synthesis
@@ -352,7 +374,7 @@ def test_synthesize_topic_shows_claims_tensions_and_review_state_and_records_the
     # The basis records the tensions as the prompt showed them: the dismissed
     # one was left out of both.
     noted = next(t for t in store.tension_rows() if t["id"] != dismissed["id"])
-    assert row["tensions"] == {noted["id"]: ["contradiction", "open", False]}
+    assert row["tensions"] == {noted["id"]: ["contradiction", "open", False, _note(noted["note"])]}
     assert row["stale"] is False
 
 

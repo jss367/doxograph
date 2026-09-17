@@ -1343,15 +1343,20 @@ def synthesis_claim_basis(claim: dict) -> str:
 
 def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
     """The other half: the topic's tensions as the prompt shows them, by id,
-    with kind, status, and whether the prompt said a claim had changed since
-    it was judged. Dismissed ones are left out of the prompt, so dismissing
-    one changes this as much as confirming one, or a pass finding a new pair,
-    does; so does re-judging a stale one against the current text. `tensions`
-    is `tension_rows` output, whose `topics` are already filtered to what both
-    claims still carry. A record from before the stale flag was kept holds
-    two-element lists, which never compare equal to these, so it reads as
-    stale until rewritten: what the model was told is not known."""
-    return {t["id"]: [t.get("kind"), t.get("status"), bool(t.get("stale"))]
+    with kind, status, whether the prompt said a claim had changed since it was
+    judged, and the note. Dismissed ones are left out of the prompt, so
+    dismissing one changes this as much as confirming one, or a pass finding a
+    new pair, does; so does re-judging a stale one against the current text.
+    The note is in because the prompt carries it: a rerun that says the same
+    disagreement in different words is a different thing to write a synthesis
+    from. It goes in as a digest, since what is wanted is whether it moved and
+    the whole of it would be a copy of the tensions file. `tensions` is
+    `tension_rows` output, whose `topics` are already filtered to what both
+    claims still carry. A record from before a field was kept holds a shorter
+    list, which never compares equal to these, so it reads as stale until
+    rewritten: what the model was told is not known."""
+    return {t["id"]: [t.get("kind"), t.get("status"), bool(t.get("stale")),
+                      hashlib.sha1((t.get("note") or "").encode("utf-8")).hexdigest()[:12]]
             for t in sorted(tensions, key=lambda t: t["id"])
             if topic in t.get("topics", []) and t.get("status") != "dismissed"}
 
