@@ -672,6 +672,27 @@ def test_a_title_inside_a_longer_word_is_not_a_citation():
     assert cites._bounded(entry, entry.squashed.find(mark), len(mark))
 
 
+def test_two_dois_that_differ_by_what_they_end_with_are_two_papers():
+    """`10.1234/foo_` is a DOI of its own. Squashing keeps no character for
+    the underscore, so what the entry prints after the identifier is what
+    tells the two apart."""
+    _paper("plain", "A paper with a long enough title",
+           ["A paper with a long enough title", "Text."], doi="10.1234/foo")
+    _paper("trailing", "Another paper with a long enough title",
+           ["Another paper with a long enough title", "Text."], doi="10.1234/foo_")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Nobody. A work. https://doi.org/10.1234/foo_, 2026.",
+    ])
+    _paper("citing2", "Another citing paper", [
+        "Another citing paper",
+        "References\n[1] Nobody. A work. https://doi.org/10.1234/foo, 2026.",
+    ])
+    edges = cites.edges()
+    assert [e["to"] for e in edges if e["from"] == "citing"] == ["trailing"]
+    assert [e["to"] for e in edges if e["from"] == "citing2"] == ["plain"]
+
+
 def test_a_doi_that_ends_in_a_bracket_is_cited_by_its_own_printing():
     """`10.1234/foo(2)` is a DOI and `normalize_doi` keeps the pair. Squashing
     leaves nothing for the bracket, so the span a match covers ends at the 2

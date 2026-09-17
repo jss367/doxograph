@@ -612,6 +612,13 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
                 or (before[-1:] in _WORD_JOINS and _WRAP.sub("", before[:-1])[-1:].isalnum()))
 
 
+# What an identifier finishes with where it does not finish with a letter.
+_FINISH = re.compile(r"[^0-9A-Za-z]*$")
+# The marks a sentence never ends with, so an entry printing one straight after
+# an identifier is printing more of the identifier.
+_NEVER_LAST = "_/" + _DASHES
+
+
 def _ends_in_a_letter(printed: str) -> str:
     """An identifier with the punctuation at its ends taken off.
 
@@ -663,9 +670,21 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     if printed and _shape(span) != _shape(_ends_in_a_letter(printed)):
         return False
     rest = entry.raw[stop:]
-    tail = _ARXIV_TAIL.match(rest) if versioned else None
-    if tail:
-        rest = rest[tail.end():]
+    # An identifier that finishes with punctuation has to be printed with it:
+    # `10.1234/foo_` is not `10.1234/foo`, and squashing keeps no character
+    # for either ending. Where it finishes with a letter, what follows is the
+    # entry's own punctuation — a full stop or a comma — except for the marks
+    # no sentence ends with, which say the identifier went on.
+    finish = _FINISH.search(printed).group() if printed else ""
+    if finish:
+        if _shape(rest[:len(finish)]) != _shape(finish):
+            return False
+        rest = rest[len(finish):]
+    elif rest[:1] in _NEVER_LAST:
+        return False
+    version = _ARXIV_TAIL.match(rest) if versioned else None
+    if version:
+        rest = rest[version.end():]
     if rest[:1].isalnum():
         return False
     # More identifier after the punctuation that joins its parts, however much
