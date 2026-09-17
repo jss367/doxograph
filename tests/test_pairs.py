@@ -27,6 +27,9 @@ def test_an_accent_is_the_same_word_however_it_is_written():
     ending where the accent starts."""
     assert pairs.words({"text": "caf\u00e9 measurements"}) == \
         pairs.words({"text": "cafe\u0301 measurements"})
+    # And a soft hyphen pasted out of a PDF is not where a word ends.
+    assert pairs.words({"text": "the measure\u00adments"}) == \
+        pairs.words({"text": "the measurements"})
 
 
 def test_words_are_stemmed_and_the_dull_ones_dropped():

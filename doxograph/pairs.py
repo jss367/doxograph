@@ -124,7 +124,11 @@ def words(row: dict) -> frozenset[str]:
         # claim typed here and two in one pasted out of a PDF, and `\w+` reads
         # the second as a word ending where the accent starts. The same word
         # either way is the whole point of the measure.
+        # A soft hyphen goes out with the same stroke: it says where a word
+        # may be broken, not where one ends, and `\w+` would read it as the
+        # end of one. The search over the papers reads it the same way.
         text = unicodedata.normalize("NFC", (row.get(field) or "")).casefold()
+        text = text.replace("\u00ad", "")
         for word in _WORD.findall(text):
             if len(word) < 2 or word in STOPWORDS:
                 continue
