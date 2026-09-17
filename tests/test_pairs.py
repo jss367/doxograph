@@ -21,6 +21,14 @@ def a_corpus() -> tuple[str, str, str]:
     return tuple(ids)
 
 
+def test_an_accent_is_the_same_word_however_it_is_written():
+    """A claim typed here has one character where one pasted out of a PDF has
+    a letter and a combining mark, and `\\w+` would read the second as a word
+    ending where the accent starts."""
+    assert pairs.words({"text": "caf\u00e9 measurements"}) == \
+        pairs.words({"text": "cafe\u0301 measurements"})
+
+
 def test_words_are_stemmed_and_the_dull_ones_dropped():
     assert pairs.stem("scales") == pairs.stem("scale")
     assert pairs.stem("steering") == pairs.stem("steer")
@@ -93,5 +101,7 @@ def test_a_verb_and_its_past_tense_meet():
                         # comes off and leaves one e where the base has two.
                         ("agree", "agreed"), ("agrees", "agreeing"),
                         ("free", "freed"), ("see", "seed"),
-                        ("program", "programmed"), ("program", "programme")):
+                        ("program", "programmed"), ("program", "programme"),
+                        # -stasis nouns, which the -sis rule reads after an s.
+                        ("metastasis", "metastases"), ("homeostasis", "homeostases")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import unicodedata
 from collections.abc import Iterable
 
 from .store import STOPWORDS
@@ -66,9 +67,10 @@ def stem(word: str) -> str:
     A plural first, then a verb ending, so `scaled` and `scales` meet.
     """
     word = _IRREGULAR.get(word, word)
-    if len(word) > 5 and word.endswith(("yses", "eses", "oses", "ises")):
-        # analyses/analysis, hypotheses/hypothesis. Narrow on purpose: phases
-        # is a plural of phase, and turning it into phasis would part the two.
+    if len(word) > 5 and word.endswith(("yses", "eses", "oses", "ises", "stases")):
+        # analyses/analysis, hypotheses/hypothesis, metastases/metastasis.
+        # Narrow on purpose: phases is a plural of phase, and turning it into
+        # phasis would part the two, so `ases` is only read after an s.
         word = word[:-3] + "sis"
     if len(word) > 4 and word.endswith("ies"):
         word = word[:-3] + "y"
@@ -118,7 +120,12 @@ def words(row: dict) -> frozenset[str]:
     """
     found = set()
     for field in ("text", "evidence"):
-        for word in _WORD.findall((row.get(field) or "").casefold()):
+        # Put together before it is cut up: an accent is one character in a
+        # claim typed here and two in one pasted out of a PDF, and `\w+` reads
+        # the second as a word ending where the accent starts. The same word
+        # either way is the whole point of the measure.
+        text = unicodedata.normalize("NFC", (row.get(field) or "")).casefold()
+        for word in _WORD.findall(text):
             if len(word) < 2 or word in STOPWORDS:
                 continue
             found.add(stem(word))
