@@ -588,6 +588,8 @@ def test_an_identifier_is_read_from_both_ends():
            ["Another paper with a long enough title", "Text."], doi="10.1234/foo")
     _paper("foobar", "A third paper with a long enough title",
            ["A third paper with a long enough title", "Text."], doi="10.1234/foob.ar")
+    _paper("bazqux", "A fourth paper with a long enough title",
+           ["A fourth paper with a long enough title", "Text."], doi="10.1234/baz.qux-quux")
     _paper("citing", "The citing paper", [
         "The citing paper",
         "References\n[1] Nobody. A work nobody wrote. https://doi.org/10.1706/03762, 2026.\n"
@@ -601,7 +603,9 @@ def test_an_identifier_is_read_from_both_ends():
         # And text that only squashes into an identifier is not one.
         "[6] Nobody. A sixth work. Vol. 10, 1234. Foo. 2026.\n"
         # Nor is a DOI that keeps its punctuation somewhere else.
-        "[7] Nobody. A seventh work. https://doi.org/10.1234/fo.obar, 2026.",
+        "[7] Nobody. A seventh work. https://doi.org/10.1234/fo.obar, 2026.\n"
+        # Or the same marks in a different order.
+        "[8] Nobody. An eighth work. https://doi.org/10.1234/baz-qux.quux, 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
 
@@ -692,6 +696,23 @@ def test_a_pdf_replaced_by_hand_is_read_again():
     stamp = store.text_path("roe2026steering").stat().st_mtime_ns + 1_000_000
     os.utime(store.pdf_path("roe2026steering"), ns=(stamp, stamp))
     assert not any(e["from"] == "roe2026steering" for e in cites.edges())
+
+
+def test_correcting_a_doi_is_a_different_paper_to_look_for():
+    """Where an identifier keeps its punctuation decides what an entry cites,
+    so a DOI corrected in place has to move the key — nothing in the text
+    changes when it does."""
+    _paper("cited", "A paper with a long enough title",
+           ["A paper with a long enough title", "Text."], doi="10.1234/foo.bar")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Nobody. A work. https://doi.org/10.1234/foob.ar, 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+
+    paper = store.load_paper("cited")
+    store.save_paper({**paper, "doi": "10.1234/foob.ar"})
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["cited"]
 
 
 def test_the_answer_is_filed_under_the_text_it_was_read_from():

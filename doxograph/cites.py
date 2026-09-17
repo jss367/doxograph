@@ -569,9 +569,16 @@ _IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9]*")
 _DOI_HEAD = re.compile(r"10\.\d{4,9}/")
 
 
+# The dashes an extraction can write a hyphen as. They are the one difference
+# between two printings of an identifier that means nothing.
+_DASHES = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
+
+
 def _shape(text: str) -> str:
-    """Where an identifier keeps its punctuation, with the rest taken out."""
-    return "".join("#" if char.isalnum() else "." for char in text)
+    """An identifier as its punctuation: which mark and where, with the
+    letters and digits taken out and the dashes read as one."""
+    return "".join("#" if char.isalnum() else "-" if char in _DASHES else char
+                   for char in text)
 
 
 def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
@@ -600,10 +607,10 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     span = _WRAP.sub("", entry.raw[entry.offsets[at]:stop])
     if any(not (char.isalnum() or char in _JOINS) for char in span):
         return False
-    # And in the same places: `10.1234/foo.bar` and `10.1234/foob.ar` are two
-    # DOIs and one fingerprint, and where the punctuation falls is all that
-    # tells them apart. The characters themselves are not compared, since an
-    # extraction can write a hyphen as a dash and mean the same identifier.
+    # And the same punctuation in the same places: `10.1234/foo.bar` and
+    # `10.1234/foob.ar` are two DOIs and one fingerprint, and so are
+    # `10.1234/foo.bar-baz` and `10.1234/foo-bar.baz`. Only the dashes are
+    # read as one, since an extraction can write a hyphen as any of them.
     if printed and _shape(span) != _shape(printed):
         return False
     rest = entry.raw[stop:]
@@ -656,9 +663,18 @@ def _named_signature(papers: list[dict]) -> str:
     topic renamed, neither of which changes a bibliography, and every such
     move would throw the answer away and read the pile again.
     """
-    named = "\n".join(f"{paper['key']} {' '.join(fingerprints(paper))}"
-                       for paper in sorted(papers, key=lambda p: p["key"]))
-    return hashlib.sha1(named.encode("utf-8")).hexdigest()
+    parts = []
+    for paper in sorted(papers, key=lambda p: p["key"]):
+        found = names(paper)
+        # Each identifier as it is written as well as as it squashes: where
+        # its punctuation falls decides what an entry is a citation of, so a
+        # DOI corrected from `10.1234/foo.bar` to `10.1234/foob.ar` is a
+        # different paper to look for. The arXiv id is named because it is
+        # the one that may be printed with a version.
+        parts.append(" ".join([paper["key"], found.title, found.arxiv]
+                              + [f"{mark}={found.printed[mark]}"
+                                 for mark in found.identifiers]))
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def _identity(key: str) -> tuple:
