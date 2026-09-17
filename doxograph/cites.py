@@ -37,15 +37,16 @@ from . import quotes, search, store
 _HEADING_ANCHORS = frozenset({"references", "reference", "bibliography",
                               "works", "literature"})
 # What a heading may carry after the word, as words rather than as phrases: a
-# heading is built out of these — "References and Notes", "References and
-# Recommended Reading", "Selected Bibliography (Primary Sources)" — and
+# heading is built out of these — "References and Notes", "List of References",
+# "Selected Bibliography (Primary Sources)" — and
 # listing the phrases meant meeting each new one for the first time. A short
 # body line beginning "References to Figure 2 show…" is refused because "to"
 # and "figure" are not among them, which is the work this does.
 _HEADING_WORDS = frozenset({
-    "and", "cited", "notes", "further", "reading", "recommended", "selected",
-    "additional", "primary", "secondary", "sources", "consulted", "list",
-    "works", "literature", "bibliography", "references", "reference", "key",
+    "and", "of", "cited", "notes", "further", "reading", "recommended",
+    "selected", "additional", "primary", "secondary", "sources", "consulted",
+    "list", "works", "literature", "bibliography", "references", "reference",
+    "key",
 })
 # How long a heading may be once it is down to its letters.
 _HEADING_LETTERS = 40
@@ -68,7 +69,13 @@ _cache_lock = threading.Lock()
 # settle a title printed in somebody else's entry.
 _ENTRY_MARK = re.compile(
     r"(?m)(?:^|(?<=\f))[ \t]*"
-    r"(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)]|\d{1,3}(?=[ \t]*$))(?=[ \t\f]|$)")
+    # A bracket closes a marker itself, so the entry may start against it.
+    r"(?:\[\d{1,3}\]|\(\d{1,3}\)"
+    # A dot or a bracket after the number does too, as long as what follows is
+    # not another digit: `1.Smith` is an entry and `3.5` is a section number.
+    r"|\d{1,3}[.)](?![0-9])"
+    # A number with nothing to close it has to have nothing after it either.
+    r"|\d{1,3}(?=[ \t]*$))")
 
 
 def entries(listing: str) -> list[quotes.Text]:

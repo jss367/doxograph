@@ -252,6 +252,13 @@ def test_a_numbered_list_is_read_one_entry_at_a_time():
     assert [e.squashed for e in
             cites.entries("[1] A paper. 2017.\n[2] Another paper. 2018.")] == [
         "apaper2017", "anotherpaper2018"]
+    # A marker the extraction left touching its entry is still a marker,
+    # unless what touches it is another digit: `3.5` is a section number.
+    assert [e.squashed for e in
+            cites.entries("[1]A paper. 2017.\n[2]Another paper. 2018.")] == [
+        "apaper2017", "anotherpaper2018"]
+    assert len(cites.entries("1.Smith, J. A paper.\n2.Jones, A. Another.")) == 2
+    assert len(cites.entries("3.5 of the paper says so.\n3.6 says otherwise.")) == 1
     for numbering in ("1. ", "(1) ", "1) "):
         assert len(cites.entries(f"{numbering}A paper.\n{numbering.replace('1', '2')}Another.")) == 2
     # A marker the extraction left alone on its line numbers the list too.
@@ -364,7 +371,7 @@ def test_an_unnumbered_list_naming_both_twins_cites_both():
 def test_a_section_label_in_letters_comes_off_the_heading():
     """Appendices number their sections by letter: "A. REFERENCES"."""
     for heading in ("A. REFERENCES", "B. Bibliography", "VI. LITERATURE CITED", "3. References",
-                    "(A) References", "[A] Bibliography"):
+                    "(A) References", "[A] Bibliography", "List of References"):
         text = f"Body.\n{heading}\n[1] A paper.\n"
         assert cites.reference_text(text).strip() == "[1] A paper.", heading
     # A prefix that leaves prose behind is still prose.
