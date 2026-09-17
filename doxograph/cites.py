@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
+import unicodedata
 from dataclasses import dataclass
 
 from . import quotes, search, store
@@ -157,8 +158,9 @@ def _at_a_page_edge(listing: str, mark: re.Match) -> bool:
 # What marks a letter or numeral as a section label rather than the first word
 # of a sentence: the dot or bracket after it. "A. REFERENCES" is a heading and
 # "A reference" is the start of a line of prose. A bracket in front of it is
-# how some papers write the same label: "(A) References".
-_LABEL = re.compile(r"^[ \t]*[\[(]?[0-9A-Za-z]{1,7}[.)\]]+[ \t]+")
+# how some papers write the same label: "(A) References". The space after the
+# label is what an extraction is likeliest to lose, so it is not required.
+_LABEL = re.compile(r"^[ \t]*[\[(]?[0-9A-Za-z]{1,7}[.)\]]+[ \t]*")
 
 
 def reference_text(text: str) -> str:
@@ -559,24 +561,23 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
 # identifier running on into somebody else's.
 _ARXIV_TAIL = re.compile(r"(?:v\d+)?(?:\.pdf)?(?![0-9A-Za-z])", re.I)
 
+# The dashes an extraction can write a hyphen as. They are the one difference
+# between two printings of an identifier that means nothing.
+_DASHES = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 # What an identifier is written with, which `ingest.DOI_RE` writes out as
-# `[-._;()/:A-Za-z0-9]`: the punctuation here joins one part of an identifier
-# to the next, and so says the identifier has not ended where a fingerprint of
-# it has.
-_JOINS = "./-_:;()"
+# `[-._;()/:A-Za-z0-9]`, with those dashes: the punctuation here joins one part
+# of an identifier to the next, and so says the identifier has not ended where
+# a fingerprint of it has.
+_JOINS = "./_:;()" + _DASHES
 # Where an identifier was split to fit the page: a line or page break, or the
 # soft hyphen an extraction leaves where a word may be broken, with whatever
 # the next line is indented by.
 _WRAP = re.compile(r"[ \t]*[\n\r\f\u00ad][ \t]*")
-_IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9]")
-_IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9]*")
+_IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]")
+_IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]*")
 # Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
 _DOI_HEAD = re.compile(r"10\.\d{4,9}/")
 
-
-# The dashes an extraction can write a hyphen as. They are the one difference
-# between two printings of an identifier that means nothing.
-_DASHES = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 
 
 def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
@@ -588,6 +589,14 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     """
     begin = entry.offsets[at]
     stop = entry.offsets[at + width - 1] + 1
+    # Past the marks belonging to the letter the title ends on, and back over
+    # the ones belonging to the letter before it: an accent written as a mark
+    # of its own is part of its letter, not the end of a word, and `café` is
+    # inside `caféine` whichever way the extraction writes the accent.
+    while stop < len(entry.raw) and unicodedata.combining(entry.raw[stop]):
+        stop += 1
+    while begin and unicodedata.combining(entry.raw[begin - 1]):
+        begin -= 1
     return not (entry.raw[:begin][-1:].isalnum() or entry.raw[stop:stop + 1].isalnum())
 
 
@@ -622,7 +631,7 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     # `Vol. 10, 1234. Foo.` is not a DOI, whatever it comes to with the commas
     # and the spaces taken out.
     span = _WRAP.sub("", entry.raw[entry.offsets[at]:stop])
-    if any(not (char.isalnum() or char in _JOINS or char in _DASHES) for char in span):
+    if any(not (char.isalnum() or char in _JOINS) for char in span):
         return False
     # And the same punctuation in the same places: `10.1234/foo.bar` and
     # `10.1234/foob.ar` are two DOIs and one fingerprint, and so are

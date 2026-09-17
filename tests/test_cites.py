@@ -377,7 +377,9 @@ def test_an_unnumbered_list_naming_both_twins_cites_both():
 def test_a_section_label_in_letters_comes_off_the_heading():
     """Appendices number their sections by letter: "A. REFERENCES"."""
     for heading in ("A. REFERENCES", "B. Bibliography", "VI. LITERATURE CITED", "3. References",
-                    "(A) References", "[A] Bibliography", "List of References"):
+                    "(A) References", "[A] Bibliography", "List of References",
+                    # The space after the label is what an extraction loses.
+                    "A.References", "IV.References", "[A]References"):
         text = f"Body.\n{heading}\n[1] A paper.\n"
         assert cites.reference_text(text).strip() == "[1] A paper.", heading
     # A prefix that leaves prose behind is still prose.
@@ -650,6 +652,12 @@ def test_a_title_inside_a_longer_word_is_not_a_citation():
         "steerings and other things. 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+    # An accent written as a mark of its own is part of its letter, and the
+    # word goes on past it. Read against the entry, since the test PDFs are
+    # latin-1 and a decomposed accent cannot be written into one.
+    entry = quotes.build("Nobody. Understanding the cafe\u0301ine of it all. 2026.")
+    title = quotes.squash("Understanding the caf\u00e9")
+    assert not cites._bounded(entry, entry.squashed.find(title), len(title))
 
 
 def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
@@ -663,6 +671,12 @@ def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
     # A different DOI is still a different DOI.
     assert not cites._whole(entry, entry.squashed.find(mark), len(mark),
                             printed="10.1234/fooba.r")
+    # And a dash the entry writes is where the identifier goes on, so a
+    # shorter DOI does not end inside a longer one.
+    longer = quotes.build("Nobody. A work. https://doi.org/10.1234/foo\u2013bar, 2026.")
+    short = quotes.squash("10.1234/foo")
+    assert not cites._whole(longer, longer.squashed.find(short), len(short),
+                            printed="10.1234/foo")
 
 
 def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
