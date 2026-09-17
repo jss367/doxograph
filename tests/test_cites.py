@@ -438,6 +438,19 @@ def test_a_heading_is_built_out_of_heading_words():
         assert cites.reference_text(f"Body.\n{prose}\n[1] A.\n") == "", prose
 
 
+def test_one_unnumbered_entry_naming_a_twin_by_its_identifier_cites_that_twin():
+    """The shared title and the preprint's id are printed together on one
+    line, which is one entry naming one work — the published version is not
+    cited by an entry that says arXiv."""
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nVaswani, A. Attention is all you need. arXiv:1706.03762, 2017.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["preprint"]
+
+
 def test_a_bare_identifier_in_an_uncut_list_leaves_the_title_to_its_twin():
     """No entry markers, a bare arXiv id for the preprint, and one printing of
     the shared title for the published version."""

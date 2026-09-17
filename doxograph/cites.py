@@ -365,6 +365,28 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
                 if identifier else at)
         return where[mark, identifier, versioned]
 
+    def beside(mark: str, versioned: bool, title: str) -> bool:
+        """Whether the one printing of a title has this identifier on its line.
+
+        A line of a reference list is one entry naming one work, however the
+        list is written, so an entry that gives a shared title and one twin's
+        identifier together is naming that twin. One printing only: two
+        printings are two entries, and the title in the other one is somebody
+        else's to claim.
+        """
+        printed = places(title, False)
+        if len(printed) != 1:
+            return False
+        begin = entry.offsets[printed[0]]
+        end = entry.offsets[printed[0] + len(title) - 1] + 1
+        for place in places(mark, True, versioned):
+            at = entry.offsets[place]
+            stop = entry.offsets[place + len(mark) - 1] + 1
+            between = entry.raw[end:at] if at >= end else entry.raw[stop:begin]
+            if "\n" not in between and quotes.PAGE_BREAK not in between:
+                return True
+        return False
+
     for other, found in marks.items():
         if other == key:
             continue
@@ -373,9 +395,13 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
                               if places(mark, True, mark == found.arxiv)), "")
         # Where the list is one stretch, an identifier is the only thing that
         # points at this paper and nobody else's: a title printed somewhere in
-        # a page of references may be somebody's citation of its twin.
-        named_by = (by_identifier if uncut and by_identifier
-                    else (title if title and title in entry.squashed else by_identifier))
+        # a page of references may be somebody's citation of its twin. Unless
+        # the two are printed on one line, which is one entry naming one work.
+        by_title = title if title and places(title, False) else ""
+        if uncut and by_identifier and not beside(
+                by_identifier, by_identifier == found.arxiv, title):
+            by_title = ""
+        named_by = by_title or by_identifier
         if not named_by:
             continue
         claims[other] = (places(named_by, named_by is not title, named_by == found.arxiv),
