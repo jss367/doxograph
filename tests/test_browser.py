@@ -3538,6 +3538,61 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
 
 
 @pytest.mark.browser
+def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_delete():
+    """A topic whose only claim is held goes off the sidebar — but not while it
+    is the topic being read. The entry there is the only way out of the filter,
+    and clearing the filter instead would make Undo a one-way trip. So it is
+    kept at zero for as long as the delete can be undone, and once the delete
+    has gone out the filter goes with it rather than leaving the reader on a
+    topic that no longer exists."""
+    _paper("paper-a", "Paper A", "solo")
+    _paper("paper-b", "Paper B", "shared")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#tags [data-tag="solo"]').click()
+                await page.locator('#tags [data-tag="solo"].active').wait_for()
+                assert "tag=solo" in page.url
+
+                card = page.locator('.claim[data-claim="paper-a-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+                await card.wait_for(state="detached")
+
+                # Still on the topic, and still able to leave it by hand.
+                await page.locator('#tags [data-tag="solo"].active').wait_for(timeout=3000)
+                assert await page.locator('#tags [data-tag="solo"] .n').text_content() == "0"
+                assert "tag=solo" in page.url
+                assert await page.locator('.claim[data-claim="paper-b-c1"]').count() == 0
+
+                # Undo puts the reader back where they were, not on the corpus.
+                await notice.get_by_role("button", name="Undo").click()
+                await card.wait_for()
+                assert await page.locator('#tags [data-tag="solo"] .n').text_content() == "1"
+                assert "tag=solo" in page.url
+                assert await page.locator('.claim[data-claim="paper-b-c1"]').count() == 0
+
+                # Once the delete is really sent the topic is gone for good, so
+                # the filter is dropped rather than left naming nothing.
+                await card.get_by_role("button", name="delete").click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+                await page.evaluate("flushTrash()")
+                await page.locator('#tags [data-tag="solo"]').wait_for(state="detached")
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
+                assert "tag=solo" not in page.url
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["claims"] == []
+
+
+@pytest.mark.browser
 def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
     """The redraw that takes the row off the page can fail — a server restarting
     under the click — and the notice raised after it is what carries the timer

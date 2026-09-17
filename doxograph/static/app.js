@@ -422,8 +422,21 @@ function pruneTrashed() {
     const tags = new Map();
     kept.forEach((row) => (row.tags || []).forEach(
       (tag) => tags.set(tag, (tags.get(tag) || 0) + 1)));
-    S.tag_counts = Object.fromEntries([...tags].sort(
+    const counted = Object.fromEntries([...tags].sort(
       (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
+    // One exception to counting what is left: the topic being filtered on. Its
+    // entry in the sidebar is the only way back out of that filter, so dropping
+    // it for the length of the wait would leave the reader on a view with no
+    // claims and nothing to click — and clearing `V.tag` instead would make
+    // Undo a one-way trip, putting them back on the whole corpus rather than
+    // on the topic they were reading. Kept at zero, and only if it was there
+    // before the prune, so a topic named by a stale URL is still dropped by
+    // `dropMissingFilters`. The delete going through takes the entry with it:
+    // the trash is empty by then, this runs no more, and the filter goes with
+    // the count the server sends.
+    if (V.tag && !Object.hasOwn(counted, V.tag)
+        && Object.hasOwn(S.tag_counts || {}, V.tag)) counted[V.tag] = 0;
+    S.tag_counts = counted;
   }
   // The analysis views hold the server's own join: each tension and agreement
   // carries the claim rows it cites, not their ids. Taking a held claim out of
@@ -735,7 +748,9 @@ function readStatus(value) {
 // match it, so it shows blank while filtering every claim away.
 //
 // Runs once the corpus is in `S`, which is why it is not part of `applyHash`:
-// at boot the URL is read before the first read of the corpus comes back.
+// at boot the URL is read before the first read of the corpus comes back. Every
+// read runs it — see `pull` — so a filter is dropped whenever the corpus stops
+// holding what it names, not only when the reader arrives at one.
 function dropMissingFilters() {
   if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) V.paper = null;
   if (V.tag && !Object.hasOwn(S.tag_counts || {}, V.tag)) V.tag = null;
@@ -908,6 +923,15 @@ async function pull() {
     S.jobs = jobs;
   }
   pruneTrashed();   // a delete that has not been sent yet is already gone here
+  // And the view is checked against the corpus that is left, which is where a
+  // filter naming something that has gone is dropped. Here rather than only at
+  // boot and on Back, because the corpus can lose a paper or a topic under a
+  // page that is sitting still: the poll picking up a rename or a removal made
+  // in another window, or the refresh that follows this page's own delete
+  // finally going out — the topic whose last claim it took is gone from the
+  // count, the sidebar entry the hold kept alive goes with it, and the filter
+  // has to go too or it outlives the Undo it was being kept for.
+  dropMissingFilters();
   return Boolean(next);
 }
 
@@ -4397,16 +4421,16 @@ async function boot() {
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  // A filter the URL named that the corpus does not have is already gone: the
+  // read above went through `pull`, which drops them once the corpus is in `S`
+  // and before anything is drawn from it.
   $('kind').value = V.kind;   // the kinds arrive with the corpus, after the URL was read
-  const before = [V.paper, V.tag, V.kind];
-  dropMissingFilters();
-  if (V.paper !== before[0] || V.tag !== before[1] || V.kind !== before[2]) renderAll();
   // `refresh` went through `render`, whose editor guard leaves the content pane
   // alone whenever the view is Research: the poll must not rebuild the form
   // under the cursor. At boot there is no form yet, so that guard would leave a
   // URL naming Research — a bookmark, or a reload of the page while on it —
   // with an active nav entry and a blank main pane. Draw it once here.
-  else if (V.view === 'research') renderContent();
+  if (V.view === 'research') renderContent();
   setInterval(async () => {
     if (document.hidden) return;
     // Keep settings current while editing; the content guard below preserves
