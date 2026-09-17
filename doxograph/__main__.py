@@ -135,18 +135,19 @@ def cmd_verify(args) -> int:
 
 def cmd_search(args) -> int:
     """Find the query in the papers' own text, without calling the model."""
-    hits = search.search_papers(" ".join(args.words), limit=args.limit)
-    if not hits:
-        print("nothing in the papers' text holds every word of that", file=sys.stderr)
-        return 1
-    for hit in hits:
+    shown = 0
+    for hit in search.search_papers(" ".join(args.words), limit=args.limit):
         try:
             paper = store.load_paper(hit["key"])
         except store.VANISHED:
-            continue
+            continue        # removed between the search and the reading
+        shown += 1
         print(f"{hit['key']:<32} {hit['occurrences']:>4} mentions  {paper.get('title', '')[:60]}")
         for passage in hit["passages"]:
             print(f"    p. {passage['page']}  …{passage['text']}…")
+    if not shown:
+        print("nothing in the papers' text holds every word of that", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -342,6 +343,19 @@ def _listening_port(value: str) -> int:
     return port
 
 
+def _how_many(value: str) -> int:
+    """A `--limit`, refused here rather than reported as nothing found. Zero
+    shows nothing however much there is, and a negative one counts from the
+    wrong end, since the limit is a slice."""
+    try:
+        limit = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number") from None
+    if limit < 1:
+        raise argparse.ArgumentTypeError(f"{limit} is not a number of papers to show")
+    return limit
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="doxograph", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -377,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("search", help="find words in the papers' own text, without the model")
     p.add_argument("words", nargs="+", help="every word has to appear in the paper")
-    p.add_argument("--limit", type=int, default=20, help="how many papers to show")
+    p.add_argument("--limit", type=_how_many, default=20, help="how many papers to show")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("cites", help="show which papers cite which, from their reference lists")

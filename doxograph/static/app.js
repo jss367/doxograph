@@ -453,7 +453,9 @@ function paperHaystack(paper) {
 // holds "a", and reading the corpus to prove it helps nobody.
 let textSearchTimer = null;
 let textSearchSeq = 0;
-const TEXT_SEARCH_MIN = 3;
+// Two characters: AI, RL and R2 are what a reader of this corpus searches
+// for, and one character is every paper in it.
+const TEXT_SEARCH_MIN = 2;
 // Three letters of a Latin query says little; two characters of Chinese or
 // Japanese is a whole word. A query carrying anything outside the Latin
 // scripts is asked whatever its length.
@@ -497,7 +499,7 @@ async function runTextSearch(query, quiet = false) {
   if (!quiet) {
     captureOpenEditor();   // the redraw rebuilds any open form from state
     V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
-    renderContent();
+    drawSearchProgress();
   }
   let next;
   try {
@@ -512,7 +514,15 @@ async function runTextSearch(query, quiet = false) {
   if (seq !== textSearchSeq || workspace !== currentWorkspaceId) return;
   V.textSearch = next;
   captureOpenEditor();
-  renderContent();
+  drawSearchProgress();
+}
+
+// The results live under the claims, so the research form never shows them —
+// and redrawing it would replace a form frozen mid-save with an enabled one,
+// which is how typing into the replacement gets thrown away when the save
+// lands. `render` stands off the research view for the same reason.
+function drawSearchProgress() {
+  if (V.view !== 'research') renderContent();
 }
 
 // The papers the query matches: directly, or through a claim of theirs. The
@@ -1544,8 +1554,8 @@ function textSearchBlock() {
       `<p class="pp"><span class="hint">p. ${passage.page}</span> …${mark(passage)}…</p>`).join('');
     return `<div class="pdfhit">
       <div class="ph">
-        <span class="pt" data-act="open-paper" data-paper="${esc(hit.key)}"
-          title="${esc(hit.title || hit.key)}">${esc(cite)}</span>
+        <button type="button" class="pt" data-act="open-paper" data-paper="${esc(hit.key)}"
+          title="${esc(hit.title || hit.key)}">${esc(cite)}</button>
         <span class="hint">${esc(hit.title || '')}</span>
         <span class="hint" style="margin-left:auto">${hit.occurrences} ${hit.occurrences === 1 ? 'mention' : 'mentions'}</span>
       </div>${passages}</div>`;
