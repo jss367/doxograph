@@ -1569,9 +1569,6 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                                       if all(t in (live[i].get("tags") or []) for i in ids))
             pruned |= was - set(record["topics"])
             existing.append(record)
-        # As in `record_tensions`: a topic taken off a record here has to be
-        # found again when it comes back, so its recorded pass goes with it.
-        _forget_passes(data, pruned)
         added = grown = reopened = kept = 0
         for item in found:
             ids = sorted({i for i in item.get("claims", []) if i in claims_by_id and i in live})
@@ -1605,6 +1602,9 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                     existing.remove(other)
                 current["topics"] = sorted(t for t in topics
                                            if all(t in (live[i].get("tags") or []) for i in members))
+                # Growing a group can drop a topic the new member does not
+                # carry, which is as much a pruning as the one above.
+                pruned |= topics - set(current["topics"])
                 if wanted > have:
                     current["claims"] = ids
                     current["fingerprints"] = fingerprints
@@ -1633,6 +1633,10 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             existing.append(record)
             added += 1
         data["agreements"] = existing
+        # Every topic taken off a record on the way through, whether before the
+        # answer was read or while a group grew past it: each has to be found
+        # again when it comes back, so its recorded pass goes with it.
+        _forget_passes(data, pruned)
         # Recorded only on the way out, and only while the topic still holds
         # the claims it was asked about; see `record_tensions`.
         if signature and _topic_unchanged(topic, claims_by_id, live):
