@@ -3811,3 +3811,55 @@ def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
 
     asyncio.run(scenario())
     assert len(store.load_paper("paper-c")["claims"]) == 1
+
+
+@pytest.mark.browser
+def test_a_held_claim_leaves_the_agreements_in_the_order_the_server_would_send():
+    """`agreement_rows` orders the cards by status, then by how many papers are
+    in the group, then by when it was found. A group that loses a member to the
+    undo window is smaller than the one the server sorted, so the page has to
+    sort what is left the same way; otherwise the cards shuffle themselves the
+    moment the wait ends and the real answer arrives."""
+    for key in ("paper-a", "paper-b", "paper-c", "paper-d"):
+        _paper(key, f"Paper {key[-1].upper()}", "recovery")
+    shown = {r["id"]: r for r in store.topic_claims("recovery")}
+    store.record_agreements(
+        "recovery", [{"claims": ["paper-a-c1", "paper-d-c1"], "note": "Two of them."}], shown)
+    store.record_agreements(
+        "recovery",
+        [{"claims": ["paper-a-c1", "paper-b-c1", "paper-c-c1"], "note": "Three of them."}], shown)
+    # Found times far enough apart to order them, whichever second the two calls
+    # above landed in: the older pair is a1, the newer trio a2.
+    data = store._read_agreements()
+    for record in data["agreements"]:
+        record["found"] = ("2026-01-01T00:00:00+00:00" if record["id"] == "a1"
+                           else "2026-02-01T00:00:00+00:00")
+    store._save_agreements(data)
+    # The trio leads on its paper count; drop it to two and the older pair does.
+    assert [r["id"] for r in store.agreement_rows()] == ["a2", "a1"]
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            order = ("() => [...document.querySelectorAll('.tcard[data-agreement]')]"
+                     ".map((node) => node.dataset.agreement).join(',') === '%s'")
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-c"]').click()
+                card = page.locator('.claim[data-claim="paper-c-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+
+                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.locator(".paperhead h2", has_text="Where papers agree").wait_for()
+                await page.wait_for_function(order % "a1,a2", timeout=5000)
+
+                await notice.get_by_role("button", name="Undo").click()
+                await page.wait_for_function(order % "a2,a1", timeout=5000)
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-c")["claims"]) == 1

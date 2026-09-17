@@ -409,16 +409,31 @@ function pruneTrashed() {
   // member left still carries them.
   S.tensions = (S.tensions || []).filter(
     (row) => !(row.claims || []).some((claim) => trashed('claim', claim.id)));
+  let regrouped = false;
   S.agreements = (S.agreements || [])
     .filter((row) => !trashed('agreement', row.id))
     .map((row) => {
       const members = (row.claims || []).filter((claim) => !trashed('claim', claim.id));
       if (members.length === (row.claims || []).length) return row;
+      regrouped = true;
       // Stale, as on the server: the note and the decision on file were about
       // a group that is not the one on screen.
       return { ...row, claims: members, n_papers: new Set(members.map((c) => c.paper)).size, stale: true };
     })
     .filter((row) => new Set((row.claims || []).map((claim) => claim.paper)).size >= 2);
+  if (regrouped) {
+    // `agreement_rows` orders by status, then by how many papers are in the
+    // group, then by when it was found. A group that lost a member to the wait
+    // is smaller than the one the server sorted, so the cards would shuffle
+    // themselves the moment the wait ended and the real answer arrived. Sorted
+    // here on the same key, and stably, so rows the delete did not touch keep
+    // the order they came in.
+    const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+    const rank = (row) => (statuses.indexOf(row.status) + 1 || 10) - 1;
+    const found = (row) => row.found || '';
+    S.agreements.sort((a, b) => rank(a) - rank(b) || b.n_papers - a.n_papers
+      || (found(a) < found(b) ? -1 : found(a) > found(b) ? 1 : 0));
+  }
   // A synthesis is the same kind of derived row: `synthesis_rows` works out the
   // counts and the stale flag from the claims its topic has now, not from the
   // ids on file, and drops a topic that has none left. Held claims were taken
