@@ -41,6 +41,18 @@ _SINGULAR_S = frozenset({
 })
 
 
+# Plurals no suffix rule reaches. The singulars above keep their s, so their
+# plurals have to arrive at the same word by name. `bases` is not here: it is
+# the plural of `basis` and of `base` alike — nucleotide bases, a basis for a
+# claim — and this corpus uses both.
+_IRREGULAR = {
+    "axes": "axis", "theses": "thesis", "ellipses": "ellipsis", "emphases": "emphasis",
+    "matrices": "matrix", "indices": "index", "vertices": "vertex",
+    "appendices": "appendix", "criteria": "criterion", "phenomena": "phenomenon",
+    "corpora": "corpus", "foci": "focus", "lemmas": "lemma", "lemmata": "lemma",
+}
+
+
 def stem(word: str) -> str:
     """A word with its commonest English endings off.
 
@@ -49,6 +61,7 @@ def stem(word: str) -> str:
     being wrong the same way for both claims still matches them to each other.
     A plural first, then a verb ending, so `scaled` and `scales` meet.
     """
+    word = _IRREGULAR.get(word, word)
     if len(word) > 5 and word.endswith(("yses", "eses", "oses", "ises")):
         # analyses/analysis, hypotheses/hypothesis. Narrow on purpose: phases
         # is a plural of phase, and turning it into phasis would part the two.
