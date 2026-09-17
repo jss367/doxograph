@@ -385,7 +385,11 @@ function fold(text) {
   // Decomposed and stripped of its marks, as the server folds: a PDF can give
   // an accented letter whole or as a letter and a mark, and a query is typed
   // whichever way the keyboard does it.
-  const lowered = String(text ?? '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '');
+  // Lowercased after the decomposition as well as before it: a compatibility
+  // capital like 𝐗 has no lowercase of its own, and NFKD turns it into a plain
+  // uppercase X that the first pass never saw.
+  const lowered = String(text ?? '').toLowerCase().normalize('NFKD')
+    .replace(/\p{M}/gu, '').toLowerCase();
   return FOLD.reduce((out, [from, to]) => out.replace(from, to), lowered);
 }
 

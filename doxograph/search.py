@@ -62,7 +62,11 @@ def terms(query: str) -> list[str]:
     """
     seen: dict[str, str] = {}
     for word in _WORD.findall(query or ""):
-        seen.setdefault(word.casefold(), word)
+        # Keyed on the form the matching uses, not merely the lowercase one:
+        # `café cafe` is one term to a search that folds accents away, and
+        # counting it twice would report two mentions of one and weigh it
+        # twice in the ranking.
+        seen.setdefault(fold(word), word)
     return list(seen.values())
 
 
