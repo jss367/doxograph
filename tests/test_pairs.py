@@ -81,5 +81,9 @@ def test_a_verb_and_its_past_tense_meet():
                         # Singulars that end in s, and the plurals they own.
                         ("bias", "biases"), ("status", "statuses"), ("virus", "viruses"),
                         # And the plurals that must still lose their s.
-                        ("area", "areas"), ("paper", "papers"), ("model", "models")):
+                        ("area", "areas"), ("paper", "papers"), ("model", "models"),
+                        # Plurals no suffix rule reaches.
+                        ("axis", "axes"), ("thesis", "theses"), ("crisis", "crises"),
+                        ("matrix", "matrices"), ("index", "indices"),
+                        ("corpus", "corpora"), ("criterion", "criteria")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)
