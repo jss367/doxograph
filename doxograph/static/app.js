@@ -3521,9 +3521,22 @@ $('content').addEventListener('click', async (event) => {
     if (act === 'agreement-unfocus') { V.agreementFocus = null; renderContent(); return; }
     if (act === 'agreement-status') {
       V.error = null;
+      // Deciding an agreement rewrites the record from the claims on file:
+      // `set_agreement_status` drops the members that have gone and
+      // fingerprints the ones that are left, "what the reviewer saw and
+      // judged". A claim waiting out its undo window is off the card but
+      // still on file, so it would be written back into the group as a member
+      // of a decision nobody made about it, and the moment the timer sent the
+      // delete the agreement would read stale again with a deleted id in its
+      // fingerprints. A group that keeps two papers without the held claim
+      // stays on screen and stays clickable, so this is reachable; a tension
+      // needs both of its claims and leaves the page entirely, which is why
+      // `tension-status` above has nothing to settle.
+      const headers = await settleDeletes();
+      if (!headers) return;   // the delete failed; the record would name the claim
       try {
         await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          method: 'PATCH', headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ status: button.dataset.status }),
         });
       } catch (error) {
@@ -3562,14 +3575,32 @@ $('content').addEventListener('click', async (event) => {
       const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
       const text = field ? field.value : (V.synthDrafts[topic] || '');
       V.error = null;
-      // Freeze the editor until the answer comes back. Success redraws from
-      // the server value, so anything typed meanwhile would be lost.
       captureOpenEditor();
+      // A correction by hand is a judgment about the claims as they stand, and
+      // `set_synthesis_text` fingerprints the ones on file rather than the ones
+      // on screen. A claim waiting out its undo window is still on file, so the
+      // basis would record a claim the reader cannot see and the synthesis
+      // would go stale — with a deleted id in its basis — the moment the timer
+      // sent the delete. The held deletes go first, as they do before a
+      // rewrite, a retag or an export.
+      //
+      // The settle ends in a read and a redraw, so what was typed is parked
+      // first: the textarea is drawn from the draft, and the value in the DOM
+      // would otherwise be replaced by the text on file.
+      V.synthDrafts[topic] = text;
+      // Frozen from here rather than from the request: the settle is a wait
+      // like any other, and a second click during it would send the flush and
+      // the PATCH twice over.
       V.synthSaving = topic;
       renderContent();
       try {
+        const headers = await settleDeletes();
+        // The held delete failed. The claim is still on file, the reader has
+        // been told so, and a basis recorded against it would be a judgment
+        // about a corpus nobody can see.
+        if (!headers) return;
         await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          method: 'PATCH', headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ text }),
         });
         V.synthEditing = null;
@@ -3578,9 +3609,13 @@ $('content').addEventListener('click', async (event) => {
         V.synthDrafts[topic] = text;   // keep what was typed so the save can be retried
         V.error = `Could not save the synthesis: ${error.message}`;
       } finally {
+        // In the `finally` so the editor is handed back on the way out of a
+        // settle that failed too: that path leaves without a request, and a
+        // redraw it did not run would leave the editor frozen with nothing
+        // left to unfreeze it.
         V.synthSaving = null;
+        await refreshAll();
       }
-      await refreshAll();
       return;
     }
     if (act === 'del-synth') {

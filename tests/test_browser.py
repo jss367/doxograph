@@ -3917,3 +3917,101 @@ def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
 
     asyncio.run(scenario())
     assert len(store.load_paper("paper-c")["claims"]) == 1
+
+
+@pytest.mark.browser
+def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
+    """A correction by hand is a judgment about the claims as they stand, and
+    `set_synthesis_text` fingerprints the ones on file. A claim waiting out its
+    undo window is off the page but still on file, so saving over it would
+    record a basis naming a claim the reader cannot see — and the synthesis
+    would go stale, with a deleted id in that basis, the moment the timer sent
+    the delete. The held deletes go first, as they do before a rewrite or an
+    export."""
+    for key in ("paper-a", "paper-b", "paper-c"):
+        _paper(key, f"Paper {key[-1].upper()}", "recovery")
+    store.record_synthesis("recovery", "All three report it.",
+                           {r["id"]: r for r in store.topic_claims("recovery")})
+    assert store.synthesis_rows()[0]["stale"] is False
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#tags [data-tag="recovery"]').click()
+                card = page.locator('.synth[data-topic="recovery"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="edit").click()
+                editor = page.locator('textarea[data-synth="recovery"]')
+                await editor.wait_for()
+
+                # The editor stays open while a claim under it is deleted: the
+                # card goes, the delete waits, and the claim is still on file.
+                await page.locator('.claim[data-claim="paper-a-c1"]').get_by_role(
+                    "button", name="delete").click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+
+                await editor.fill("The two that are left report it.")
+                await page.locator('.synth[data-topic="recovery"]').get_by_role(
+                    "button", name="Save", exact=True).click()
+                await page.locator('textarea[data-synth="recovery"]').wait_for(
+                    state="detached", timeout=10000)
+            await browser.close()
+
+    asyncio.run(scenario())
+    # The delete went before the save, so the claim is gone and the basis names
+    # the two the reader was looking at — and reads current, not stale.
+    assert store.load_paper("paper-a")["claims"] == []
+    record = store.load_syntheses()["recovery"]
+    assert record["source"] == "hand"
+    assert set(record["claims"]) == {"paper-b-c1", "paper-c-c1"}
+    assert store.synthesis_rows()[0]["stale"] is False
+
+
+@pytest.mark.browser
+def test_deciding_an_agreement_settles_a_held_claim_delete_first():
+    """`set_agreement_status` rewrites the record from the claims on file: the
+    members that have gone are dropped and the ones that are left fingerprinted,
+    "what the reviewer saw and judged". A group keeping two papers without a
+    held member stays on screen and stays clickable, so the decision is
+    reachable during the undo window — and taken against the corpus on file it
+    would write the held claim back in as a member of a judgment nobody made
+    about it, leaving the group stale again the moment the delete landed."""
+    for key in ("paper-a", "paper-b", "paper-c"):
+        _paper(key, f"Paper {key[-1].upper()}", "recovery")
+    store.record_agreements(
+        "recovery",
+        [{"claims": ["paper-a-c1", "paper-b-c1", "paper-c-c1"], "note": "Three of them."}],
+        {r["id"]: r for r in store.topic_claims("recovery")})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-c"]').click()
+                claim = page.locator('.claim[data-claim="paper-c-c1"]')
+                await claim.wait_for()
+                await claim.get_by_role("button", name="delete").click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+
+                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                card = page.locator('.tcard[data-agreement="a1"]')
+                await card.wait_for()
+                # A and B are left, so the card is still here — and stale, since
+                # the group on screen is not the one on file.
+                await card.locator(".stale").wait_for()
+                await card.get_by_role("button", name="Confirm").click()
+                await card.locator(".stale").wait_for(state="detached", timeout=10000)
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-c")["claims"] == []
+    (record,) = store.load_agreements()
+    assert record["status"] == "confirmed"
+    assert record["claims"] == ["paper-a-c1", "paper-b-c1"]
+    assert set(record["fingerprints"]) == {"paper-a-c1", "paper-b-c1"}
+    assert store.agreement_rows()[0]["stale"] is False
