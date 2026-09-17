@@ -592,9 +592,14 @@ def test_an_arxiv_id_is_cited_with_or_without_its_version():
         "Another citing paper",
         "References\n[1] Somebody. A work. arXiv:1706.03762, 2017.",
     ])
+    # Or linked to as the PDF it is served as.
+    _paper("citing3", "A third citing paper", [
+        "A third citing paper",
+        "References\n[1] Somebody. A work. https://arxiv.org/pdf/1706.03762v5.pdf, 2017.",
+    ])
     edges = cites.edges()
-    assert [e["to"] for e in edges if e["from"] == "citing"] == ["attention"]
-    assert [e["to"] for e in edges if e["from"] == "citing2"] == ["attention"]
+    for citing in ("citing", "citing2", "citing3"):
+        assert [e["to"] for e in edges if e["from"] == citing] == ["attention"], citing
 
 
 def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():

@@ -489,9 +489,10 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
     return cited
 
 
-# A version an arXiv id is printed with: `1706.03762v5` is that paper, and the
-# `v5` is not the identifier running on into somebody else's.
-_VERSION = re.compile(r"v\d+(?![0-9A-Za-z])")
+# What an arXiv id is printed with and is still that paper: the version it is
+# cited at, and the extension of the PDF it is linked to. Neither is the
+# identifier running on into somebody else's.
+_ARXIV_TAIL = re.compile(r"(?:v\d+)?(?:\.pdf)?(?![0-9A-Za-z])", re.I)
 
 # What an identifier is written with, which `ingest.DOI_RE` writes out as
 # `[-._;()/:A-Za-z0-9]`: the punctuation here joins one part of an identifier
@@ -516,14 +517,15 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> 
     `1706.03762` sits inside the DOI `10.1706/03762` and ends where it ends.
 
     `versioned` for an arXiv id, which is printed with the version it is
-    cited at — `1706.03762v5` is that paper. A DOI is not: `10.1234/foov2` is
-    a DOI of its own and not a second printing of `10.1234/foo`.
+    cited at and with the extension of the PDF it is linked to —
+    `1706.03762v5` and `1706.03762.pdf` are that paper. A DOI is not:
+    `10.1234/foov2` is a DOI of its own, not a printing of `10.1234/foo`.
     """
     stop = entry.offsets[at + width - 1] + 1
     rest = entry.raw[stop:]
-    version = _VERSION.match(rest) if versioned else None
-    if version:
-        rest = rest[version.end():]
+    tail = _ARXIV_TAIL.match(rest) if versioned else None
+    if tail:
+        rest = rest[tail.end():]
     if rest[:1].isalnum():
         return False
     # More identifier after the punctuation that joins its parts, however much
