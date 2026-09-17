@@ -264,6 +264,9 @@ def test_a_numbered_list_is_read_one_entry_at_a_time():
     # What tells them apart is the counting: a marker carries on from the one
     # before it, wherever on the page it falls.
     assert len(cites.entries("1\nA paper. 2017.\n\f2\nAnother paper. 2018.\n")) == 2
+    # Unless the list numbers itself another way, where a bare number is the
+    # page's however well it counts.
+    assert len(cites.entries("[11] A paper. 2017.\n12\n\farXiv:1706.03762, 2017.\n")) == 1
     # An author-year list says nothing about where its entries are, and is
     # read whole, as it always was.
     whole = cites.entries("Vaswani, A. Attention is all you need. 2017.\nRoe, A. Steering. 2026.")

@@ -104,16 +104,26 @@ def _marks(listing: str) -> list[re.Match]:
     A bare number at the head or the foot of a page may be the folio: nothing
     but the break stands between them, and read as an entry it would cut a
     reference in two at the page break, leaving a title on one side of the cut
-    without the identifier on the other that says which paper it is. What
-    tells the two apart is the counting: an entry marker carries on from the
-    one before it, and a page number does not.
+    without the identifier on the other that says which paper it is. In a list
+    that numbers itself in bare numbers, what tells the two apart is the
+    counting: an entry marker carries on from the one before it, and a page
+    number does not.
     """
+    found = list(_ENTRY_MARK.finditer(listing))
+    # A list numbers its entries one way. Where it writes its markers with a
+    # bracket or a dot, a bare number is not one of them — it is the page's,
+    # and no counting can tell a folio that happens to fall where the next
+    # marker would from the marker itself.
+    delimited = any(not _BARE.fullmatch(mark.group().strip()) for mark in found)
     kept: list[re.Match] = []
-    for mark in _ENTRY_MARK.finditer(listing):
-        if _BARE.fullmatch(mark.group().strip()) and _at_a_page_edge(listing, mark):
-            expected = _numbered(kept[-1]) + 1 if kept else 1
-            if _numbered(mark) != expected:
+    for mark in found:
+        if _BARE.fullmatch(mark.group().strip()):
+            if delimited:
                 continue
+            if _at_a_page_edge(listing, mark):
+                expected = _numbered(kept[-1]) + 1 if kept else 1
+                if _numbered(mark) != expected:
+                    continue
         kept.append(mark)
     return kept
 
