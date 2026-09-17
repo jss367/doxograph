@@ -286,8 +286,9 @@ rather than both, and an identifier beats a title, so a preprint and its
 published version are told apart by the DOI or arXiv id the entry carries. A
 list that does not number its entries is read whole.
 
-A heading only has to begin with the word, so "References and Notes" and
-"Bibliography (Primary Sources)" are found too. A paper whose PDF has no
+A heading is built out of heading words and has to say one of the words that
+names a bibliography, so "References and Notes", "Selected Bibliography" and
+"Works Cited" are all found, while "References to Figure 2 show" is prose. A paper whose PDF has no
 "References" heading at all contributes no citations. That
 is the conservative reading: guessing where the list starts would invent
 links.

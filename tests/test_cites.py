@@ -417,3 +417,15 @@ def test_three_twins_and_two_printings_keep_them_all():
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == [
         "preprint", "published", "reissue"]
+
+
+def test_a_heading_is_built_out_of_heading_words():
+    """Listing the phrases meant meeting each new one for the first time."""
+    for heading in ("References and Recommended Reading", "References and Notes",
+                    "Selected Bibliography", "Works Cited", "Key References",
+                    "References and Further Reading", "Literature Cited",
+                    "Bibliography (Primary Sources)"):
+        text = f"Body of the paper.\n{heading}\n[1] A paper.\n"
+        assert cites.reference_text(text).strip() == "[1] A paper.", heading
+    for prose in ("References to Figure 2 show", "Referenced work", "No references"):
+        assert cites.reference_text(f"Body.\n{prose}\n[1] A.\n") == "", prose

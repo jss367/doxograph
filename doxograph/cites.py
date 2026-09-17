@@ -32,13 +32,21 @@ from . import config, quotes, search, store
 # plural would be read as the singular with an "s" left over. A paper with one
 # item in its bibliography does label it "Reference", and the tail check keeps
 # "Referenced work…" out either way.
-_HEADINGS = ("references", "reference", "bibliography", "workscited", "literaturecited")
-# What a heading may carry after the word. A short body line — "References to
-# Figure 2 show…" — begins with one of the words above too, and reading the
-# rest of the paper as a reference list invents citations out of its prose.
-_HEADING_TAIL = ("", "cited", "andnotes", "notes", "andfurtherreading", "andbibliography",
-                 "primary", "primarysources", "secondary", "secondarysources",
-                 "consulted", "list")
+# The words that name a bibliography. A heading has to say one of them, or
+# "Suggested Reading" would be a heading and so would half a paper's sections.
+_HEADING_ANCHORS = frozenset({"references", "reference", "bibliography",
+                              "works", "literature"})
+# What a heading may carry after the word, as words rather than as phrases: a
+# heading is built out of these — "References and Notes", "References and
+# Recommended Reading", "Selected Bibliography (Primary Sources)" — and
+# listing the phrases meant meeting each new one for the first time. A short
+# body line beginning "References to Figure 2 show…" is refused because "to"
+# and "figure" are not among them, which is the work this does.
+_HEADING_WORDS = frozenset({
+    "and", "cited", "notes", "further", "reading", "recommended", "selected",
+    "additional", "primary", "secondary", "sources", "consulted", "list",
+    "works", "literature", "bibliography", "references", "reference", "key",
+})
 # How long a heading may be once it is down to its letters.
 _HEADING_LETTERS = 40
 
@@ -109,33 +117,37 @@ def reference_text(text: str) -> str:
 def _is_heading(squashed: str, labelled: bool = False) -> bool:
     """Whether a line's letters say a reference list starts here.
 
-    A section number comes off first, in either notation: IEEE numbers its
-    sections in Roman, so a bibliography can open with "VI. REFERENCES" and
-    squash to "vireferences". The Roman run is only taken off when what is
-    left is a heading, since "literaturecited" starts with one of its letters.
+    A heading is built out of heading words and says one of the words that
+    names a bibliography: "References", "References and Notes", "Selected
+    Bibliography", "Works Cited". Anything the words do not account for is
+    prose — "References to Figure 2 show…" stops at "to" — which is the work
+    this does, since a body line can begin with the word a heading does.
+
+    A section label comes off first where the line wrote one; see `_LABEL`.
     """
     plain = squashed.lstrip("0123456789")
-    # A section label comes off: Arabic above, a single letter — "A.
-    # REFERENCES" — or a Roman numeral. Only those, and only as far as a
-    # heading: any alphabetic prefix would take the "see" off "see references"
-    # and read the rest of the paper as a bibliography.
     candidates = [plain]
-    # A label only comes off where the line wrote one: a letter or a numeral
-    # followed by a dot or a bracket. Without that, the first letters are the
-    # first letters of a word — "A reference" is not "A. REFERENCES".
     if labelled:
         if len(plain) > 1 and plain[0].isalpha():
             candidates.append(plain[1:])
         candidates += [plain[at:] for at in range(2, 8)
                        if at < len(plain) and set(plain[:at]) <= set("ivxlcdm")]
-    for candidate in candidates:
-        # Every heading it could begin with, not the first: "references" and
-        # "reference" both fit the plural, and only one of them leaves a tail
-        # the check accepts.
-        if any(candidate.startswith(head) and candidate[len(head):] in _HEADING_TAIL
-               for head in _HEADINGS):
-            return True
-    return False
+    return any(_reads_as_heading(candidate) for candidate in candidates)
+
+
+def _reads_as_heading(letters: str) -> bool:
+    """Whether a run of letters is heading words and nothing else, one of them
+    naming a bibliography. Longest word first, or "references" reads as
+    "reference" and leaves an s nothing accounts for."""
+    order = sorted(_HEADING_WORDS, key=len, reverse=True)
+    said = []
+    while letters:
+        word = next((w for w in order if letters.startswith(w)), None)
+        if word is None:
+            return False
+        said.append(word)
+        letters = letters[len(word):]
+    return bool(said) and any(word in _HEADING_ANCHORS for word in said)
 
 
 def fingerprints(paper: dict) -> list[str]:
