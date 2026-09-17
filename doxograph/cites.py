@@ -189,7 +189,9 @@ def reference_text(text: str) -> str:
         # and short as a heading.
         if len(squashed) > _HEADING_LETTERS:
             continue
-        if _is_heading(squashed, labelled=bool(_LABEL.match(line))):
+        label = _LABEL.match(line)
+        if _is_heading(squashed, labelled=bool(label),
+                       label=quotes.squash(label.group()) if label else ""):
             found.append((at, _points_at_a_page(lines, i + 1, here)))
     # A contents page writes the word too, and the list it points at is further
     # down. Passed over only when there is another heading to pass to: a
@@ -229,7 +231,7 @@ def _points_at_a_page(lines: list[str], start: int, page: int) -> bool:
     return False
 
 
-def _is_heading(squashed: str, labelled: bool = False) -> bool:
+def _is_heading(squashed: str, labelled: bool = False, label: str = "") -> bool:
     """Whether a line's letters say a reference list starts here.
 
     A heading is built out of heading words and says one of the words that
@@ -242,6 +244,13 @@ def _is_heading(squashed: str, labelled: bool = False) -> bool:
     """
     plain = squashed.lstrip("0123456789")
     candidates = [plain]
+    if (label and any(char.isdigit() for char in label) and squashed.startswith(label)):
+        # The label as the line wrote it, where it counts: a supplement numbers
+        # its bibliography "S1. References", and neither a letter nor a roman
+        # numeral accounts for that. A number in it is what says it is a label
+        # and not a word — "Cf. references" is prose, and taking "Cf" off it
+        # would make a heading of it.
+        candidates.append(squashed[len(label):])
     if labelled:
         if len(plain) > 1 and plain[0].isalpha():
             candidates.append(plain[1:])
@@ -573,6 +582,7 @@ _JOINS = "./_:;()" + _DASHES
 # soft hyphen an extraction leaves where a word may be broken, with whatever
 # the next line is indented by.
 _WRAP = re.compile(r"[ \t]*[\n\r\f\u00ad][ \t]*")
+_WRAP_END = re.compile(r"[ \t]*[\n\r\f\u00ad][ \t]*$")
 # What holds a word together across a mark that is not a letter: a hyphen in
 # any of its shapes, and the two apostrophes.
 _WORD_JOINS = _DASHES + "'\u2019"
@@ -604,6 +614,10 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     before = entry.raw[max(begin - 12, 0):begin]
     if after[:1].isalnum() or before[-1:].isalnum():
         return False
+    # A hyphen the entry wrapped at stands before the indentation of the line
+    # the word goes on to: `Network-\n  based` is one word, and a title that
+    # starts at `based` starts inside it.
+    before = _WRAP_END.sub("", before)
     # A hyphen or an apostrophe with more word on the other side is inside a
     # word too: `network-based` and `model's` are not `network` and `model`.
     # Only there is a wrap read through, since a title at the end of a line is

@@ -379,7 +379,10 @@ def test_a_section_label_in_letters_comes_off_the_heading():
     for heading in ("A. REFERENCES", "B. Bibliography", "VI. LITERATURE CITED", "3. References",
                     "(A) References", "[A] Bibliography", "List of References",
                     # The space after the label is what an extraction loses.
-                    "A.References", "IV.References", "[A]References"):
+                    "A.References", "IV.References", "[A]References",
+                    # A supplement numbers its own: neither a letter nor a
+                    # roman numeral accounts for "S1".
+                    "S1. References", "A1. Bibliography"):
         text = f"Body.\n{heading}\n[1] A paper.\n"
         assert cites.reference_text(text).strip() == "[1] A paper.", heading
     # A prefix that leaves prose behind is still prose.
@@ -670,6 +673,14 @@ def test_a_title_inside_a_longer_word_is_not_a_citation():
     # But a title at the end of a line is an entry ending, not a word going on.
     entry = quotes.build("Nobody. Understanding neural network\nSmith, J. Another. 2026.")
     assert cites._bounded(entry, entry.squashed.find(mark), len(mark))
+
+    # The same either side: a title that starts where a wrapped word goes on
+    # starts inside that word.
+    tail = quotes.squash("Based methods for language models")
+    entry = quotes.build("Nobody. Network-\n  based methods for language models. 2026.")
+    assert not cites._bounded(entry, entry.squashed.find(tail), len(tail))
+    entry = quotes.build("Nobody. Another work.\n  Based methods for language models. 2026.")
+    assert cites._bounded(entry, entry.squashed.find(tail), len(tail))
 
 
 def test_two_dois_that_differ_by_what_they_end_with_are_two_papers():
