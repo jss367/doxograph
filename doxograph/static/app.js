@@ -359,6 +359,8 @@ async function loadWorkspaces() {
 // sides properly and would find the paper by its text while the page hid the
 // claim. These are the expansions that turn up in a research corpus; the rest
 // of Unicode's case folding is left to the server.
+const COMBINING = /[\u0300-\u034e\u0350-\u036f\u0483-\u0487\u0591-\u05bd\u05bf\u05c1-\u05c2\u05c4-\u05c5\u05c7\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7-\u06e8\u06ea-\u06ed\u0711\u0730-\u074a\u07eb-\u07f3\u07fd\u0816-\u0819\u081b-\u0823\u0825-\u0827\u0829-\u082d\u0859-\u085b\u0897-\u089f\u08ca-\u08e1\u08e3-\u08ff\u093c\u094d\u0951-\u0954\u09bc\u09cd\u09fe\u0a3c\u0a4d\u0abc\u0acd\u0b3c\u0b4d\u0bcd\u0c3c\u0c4d\u0c55-\u0c56\u0cbc\u0ccd\u0d3b-\u0d3c\u0d4d\u0dca\u0e38-\u0e3a\u0e48-\u0e4b\u0eb8-\u0eba\u0ec8-\u0ecb\u0f18-\u0f19\u0f35\u0f37\u0f39\u0f71-\u0f72\u0f74\u0f7a-\u0f7d\u0f80\u0f82-\u0f84\u0f86-\u0f87\u0fc6\u1037\u1039-\u103a\u108d\u135d-\u135f\u1714-\u1715\u1734\u17d2\u17dd\u18a9\u1939-\u193b\u1a17-\u1a18\u1a60\u1a75-\u1a7c\u1a7f\u1ab0-\u1abd\u1abf-\u1ace\u1b34\u1b44\u1b6b-\u1b73\u1baa-\u1bab\u1be6\u1bf2-\u1bf3\u1c37\u1cd0-\u1cd2\u1cd4-\u1ce0\u1ce2-\u1ce8\u1ced\u1cf4\u1cf8-\u1cf9\u1dc0-\u1dff\u20d0-\u20dc\u20e1\u20e5-\u20f0\u2cef-\u2cf1\u2d7f\u2de0-\u2dff\u302a-\u302f\u3099-\u309a\ua66f\ua674-\ua67d\ua69e-\ua69f\ua6f0-\ua6f1\ua806\ua82c\ua8c4\ua8e0-\ua8f1\ua92b-\ua92d\ua953\ua9b3\ua9c0\uaab0\uaab2-\uaab4\uaab7-\uaab8\uaabe-\uaabf\uaac1\uaaf6\uabed\ufb1e\ufe20-\ufe2f\u{101fd}\u{102e0}\u{10376}-\u{1037a}\u{10a0d}\u{10a0f}\u{10a38}-\u{10a3a}\u{10a3f}\u{10ae5}-\u{10ae6}\u{10d24}-\u{10d27}\u{10d69}-\u{10d6d}\u{10eab}-\u{10eac}\u{10efd}-\u{10eff}\u{10f46}-\u{10f50}\u{10f82}-\u{10f85}\u{11046}\u{11070}\u{1107f}\u{110b9}-\u{110ba}\u{11100}-\u{11102}\u{11133}-\u{11134}\u{11173}\u{111c0}\u{111ca}\u{11235}-\u{11236}\u{112e9}-\u{112ea}\u{1133b}-\u{1133c}\u{1134d}\u{11366}-\u{1136c}\u{11370}-\u{11374}\u{113ce}-\u{113d0}\u{11442}\u{11446}\u{1145e}\u{114c2}-\u{114c3}\u{115bf}-\u{115c0}\u{1163f}\u{116b6}-\u{116b7}\u{1172b}\u{11839}-\u{1183a}\u{1193d}-\u{1193e}\u{11943}\u{119e0}\u{11a34}\u{11a47}\u{11a99}\u{11c3f}\u{11d42}\u{11d44}-\u{11d45}\u{11d97}\u{11f41}-\u{11f42}\u{1612f}\u{16af0}-\u{16af4}\u{16b30}-\u{16b36}\u{16ff0}-\u{16ff1}\u{1bc9e}\u{1d165}-\u{1d169}\u{1d16d}-\u{1d172}\u{1d17b}-\u{1d182}\u{1d185}-\u{1d18b}\u{1d1aa}-\u{1d1ad}\u{1d242}-\u{1d244}\u{1e000}-\u{1e006}\u{1e008}-\u{1e018}\u{1e01b}-\u{1e021}\u{1e023}-\u{1e024}\u{1e026}-\u{1e02a}\u{1e08f}\u{1e130}-\u{1e136}\u{1e2ae}\u{1e2ec}-\u{1e2ef}\u{1e4ec}-\u{1e4ef}\u{1e5ee}-\u{1e5ef}\u{1e8d0}-\u{1e8d6}\u{1e944}-\u{1e94a}]/gu;
+
 const FOLD = [[/ß/g, 'ss'], [/ẞ/g, 'ss'], [/İ/g, 'i'], [/ﬀ/g, 'ff'], [/ﬁ/g, 'fi'],
               [/ﬂ/g, 'fl'], [/ﬃ/g, 'ffi'], [/ﬄ/g, 'ffl'], [/ŉ/g, 'ʼn'],
               // `toLowerCase` knows where a Greek word ends and Python's
@@ -377,10 +379,13 @@ function fold(text) {
   // marks come off, or ᾳ folds to α here and αι on the server.
   const lowered = String(text ?? '').toLowerCase().normalize('NFKD')
     .replace(/\u0345/gu, 'ι')
-    // The accent blocks, not every mark: a vowel sign in Devanagari or Arabic
-    // is a letter of the word, and the server keeps it — dropping it here
-    // would match काल to कल on the page and not in the papers.
-    .replace(/[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20f0\ufe20-\ufe2f]/gu, '')
+    // Exactly the marks the server drops, which are the ones Unicode gives a
+    // combining class: an accent belongs to the letter under it, while a
+    // vowel sign in Devanagari is a letter of the word and stays. JavaScript
+    // cannot ask for a combining class, so the set is written out. Regenerate
+    // with: python -c "import unicodedata; ..." over every code point where
+    // `unicodedata.combining(chr(cp))` is not zero.
+    .replace(COMBINING, '')
     .toLowerCase();
   return FOLD.reduce((out, [from, to]) => out.replace(from, to), lowered);
 }
@@ -414,7 +419,10 @@ const UNSEGMENTED = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00
 // filter down. What is left is to consume the character before the word, and
 // to allow the start of the string in its place.
 function queryPatterns(query) {
-  return (fold(query).match(/[\p{L}\p{N}_]+/gu) || [])
+  // Marks count as part of the word they sit on: in a script whose vowels are
+  // marks, splitting on them cuts one written word into its consonants, and
+  // the server does not.
+  return (fold(query).match(/[\p{L}\p{N}_\p{M}]+/gu) || [])
     .map((term) => (UNSEGMENTED.test(term)
       ? new RegExp(term, 'u')
       // The underscore is a word character to the server's `\w`, so it is one
