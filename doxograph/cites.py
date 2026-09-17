@@ -95,33 +95,47 @@ def entries(listing: str) -> list[quotes.Text]:
 
 
 _BARE = re.compile(r"\d{1,3}")
+_DIGITS = re.compile(r"\d+")
 
 
 def _marks(listing: str) -> list[re.Match]:
     """Where a list numbers its entries, the pages' own numbers left out.
 
-    A bare number at the head or the foot of a page is the folio: nothing but
-    the break stands between them. Read as an entry it would cut a reference
-    in two at the page break, and a title on one side of the cut would lose
-    the identifier on the other that says which paper it is.
+    A bare number at the head or the foot of a page may be the folio: nothing
+    but the break stands between them, and read as an entry it would cut a
+    reference in two at the page break, leaving a title on one side of the cut
+    without the identifier on the other that says which paper it is. What
+    tells the two apart is the counting: an entry marker carries on from the
+    one before it, and a page number does not.
     """
-    kept = []
+    kept: list[re.Match] = []
     for mark in _ENTRY_MARK.finditer(listing):
-        if _BARE.fullmatch(mark.group().strip()):
-            before = listing.rfind(quotes.PAGE_BREAK, 0, mark.start())
-            after = listing.find(quotes.PAGE_BREAK, mark.end())
-            head = before >= 0 and not listing[before + 1:mark.start()].strip()
-            foot = after >= 0 and not listing[mark.end():after].strip()
-            if head or foot:
+        if _BARE.fullmatch(mark.group().strip()) and _at_a_page_edge(listing, mark):
+            expected = _numbered(kept[-1]) + 1 if kept else 1
+            if _numbered(mark) != expected:
                 continue
         kept.append(mark)
     return kept
 
 
+def _numbered(mark: re.Match) -> int:
+    """The number a marker carries."""
+    return int(_DIGITS.search(mark.group()).group())
+
+
+def _at_a_page_edge(listing: str, mark: re.Match) -> bool:
+    """Whether a marker has nothing but a page break on one side of it."""
+    before = listing.rfind(quotes.PAGE_BREAK, 0, mark.start())
+    after = listing.find(quotes.PAGE_BREAK, mark.end())
+    return ((before >= 0 and not listing[before + 1:mark.start()].strip())
+            or (after >= 0 and not listing[mark.end():after].strip()))
+
+
 # What marks a letter or numeral as a section label rather than the first word
 # of a sentence: the dot or bracket after it. "A. REFERENCES" is a heading and
-# "A reference" is the start of a line of prose.
-_LABEL = re.compile(r"^[ \t]*[0-9A-Za-z]{1,7}[.)\]]+[ \t]+")
+# "A reference" is the start of a line of prose. A bracket in front of it is
+# how some papers write the same label: "(A) References".
+_LABEL = re.compile(r"^[ \t]*[\[(]?[0-9A-Za-z]{1,7}[.)\]]+[ \t]+")
 
 
 def reference_text(text: str) -> str:

@@ -261,6 +261,9 @@ def test_a_numbered_list_is_read_one_entry_at_a_time():
     # and cutting the list there would part an entry from its second line.
     assert len(cites.entries("Vaswani, A. Attention is all you need.\n12\n"
                              "\farXiv:1706.03762, 2017.\n")) == 1
+    # What tells them apart is the counting: a marker carries on from the one
+    # before it, wherever on the page it falls.
+    assert len(cites.entries("1\nA paper. 2017.\n\f2\nAnother paper. 2018.\n")) == 2
     # An author-year list says nothing about where its entries are, and is
     # read whole, as it always was.
     whole = cites.entries("Vaswani, A. Attention is all you need. 2017.\nRoe, A. Steering. 2026.")
@@ -357,7 +360,8 @@ def test_an_unnumbered_list_naming_both_twins_cites_both():
 
 def test_a_section_label_in_letters_comes_off_the_heading():
     """Appendices number their sections by letter: "A. REFERENCES"."""
-    for heading in ("A. REFERENCES", "B. Bibliography", "VI. LITERATURE CITED", "3. References"):
+    for heading in ("A. REFERENCES", "B. Bibliography", "VI. LITERATURE CITED", "3. References",
+                    "(A) References", "[A] Bibliography"):
         text = f"Body.\n{heading}\n[1] A paper.\n"
         assert cites.reference_text(text).strip() == "[1] A paper.", heading
     # A prefix that leaves prose behind is still prose.
