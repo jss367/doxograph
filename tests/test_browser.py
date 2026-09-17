@@ -3423,3 +3423,48 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
 
     asyncio.run(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
+
+
+@pytest.mark.browser
+def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
+    """The redraw that takes the row off the page can fail — a server restarting
+    under the click — and the notice raised after it is what carries the timer
+    that sends the delete. It goes up either way, so the row is not left hidden
+    by a delete that is never sent and that nothing on screen can undo."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        refusing = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_read(route, request):
+                if refusing.is_set():
+                    await route.abort()
+                    return
+                await route.continue_()
+
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator(f'.claim[data-claim="{one}"]')
+                await card.wait_for()
+
+                # The read `deleteLater` ends in is refused, so the page never
+                # redraws — but the delete still has to be scheduled and offered.
+                refusing.set()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+                assert await notice.get_by_role("button", name="Undo").count() == 1
+                refusing.clear()
+
+                # The notice runs out and sends the delete it was holding.
+                await notice.wait_for(state="detached", timeout=20000)
+                await card.wait_for(state="detached", timeout=20000)
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]

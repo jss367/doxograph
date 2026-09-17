@@ -405,32 +405,43 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   trash.set(token, { path, workspace, paper, send, sending: null });
   forgetStateTag();
   pruneTrashed();
-  await refreshAll();
-  // The wait can end during that refresh — `flushTrash` sends what is waiting
-  // — and a notice raised afterwards would offer to undo a delete the server
-  // already has. The entry is still in the trash while its request is in
-  // flight, which is what keeps the row off the screen, so `sending` is the
-  // thing to ask: once it is set there is nothing left to undo.
-  if (!trash.get(token) || trash.get(token).sending) return;
-  notice = toast(`Deleted ${label}.`, {
-    timeout: UNDO_MS,
-    onExpire: send,
-    actions: [{
-      label: 'Undo',
-      onClick: async () => {
-        // Sent between the notice going up and this being clicked. `send`
-        // closes the notice, so this is all but unreachable — but an Undo that
-        // quietly does nothing is worse than one that says so.
-        if (trash.get(token)?.sending) {
-          toast(`That delete has already been sent; ${label} is gone.`, { tone: 'warn' });
-          return;
-        }
-        trash.delete(token);
-        forgetStateTag();
-        await refreshAll();
-      },
-    }],
-  });
+  // The redraw goes first so the row is off the screen before a notice offering
+  // to put it back appears over it. But it reaches the server, and a server
+  // that is restarting rejects it — and the notice is what carries the timer
+  // that finally sends the delete. Raised only on the way out of a refresh that
+  // worked, it would leave the entry sitting in the trash: the row hidden, the
+  // DELETE never sent, and no Undo and no error to say so. So it goes up either
+  // way, and the failure still reaches the caller.
+  try {
+    await refreshAll();
+  } finally {
+    // The wait can end during that refresh — `flushTrash` sends what is waiting
+    // — and a notice raised afterwards would offer to undo a delete the server
+    // already has. The entry is still in the trash while its request is in
+    // flight, which is what keeps the row off the screen, so `sending` is the
+    // thing to ask: once it is set there is nothing left to undo.
+    if (trash.get(token) && !trash.get(token).sending) {
+      notice = toast(`Deleted ${label}.`, {
+        timeout: UNDO_MS,
+        onExpire: send,
+        actions: [{
+          label: 'Undo',
+          onClick: async () => {
+            // Sent between the notice going up and this being clicked. `send`
+            // closes the notice, so this is all but unreachable — but an Undo
+            // that quietly does nothing is worse than one that says so.
+            if (trash.get(token)?.sending) {
+              toast(`That delete has already been sent; ${label} is gone.`, { tone: 'warn' });
+              return;
+            }
+            trash.delete(token);
+            forgetStateTag();
+            await refreshAll();
+          },
+        }],
+      });
+    }
+  }
 }
 
 // A delete belongs to the workspace it was made in, so leaving one sends what
