@@ -27,6 +27,20 @@ def shown():
     return {r["id"]: r for r in store.claim_rows()}
 
 
+def test_a_rerun_that_says_nothing_takes_the_old_words_off():
+    """The answer on file was written under a prompt this rerun was not given.
+    Where the rerun explains the group differently — or not at all — what the
+    card shows is this answer, not the last one."""
+    a, b, *_ = build_corpus()
+    live = {r["id"]: r for r in store.claim_rows()}
+    store.record_agreements("recovery-rate", [
+        {"claims": [a, b], "note": "Both measure rollouts."}], live)
+    assert store.agreement_rows()[0]["note"] == "Both measure rollouts."
+
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": ""}], live)
+    assert store.agreement_rows()[0]["note"] == ""
+
+
 def test_record_adds_an_open_group_and_drops_one_paper_and_unknown_members():
     a, b, c, d = build_corpus()
     result = store.record_agreements("recovery-rate", [

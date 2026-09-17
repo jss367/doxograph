@@ -1685,9 +1685,12 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                     continue
                 if current.get("fingerprints") == fingerprints:
                     # As the tensions pass: the group stands, and takes the new
-                    # wording only while nobody has ruled on the old.
+                    # wording only while nobody has ruled on the old. Whatever
+                    # the rerun said, including nothing: the words on file were
+                    # written under a prompt this answer was not given, and
+                    # keeping them would put them in this answer's mouth.
                     if current.get("status") == "open":
-                        current.update(note=note or current.get("note", ""))
+                        current.update(note=note)
                     kept += 1
                     continue
                 current.update(note=note, fingerprints=fingerprints, status="open", found=now())
