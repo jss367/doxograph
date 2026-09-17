@@ -1675,3 +1675,34 @@ def test_the_page_finds_what_the_server_finds_whatever_the_case():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_pdf_result_can_be_reached_from_the_keyboard():
+    from pdfs import minimal_pdf
+
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    store.save_paper(store.new_paper("wu2026silent", title="A silent paper", year=2026))
+    store.pdf_path("wu2026silent").write_bytes(minimal_pdf([
+        "A silent paper", "Nobody has read this one yet, but it discusses sandbagging."]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("sandbagging")
+                hit = page.locator('.pdfhits .pdfhit [data-paper="wu2026silent"]')
+                await hit.wait_for()
+                # The sidebar can omit a paper whose claims do not match, so
+                # this is the only way to the result — it has to be reachable.
+                await hit.focus()
+                await page.keyboard.press("Enter")
+                await page.locator("#papers li.active").wait_for()
+                assert await page.locator("#papers li.active").get_attribute("data-paper") == "wu2026silent"
+
+            await browser.close()
+
+    asyncio.run(scenario())

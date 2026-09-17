@@ -313,3 +313,36 @@ def test_a_query_saying_one_word_two_ways_says_it_once():
     a_paper_of("cafe", "A study of the cafe as a workplace.")
     assert search.terms("café cafe") == ["café"]
     assert search.search_papers("café cafe")[0]["occurrences"] == 1
+
+
+def test_the_command_says_nothing_found_when_every_hit_has_gone(capsys, monkeypatch):
+    a_corpus()
+    assert __main__.main(["search", "sandbagging"]) == 0
+    capsys.readouterr()
+    # The paper is removed between the search and the reading of it.
+    monkeypatch.setattr(store, "load_paper", _gone)
+    assert __main__.main(["search", "sandbagging"]) == 1
+    assert "nothing in the papers' text" in capsys.readouterr().err
+
+
+def _gone(key):
+    raise KeyError(key)
+
+
+def test_the_command_refuses_a_limit_that_shows_nothing(capsys):
+    import pytest
+    a_corpus()
+    for bad in ("0", "-3"):
+        with pytest.raises(SystemExit):
+            __main__.main(["search", "--limit", bad, "sandbagging"])
+        assert "not a number of papers to show" in capsys.readouterr().err
+
+
+def test_two_terms_either_side_of_a_page_break_are_two_passages():
+    """A passage is cut to one page, so terms on opposite sides of a break
+    cannot both be shown in one."""
+    a_paper_of("split", "Recovery under steering.\x0cSandbagging is measured separately.")
+    hit = search.search_papers("recovery sandbagging")[0]
+    assert len(hit["passages"]) == 2
+    marked = [part["text"] for passage in hit["passages"] for part in passage["parts"] if part["mark"]]
+    assert sorted(marked) == ["Recovery", "Sandbagging"]
