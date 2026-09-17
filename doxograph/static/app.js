@@ -372,8 +372,11 @@ function fold(text) {
   // whichever way the keyboard does it.
   // Lowercased after the decomposition as well as before it: a compatibility
   // capital like 𝐗 has no lowercase of its own, and NFKD turns it into a plain
-  // uppercase X that the first pass never saw.
+  // uppercase X that the first pass never saw. The iota subscript is a letter
+  // to `casefold` and a mark to everyone else, so it is spelled out before the
+  // marks come off, or ᾳ folds to α here and αι on the server.
   const lowered = String(text ?? '').toLowerCase().normalize('NFKD')
+    .replace(/\u0345/gu, 'ι')
     .replace(/\p{M}/gu, '').toLowerCase();
   return FOLD.reduce((out, [from, to]) => out.replace(from, to), lowered);
 }
