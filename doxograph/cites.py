@@ -165,6 +165,8 @@ def _at_a_page_edge(listing: str, mark: re.Match) -> bool:
 # "Cf. references" would read as a label and a heading of nothing.
 _LABEL = re.compile(r"^[ \t]*[\[(]?(?:[0-9A-Za-z]{1,7}[.)\]]+)+"
                     r"(?:[0-9A-Za-z]{1,7}(?=[ \t]))?[ \t]*")
+# The parts a label is built from, which is how many it has.
+_PARTS = re.compile(r"[0-9A-Za-z]{1,7}")
 
 
 def reference_text(text: str) -> str:
@@ -195,7 +197,7 @@ def reference_text(text: str) -> str:
             continue
         label = _LABEL.match(line)
         if _is_heading(squashed, labelled=bool(label),
-                       label=quotes.squash(label.group()) if label else ""):
+                       label=label.group() if label else ""):
             found.append((at, _points_at_a_page(lines, i + 1, here)))
     # A contents page writes the word too, and the list it points at is further
     # down. Passed over only when there is another heading to pass to: a
@@ -248,13 +250,19 @@ def _is_heading(squashed: str, labelled: bool = False, label: str = "") -> bool:
     """
     plain = squashed.lstrip("0123456789")
     candidates = [plain]
-    if (label and any(char.isdigit() for char in label) and squashed.startswith(label)):
-        # The label as the line wrote it, where it counts: a supplement numbers
-        # its bibliography "S1. References", and neither a letter nor a roman
-        # numeral accounts for that. A number in it is what says it is a label
-        # and not a word — "Cf. references" is prose, and taking "Cf" off it
-        # would make a heading of it.
-        candidates.append(squashed[len(label):])
+    # Counted on the label as the line wrote it: squashing takes the delimiter
+    # out, and the delimiter is what says where one part ends and the next
+    # begins.
+    counted = any(char.isdigit() for char in label) or len(_PARTS.findall(label)) > 1
+    written = quotes.squash(label)
+    if written and counted and squashed.startswith(written):
+        # The label as the line wrote it, where it says it is one: a supplement
+        # numbers its bibliography "S1. References" and an appendix writes
+        # "A.I References", and neither a letter nor a roman numeral accounts
+        # for those. A number in it, or a second part after a delimiter, is
+        # what tells a label from a word — "Cf. references" is prose, and
+        # taking "Cf" off it would make a heading of it.
+        candidates.append(squashed[len(written):])
     if labelled:
         if len(plain) > 1 and plain[0].isalpha():
             candidates.append(plain[1:])
