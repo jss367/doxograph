@@ -326,11 +326,21 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     terms are found in the folded text and read back out of the original.
     """
     text, offsets = fold_with_offsets(raw)
-    # More matches than passages, because the ones near each other collapse
-    # into one: a term in the title and again in the abstract is a single
-    # passage, and the occurrence worth showing beside it may be the fourth.
-    found = [[(m.start(), m.end()) for m in islice(pattern.finditer(text), PASSAGES * 8)]
-             for pattern in patterns]
+    # Every match, lazily: the ones near each other collapse into one passage,
+    # so a term that occurs twenty times in one paragraph and once on a later
+    # page needs the twenty-first to say anything new. Taken one at a time, and
+    # only as far as the passages need.
+    found = [pattern.finditer(text) for pattern in patterns]
+    taken: list[list[tuple[int, int]]] = [[] for _ in patterns]
+
+    def place(which: int, nth: int):
+        """The `nth` match of a term, or None once they run out."""
+        while len(taken[which]) <= nth:
+            match = next(found[which], None)
+            if match is None:
+                return None
+            taken[which].append((match.start(), match.end()))
+        return taken[which][nth]
     starts: list[tuple[int, int]] = []
 
     def page_of(folded_at: int) -> int:
@@ -341,19 +351,24 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     # word's second occurrence. Near enough to be one passage means near
     # enough and on the same page: a passage is cut to one page, so two terms
     # either side of a break cannot both be shown in one.
-    for nth in range(PASSAGES * 8):
-        for places in found:
+    nth = 0
+    while len(starts) < PASSAGES:
+        exhausted = True
+        for which in range(len(patterns)):
             if len(starts) >= PASSAGES:
                 break
-            if nth >= len(places):
+            span = place(which, nth)
+            if span is None:
                 continue
-            where = places[nth][0]
+            exhausted = False
+            where = span[0]
             if any(abs(where - at) < PASSAGE_SPAN and page_of(where) == page_of(at)
                    for at, _ in starts):
                 continue
-            starts.append(places[nth])
-        if len(starts) >= PASSAGES:
+            starts.append(span)
+        if exhausted:
             break
+        nth += 1
     passages = []
     for folded_at, folded_end in sorted(starts)[:PASSAGES]:
         at = offsets[folded_at] if folded_at < len(offsets) else len(raw)
@@ -364,7 +379,11 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
         # word that matched is the exception — split at the foot of a page, it
         # is one word, and a passage showing half of it shows nothing.
         low = raw.rfind(quotes.PAGE_BREAK, 0, at) + 1
-        high = raw.find(quotes.PAGE_BREAK, max(stop - 1, at))
+        # Where the matched word itself runs over a break, the passage ends
+        # with the word: searching on from there would find the next page's
+        # break and read a page the passage does not claim to be on.
+        crosses = raw.find(quotes.PAGE_BREAK, at, stop) >= 0
+        high = stop if crosses else raw.find(quotes.PAGE_BREAK, max(stop - 1, at))
         high = len(raw) if high < 0 else high
         begin = max(low, at - PASSAGE_SPAN)
         end = max(min(high, at + PASSAGE_SPAN), stop)

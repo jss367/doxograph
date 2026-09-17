@@ -1823,3 +1823,26 @@ def test_the_page_folds_a_historic_cyrillic_letter_as_the_server_does():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_folds_what_a_decomposition_produces():
+    """A compatibility character can decompose into one that folds: 𝛓 comes
+    out as ς, which is σ to the server and itself to `toLowerCase`."""
+    _paper("pap2026sigma", "On 𝛓 and its uses", "introspection")
+    store.update_claim("pap2026sigma", "pap2026sigma-c1", {"text": "The value 𝛓 is fixed."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("σ")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())

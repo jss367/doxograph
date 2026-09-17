@@ -374,3 +374,20 @@ def test_a_word_whose_vowels_are_marks_is_one_term():
     a_paper_of("hindi", "यह एक किताब है।")
     a_paper_of("other", "बात की कहानी।")
     assert [hit["key"] for hit in search.search_papers("किताब")] == ["hindi"]
+
+
+def test_a_passage_ends_with_the_word_that_crosses_the_break():
+    """Searching on from a match that straddles a break finds the next page's
+    break, and reads a page the passage does not claim to be on."""
+    a_paper_of("split", "We measure the transfor-\x0cmation." + (" filler" * 40))
+    passage = search.search_papers("transformation")[0]["passages"][0]
+    assert passage["page"] == 1
+    assert "filler" not in passage["text"]
+
+
+def test_a_term_repeated_in_one_place_does_not_hide_a_later_one():
+    """Sixteen occurrences in one paragraph collapse into one passage, and the
+    seventeenth is the one that says something new."""
+    a_paper_of("many", ("AI " * 30) + "\x0c" + ("filler " * 30) + "AI again here.")
+    passages = search.search_papers("AI")[0]["passages"]
+    assert [p["page"] for p in passages] == [1, 2]

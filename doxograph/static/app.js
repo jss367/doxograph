@@ -376,9 +376,13 @@ function fold(text) {
   // are accents, then lowercased again: a compatibility capital has no
   // lowercase of its own, and NFKD turns it into a plain uppercase letter the
   // first pass never saw.
+  // Folded on both sides of the decomposition: a compatibility character can
+  // decompose into one that folds — mathematical bold final sigma comes out
+  // as ς, which is σ to `casefold` and itself to `toLowerCase`.
   return String(text ?? '').toLowerCase()
     .replace(CASEFOLD_RE, (ch) => CASEFOLD[ch])
     .normalize('NFKD')
+    .replace(CASEFOLD_RE, (ch) => CASEFOLD[ch])
     .replace(COMBINING, '')
     .toLowerCase();
 }
