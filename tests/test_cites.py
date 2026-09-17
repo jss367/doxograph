@@ -671,6 +671,16 @@ def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
         "References\n[1] A Vaswani, N Shazeer: Attention is all you need. NeurIPS, 2017.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing4"] == ["attention"]
+    # An extraction that left a space in front of the full stop, or put it on
+    # the next line, has still ended the title there.
+    title = quotes.squash(ATTENTION)
+    for raw in ("Nobody. Attention is all you need . NeurIPS, 2017.",
+                "Nobody. Attention is all you need\n. NeurIPS, 2017."):
+        spaced = quotes.build(raw)
+        assert cites._bounded(spaced, spaced.squashed.find(title), len(title)), raw
+    # But a colon and a subtitle is the title going on, spaced or not.
+    spaced = quotes.build("Nobody. Attention is all you need :  for image restoration.")
+    assert not cites._bounded(spaced, spaced.squashed.find(title), len(title))
     # And the paper itself is still cited where the entry stops at its title,
     # with a full stop after it or with the break before the next entry.
     _paper("citing2", "Another citing paper", [

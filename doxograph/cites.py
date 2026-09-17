@@ -639,13 +639,19 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     before = entry.raw[max(begin - 64, 0):begin]
     if after[:1].isalnum() or before[-1:].isalnum():
         return False
-    # A space after a title is more of the same title, and so is a colon with
-    # a subtitle after it: what a paper is recorded under carries its subtitle
-    # too, so an entry that writes one the record has not got is writing a
-    # different work's title. Only where there is something after the space:
-    # an entry whose last words are the title ends in the break before the
-    # next one, and that is where the title ends.
-    if (after[:1] in _SUBTITLE or after[:1].isspace()) and after.strip():
+    # A word after a title is more of the same title, and so is a subtitle:
+    # what a paper is recorded under carries its subtitle too, so an entry
+    # that writes one the record has not got is writing a different work's
+    # title. An entry whose last words are the title ends in the break before
+    # the next one, and that is where the title ends.
+    goes_on = after.lstrip() if after[:1].isspace() else after
+    # A colon and a subtitle after it, spaced or not, is the title going on.
+    if goes_on[:1] in _SUBTITLE and goes_on[1:].strip():
+        return False
+    # So is another word. Punctuation is not: an extraction can leave a space
+    # in front of the full stop or the comma an entry puts after a title, and
+    # `Attention is all you need . NeurIPS, 2017` ends where the others do.
+    if after[:1].isspace() and goes_on[:1].isalnum():
         return False
     # A colon before a title is left alone, unlike one after it. After a
     # title it can only be the title going on; before it, it is as likely to
