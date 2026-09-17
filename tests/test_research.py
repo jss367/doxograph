@@ -32,12 +32,21 @@ def test_a_line_moved_into_the_context_is_a_different_prompt():
     running them together with one more would read "A\nB" beside "C" as the
     same prompt as "A" beside "B\nC". They are different prompts, and a topic
     whose claims had not moved would never be asked again."""
-    with client() as c:
-        c.put("/api/context", json={"text": "C"})
-        one = extract._pass_extra("steering", "A\nB")
-        c.put("/api/context", json={"text": "B\nC"})
-        two = extract._pass_extra("steering", "A")
+    one = extract._pass_extra("steering", "A\nB", "C")
+    two = extract._pass_extra("steering", "A", "B\nC")
     assert one != two
+
+
+def test_a_pass_is_signed_with_the_context_the_model_was_given():
+    """Read once for the signature and again for the prompt, an edit landing
+    between the two would sign the answer with a context the prompt never
+    carried — and undoing the edit would leave it looking current."""
+    with client() as c:
+        c.put("/api/context", json={"text": "The context as it was."})
+        context = extract.context_block()
+        c.put("/api/context", json={"text": "Edited while the call was out."})
+    assert extract._pass_extra("steering", "", context) != \
+        extract._pass_extra("steering", "", extract.context_block())
 
 
 def test_the_ledger_is_replaced_whole():
