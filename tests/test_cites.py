@@ -469,6 +469,30 @@ def test_editing_a_claim_does_not_throw_away_the_citations():
     assert list(cites._cache) != before
 
 
+def test_a_contents_page_is_not_where_the_reference_list_starts():
+    """A contents page writes the word and puts the page number under it. The
+    body that follows names a paper, and reading the list from there would
+    call the mention a citation."""
+    _paper("attention", ATTENTION, [ATTENTION, "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper\nContents\nIntroduction\n1\nReferences\n12",
+        "Introduction\nWe build on Attention is all you need throughout.",
+        "References\nNobody. A work nobody wrote. 1999.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+
+
+def test_a_list_whose_first_entry_is_a_number_on_its_own_line_is_still_the_list():
+    """The only heading a paper has is taken however the line under it reads:
+    a bare `1` there is the first entry, not a page number."""
+    _paper("attention", ATTENTION, [ATTENTION, "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n1\nA Vaswani et al. Attention is all you need. 2017.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["attention"]
+
+
 def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
     """An unnumbered list cites the longer paper by title and DOI; the shorter
     corpus title reads inside that title and is cited nowhere."""

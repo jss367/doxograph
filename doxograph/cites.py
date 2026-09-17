@@ -98,9 +98,11 @@ def reference_text(text: str) -> str:
     twice.
     """
     at = 0
+    found: list[tuple[int, bool]] = []
     # `splitlines` breaks on the page separator too, so a heading at the top of
     # a page is found like any other.
-    for line in text.splitlines(keepends=True):
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
         at += len(line)
         squashed = quotes.squash(line)
         # Measured on the letters, not the line: a small-capitals heading can
@@ -110,8 +112,32 @@ def reference_text(text: str) -> str:
         if len(squashed) > _HEADING_LETTERS:
             continue
         if _is_heading(squashed, labelled=bool(_LABEL.match(line))):
-            return text[at:]
-    return ""
+            found.append((at, _points_at_a_page(lines, i + 1)))
+    # A contents page writes the word too, and the list it points at is further
+    # down. Passed over only when there is another heading to pass to: a
+    # bibliography whose first entry is a bare number on a line of its own
+    # looks the same from here, and skipping the only heading a paper has
+    # would drop every work it cites.
+    for start, contents in found:
+        if not contents:
+            return text[start:]
+    return text[found[0][0]:] if found else ""
+
+
+# A page number a contents entry points at: digits alone, after however many
+# dot leaders the extraction put on the line. `[1]` and `1.` are not this —
+# they are how a reference list numbers its first entry, and the brackets and
+# the dot are what say so.
+_PAGE_NUMBER = re.compile(r"^[ 	.·•…‐-―]*\d{1,4}[ 	]*$")
+
+
+def _points_at_a_page(lines: list[str], start: int) -> bool:
+    """Whether the lines after a heading are a page number and nothing else."""
+    for line in lines[start:start + 3]:
+        if not line.strip():
+            continue
+        return bool(_PAGE_NUMBER.match(line.rstrip("\n\r\f")))
+    return False
 
 
 def _is_heading(squashed: str, labelled: bool = False) -> bool:
