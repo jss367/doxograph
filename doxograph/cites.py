@@ -61,8 +61,14 @@ _cache_lock = threading.Lock()
 
 # Where a reference list numbers its entries. A bibliography that does not is
 # one entry as far as this is concerned, which is where this started.
+#
+# A number with nothing else on its line counts as well: a two-column
+# extraction puts the marker of a list written `1. Vaswani…` on a line of its
+# own, and read as one stretch a list like that lets an entry's identifier
+# settle a title printed in somebody else's entry.
 _ENTRY_MARK = re.compile(
-    r"(?m)(?:^|(?<=\f))[ \t]*(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)])(?=[ \t\f]|$)")
+    r"(?m)(?:^|(?<=\f))[ \t]*"
+    r"(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)]|\d{1,3}(?=[ \t]*$))(?=[ \t\f]|$)")
 
 
 def entries(listing: str) -> list[quotes.Text]:
@@ -429,11 +435,13 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
 # `v5` is not the identifier running on into somebody else's.
 _VERSION = re.compile(r"v\d+(?![0-9A-Za-z])")
 
-# What joins one part of an identifier to the next, and so says the identifier
-# has not ended where a fingerprint of it has. The punctuation a DOI suffix is
-# allowed, which `ingest.DOI_RE` writes out as `[-._;()/:A-Za-z0-9]`.
+# What an identifier is written with, which `ingest.DOI_RE` writes out as
+# `[-._;()/:A-Za-z0-9]`: the punctuation here joins one part of an identifier
+# to the next, and so says the identifier has not ended where a fingerprint of
+# it has.
 _JOINS = "./-_:;()"
 _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9]")
+_IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9]*")
 # Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
 _DOI_HEAD = re.compile(r"10\.\d{4,9}/")
 
@@ -460,8 +468,12 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> 
         rest = rest[version.end():]
     if rest[:1].isalnum():
         return False
-    # A separator with more identifier after it: `.bar` of `10.1234/foo.bar`.
-    if rest[:1] in _JOINS and rest[1:2].isalnum():
+    # More identifier after the punctuation that joins its parts, however much
+    # punctuation that is: `.bar` of `10.1234/foo.bar`, `/(2)` of
+    # `10.1234/foo/(2)`. The run stops at the comma or the space an entry goes
+    # on with, so a DOI at the end of what it is cited by reads whole.
+    run = _IDENTIFIER_RUN.match(rest)
+    if run and any(char.isalnum() for char in run.group()):
         return False
     begin = entry.offsets[at]
     lead = entry.raw[:begin]

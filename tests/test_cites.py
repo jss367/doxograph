@@ -254,6 +254,9 @@ def test_a_numbered_list_is_read_one_entry_at_a_time():
         "apaper2017", "anotherpaper2018"]
     for numbering in ("1. ", "(1) ", "1) "):
         assert len(cites.entries(f"{numbering}A paper.\n{numbering.replace('1', '2')}Another.")) == 2
+    # A marker the extraction left alone on its line numbers the list too.
+    assert [e.squashed for e in cites.entries("1\nA paper. 2017.\n2\nAnother paper. 2018.")] == [
+        "apaper2017", "anotherpaper2018"]
     # An author-year list says nothing about where its entries are, and is
     # read whole, as it always was.
     whole = cites.entries("Vaswani, A. Attention is all you need. 2017.\nRoe, A. Steering. 2026.")
@@ -545,7 +548,9 @@ def test_an_identifier_is_read_from_both_ends():
         # A DOI suffix is allowed brackets and semicolons as well as dots.
         "[3] Nobody. A third work. https://doi.org/10.1234/foo(2), 2026.\n"
         # And it is allowed to end with something that reads as an arXiv id.
-        "[4] Nobody. A fourth work. https://doi.org/10.9999/abc/1706.03762, 2026.",
+        "[4] Nobody. A fourth work. https://doi.org/10.9999/abc/1706.03762, 2026.\n"
+        # However much punctuation stands between the DOI and the rest of it.
+        "[5] Nobody. A fifth work. https://doi.org/10.1234/foo/(2), 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
 
