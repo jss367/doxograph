@@ -36,7 +36,7 @@ extension AppDelegate {
 
     private func appMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(item("About Doxograph", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        menu.addItem(item("About Doxograph", #selector(showAbout(_:)), target: self))
         menu.addItem(item("Update Doxograph…", #selector(updateDoxograph(_:)), target: self))
         menu.addItem(.separator())
         menu.addItem(item("Hide Doxograph", #selector(NSApplication.hide(_:)), "h"))
@@ -46,6 +46,17 @@ extension AppDelegate {
         menu.addItem(.separator())
         menu.addItem(item("Quit Doxograph", #selector(NSApplication.terminate(_:)), "q"))
         return menu
+    }
+
+    /// The standard About panel, without the build number.
+    ///
+    /// AppKit writes `CFBundleVersion` in parentheses after the version, so the
+    /// panel would read "Version 0.5.0 (6)". That second number is a counter
+    /// this app keeps only so macOS can tell two bundles with the same version
+    /// apart; it means nothing to anyone reading the panel. An empty string for
+    /// the key that carries it leaves just the version.
+    @objc func showAbout(_ sender: Any?) {
+        NSApp.orderFrontStandardAboutPanel(options: [.version: ""])
     }
 
     private func fileMenu() -> NSMenu {
