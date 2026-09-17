@@ -382,7 +382,10 @@ function fold(text) {
   // Folded on both sides of the decomposition: a compatibility character can
   // decompose into one that folds — mathematical bold final sigma comes out
   // as ς, which is σ to `casefold` and itself to `toLowerCase`.
+  // A soft hyphen goes with them: it says where a word may be broken, and a
+  // word carrying one is the word, as the server reads it too.
   return String(text ?? '').toLowerCase()
+    .replace(/\u00ad/g, '')
     .replace(CASEFOLD_RE, (ch) => CASEFOLD[ch])
     .normalize('NFKD')
     .replace(CASEFOLD_RE, (ch) => CASEFOLD[ch])

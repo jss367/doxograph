@@ -119,7 +119,10 @@ def fold_with_offsets(text: str) -> tuple[str, array.array]:
     folded: list[str] = []
     offsets = array.array("i")
     for at, char in enumerate(text):
-        if at in dropped:
+        # A soft hyphen is where a word may be broken, not a letter of it, and
+        # a PDF can put one in a word it did not end up breaking. The pattern
+        # above only reaches the ones a line break follows.
+        if at in dropped or char == "\u00ad":
             continue
         for out in unicodedata.normalize("NFKD", char).casefold():
             # A PDF can give an accented letter whole or as a letter and a
@@ -390,9 +393,14 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
             if span is None:
                 continue
             exhausted = False
-            where = span[0]
-            if any(abs(where - at) < PASSAGE_SPAN and page_of(where) == page_of(at)
-                   for at, _ in starts):
+            where, ends = span
+            # Shown already means shown whole: a passage reaches PASSAGE_SPAN
+            # past where it starts, and a match beginning inside that but
+            # running past the end would be cut in half — `transfor` of
+            # `transformation`, with nothing to mark and one of the query's
+            # words nowhere in the answer.
+            if any(at - PASSAGE_SPAN <= where and ends <= at + PASSAGE_SPAN
+                   and page_of(where) == page_of(at) for at, _ in starts):
                 continue
             starts.append(span)
         if exhausted:

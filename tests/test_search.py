@@ -273,6 +273,25 @@ def test_a_term_in_an_unspaced_script_can_meet_itself():
     assert [hit["key"] for hit in search.search_papers("哈哈")] == ["doubled", "single"]
 
 
+def test_a_soft_hyphen_inside_a_word_is_not_part_of_it():
+    """A PDF marks where a word may be broken whether or not it broke there,
+    and `transfor\u00admation` is one word to a search either way."""
+    a_paper_of("soft", "We measure the transfor\u00admation of activations.")
+    assert [hit["key"] for hit in search.search_papers("transformation")] == ["soft"]
+
+
+def test_a_term_that_would_be_cut_off_gets_its_own_passage():
+    """A passage reaches PASSAGE_SPAN past where it starts. A term beginning
+    just inside that runs past the end, and a passage showing `transfor` marks
+    neither the word nor answers the query that asked for it."""
+    filler = "and so on " * 13                      # 130 characters of nothing
+    a_paper_of("clip", f"AI {filler}transformation of activations.")
+    hits = search.search_papers("AI transformation")
+    marked = {part["text"] for passage in hits[0]["passages"]
+              for part in passage["parts"] if part["mark"]}
+    assert "transformation" in marked
+
+
 def test_a_word_split_at_a_page_break_is_one_word_to_a_search():
     a_paper_of("split", "We measure the transfor-\x0cmation of steered activations.")
     assert [hit["key"] for hit in search.search_papers("transformation")] == ["split"]
