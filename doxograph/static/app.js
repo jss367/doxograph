@@ -1654,8 +1654,8 @@ function renderGraphNav() {
 let CITATIONS = [];
 let citationsSeq = 0;
 let citationsFailed = false;
-let citationsInFlight = null;   // the workspace an asking is out for, if any
-let citationsStale = false;     // the corpus moved while that asking was out
+const citationsInFlight = new Map();   // workspace -> the asking out for it
+let citationsStale = false;           // the corpus moved while one was out
 
 async function loadCitations() {
   // Whose citations these are, and which asking. A request left in flight when
@@ -1668,15 +1668,18 @@ async function loadCitations() {
   // this a retry after a failure would start another scan on every tick until
   // one finished. A different corpus is a different question, and asks.
   const workspace = currentWorkspaceId;
-  if (citationsInFlight === workspace) {
+  if (citationsInFlight.has(workspace)) {
     // The corpus moved while this one was reading it, so its answer describes
     // papers that have changed since. Asked again once it is out of the way.
     citationsStale = true;
     return;
   }
-  citationsInFlight = workspace;
-  citationsStale = false;
   const seq = ++citationsSeq;
+  // Kept per corpus and stamped with this asking: going A → B → A starts a
+  // second reading for A, and the first to come back must not clear the
+  // guard the second is relying on.
+  citationsInFlight.set(workspace, seq);
+  citationsStale = false;
   let edges;
   try {
     const found = await api('/api/citations');
@@ -1688,7 +1691,7 @@ async function loadCitations() {
     citationsFailed = true;
     return;
   } finally {
-    if (citationsInFlight === workspace) citationsInFlight = null;
+    if (citationsInFlight.get(workspace) === seq) citationsInFlight.delete(workspace);
   }
   if (seq !== citationsSeq || workspace !== currentWorkspaceId) return;
   citationsFailed = false;
@@ -1979,6 +1982,13 @@ function graphDraw() {
     if (!fan.has(key)) fan.set(key, []);
     fan.get(key).push(e);
   }
+  // Two papers can both disagree and cite, and the two lines run between the
+  // same centres: drawn on top of each other the solid arrow fills the
+  // tension's dashes and hides the layer underneath. Moved aside far enough
+  // to read, which only arises for this one pair of types.
+  const alsoTense = new Set(GRAPH.edges
+    .filter((e) => e.type === 'tension')
+    .map((e) => [pairKey(e), `${e.b}|${e.a}`]).flat());
   for (const e of GRAPH.edges) {
     const { source: a, target: b } = e;
     const touching = hover && (a === hover || b === hover);
@@ -1997,8 +2007,14 @@ function graphDraw() {
     if (e.type === 'cite') {
       ctx.strokeStyle = colors.accent;
       ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      graphArrow(ctx, a, b, colors.accent);
+      let sx = 0, sy = 0;
+      if (alsoTense.has(pairKey(e))) {
+        const d = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
+        sx = (-(b.y - a.y) / d) * 5; sy = ((b.x - a.x) / d) * 5;
+      }
+      ctx.beginPath(); ctx.moveTo(a.x + sx, a.y + sy); ctx.lineTo(b.x + sx, b.y + sy); ctx.stroke();
+      graphArrow(ctx, { x: a.x + sx, y: a.y + sy }, { x: b.x + sx, y: b.y + sy, r: b.r },
+                 colors.accent);
       continue;
     }
     if (e.type === 'topic') {

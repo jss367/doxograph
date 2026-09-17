@@ -28,7 +28,11 @@ from . import config, quotes, search, store
 # Sources)" all start a reference list, so the word only has to begin the line.
 # Plural on purpose: "referenced" and "references" part company at the eighth
 # letter, so a line of prose beginning "Referenced work…" is not a heading.
-_HEADINGS = ("references", "bibliography", "workscited", "literaturecited")
+# Longest first: "references" has to be tried before "reference", or the
+# plural would be read as the singular with an "s" left over. A paper with one
+# item in its bibliography does label it "Reference", and the tail check keeps
+# "Referenced work…" out either way.
+_HEADINGS = ("references", "reference", "bibliography", "workscited", "literaturecited")
 # What a heading may carry after the word. A short body line — "References to
 # Figure 2 show…" — begins with one of the words above too, and reading the
 # rest of the paper as a reference list invents citations out of its prose.
@@ -110,8 +114,11 @@ def _is_heading(squashed: str) -> bool:
     candidates = [plain] + [plain[at:] for at in range(1, 8) if at < len(plain)
                             and set(plain[:at]) <= set("ivxlcdm")]
     for candidate in candidates:
-        head = next((h for h in _HEADINGS if candidate.startswith(h)), None)
-        if head is not None and candidate[len(head):] in _HEADING_TAIL:
+        # Every heading it could begin with, not the first: "references" and
+        # "reference" both fit the plural, and only one of them leaves a tail
+        # the check accepts.
+        if any(candidate.startswith(head) and candidate[len(head):] in _HEADING_TAIL
+               for head in _HEADINGS):
             return True
     return False
 
@@ -144,12 +151,13 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     The answer is cached against the corpus and the extracted text, both of
     which it is read from, so the map can ask for it on every opening.
     """
-    papers = store.all_papers() if papers is None else papers
+    given = papers is not None
     signature = f"{store.corpus_signature()}:{_text_signature()}"
     with _cache_lock:
         hit = _cache.get(signature)
     if hit is not None:
         return hit
+    papers = papers if given else store.all_papers()
     marks = {paper["key"]: fingerprints(paper) for paper in papers}
     found = []
     for paper in papers:
@@ -162,9 +170,14 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         for other in _cited(paper["key"], listing, marks):
             found.append({"from": paper["key"], "to": other})
     found.sort(key=lambda edge: (edge["from"], edge["to"]))
-    with _cache_lock:
-        _cache.clear()      # one corpus at a time is all the map ever asks for
-        _cache[signature] = found
+    # Only if the corpus stood still while it was being read. A paper added or
+    # removed in the middle leaves this describing neither the corpus before
+    # nor the one after, and storing it under the new signature would serve
+    # that to every later asking.
+    if given or signature == f"{store.corpus_signature()}:{_text_signature()}":
+        with _cache_lock:
+            _cache.clear()  # one corpus at a time is all the map ever asks for
+            _cache[signature] = found
     return found
 
 
@@ -188,38 +201,51 @@ def _cited(key: str, entries: list[str], marks: dict[str, list[str]]) -> list[st
 def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
     """The papers one stretch of a reference list names.
 
-    Within an entry the longest mark a paper is named by is its claim on the
-    text. A claim sitting strictly inside another paper's is part of that
-    citation rather than a second one — "Attention is all you need" inside
-    "Attention is all you need for image restoration" — and claims on the same
-    stretch are twins, told apart by an identifier if the entry carries one.
-    Claims that do not overlap are separate citations, which is what keeps an
-    unnumbered bibliography from coming back as a single work.
+    A paper claims the places its title is printed, or — where the entry names
+    it by an identifier and not by name — the places that identifier is. A
+    claim sitting strictly inside another paper's is part of that citation
+    rather than a second one: "Attention is all you need" inside "Attention is
+    all you need for image restoration". Claims on the same place are twins,
+    told apart by an identifier if the entry carries one. Everything else is a
+    separate citation, which is what keeps an unnumbered bibliography from
+    coming back as a single work.
     """
-    claims: dict[str, tuple[int, int, int]] = {}
+    claims: dict[str, tuple[list[int], int, int]] = {}
     for other, found in marks.items():
         if other == key:
             continue
         # `fingerprints` puts a paper's identifiers first and its title last.
-        places = [(entry.find(mark), len(mark), 1 if at < len(found) - 1 else 0)
-                  for at, mark in enumerate(found) if mark in entry]
-        if not places:
+        title = found[-1] if found else ""
+        identifier = any(mark in entry for mark in found[:-1])
+        named_by = title if title and title in entry else next(
+            (mark for mark in found[:-1] if mark in entry), "")
+        if not named_by:
             continue
-        identifier = max(named for _, _, named in places)
-        at, width, _ = max(places, key=lambda place: place[1])
-        claims[other] = (at, width, identifier)
+        claims[other] = (_occurrences(entry, named_by), len(named_by), identifier)
 
     cited: set[str] = set()
     twins: dict[tuple[int, int], list[str]] = {}
-    for other, (at, width, _) in claims.items():
-        if any(w > width and begin <= at and at + width <= begin + w
-               for name, (begin, w, _) in claims.items() if name != other):
-            continue        # part of a longer paper's citation, not its own
-        twins.setdefault((at, width), []).append(other)
+    for other, (places, width, _) in claims.items():
+        for at in places:
+            # Inside a longer claim of somebody else's: part of that citation.
+            if any(w > width and any(begin <= at and at + width <= begin + w for begin in wheres)
+                   for name, (wheres, w, _) in claims.items() if name != other):
+                continue
+            twins.setdefault((at, width), []).append(other)
     for named_by in twins.values():
         best = max(claims[other][2] for other in named_by)
         cited |= {other for other in named_by if claims[other][2] == best}
     return cited
+
+
+def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
+    """Where a mark falls in a stretch of a reference list, up to `cap` places."""
+    places = []
+    at = entry.find(mark)
+    while at >= 0 and len(places) < cap:
+        places.append(at)
+        at = entry.find(mark, at + 1)
+    return places
 
 
 def _text_signature() -> str:

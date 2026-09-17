@@ -295,3 +295,37 @@ def test_one_doi_recorded_twice_is_one_identifier():
     paper = {"key": "x", "title": "A paper with a long enough title to look for",
              "doi": "10.1234/abcd", "source": {"kind": "doi", "id": "10.1234/abcd"}}
     assert cites.fingerprints(paper).count("101234abcd") == 1
+
+
+def test_an_unnumbered_list_citing_a_contained_title_later_cites_both():
+    """The shorter title's first printing is inside the longer one's; its own
+    citation is further down, and there are no entry markers to separate them."""
+    _paper("short", ATTENTION, [ATTENTION, "Text."])
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nSomebody. Attention is all you need for image restoration. 2026.\n"
+        "Vaswani, A. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["long", "short"]
+
+
+def test_an_identifier_settles_a_twin_whatever_its_length():
+    """The DOI is longer than the shared title, and the claim still belongs at
+    the title: that is the place the two papers are arguing over."""
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."],
+           doi="10.5555/3295222.3295349.an.unusually.long.suffix")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] A Vaswani et al. Attention is all you need. "
+        "https://doi.org/10.5555/3295222.3295349.an.unusually.long.suffix, 2017.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["published"]
+
+
+def test_a_bibliography_with_one_item_may_call_itself_reference():
+    assert cites.reference_text("Body.\nReference\n[1] A paper.\n").strip() == "[1] A paper."
+    assert cites.reference_text("Body.\nReferences\n[1] A paper.\n").strip() == "[1] A paper."
+    assert cites.reference_text("Body.\nReferenced below.\n[1] A paper.\n") == ""
