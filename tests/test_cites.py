@@ -660,6 +660,19 @@ def test_a_title_inside_a_longer_word_is_not_a_citation():
     assert not cites._bounded(entry, entry.squashed.find(title), len(title))
 
 
+def test_a_doi_that_ends_in_a_bracket_is_cited_by_its_own_printing():
+    """`10.1234/foo(2)` is a DOI and `normalize_doi` keeps the pair. Squashing
+    leaves nothing for the bracket, so the span a match covers ends at the 2
+    and the identifier it is compared with has to end there too."""
+    _paper("bracketed", "A paper with a long enough title",
+           ["A paper with a long enough title", "Text."], doi="10.1234/foo(2)")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Nobody. A work. https://doi.org/10.1234/foo(2), 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["bracketed"]
+
+
 def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
     """A PDF can write a hyphen as an en dash, and it is the same DOI. Read
     against the entry rather than through one, since the test PDFs are

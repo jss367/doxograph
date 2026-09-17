@@ -600,6 +600,17 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     return not (entry.raw[:begin][-1:].isalnum() or entry.raw[stop:stop + 1].isalnum())
 
 
+def _ends_in_a_letter(printed: str) -> str:
+    """An identifier with the punctuation at its ends taken off.
+
+    A DOI may finish with a bracket — `10.1234/foo(2)` is one, and
+    `ingest.normalize_doi` keeps the pair — and squashing leaves no character
+    for it, so the span a match covers stops at the last letter or digit and
+    has nothing to compare the bracket with.
+    """
+    return re.sub(r"^[^0-9A-Za-z]+|[^0-9A-Za-z]+$", "", printed)
+
+
 def _shape(text: str) -> str:
     """An identifier as its punctuation: which mark and where, with the
     letters and digits taken out and the dashes read as one."""
@@ -637,7 +648,7 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     # `10.1234/foob.ar` are two DOIs and one fingerprint, and so are
     # `10.1234/foo.bar-baz` and `10.1234/foo-bar.baz`. Only the dashes are
     # read as one, since an extraction can write a hyphen as any of them.
-    if printed and _shape(span) != _shape(printed):
+    if printed and _shape(span) != _shape(_ends_in_a_letter(printed)):
         return False
     rest = entry.raw[stop:]
     tail = _ARXIV_TAIL.match(rest) if versioned else None
