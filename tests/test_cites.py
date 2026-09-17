@@ -572,6 +572,24 @@ def test_text_that_moved_while_it_was_being_read_is_not_cached():
     assert not cites._cache, "an answer was stored for text it cannot speak for"
 
 
+def test_the_answer_is_filed_under_the_text_it_was_read_from():
+    """Not under the text as it stands when the answer is stored: a paper
+    replaced while the scan was finishing would file the old citations under
+    the new text's name, and the map would go on being served them."""
+    a_corpus()
+    cites._cache.clear()
+    cites.edges()
+    was_read = cites._read_signature(
+        {paper["key"]: cites._text_identity(paper["key"]) for paper in store.all_papers()})
+    assert list(cites._cache)[0].endswith(was_read)
+
+    # Text left behind by a paper that is no longer in the corpus is not part
+    # of it, and does not throw the answer away.
+    before = list(cites._cache)
+    store.text_path("gone2019").write_text("A paper that is not here.", encoding="utf-8")
+    assert cites.edges() and list(cites._cache) == before
+
+
 def test_a_pdf_arriving_mid_scan_is_not_cached_as_though_it_were_read():
     """A paper this scan has already passed gets new text. Its name has not
     moved, so nothing but the text itself would notice."""

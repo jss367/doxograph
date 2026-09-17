@@ -14,11 +14,10 @@ paper no model has read.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import threading
 
-from . import config, quotes, search, store
+from . import quotes, search, store
 
 # A line that says the references start. Matched on its letters alone, which
 # takes care of a section number in front of it, a colon after it, the case,
@@ -230,7 +229,8 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     papers = papers if given else store.all_papers()
     named = _named_signature(papers)
     with _cache_lock:
-        hit = _cache.get(f"{named}:{_text_signature()}")
+        hit = _cache.get(f"{named}:{_read_signature(
+            {paper['key']: _text_identity(paper['key']) for paper in papers})}")
     if hit is not None:
         return hit
     marks = {paper["key"]: fingerprints(paper) for paper in papers}
@@ -275,7 +275,10 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     if given or (steady and named == _named_signature(store.all_papers())):
         with _cache_lock:
             _cache.clear()  # one corpus at a time is all the map ever asks for
-            _cache[f"{named}:{_text_signature()}"] = found
+            # Keyed off what this scan read, not off what the text says now:
+            # sampling the pile again here would take in a paper replaced
+            # since, and file the old answer under the new text's name.
+            _cache[f"{named}:{_read_signature(read)}"] = found
     return found
 
 
@@ -434,7 +437,7 @@ def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
 def _named_signature(papers: list[dict]) -> str:
     """The names every paper can be cited by, and nothing else.
 
-    Half of what the citations are read from; `_text_signature` is the other
+    Half of what the citations are read from; `_read_signature` is the other
     half. Not the corpus signature: that moves when a claim is edited or a
     topic renamed, neither of which changes a bibliography, and every such
     move would throw the answer away and read the pile again.
@@ -453,18 +456,15 @@ def _text_identity(key: str) -> tuple:
     return (st.st_size, st.st_mtime_ns, st.st_ino)
 
 
-def _text_signature() -> str:
-    """The extracted text as it stands. A PDF arriving for a paper already in
-    the corpus changes this and nothing else, so the corpus signature alone
-    would go on serving the citations worked out before it."""
-    parts = []
-    try:
-        with os.scandir(config.text_dir()) as entries:
-            for entry in entries:
-                if entry.name.endswith(".txt"):
-                    st = entry.stat()
-                    parts.append((entry.name, st.st_size, st.st_mtime_ns))
-    except FileNotFoundError:
-        pass
-    parts.sort()
-    return hashlib.sha1(repr(parts).encode()).hexdigest()
+def _read_signature(read: dict) -> str:
+    """The text a scan read, named by what each paper's text was at the time.
+
+    What the citations were read from, and the other half of the cache key.
+    Only the papers in the corpus: text left behind by a paper that is gone
+    says nothing about the answer, and re-reading the pile would have thrown
+    it away for nothing.
+    """
+    parts = "\n".join(f"{key} {was}" for key, was in sorted(read.items()))
+    return hashlib.sha1(parts.encode("utf-8")).hexdigest()
+
+
