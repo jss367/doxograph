@@ -313,6 +313,48 @@ function forgetStateTag() {
   stateEtag = null;
 }
 
+// Whether a claim still says what a synthesis's basis on file recorded it
+// saying. The server writes each entry of that basis as a JSON list of the
+// three fields the model was shown, so it is read back rather than built again
+// here: building it would mean reproducing Python's spacing and its escaping of
+// everything above ASCII, and what the comparison is about is the values.
+function basisMatches(fingerprint, claim) {
+  let written;
+  try { written = JSON.parse(fingerprint); } catch { return false; }
+  return Array.isArray(written) && written.length === 3
+    && written[0] === (claim.text || '') && written[1] === (claim.evidence || '')
+    && written[2] === (claim.kind || 'finding');
+}
+
+// `synthesis_rows` reads `stale` off two comparisons: the topic's claims
+// against the basis the text was written from, and the topic's tensions against
+// the ones the model was shown. A held claim can settle either of them as
+// easily as unsettle it — a synthesis reading stale only because a claim had
+// been added since is current again once that claim is the one deleted — so the
+// flag is worked out again rather than simply turned on. `tensions` is the
+// pruned list: one citing a held claim is already out of it, as it is out of
+// the answer the server would give.
+function synthesisStale(row, live, tensions) {
+  const basis = row.claims || {};
+  if (Object.keys(basis).length !== live.length
+      || !live.every((claim) => claim.id in basis && basisMatches(basis[claim.id], claim))) {
+    return true;
+  }
+  const shown = (tensions || []).filter(
+    (tension) => (tension.topics || []).includes(row.topic) && tension.status !== 'dismissed');
+  const written = row.tensions || {};
+  if (Object.keys(written).length !== shown.length) return true;
+  // A record written before the tensions were part of the basis holds
+  // two-element lists, which match nothing here and leave it reading stale, as
+  // it does on the server: what the model was told is not known.
+  return !shown.every((tension) => {
+    const seen = written[tension.id];
+    return Array.isArray(seen) && seen.length === 3
+      && seen[0] === (tension.kind ?? null) && seen[1] === (tension.status ?? null)
+      && seen[2] === Boolean(tension.stale);
+  });
+}
+
 // Takes the waiting rows out of `S`. Called wherever `S` is replaced, and
 // written to be safe to run twice on the same state: the per-paper counts are
 // recounted from the claims that are left rather than decremented.
@@ -381,16 +423,13 @@ function pruneTrashed() {
   // counts and the stale flag from the claims its topic has now, not from the
   // ids on file, and drops a topic that has none left. Held claims were taken
   // out of only the syntheses deleted by topic, so a topic one of them carried
-  // went on claiming more claims and papers than it still had, reading as
-  // written-against-current, and citing a claim the page no longer knows —
-  // `citeHtml` leaves that bracket as written, a bare `[paper-a-c1]`. So the
-  // rows a held claim touches are rebuilt the way the server builds them: no
-  // claims left and the card goes, otherwise recount and read stale, since the
-  // text on file was written about a set of claims that is not the one on
-  // screen. (When the held claim was not in the basis on file, the row was
-  // already stale for carrying a claim the synthesis never saw, so the flag
-  // only ever stands still or turns on.) Undo is still the delete never being
-  // sent, so the next refresh brings the row back as the server has it.
+  // went on claiming more claims and papers than it still had and cited a claim
+  // the page no longer knows — `citeHtml` leaves that bracket as written, a
+  // bare `[paper-a-c1]`. So the rows a held claim touches are rebuilt the way
+  // the server builds them: no claims left and the card goes, otherwise recount
+  // and read the stale flag off the basis on file. Undo is still the delete
+  // never being sent, so the next refresh brings the row back as the server
+  // has it.
   const heldTopics = new Set();
   all.forEach((row) => {
     if (trashed('claim', row.id)) (row.tags || []).forEach((tag) => heldTopics.add(tag));
@@ -402,7 +441,8 @@ function pruneTrashed() {
       const live = kept.filter((claim) => (claim.tags || []).includes(row.topic));
       if (!live.length) return null;
       return { ...row, n_claims: live.length,
-               n_papers: new Set(live.map((claim) => claim.paper)).size, stale: true };
+               n_papers: new Set(live.map((claim) => claim.paper)).size,
+               stale: synthesisStale(row, live, S.tensions) };
     })
     .filter(Boolean);
 }

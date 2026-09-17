@@ -3769,3 +3769,45 @@ def test_a_held_claim_moves_the_paper_status_dot_with_it():
     assert len(store.load_paper("paper-a")["claims"]) == 2
     assert len(store.load_paper("paper-b")["claims"]) == 1
     assert len(store.load_paper("paper-c")["claims"]) == 1
+
+
+@pytest.mark.browser
+def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
+    """`synthesis_rows` reads `stale` off the claims the topic has against the
+    basis the text was written from, so holding a claim can settle that
+    comparison as easily as unsettle it: a synthesis that read stale only
+    because a claim had been added since is current again once that claim is
+    the one deleted. The page has to read it the same way rather than take
+    every touched row as stale, or the card contradicts the one the server
+    sends eight seconds later."""
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    store.record_synthesis("recovery", "Both report it [paper-a-c1].",
+                           {r["id"]: r for r in store.topic_claims("recovery")})
+    _paper("paper-c", "Paper C", "recovery")   # added since: the card reads stale
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#tags [data-tag="recovery"]').click()
+                card = page.locator('.synth[data-topic="recovery"]')
+                await card.locator(".stale").wait_for()
+                assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
+
+                await page.locator('.claim[data-claim="paper-c-c1"]').get_by_role(
+                    "button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+                await card.locator(".stale").wait_for(state="detached", timeout=5000)
+                assert "2 claims in 2 papers" in await card.locator(".smeta").text_content()
+
+                await notice.get_by_role("button", name="Undo").click()
+                await card.locator(".stale").wait_for()
+                assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-c")["claims"]) == 1
