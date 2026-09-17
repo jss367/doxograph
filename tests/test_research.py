@@ -27,6 +27,19 @@ def test_an_empty_context_falls_back_to_the_default_wording():
     assert "No research context" in extract.context_block()
 
 
+def test_a_line_moved_into_the_context_is_a_different_prompt():
+    """The description and the context both hold newlines of their own, so
+    running them together with one more would read "A\nB" beside "C" as the
+    same prompt as "A" beside "B\nC". They are different prompts, and a topic
+    whose claims had not moved would never be asked again."""
+    with client() as c:
+        c.put("/api/context", json={"text": "C"})
+        one = extract._pass_extra("steering", "A\nB")
+        c.put("/api/context", json={"text": "B\nC"})
+        two = extract._pass_extra("steering", "A")
+    assert one != two
+
+
 def test_the_ledger_is_replaced_whole():
     with client() as c:
         response = c.put("/api/ledger", json={"claims": [

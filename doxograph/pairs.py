@@ -88,14 +88,25 @@ def stem(word: str) -> str:
         # holding the line at five parted an ordinary pair of verb forms.
         word = word[:-2]
     # A silent e goes last, from every word alike, and so does a doubled final
-    # consonant. Only stripping them after a suffix would leave `scaled` as
+    # letter. Only stripping them after a suffix would leave `scaled` as
     # `scal` beside `scale` and `controlled` as `controll` beside `control`;
     # taking them off both is wrong about the word and right about the pair,
     # which is all this measure is for.
+    #
+    # The double comes off either side of the e, since the two endings uncover
+    # each other: `programme` needs the e gone before its m's are a pair, and
+    # `agree` needs its e's read as a pair before one e goes, or `agreed` (an
+    # `ed` short of `agre`) would end a letter shorter than `agree` does.
+    word = _undoubled(word)
     if len(word) > 2 and word.endswith("e"):
         word = word[:-1]
+    return _undoubled(word)
+
+
+def _undoubled(word: str) -> str:
+    """A word with a doubled final letter made single."""
     if len(word) > 3 and word[-1] == word[-2] and word[-1].isalpha():
-        word = word[:-1]
+        return word[:-1]
     return word
 
 

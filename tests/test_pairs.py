@@ -88,5 +88,10 @@ def test_a_verb_and_its_past_tense_meet():
                         ("corpus", "corpora"), ("criterion", "criteria"),
                         ("nucleus", "nuclei"), ("radius", "radii"),
                         ("stimulus", "stimuli"), ("genus", "genera"),
-                        ("census", "censuses"), ("lens", "lenses")):
+                        ("census", "censuses"), ("lens", "lenses"),
+                        # Verbs whose base ends in a doubled letter: the ed
+                        # comes off and leaves one e where the base has two.
+                        ("agree", "agreed"), ("agrees", "agreeing"),
+                        ("free", "freed"), ("see", "seed"),
+                        ("program", "programmed"), ("program", "programme")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)
