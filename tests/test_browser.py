@@ -3123,3 +3123,76 @@ def test_the_page_folds_what_a_decomposition_produces():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_an_export_does_not_run_on_a_delete_that_failed():
+    """The export is written from what is on file. A held delete that came back
+    an error left the claim there, so exporting would hand back a file holding a
+    claim the reader watched disappear."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        exports = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_delete(route, request):
+                if request.method == "DELETE":
+                    await route.fulfill(status=500, json={"detail": "Disk is full"})
+                    return
+                await route.continue_()
+
+            async def record_export(route, request):
+                exports.append(request.url)
+                await route.fulfill(status=200, json={"path": "/tmp/out.md"})
+
+            await page.route(f"**/api/papers/doe2026study/claims/{one}", refuse_delete)
+            await page.route("**/api/export", record_export)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim[data-claim="{one}"] [data-act="del"]').click()
+                await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
+
+                # The export settles the held deletes first, and that is where
+                # the failure turns up.
+                await page.locator("#btn-export").click()
+                await page.locator("#toasts .toast", has_text="Could not delete the claim").wait_for()
+                await page.wait_for_timeout(500)
+                assert exports == []
+
+                # The claim is back on screen, because it is back on file.
+                await page.locator(f'.claim[data-claim="{one}"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [one, two]
+
+
+@pytest.mark.browser
+def test_a_kind_the_url_names_that_does_not_exist_is_dropped():
+    """A bookmark, a hand-edited address, or a kind a later version stopped
+    using. The select has no option to match it, so it reads blank while every
+    claim is filtered away — a corpus that looks empty for no visible reason."""
+    _paper_with_claims("doe2026study", "A study", ["One.", "Two."], kind="finding")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#kind=wibble")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 2
+                assert await page.locator("#kind").input_value() == ""
+                assert "kind=" not in await page.evaluate("location.hash")
+
+                # A kind that does exist is kept.
+                await page.goto(f"{url}/#kind=finding")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#kind").input_value() == "finding"
+            await browser.close()
+
+    asyncio.run(scenario())

@@ -341,7 +341,12 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
     if (!entry) return Promise.resolve();   // already sent, or undone
     if (entry.sending) return entry.sending;
     if (notice) notice.close();
+    // Resolves to whether the row is really gone. A delete that failed leaves
+    // it on file, and the callers waiting on this — an export, a retag, a model
+    // pass — would go on to read a corpus that still holds a claim the reader
+    // watched disappear. They are told, rather than left to assume it settled.
     entry.sending = (async () => {
+      let sent = true;
       try {
         // Named rather than implied: `flushTrash` sends these before a switch,
         // and this makes that a guarantee rather than an ordering to preserve.
@@ -357,12 +362,14 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
           headers: { 'X-Doxograph-Workspace': workspace },
         });
       } catch (error) {
+        sent = false;
         toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
       } finally {
         trash.delete(token);
         forgetStateTag();
       }
       await refreshAll();
+      return sent;
     })();
     return entry.sending;
   };
@@ -407,20 +414,28 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
 // The flush ends in a read and a read is not counted as a change in flight, so
 // the picker can move in the gap; anything sent afterwards has to name the
 // corpus the reader was looking at, not the one they have since gone to.
+// Null when a held delete came back an error: the row is still on file, the
+// reader has already been told so, and whatever was waiting on the deletion
+// must not go ahead against a corpus that still holds it. Every caller checks.
 async function settleDeletes(wanted = null) {
   const workspace = currentWorkspaceId;
-  await flushTrash(wanted);
+  if (!await flushTrash(wanted)) return null;
   return { 'X-Doxograph-Workspace': workspace };
 }
 
+// True when everything it sent is really gone.
 async function flushTrash(wanted = null) {
   // Drained rather than snapshotted: the page stays interactive while this
   // runs, so a row deleted during it has to go with the rest. A snapshot would
   // leave that one on file for the export or the model pass waiting on this.
+  let settled = true;
   for (;;) {
     const waiting = [...trash.values()].filter((entry) => !wanted || wanted(entry));
-    if (!waiting.length) return;
-    await Promise.all(waiting.map((entry) => entry.send()));
+    if (!waiting.length) return settled;
+    // `send` resolves to `undefined` for an entry that went while this was
+    // deciding; only an outright `false` is a failure.
+    const sent = await Promise.all(waiting.map((entry) => entry.send()));
+    if (sent.some((ok) => ok === false)) settled = false;
   }
 }
 
@@ -502,14 +517,24 @@ function readStatus(value) {
   return STATUSES.includes(value) ? value : '';
 }
 
-// A paper or a topic named by a URL may be gone: at boot from a stale bookmark,
-// or on Back to an entry from before it was removed. A paper's key is retired
-// and will never come back; a topic can be renamed away. Either would empty the
-// list with nothing on screen to say why — and a topic the sidebar cannot list
-// leaves nothing to click to get out of it, short of editing the address.
+// A paper, a topic or a kind named by a URL may be gone: at boot from a stale
+// bookmark, or on Back to an entry from before it was removed. A paper's key is
+// retired and will never come back; a topic can be renamed away; a kind can be
+// hand-typed into the address or left over from an older version. Any of them
+// would empty the list with nothing on screen to say why — and a topic the
+// sidebar cannot list leaves nothing to click to get out of it, short of
+// editing the address. The kind is worse still: the select has no option to
+// match it, so it shows blank while filtering every claim away.
+//
+// Runs once the corpus is in `S`, which is why it is not part of `applyHash`:
+// at boot the URL is read before the first read of the corpus comes back.
 function dropMissingFilters() {
   if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) V.paper = null;
   if (V.tag && !Object.hasOwn(S.tag_counts || {}, V.tag)) V.tag = null;
+  if (V.kind && !(S.kinds || []).includes(V.kind)) {
+    V.kind = '';
+    $('kind').value = '';
+  }
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -1486,6 +1511,7 @@ async function findAgreements() {
   // The pass reads the corpus, so it must not read a claim the reader has
   // deleted — and it must read the corpus they were looking at.
   const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   try {
     const result = await api('/api/agreements', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
@@ -1858,6 +1884,7 @@ function synthesizeButton(tag) {
 async function synthesize(topics) {
   V.error = null;
   const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   try {
     const result = await api('/api/syntheses', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
@@ -3090,6 +3117,9 @@ async function removePaper(paper) {
   // two corpora has the same key in both, and removing the wrong one is not
   // something an undo could fix.
   const headers = await settleDeletes((entry) => entry.paper === paper);
+  // That claim's delete failed. Removing the paper would take it anyway, under
+  // a notice that said the claim could not be deleted — so nothing happens.
+  if (!headers) return;
   const workspace = headers['X-Doxograph-Workspace'];
   await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
   // Moved on meanwhile: the view belongs to another corpus now, and the drafts
@@ -3348,6 +3378,7 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'reextract') {
       const workspace = await settleDeletes();
+      if (!workspace) return;   // the delete failed; the pass would read the claim
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, {
         method: 'POST', headers: workspace,
       });
@@ -3366,6 +3397,7 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'retag-one') {
       const workspace = await settleDeletes();
+      if (!workspace) return;   // the delete failed; the pass would read the claim
       await api('/api/retag', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
         body: JSON.stringify({ keys: [paper] }),
@@ -3501,6 +3533,7 @@ $('research-nav').addEventListener('click', (event) => {
 async function findTensions() {
   V.error = null;
   const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   try {
     const result = await api('/api/tensions', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
@@ -3751,6 +3784,7 @@ $('btn-retag').addEventListener('click', async () => {
   });
   if (!go) return;
   const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   await api('/api/retag', {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
   });
@@ -3765,6 +3799,9 @@ $('btn-export').addEventListener('click', async () => {
   // The file is written from what is on file, so a delete still waiting out
   // its notice would otherwise be exported as a live claim.
   const headers = await settleDeletes();
+  // The delete failed, so the claim is still on file and the export would
+  // carry it. The notice about the delete is the one to answer first.
+  if (!headers) return;
   const workspace = headers['X-Doxograph-Workspace'] || 'default';
   let result;
   try {
@@ -4014,9 +4051,9 @@ async function boot() {
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   $('kind').value = V.kind;   // the kinds arrive with the corpus, after the URL was read
-  const before = [V.paper, V.tag];
+  const before = [V.paper, V.tag, V.kind];
   dropMissingFilters();
-  if (V.paper !== before[0] || V.tag !== before[1]) renderAll();
+  if (V.paper !== before[0] || V.tag !== before[1] || V.kind !== before[2]) renderAll();
   setInterval(async () => {
     if (document.hidden) return;
     // Keep settings current while editing; the content guard below preserves
