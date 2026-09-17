@@ -307,3 +307,9 @@ def test_text_older_than_its_pdf_is_read_again(tmp_path):
     quotes._cache.clear()
     assert search.search_papers("sandbagging") == []
     assert [hit["key"] for hit in search.search_papers("penguins")] == ["swapped"]
+
+
+def test_a_query_saying_one_word_two_ways_says_it_once():
+    a_paper_of("cafe", "A study of the cafe as a workplace.")
+    assert search.terms("café cafe") == ["café"]
+    assert search.search_papers("café cafe")[0]["occurrences"] == 1
