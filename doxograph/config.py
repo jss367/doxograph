@@ -52,6 +52,11 @@ except ValueError:
 # extractions worth re-running. Stored on each paper so you can find stale ones.
 SCHEMA_VERSION = 1
 
+# The same for the cross-paper passes: tensions, agreements and syntheses.
+# Each pass skips a topic nothing has changed in, so without this in what they
+# compare against, a changed prompt would never reach a topic already answered.
+PASS_VERSION = 1
+
 CLAIM_KINDS = ["finding", "method", "definition", "negative", "conjecture"]
 CLAIM_STRENGTHS = ["headline", "supporting", "aside"]
 LEDGER_RELATIONS = ["supports", "contradicts", "method-for", "refines", "independent"]

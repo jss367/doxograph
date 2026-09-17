@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
-from . import __version__, bib, config, export, extract, ingest, search, store
+from . import __version__, bib, config, export, extract, ingest, pairs, search, store
 
 STATIC = Path(__file__).parent / "static"
 
@@ -430,14 +430,14 @@ def _finish_pass(job: dict, total: int, unit: str, failed: int, last_failure: st
 
 
 @_workspace_job
-def _run_tensions(job: dict, topics: list[str]) -> None:
+def _run_tensions(job: dict, topics: list[str], force: bool = False) -> None:
     try:
         rows, tags = store.claim_rows(), store.load_tags()
-        added = reopened = failed = done = 0
+        added = reopened = skipped = failed = done = 0
         last_failure = ""
         _set(job, state="reading", detail=f"0 of {len(topics)} topics")
         for topic, result, exc in extract.run_concurrently(
-                topics, lambda t: extract.find_tensions(t, rows, tags)):
+                topics, lambda t: extract.find_tensions(t, rows, tags, force=force)):
             done += 1
             if exc is not None:
                 failed += 1
@@ -446,8 +446,10 @@ def _run_tensions(job: dict, topics: list[str]) -> None:
             else:
                 added += result["added"]
                 reopened += result["reopened"]
+                skipped += 1 if result.get("skipped") else 0
             _set(job, detail=f"{done} of {len(topics)} topics")
-        summary = f"{added} new" + (f", {reopened} reopened" if reopened else "")
+        summary = (f"{added} new" + (f", {reopened} reopened" if reopened else "")
+                   + (f", {skipped} unchanged" if skipped else ""))
         _finish_pass(job, len(topics), "topics", failed, last_failure, summary)
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
@@ -457,14 +459,14 @@ def _run_tensions(job: dict, topics: list[str]) -> None:
 
 
 @_workspace_job
-def _run_agreements(job: dict, topics: list[str]) -> None:
+def _run_agreements(job: dict, topics: list[str], force: bool = False) -> None:
     try:
         rows, tags = store.claim_rows(), store.load_tags()
-        added = grown = failed = done = 0
+        added = grown = skipped = failed = done = 0
         last_failure = ""
         _set(job, state="reading", detail=f"0 of {len(topics)} topics")
         for topic, result, exc in extract.run_concurrently(
-                topics, lambda t: extract.find_agreements(t, rows, tags)):
+                topics, lambda t: extract.find_agreements(t, rows, tags, force=force)):
             done += 1
             if exc is not None:
                 failed += 1
@@ -473,8 +475,10 @@ def _run_agreements(job: dict, topics: list[str]) -> None:
             else:
                 added += result["added"]
                 grown += result["grown"]
+                skipped += 1 if result.get("skipped") else 0
             _set(job, detail=f"{done} of {len(topics)} topics")
-        summary = f"{added} new" + (f", {grown} grown" if grown else "")
+        summary = (f"{added} new" + (f", {grown} grown" if grown else "")
+                   + (f", {skipped} unchanged" if skipped else ""))
         _finish_pass(job, len(topics), "topics", failed, last_failure, summary)
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
@@ -484,14 +488,14 @@ def _run_agreements(job: dict, topics: list[str]) -> None:
 
 
 @_workspace_job
-def _run_syntheses(job: dict, topics: list[str]) -> None:
+def _run_syntheses(job: dict, topics: list[str], force: bool = False) -> None:
     try:
         rows, tags = store.claim_rows(), store.load_tags()
-        written = failed = done = 0
+        written = skipped = failed = done = 0
         last_failure = ""
         _set(job, state="reading", detail=f"0 of {len(topics)} topics")
         for topic, result, exc in extract.run_concurrently(
-                topics, lambda t: extract.synthesize_topic(t, rows, tags)):
+                topics, lambda t: extract.synthesize_topic(t, rows, tags, force=force)):
             done += 1
             if exc is not None:
                 failed += 1
@@ -499,12 +503,18 @@ def _run_syntheses(job: dict, topics: list[str]) -> None:
                 traceback.print_exception(exc)
             else:
                 written += 1 if result["written"] else 0
+                skipped += 1 if result.get("skipped") else 0
             _set(job, detail=f"{done} of {len(topics)} topics")
+        # The topics nothing had changed in are said either way: a pass that
+        # failed somewhere still did not ask about those, and a summary that
+        # left them out would read as though it had.
+        unchanged = f", {skipped} unchanged" if skipped else ""
         if failed:
             _set(job, state="error",
-                 detail=f"{failed} of {len(topics)} topics failed, {written} written; {last_failure}")
+                 detail=(f"{failed} of {len(topics)} topics failed, "
+                         f"{written} written{unchanged}; {last_failure}"))
         else:
-            _set(job, state="done", detail=f"{written} of {len(topics)} topics written")
+            _set(job, state="done", detail=f"{written} of {len(topics)} topics written{unchanged}")
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -576,6 +586,8 @@ class ReviewBody(BaseModel):
 
 class TensionsBody(BaseModel):
     topics: list[str] | None = None
+    # A topic nothing has changed in is not asked about again. This asks anyway.
+    force: bool = False
 
 
 class TensionStatusBody(BaseModel):
@@ -584,6 +596,8 @@ class TensionStatusBody(BaseModel):
 
 class AgreementsBody(BaseModel):
     topics: list[str] | None = None
+    # A topic nothing has changed in is not asked about again. This asks anyway.
+    force: bool = False
 
 
 class AgreementStatusBody(BaseModel):
@@ -592,6 +606,8 @@ class AgreementStatusBody(BaseModel):
 
 class SynthesesBody(BaseModel):
     topics: list[str] | None = None
+    # A topic nothing has changed in is not asked about again. This asks anyway.
+    force: bool = False
 
 
 class SynthesisTextBody(BaseModel):
@@ -995,6 +1011,34 @@ def search_text(q: str = "", limit: int = 20) -> dict:
     }
 
 
+@app.get("/api/papers/{key}/claims/{claim_id}/similar")
+def similar_claims(key: str, claim_id: str, limit: int = 5) -> dict:
+    """Claims from other papers that resemble this one, by their words.
+
+    No model: it compares the claims already on disk. A suggestion for reading,
+    not a judgment — whether two claims actually bear on each other is what the
+    tensions and agreements passes are for.
+    """
+    rows = store.claim_rows()
+    by_id = {row["id"]: row for row in rows}
+    if by_id.get(claim_id, {}).get("paper") != key:
+        raise HTTPException(404, f"no claim {claim_id} on {key}")
+    found = pairs.similar_to(claim_id, rows, limit=max(1, min(limit, 20)))
+    return {
+        "claim": claim_id,
+        "similar": [
+            {
+                **hit,
+                "text": by_id[hit["claim"]].get("text", ""),
+                "paper": by_id[hit["claim"]]["paper"],
+                "paper_authors": by_id[hit["claim"]].get("paper_authors", []),
+                "paper_year": by_id[hit["claim"]].get("paper_year"),
+            }
+            for hit in found
+        ],
+    }
+
+
 @app.get("/api/papers/{key}/claims/{claim_id}/quote-context")
 def quote_context(key: str, claim_id: str) -> dict:
     """The passage of the PDF a claim's quote was matched against."""
@@ -1101,7 +1145,7 @@ def find_tensions(body: TensionsBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"tensions in {len(topics)} topics")
-    _pool.submit(_run_tensions, job, topics)
+    _pool.submit(_run_tensions, job, topics, body.force)
     return {"queued": len(topics)}
 
 
@@ -1134,7 +1178,7 @@ def find_agreements(body: AgreementsBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"agreements in {len(topics)} topics")
-    _pool.submit(_run_agreements, job, topics)
+    _pool.submit(_run_agreements, job, topics, body.force)
     return {"queued": len(topics)}
 
 
@@ -1174,7 +1218,7 @@ def synthesize(body: SynthesesBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"synthesis of {len(topics)} topics")
-    _pool.submit(_run_syntheses, job, topics)
+    _pool.submit(_run_syntheses, job, topics, body.force)
     return {"queued": len(topics)}
 
 

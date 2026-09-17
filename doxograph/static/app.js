@@ -129,6 +129,8 @@ const NEW_CLAIM_ID = '__new__';
 // is in GRAPH below.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
+// similar is the one claim whose lookalikes from other papers are open, in the
+// same shape as quoteContext. Also one at a time, and for the same reason.
 // textSearch is the last answer from the search over the papers' own text:
 // { q, loading, papers, terms, error }. It is keyed by the query it was asked
 // for, so an answer left over from an earlier one is not drawn under a later.
@@ -148,7 +150,7 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null,
-            quoteContext: null, textSearch: null };
+            quoteContext: null, textSearch: null, similar: null };
 
 function blankClaim(paper) {
   return {
@@ -343,12 +345,29 @@ function forgetStateTag() {
 // three fields the model was shown, so it is read back rather than built again
 // here: building it would mean reproducing Python's spacing and its escaping of
 // everything above ASCII, and what the comparison is about is the values.
+// The heading a cross-paper prompt writes for a claim's paper, as
+// `store.cite_head` writes it. The fingerprints below were made on the server
+// and are compared here character for character, so the two have to agree: a
+// blank author is skipped rather than shown, and a paper with none is named by
+// its key.
+function citeHead(claim) {
+  const authors = claim.paper_authors || [];
+  const key = claim.paper || '';
+  let head = key;
+  for (const author of authors) {
+    const parts = String(author).split(/\s+/).filter(Boolean);
+    if (parts.length) { head = parts[parts.length - 1]; break; }
+  }
+  if (authors.length > 1) head += ' et al.';
+  return `${head} (${claim.paper_year || 'n.d.'}): ${claim.paper_title || key}`;
+}
+
 function basisMatches(fingerprint, claim) {
   let written;
   try { written = JSON.parse(fingerprint); } catch { return false; }
-  return Array.isArray(written) && written.length === 3
+  return Array.isArray(written) && written.length === 4
     && written[0] === (claim.text || '') && written[1] === (claim.evidence || '')
-    && written[2] === (claim.kind || 'finding');
+    && written[2] === (claim.kind || 'finding') && written[3] === citeHead(claim);
 }
 
 // `synthesis_rows` reads `stale` off two comparisons: the topic's claims
@@ -369,14 +388,14 @@ function synthesisStale(row, live, tensions) {
     (tension) => (tension.topics || []).includes(row.topic) && tension.status !== 'dismissed');
   const written = row.tensions || {};
   if (Object.keys(written).length !== shown.length) return true;
-  // A record written before the tensions were part of the basis holds
-  // two-element lists, which match nothing here and leave it reading stale, as
-  // it does on the server: what the model was told is not known.
+  // A record written before a field was part of the basis holds a shorter
+  // list, which matches nothing here and leaves it reading stale, as it does
+  // on the server: what the model was told is not known.
   return !shown.every((tension) => {
     const seen = written[tension.id];
-    return Array.isArray(seen) && seen.length === 3
+    return Array.isArray(seen) && seen.length === 4
       && seen[0] === (tension.kind ?? null) && seen[1] === (tension.status ?? null)
-      && seen[2] === Boolean(tension.stale);
+      && seen[2] === Boolean(tension.stale) && seen[3] === (tension.note || '');
   });
 }
 
@@ -939,7 +958,7 @@ async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) rerunTextSearch();
+  if (changed) { rerunTextSearch(); closeSimilar(); }
   render();
 }
 
@@ -952,7 +971,7 @@ async function refreshAll() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) rerunTextSearch();
+  if (changed) { rerunTextSearch(); closeSimilar(); }
   renderAll();
 }
 
@@ -982,7 +1001,7 @@ function resetWorkspaceView() {
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     graph: { topics: true, minShared: null, tensions: true, ledger: true },
-    quoteContext: null, textSearch: null,
+    quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
   dropTextSearch();
@@ -1585,11 +1604,15 @@ function claimCard(row, shown, group = '') {
         <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
         <button type="button" data-act="edit" data-claim="${esc(row.id)}">edit</button>
+        <button type="button" data-act="similar" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
+          data-group="${esc(group)}"
+          title="Claims from other papers that use the same words">${similarOpen(row.id, group) ? 'hide alike' : 'alike'}</button>
         <button type="button" data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
       </span>
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
+    ${similarHtml(row, group)}
     ${links}
   </div>`;
 }
@@ -1686,6 +1709,47 @@ function quoteContextHtml(row) {
     ${diff}
     <div class="qacts">${replace}</div>
   </div>`;
+}
+
+// Drop the alike panel, taking it off the screen even when no redraw will
+// come: `render` leaves the content alone while an editor is open, and a
+// panel left standing there shows matches worked out from claims that have
+// since moved, under a button that says "hide alike" and would start a new
+// lookup because the state says it is closed.
+function closeSimilar() {
+  if (!V.similar) return;
+  V.similar = null;
+  document.querySelectorAll('#content .alike').forEach((node) => node.remove());
+  document.querySelectorAll('#content [data-act="similar"]').forEach((button) => {
+    button.textContent = 'alike';
+  });
+}
+
+function similarOpen(claimId, group = '') {
+  return Boolean(V.similar && V.similar.claim === claimId
+    && (V.similar.group || '') === group);
+}
+
+// Claims from other papers that use the same words as this one. Worked out
+// here rather than by the model, so it costs nothing and says nothing about
+// what the two claims mean: the reader decides whether they bear on each
+// other, and the tensions and agreements passes are not filtered by it.
+function similarHtml(row, group = '') {
+  // Beside the copy whose button was pressed, as the passage is: a claim with
+  // several tags is drawn under each of them, and in the tensions view it
+  // appears in every pair it is part of.
+  if (!similarOpen(row.id, group)) return '';
+  const found = V.similar;
+  if (found.loading) return '<div class="alike">Comparing the claims…</div>';
+  if (found.error) return `<div class="alike"><span class="qflag">${esc(found.error)}</span></div>`;
+  if (!found.rows.length) {
+    return '<div class="alike">No claim from another paper is worded much like this one.</div>';
+  }
+  return `<div class="alike">${found.rows.map((hit) => {
+    const cite = `${(hit.paper_authors || [])[0] ? hit.paper_authors[0].split(' ').pop() : hit.paper} ${hit.paper_year || ''}`;
+    return `<div class="alikerow" data-act="goto-claim" data-claim="${esc(hit.claim)}">
+      <span class="pt">${esc(cite)}</span> ${esc(hit.text)}</div>`;
+  }).join('')}</div>`;
 }
 
 function tensionMarker(claimId) {
@@ -2143,7 +2207,7 @@ function synthesisBlock(tag) {
         · ${synth.n_claims} claims in ${synth.n_papers} papers</span>
       ${synth.stale ? '<span class="stale">claims or tensions have changed since</span>' : ''}
       <span class="cact" style="margin-left:auto">
-        <button type="button" data-act="synthesize" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-topic="${esc(tag)}">Rewrite</button>
+        <button type="button" data-act="synthesize" data-force="1" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-topic="${esc(tag)}">Rewrite</button>
         <button type="button" data-act="edit-synth" data-topic="${esc(tag)}">edit</button>
         <button type="button" data-act="del-synth" data-topic="${esc(tag)}">delete</button>
       </span>
@@ -2158,14 +2222,19 @@ function synthesizeButton(tag) {
     title="Ask the model what the papers hold on this topic">synthesize</button>`;
 }
 
-async function synthesize(topics) {
+// `force` is for Rewrite, which is an instruction and not a request: a topic
+// nothing has changed in is skipped by the pass, so without it the button
+// would report a finished job and leave the text exactly as it was. Writing a
+// synthesis that does not exist yet, and the pass over the whole corpus, both
+// mean "where it is worth it" and are left alone.
+async function synthesize(topics, force = false) {
   V.error = null;
   const workspace = await settleDeletes();
   if (!workspace) return;   // the delete failed; the pass would read the claim
   try {
     const result = await api('/api/syntheses', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
-      body: JSON.stringify(topics ? { topics } : {}),
+      body: JSON.stringify({ ...(topics ? { topics } : {}), ...(force ? { force: true } : {}) }),
     });
     if (!result.queued) {
       V.error = topics
@@ -3178,6 +3247,28 @@ function syncDraftReviews(ids, reviewed) {
   });
 }
 
+async function showSimilar(paper, claim, group = '') {
+  // Matched on the request itself, as the passage is: a claim id is unique
+  // per corpus and not across workspaces, and switching is not held back by a
+  // read, so the answer to one workspace's question could land in another.
+  const pending = { claim, paper, group, loading: true, error: null, rows: [] };
+  captureOpenEditor();
+  V.similar = pending;
+  renderContent();
+  let next;
+  try {
+    const found = await api(
+      `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}/similar`);
+    next = { claim, paper, group, loading: false, error: null, rows: found.similar || [] };
+  } catch (error) {
+    next = { claim, paper, group, loading: false, error: `Could not compare the claims: ${error.message}`, rows: [] };
+  }
+  if (V.similar !== pending) return;   // closed, or another opened, while it ran
+  V.similar = next;
+  captureOpenEditor();
+  renderContent();
+}
+
 async function showQuoteContext(paper, claim, group = '') {
   // The pending request itself is what a late answer has to match, not the
   // claim id: claim ids are unique per corpus and not across workspaces, so
@@ -3542,6 +3633,12 @@ $('content').addEventListener('click', async (event) => {
       await toggleReviewed(S.claims.find((c) => c.id === claim));
       return;
     }
+    if (act === 'similar') {
+      const group = button.dataset.group || '';
+      if (similarOpen(claim, group)) { closeSimilar(); captureOpenEditor(); renderContent(); return; }
+      await showSimilar(paper, claim, group);
+      return;
+    }
     if (act === 'copy-quote') {
       const row = S.claims.find((c) => c.id === claim);
       if (row) await copyText(row.quote, 'Quote copied.');
@@ -3684,7 +3781,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'synthesize') {
-      await synthesize([button.dataset.topic]);
+      await synthesize([button.dataset.topic], button.dataset.force === '1');
       return;
     }
     if (act === 'edit-synth') {
@@ -4504,6 +4601,7 @@ async function boot() {
       renderJobs();
       if (!changed) return;
       rerunTextSearch();     // a paper imported since holds the query's words too
+      closeSimilar();        // and the claims it was compared against have moved
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();

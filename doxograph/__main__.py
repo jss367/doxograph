@@ -159,9 +159,10 @@ def cmd_tensions(args) -> int:
             print("no topic has claims from two papers yet", file=sys.stderr)
         rows, tags = store.claim_rows(), store.load_tags()
         failures = _run_pass(
-            topics, lambda topic: extract.find_tensions(topic, rows, tags),
+            topics, lambda topic: extract.find_tensions(topic, rows, tags, force=args.force),
             lambda topic, result: print(
-                f"{topic}: {result['returned']} returned, {result['added']} new"
+                f"{topic}: unchanged since the last pass, not asked again" if result["skipped"]
+                else f"{topic}: {result['returned']} returned, {result['added']} new"
                 + (f", {result['reopened']} reopened" if result["reopened"] else "")))
         if failures:
             return 1
@@ -193,9 +194,10 @@ def cmd_agreements(args) -> int:
             print("no topic has claims from two papers yet", file=sys.stderr)
         rows, tags = store.claim_rows(), store.load_tags()
         failures = _run_pass(
-            topics, lambda topic: extract.find_agreements(topic, rows, tags),
+            topics, lambda topic: extract.find_agreements(topic, rows, tags, force=args.force),
             lambda topic, result: print(
-                f"{topic}: {result['returned']} returned, {result['added']} new"
+                f"{topic}: unchanged since the last pass, not asked again" if result["skipped"]
+                else f"{topic}: {result['returned']} returned, {result['added']} new"
                 + (f", {result['grown']} grown" if result["grown"] else "")
                 + (f", {result['reopened']} reopened" if result["reopened"] else "")))
         if failures:
@@ -232,11 +234,14 @@ def cmd_synthesize(args) -> int:
         def report(topic, result):
             if result["written"]:
                 print(f"{topic}: written from {result['claims']} claims in {result['papers']} papers")
+            elif result["skipped"]:
+                print(f"{topic}: unchanged since it was written, left alone")
             else:
                 print(f"{topic}: no claims, nothing written", file=sys.stderr)
                 unwritten.append(topic)
 
-        failures = _run_pass(topics, lambda topic: extract.synthesize_topic(topic, rows, tags), report)
+        failures = _run_pass(
+            topics, lambda topic: extract.synthesize_topic(topic, rows, tags, force=args.force), report)
         if failures or unwritten:
             return 1
     rows = store.synthesis_rows()
@@ -376,17 +381,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")
     p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
     p.add_argument("--all", action="store_true", help="include dismissed tensions in the listing")
+    p.add_argument("--force", action="store_true",
+                   help="ask again about topics nothing has changed in")
     p.set_defaults(func=cmd_tensions)
 
     p = sub.add_parser("agreements", help="find claims from different papers that assert the same finding")
     p.add_argument("topics", nargs="*", help="topics to check; default is every topic with two papers")
     p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
     p.add_argument("--all", action="store_true", help="include dismissed agreements in the listing")
+    p.add_argument("--force", action="store_true",
+                   help="ask again about topics nothing has changed in")
     p.set_defaults(func=cmd_agreements)
 
     p = sub.add_parser("synthesize", help="write what the papers hold on each topic")
     p.add_argument("topics", nargs="*", help="topics to write; default is every topic with two papers")
     p.add_argument("--list", action="store_true", help="show what is on file without calling the model")
+    p.add_argument("--force", action="store_true",
+                   help="write again over syntheses nothing has changed under")
     p.set_defaults(func=cmd_synthesize)
 
     p = sub.add_parser("list", help="list the corpus")

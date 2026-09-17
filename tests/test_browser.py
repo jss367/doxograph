@@ -2909,6 +2909,38 @@ def test_the_query_takes_words_in_any_order_and_finds_them_in_the_pdfs():
 
 
 @pytest.mark.browser
+def test_alike_shows_claims_from_other_papers_worded_the_same_way():
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+
+                row = card.locator(".alike .alikerow")
+                await row.wait_for()
+                assert await page.locator(".alike").count() == 1
+                assert "about half the time" in await row.inner_text()
+                # Clicking one selects that claim, as a citation does.
+                await row.click()
+                await page.locator('.claim.sel[data-claim="li2025steer-c1"]').wait_for()
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
     from pdfs import minimal_pdf
 
@@ -2940,6 +2972,42 @@ def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
                 await page.get_by_role("button", name="Save").click()
                 await page.locator(".claim .qflag").wait_for(state="detached")
                 assert await page.locator(".qctx").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_rewrite_asks_again_even_when_nothing_has_changed():
+    """The pass skips a topic nothing has changed in, so Rewrite has to say
+    so — otherwise it reports a finished job and leaves the text alone."""
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.record_synthesis("recovery-rate", "What the papers hold, as written before.",
+                           {c["id"]: c for c in store.claim_rows()})
+
+    async def scenario():
+        posted = []
+        asked = asyncio.Event()
+
+        async def capture(route):
+            posted.append(route.request.post_data_json)
+            await route.fulfill(status=200, json={"queued": 1})
+            asked.set()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(".synth").wait_for()
+                await page.route("**/api/syntheses", capture)
+                await page.get_by_role("button", name="Rewrite").click()
+                # The click starts a fetch and comes back; what is asserted is
+                # what the fetch carried, so the wait is for the route.
+                await asyncio.wait_for(asked.wait(), timeout=10)
+                assert posted == [{"topics": ["recovery-rate"], "force": True}]
 
             await browser.close()
 
@@ -3070,6 +3138,38 @@ def test_opening_a_passage_keeps_what_is_typed_in_another_claims_editor():
 
 
 @pytest.mark.browser
+def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+                await card.locator(".alike .alikerow").wait_for()
+
+                # The matches were worked out from the claims as they read
+                # then; once any of them changes the panel is not an answer to
+                # anything, so it closes rather than going quietly stale.
+                store.update_claim("li2025steer", "li2025steer-c1",
+                                   {"text": "Something else entirely, about penguins."})
+                await page.locator(".alike").wait_for(state="detached")
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
     """While an editor is open the poll leaves the content alone, so a passage
     can outlive the claim it describes without being redrawn."""
@@ -3167,6 +3267,106 @@ def test_the_page_finds_what_the_server_finds_whatever_the_case():
                     await page.locator("#content .claim").first.wait_for()
                     assert await page.locator("#content .claim").count() == 1, query
                     assert await page.locator('#papers [data-paper="weber2026strasse"]').count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_alike_panel_goes_even_while_an_editor_holds_the_content():
+    """`render` leaves the content alone while an editor is open, so a panel
+    cleared from the state would have stayed on screen and clickable."""
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+                await card.locator(".alike .alikerow").wait_for()
+
+                # An editor open elsewhere freezes the content.
+                await page.locator('.claim[data-claim="li2025steer-c1"]').get_by_role(
+                    "button", name="edit").click()
+                await page.locator('textarea[name="text"]').fill("Half-typed correction")
+                store.add_claim("li2025steer", {"text": "A new claim.", "tags": ["recovery-rate"]})
+
+                await page.locator(".alike").wait_for(state="detached")
+                assert await page.locator('textarea[name="text"]').input_value() == "Half-typed correction"
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_following_an_alike_suggestion_keeps_what_was_typed():
+    """The jump redraws the page, and a form rebuilt from the state it was
+    drawn with would lose whatever was typed into it since."""
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+                await card.locator(".alike .alikerow").wait_for()
+
+                await page.locator('.claim[data-claim="li2025steer-c1"]').get_by_role(
+                    "button", name="edit").click()
+                await page.locator('textarea[name="text"]').fill("Half-typed correction")
+                await card.locator(".alike .alikerow").first.click()
+
+                assert await page.locator(
+                    'textarea[name="text"]').input_value() == "Half-typed correction"
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts.",
+                        "tags": ["recovery-rate", "scaling"]})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                cards = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await cards.first.wait_for()
+                assert await cards.count() == 2        # one per topic it carries
+
+                await cards.nth(1).get_by_role("button", name="alike", exact=True).click()
+                await cards.nth(1).locator(".alike .alikerow").wait_for()
+                assert await page.locator(".alike").count() == 1
 
             await browser.close()
 

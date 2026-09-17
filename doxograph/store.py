@@ -720,6 +720,30 @@ def rename_tag(old: str, new: str) -> None:
         _retag_all(old, new)
 
 
+def _move_pass(data: dict, old: str, new: str | None) -> bool:
+    """Carry a topic's recorded pass to its new name, or drop it with the topic.
+
+    A deleted topic loses the pairs it was attached to. Recreating the tag over
+    the same unchanged claims produces the same signature, so a pass left on
+    file would be skipped and the topic never put back on those pairs.
+
+    Where the new name is a topic of its own — a merge rather than a rename —
+    its own pass stands. It was recorded against its own claims and its own
+    name, and the old topic's signature, which carries the old name, could
+    only say the destination had never been asked. If the merge brings claims
+    the destination did not have, its signature no longer matches what a pass
+    would compute now, and the pass runs again of its own accord.
+    """
+    passes = data.get("passes") or {}
+    if old not in passes:
+        return False
+    signature = passes.pop(old)
+    if new and new not in passes:
+        passes[new] = signature
+    data["passes"] = passes
+    return True
+
+
 def _retag_all(old: str, new: str | None) -> None:
     """Rewrite or drop a tag across every paper, every tension's topics, and
     the syntheses. Called holding `vocab_lock`; takes `tensions_lock` and then
@@ -751,7 +775,7 @@ def _retag_all(old: str, new: str | None) -> None:
                 save_paper(paper)
     with tensions_lock():
         data = _read_tensions()
-        touched = False
+        touched = _move_pass(data, old, new)
         for tension in data["tensions"]:
             if old not in tension.get("topics", []):
                 continue
@@ -764,7 +788,7 @@ def _retag_all(old: str, new: str | None) -> None:
             _save_tensions(data)
     with agreements_lock():
         data = _read_agreements()
-        touched = False
+        touched = _move_pass(data, old, new)
         for record in data["agreements"]:
             if old not in record.get("topics", []):
                 continue
@@ -966,6 +990,7 @@ def _read_tensions() -> dict:
         raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
     loaded.setdefault("seq", 0)
     loaded.setdefault("tensions", [])
+    loaded.setdefault("passes", {})
     return loaded
 
 
@@ -995,12 +1020,78 @@ def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
 
 def claim_fingerprint(claim: dict) -> str:
     """What a tension's judgment rests on: everything `_tension_listing` shows
-    the model about a claim. If the text, evidence or kind changes, the
-    judgment was made about a claim that no longer exists."""
-    return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("kind", "finding")])
+    the model about a claim, whose paper included. If the text, evidence or
+    kind changes the judgment was made about a claim that no longer exists,
+    and if the paper's author, year or title changes the note the model wrote
+    may name the wrong people."""
+    return json.dumps([claim.get("text", ""), claim.get("evidence", ""),
+                       claim.get("kind", "finding"), cite_head(claim)])
 
 
-def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]) -> dict:
+def cite_head(claim: dict) -> str:
+    """How a cross-paper prompt names a claim's paper.
+
+    `_tension_listing` writes the cited surname, "et al." where there is more
+    than one author, the year and the title. Adding a coauthor changes the
+    heading without changing any one of those fields, so the count is in here
+    too.
+    """
+    authors = claim.get("paper_authors") or []
+    key = claim.get("paper") or ""
+    head = cite_surname(authors, key)
+    if len(authors) > 1:
+        head += " et al."
+    return f"{head} ({claim.get('paper_year') or 'n.d.'}): {claim.get('paper_title') or key}"
+
+
+def _forget_passes(data: dict, topics: set[str]) -> None:
+    """Drop the recorded pass for each of `topics`. Caller saves."""
+    passes = data.get("passes") or {}
+    for topic in topics:
+        passes.pop(topic, None)
+    data["passes"] = passes
+
+
+def _topic_unchanged(topic: str, shown: dict[str, dict], live: dict[str, dict]) -> bool:
+    """Whether a topic still holds the claims a pass was asked about, as it
+    was asked about them. Anything else and the answer describes a question
+    that is no longer being put."""
+    def basis(claims):
+        return {i: claim_fingerprint(c) for i, c in claims.items()
+                if topic in (c.get("tags") or [])}
+    was = basis(shown)
+    return bool(was) and was == basis(live)
+
+
+def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
+    """What a per-topic pass was asked about, in one string.
+
+    Everything the prompt carries: which claims are in the topic, what each one
+    says, and which paper it is from — the listing names the authors, year and
+    title, and correcting any of those is a correction the model should see —
+    plus `extra` for the parts that are not claims at all: the topic's
+    description, the research context, the prompt itself. A pass whose
+    signature is unchanged would be asked exactly what it was asked last time,
+    and the merge would keep the answer it already has, so it is not asked.
+    """
+    payload = [topic, extra] + sorted(
+        f"{r['id']} {r.get('paper')} {claim_fingerprint(r)}" for r in rows
+    )
+    return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()[:16]
+
+
+def tension_pass(topic: str) -> str | None:
+    """The signature of the last tensions pass over `topic`, if any."""
+    return (_read_tensions().get("passes") or {}).get(topic)
+
+
+def agreement_pass(topic: str) -> str | None:
+    """The signature of the last agreements pass over `topic`, if any."""
+    return (_read_agreements().get("passes") or {}).get(topic)
+
+
+def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict],
+                    signature: str | None = None) -> dict:
     """Merge one topic's model output into the file.
 
     `found` is a list of `{"claims": [id, id], "kind", "note"}`; `claims_by_id`
@@ -1048,8 +1139,15 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
         live = {c["id"]: c for c in claim_rows()}
         existing = [t for t in data["tensions"]
                     if len(t.get("claims", [])) == 2 and all(i in live for i in t["claims"])]
+        pruned: set[str] = set()
         for tension in existing:
+            was = set(tension.get("topics") or [])
             tension["topics"] = _shared_topics(tension, live)
+            pruned |= was - set(tension["topics"])
+        # A topic taken off a record here is a topic whose pairs have to be
+        # found again when it comes back. Its recorded pass goes with it, or
+        # restoring the tag would reproduce the signature and skip the run.
+        _forget_passes(data, pruned)
         by_pair = {_pair(t["claims"]): t for t in existing}
         added = reopened = kept = 0
         for item in found:
@@ -1072,6 +1170,13 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
                     current["topics"].append(topic)
                     current["topics"].sort()
                 if current.get("fingerprints") == fingerprints:
+                    # The same pair over the same text: the finding stands, and
+                    # keeps the day it was found and whatever was decided about
+                    # it. A newer model or a newer prompt can still put it in
+                    # better words — unless a reviewer has ruled on the words
+                    # it has, which is a decision about what it says.
+                    if current.get("status") == "open":
+                        current.update(kind=kind, note=note)
                     kept += 1
                     continue
                 if any(fingerprints[i] != claim_fingerprint(live[i]) for i in (a, b)):
@@ -1096,6 +1201,14 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
             by_pair[(a, b)] = record
             added += 1
         data["tensions"] = existing
+        # Recorded only on the way out, so a failed call is asked again, and
+        # only while the topic still holds the claims it was asked about. A
+        # tag taken off one of them during the call — or off all of them —
+        # means this answer was about a topic that no longer exists in that
+        # shape; writing its signature down would skip the pass that has to
+        # run when the tag comes back.
+        if signature and _topic_unchanged(topic, claims_by_id, live):
+            data.setdefault("passes", {})[topic] = signature
         _save_tensions(data)
         return {"added": added, "reopened": reopened, "kept": kept}
 
@@ -1128,12 +1241,21 @@ def set_tension_status(tension_id: str, status: str) -> dict:
 
 
 def delete_tension(tension_id: str) -> None:
+    """Remove a tension, and forget the passes that found it.
+
+    Deleting is not dismissing: a dismissed pair stays on file and a repeat
+    pass leaves the decision alone, but a deleted one is gone, and the topics
+    it was found under have to be asked again for it to come back. Their
+    signatures would otherwise match and the pass would skip them.
+    """
     with tensions_lock():
         data = _read_tensions()
         before = len(data["tensions"])
+        gone = [t for t in data["tensions"] if t.get("id") == tension_id]
         data["tensions"] = [t for t in data["tensions"] if t.get("id") != tension_id]
         if len(data["tensions"]) == before:
             raise KeyError(tension_id)
+        _forget_passes(data, {topic for t in gone for topic in (t.get("topics") or [])})
         _save_tensions(data)
 
 
@@ -1228,26 +1350,63 @@ def topic_claims(topic: str, rows: list[dict] | None = None) -> list[dict]:
     return [r for r in (rows if rows is not None else claim_rows()) if topic in (r.get("tags") or [])]
 
 
+def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None,
+                           context: str | None = None) -> str:
+    """What a synthesis was asked, apart from its claims and tensions.
+
+    The prompt version, the model asked, the topic's name, its description and
+    the research context — all of them decide what comes back, and none of
+    them is part of what makes a synthesis stale, so without this a rename, a
+    reworded description, a rewritten context or a change of model would never
+    be written again.
+
+    `context` is what the caller is putting in the prompt, so that the
+    synthesis is filed under the context the model was actually given; read
+    here only for a write that has no prompt behind it. A list rather than
+    five lines run together, since the description and the context both hold
+    newlines of their own.
+    """
+    tags = load_tags() if tags is None else tags
+    description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
+    context = load_context() if context is None else context
+    return json.dumps([config.PASS_VERSION, config.MODEL, topic, description, context])
+
+
 def synthesis_basis(rows: list[dict]) -> dict[str, str]:
-    """Half of what a synthesis rests on: the set of claims and what each
-    said. A claim added, removed, or edited (text, evidence, kind) changes it.
-    Reviewing a claim does not: the prompt marks unreviewed claims, but a
-    review pass over a corpus does not change what any claim says, and staling
-    every synthesis while it runs would leave the mark meaning nothing."""
-    return {r["id"]: claim_fingerprint(r) for r in rows}
+    """Half of what a synthesis rests on: the set of claims, what each said,
+    and which paper it came from. A claim added, removed, or edited (text,
+    evidence, kind) changes it, and so does a correction to the author, year
+    or title — the listing names those and the model is told to cite papers by
+    author and year. Reviewing a claim does not: the prompt marks unreviewed
+    claims, but a review pass over a corpus does not change what any claim
+    says, and staling every synthesis while it runs would leave the mark
+    meaning nothing."""
+    return {r["id"]: synthesis_claim_basis(r) for r in rows}
+
+
+def synthesis_claim_basis(claim: dict) -> str:
+    """One claim as a synthesis rests on it: what it says, and whose paper it
+    is. The same string the tensions merge compares."""
+    return claim_fingerprint(claim)
 
 
 def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
     """The other half: the topic's tensions as the prompt shows them, by id,
-    with kind, status, and whether the prompt said a claim had changed since
-    it was judged. Dismissed ones are left out of the prompt, so dismissing
-    one changes this as much as confirming one, or a pass finding a new pair,
-    does; so does re-judging a stale one against the current text. `tensions`
-    is `tension_rows` output, whose `topics` are already filtered to what both
-    claims still carry. A record from before the stale flag was kept holds
-    two-element lists, which never compare equal to these, so it reads as
-    stale until rewritten: what the model was told is not known."""
-    return {t["id"]: [t.get("kind"), t.get("status"), bool(t.get("stale"))]
+    with kind, status, whether the prompt said a claim had changed since it was
+    judged, and the note. Dismissed ones are left out of the prompt, so
+    dismissing one changes this as much as confirming one, or a pass finding a
+    new pair, does; so does re-judging a stale one against the current text.
+    The note is in because the prompt carries it: a rerun that says the same
+    disagreement in different words is a different thing to write a synthesis
+    from. It goes in whole rather than as a digest, because the page works the
+    same comparison out for itself while a delete is held, and it cannot hash
+    anything without waiting for `crypto.subtle`. `tensions` is
+    `tension_rows` output, whose `topics` are already filtered to what both
+    claims still carry. A record from before a field was kept holds a shorter
+    list, which never compares equal to these, so it reads as stale until
+    rewritten: what the model was told is not known."""
+    return {t["id"]: [t.get("kind"), t.get("status"), bool(t.get("stale")),
+                      t.get("note") or ""]
             for t in sorted(tensions, key=lambda t: t["id"])
             if topic in t.get("topics", []) and t.get("status") != "dismissed"}
 
@@ -1259,7 +1418,8 @@ UNCHECKED = object()
 
 def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
                      tensions: list[dict] | None = None, source: str = "model",
-                     before: dict | None | object = UNCHECKED) -> dict | None:
+                     before: dict | None | object = UNCHECKED,
+                     basis: str | None = None) -> dict | None:
     """Write one topic's synthesis.
 
     `claims_by_id` is every claim the model was shown, as it stood when the
@@ -1305,7 +1465,15 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
             "text": text,
             "source": source,
             "written": now(),
-            "claims": {i: claim_fingerprint(c) for i, c in claims_by_id.items()
+            # The prompt it was written under, topic name and description
+            # included: both are in what the model was given, and a rename or
+            # a reworded description changes the question. Taken as the prompt
+            # was built, not as things stand now — a description edited during
+            # the call describes a question this answer was never asked. A
+            # record with none of this is older than the field and counts as
+            # older than the prompt.
+            "prompt_basis": basis if basis is not None else synthesis_prompt_basis(topic),
+            "claims": {i: synthesis_claim_basis(c) for i, c in claims_by_id.items()
                        if topic in (c.get("tags") or [])},
             "tensions": synthesis_tensions(topic, tension_rows() if tensions is None else tensions),
         }
@@ -1327,6 +1495,7 @@ def set_synthesis_text(topic: str, text: str) -> dict:
             raise KeyError(topic)
         record = data["syntheses"][topic]
         record.update(text=text, source="hand", written=now(),
+                      prompt_basis=synthesis_prompt_basis(topic),
                       claims=synthesis_basis(topic_claims(topic)),
                       tensions=synthesis_tensions(topic, tension_rows()))
         _save_syntheses(data)
@@ -1411,6 +1580,7 @@ def _read_agreements() -> dict:
         raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
     loaded.setdefault("seq", 0)
     loaded.setdefault("agreements", [])
+    loaded.setdefault("passes", {})
     return loaded
 
 
@@ -1426,7 +1596,8 @@ def _agreement_papers(ids, live: dict[str, dict]) -> set[str]:
     return {live[i].get("paper") for i in ids if i in live}
 
 
-def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dict]) -> dict:
+def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dict],
+                      signature: str | None = None) -> dict:
     """Merge one topic's model output into the file.
 
     `found` is a list of `{"claims": [id, ...], "note"}`. The rules follow
@@ -1449,15 +1620,19 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
         data = _read_agreements()
         live = {c["id"]: c for c in claim_rows()}
         existing = []
+        pruned: set[str] = set()
         for record in data["agreements"]:
             ids = [i for i in record.get("claims", []) if i in live]
             if len(_agreement_papers(ids, live)) < 2:
                 continue
             record["claims"] = ids
+            was = set(record.get("topics") or [])
             record["topics"] = sorted(t for t in record.get("topics", [])
                                       if all(t in (live[i].get("tags") or []) for i in ids))
+            pruned |= was - set(record["topics"])
             existing.append(record)
         added = grown = reopened = kept = 0
+        unattached = False
         for item in found:
             ids = sorted({i for i in item.get("claims", []) if i in claims_by_id and i in live})
             if len(_agreement_papers(ids, live)) < 2:
@@ -1490,6 +1665,9 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                     existing.remove(other)
                 current["topics"] = sorted(t for t in topics
                                            if all(t in (live[i].get("tags") or []) for i in members))
+                # Growing a group can drop a topic the new member does not
+                # carry, which is as much a pruning as the one above.
+                pruned |= topics - set(current["topics"])
                 if wanted > have:
                     current["claims"] = ids
                     current["fingerprints"] = fingerprints
@@ -1498,8 +1676,21 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                     continue
                 if wanted < have:
                     kept += 1   # a part of what is already on file adds nothing
+                    # But the topic goes unattached where a member of the
+                    # larger record does not carry it, and this answer is not
+                    # on file under the topic at all. Recording the signature
+                    # would skip the pass that has to run once that member
+                    # goes, and nothing else would ever put the topic back.
+                    unattached = unattached or topic not in (current.get("topics") or [])
                     continue
                 if current.get("fingerprints") == fingerprints:
+                    # As the tensions pass: the group stands, and takes the new
+                    # wording only while nobody has ruled on the old. Whatever
+                    # the rerun said, including nothing: the words on file were
+                    # written under a prompt this answer was not given, and
+                    # keeping them would put them in this answer's mouth.
+                    if current.get("status") == "open":
+                        current.update(note=note)
                     kept += 1
                     continue
                 current.update(note=note, fingerprints=fingerprints, status="open", found=now())
@@ -1518,6 +1709,15 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             existing.append(record)
             added += 1
         data["agreements"] = existing
+        # Every topic taken off a record on the way through, whether before the
+        # answer was read or while a group grew past it: each has to be found
+        # again when it comes back, so its recorded pass goes with it.
+        _forget_passes(data, pruned)
+        # Recorded only on the way out, only while the topic still holds the
+        # claims it was asked about — see `record_tensions` — and only if
+        # everything the answer said is on file under the topic.
+        if signature and not unattached and _topic_unchanged(topic, claims_by_id, live):
+            data.setdefault("passes", {})[topic] = signature
         _save_agreements(data)
         return {"added": added, "grown": grown, "reopened": reopened, "kept": kept}
 
@@ -1547,12 +1747,16 @@ def set_agreement_status(agreement_id: str, status: str) -> dict:
 
 
 def delete_agreement(agreement_id: str) -> None:
+    """Remove an agreement, and forget the passes that found it; see
+    `delete_tension` for why."""
     with agreements_lock():
         data = _read_agreements()
         before = len(data["agreements"])
+        gone = [r for r in data["agreements"] if r.get("id") == agreement_id]
         data["agreements"] = [r for r in data["agreements"] if r.get("id") != agreement_id]
         if len(data["agreements"]) == before:
             raise KeyError(agreement_id)
+        _forget_passes(data, {topic for r in gone for topic in (r.get("topics") or [])})
         _save_agreements(data)
 
 

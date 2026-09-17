@@ -1,5 +1,6 @@
 """Tensions: pairs of claims from different papers that disagree."""
 
+import json
 import threading
 
 import pytest
@@ -69,6 +70,25 @@ def test_rerun_keeps_a_decision_and_the_pair_order_does_not_matter():
     assert tension["id"] == tid
     assert tension["status"] == "dismissed"
     assert tension["note"] == "first"          # the model does not get to remake a decision
+
+
+def test_a_rerun_puts_an_undecided_finding_in_the_new_words():
+    """A pass only runs again when something has changed — the model, the
+    prompt, or a claim elsewhere in the topic. What comes back for a pair
+    nobody has ruled on is this model's answer, and the note the topic shows
+    should be the one it just gave."""
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "first"}], shown())
+    found = store.tension_rows()[0]["found"]
+
+    result = store.record_tensions("recovery-rate", [
+        {"claims": [a, b], "kind": "contradiction", "note": "second"},
+    ], shown())
+    assert result == {"added": 0, "reopened": 0, "kept": 1}
+    [tension] = store.tension_rows()
+    assert tension["note"] == "second" and tension["kind"] == "contradiction"
+    assert tension["found"] == found            # the same finding, not a new one
+    assert tension["stale"] is False
 
 
 def test_editing_a_claim_marks_the_tension_stale_and_a_rerun_reopens_it():
@@ -285,7 +305,8 @@ def test_status_must_be_known_and_tension_must_exist():
 def test_find_tensions_skips_a_topic_with_one_paper_without_calling_the_model(monkeypatch):
     build_corpus()
     monkeypatch.setattr(extract, "client", lambda: (_ for _ in ()).throw(AssertionError("called")))
-    assert extract.find_tensions("scaling") == {"added": 0, "reopened": 0, "kept": 0, "returned": 0}
+    assert extract.find_tensions("scaling") == {
+        "added": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": False}
 
 
 def test_find_tensions_records_what_the_model_returns(monkeypatch):
@@ -311,7 +332,7 @@ def test_find_tensions_records_what_the_model_returns(monkeypatch):
 
     monkeypatch.setattr(extract, "client", lambda: Client())
     result = extract.find_tensions("recovery-rate")
-    assert result == {"added": 1, "reopened": 0, "kept": 0, "returned": 1}
+    assert result == {"added": 1, "reopened": 0, "kept": 0, "returned": 1, "skipped": False}
     prompt = captured["messages"][0]["content"]
     assert "Doe (2026)" in prompt and "Li et al." not in prompt
     assert a in prompt and b in prompt
@@ -347,7 +368,7 @@ def test_api_find_tensions_queues_nothing_without_two_papers_on_a_topic():
 def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_topics(monkeypatch):
     build_corpus()   # recovery-rate has two papers; scaling has one
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics: submitted.append(topics))
+    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics, force: submitted.append(topics))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/tensions", json={"topics": ["scaling", "nonesuch"]}).json() == {"queued": 0}
         body = {"topics": ["recovery-rate", "scaling", "recovery-rate", "nonesuch"]}
@@ -359,11 +380,11 @@ def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_top
 def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     asked = []
 
-    def find(topic, rows=None, tags=None):
+    def find(topic, rows=None, tags=None, force=False):
         asked.append(topic)
         if topic == "recovery-rate":
             raise RuntimeError("tension pass refused for recovery-rate: no")
-        return {"added": 2, "reopened": 1, "kept": 0, "returned": 3}
+        return {"added": 2, "reopened": 1, "kept": 0, "returned": 3, "skipped": False}
 
     monkeypatch.setattr(extract, "find_tensions", find)
     job = server._new_job("tensions in 2 topics")
@@ -423,3 +444,275 @@ def test_cli_lists_tensions_without_calling_the_model(capsys):
     assert __main__.main(["tensions", "--list", "--all"]) == 0
     out = capsys.readouterr().out
     assert "dismissed" in out and "1 tensions, 0 open" in out
+
+
+# --- a topic nothing has changed in is not asked about again ---------------
+
+def _fake_tensions(monkeypatch, pairs_returned, calls):
+    """A client that answers with `pairs_returned` and counts its calls."""
+    class Text:
+        type = "text"
+        def __init__(self, text): self.text = text
+
+    class Response:
+        stop_reason = "end_turn"
+        content = [Text(json.dumps({"tensions": pairs_returned}))]
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return Response()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+
+
+def test_a_rerun_over_an_unchanged_topic_costs_nothing(monkeypatch):
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+
+    first = extract.find_tensions("recovery-rate")
+    assert (first["added"], first["skipped"]) == (1, False)
+    again = extract.find_tensions("recovery-rate")
+    assert again == {"added": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": True}
+    assert len(calls) == 1
+
+    # Asking anyway is what --force is for.
+    forced = extract.find_tensions("recovery-rate", force=True)
+    assert forced["skipped"] is False and len(calls) == 2
+
+
+def test_editing_a_claim_makes_the_topic_worth_asking_about_again(monkeypatch):
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    store.update_claim("doe2026recovery", a, {"text": "Llama-3 70B recovers in 4.6% of rollouts."})
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(calls) == 2
+
+    # So does editing the research context, which every prompt carries.
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+    store.save_context("I am studying recovery under steering.")
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+
+
+def test_a_failed_pass_is_asked_again(monkeypatch):
+    build_corpus()
+    calls = []
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("the model is down")
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            extract.find_tensions("recovery-rate")
+    assert len(calls) == 2
+
+
+def test_correcting_a_papers_own_details_is_worth_asking_about_again(monkeypatch):
+    """The listing names each paper's author, year and title, so a correction
+    to any of them changes what the model was shown."""
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        client.patch("/api/papers/doe2026recovery", json={"title": "Recovery under steering, revisited"})
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(calls) == 2
+
+
+def test_deleting_a_topic_forgets_the_pass_that_was_run_over_it(monkeypatch):
+    """Recreating the tag over the same claims makes the same signature, so a
+    pass left on file would be skipped and the pairs never get their topic
+    back."""
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    extract.find_tensions("recovery-rate")
+    assert store.tension_rows()[0]["topics"] == ["recovery-rate"]
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    store.delete_tag("recovery-rate")
+    assert store.tension_rows()[0]["topics"] == []
+    store.add_tag("recovery-rate", "How often a model returns to task.")
+    for claim_id, key in ((a, "doe2026recovery"), (b, "li2025steer")):
+        store.update_claim(key, claim_id, {"tags": ["recovery-rate"]})
+
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert store.tension_rows()[0]["topics"] == ["recovery-rate"]
+
+
+def test_a_renamed_topic_keeps_the_pass_that_was_run_over_it(monkeypatch):
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    store.rename_tag("recovery-rate", "task-recovery")
+    # The claims say the same thing under a new name, and the name is in the
+    # signature, so it is asked once more and then left alone.
+    assert extract.find_tensions("task-recovery")["skipped"] is False
+    assert extract.find_tensions("task-recovery")["skipped"] is True
+    assert store.tension_pass("recovery-rate") is None
+
+
+def test_a_coauthor_arriving_changes_the_heading_and_so_the_signature(monkeypatch):
+    """One author is "Doe (2026)"; two is "Doe et al. (2026)". Neither the
+    surname nor the year nor the title moved, but the prompt did."""
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    paper = store.load_paper("doe2026recovery")
+    store.save_paper({**paper, "authors": ["Jane Doe", "Ada Roe"]})
+    assert "et al." in extract._tension_listing(store.claim_rows())
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+
+
+def test_a_corrected_attribution_reaches_the_note(monkeypatch):
+    """The pass runs again when a paper's details change; the merge has to take
+    the answer, or the corrected note is thrown away and the signature cached."""
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "Doe (2026) sees recovery."}], calls)
+    extract.find_tensions("recovery-rate")
+    assert store.tension_rows()[0]["note"] == "Doe (2026) sees recovery."
+
+    paper = store.load_paper("doe2026recovery")
+    store.save_paper({**paper, "authors": ["Jane Doe", "Ada Roe"]})
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension",
+                                  "note": "Doe et al. (2026) see recovery."}], calls)
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert store.tension_rows()[0]["note"] == "Doe et al. (2026) see recovery."
+
+
+def test_a_topic_deleted_during_the_call_does_not_get_its_pass_recorded(monkeypatch):
+    """`_retag_all` forgets the pass and strips the topic; a late result must
+    not write the pass back, or recreating the tag skips the run that would
+    put the topic on the pairs again."""
+    a, b, _ = build_corpus()
+    calls = []
+
+    class Text:
+        type = "text"
+        def __init__(self, text): self.text = text
+
+    class Response:
+        stop_reason = "end_turn"
+        content = [Text(json.dumps({"tensions": [{"claims": [a, b], "kind": "tension", "note": "n"}]}))]
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            store.delete_tag("recovery-rate")     # deleted while the model thinks
+            return Response()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    extract.find_tensions("recovery-rate")
+    assert store.tension_pass("recovery-rate") is None
+
+
+def test_one_claim_losing_the_topic_mid_call_leaves_the_pass_unrecorded(monkeypatch):
+    """The pair is stored without the topic, so the run that would put it back
+    has to happen when the tag is restored."""
+    a, b, _ = build_corpus()
+    calls = []
+
+    class Text:
+        type = "text"
+        def __init__(self, text): self.text = text
+
+    class Response:
+        stop_reason = "end_turn"
+        content = [Text(json.dumps({"tensions": [{"claims": [a, b], "kind": "tension", "note": "n"}]}))]
+
+    class Messages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            store.update_claim("li2025steer", b, {"tags": []})     # untagged mid-call
+            return Response()
+
+    class Client:
+        messages = Messages()
+
+    monkeypatch.setattr(extract, "client", lambda: Client())
+    extract.find_tensions("recovery-rate")
+    assert store.tension_rows()[0]["topics"] == []
+    assert store.tension_pass("recovery-rate") is None
+
+    store.update_claim("li2025steer", b, {"tags": ["recovery-rate"]})
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert store.tension_rows()[0]["topics"] == ["recovery-rate"]
+
+
+def test_a_topic_pruned_by_another_pass_loses_its_recorded_pass(monkeypatch):
+    """A pair on two topics: one pass caches X's signature, a later Y pass
+    finds X gone from a claim and prunes it from the record. Restoring X has
+    to run the pass again, or the pair never gets X back."""
+    store.add_tag("scaling", "How results move with size.")
+    a, = _paper("doe2026recovery", "Recovery under steering", "Jane Doe", 2026,
+                ("Llama-3 70B recovers in 46% of rollouts.", ["recovery-rate", "scaling"]))
+    b, = _paper("li2025steer", "Steering does not wash out", "Bo Li", 2025,
+                ("Steered models almost never return to the task.", ["recovery-rate", "scaling"]))
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    extract.find_tensions("recovery-rate")
+    assert store.tension_pass("recovery-rate") is not None
+
+    # The tag comes off one claim, and the other topic's pass prunes it.
+    store.update_claim("li2025steer", b, {"tags": ["scaling"]})
+    extract.find_tensions("scaling")
+    assert store.tension_rows()[0]["topics"] == ["scaling"]
+    assert store.tension_pass("recovery-rate") is None
+
+    store.update_claim("li2025steer", b, {"tags": ["recovery-rate", "scaling"]})
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert "recovery-rate" in store.tension_rows()[0]["topics"]
+
+
+def test_changing_the_model_asks_every_topic_again(monkeypatch):
+    from doxograph import config
+    build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    monkeypatch.setattr(config, "MODEL", "claude-something-else")
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(calls) == 2
+
+
+def test_a_deleted_tension_can_be_found_again(monkeypatch):
+    """Deleting is not dismissing: the pair is gone, and the pass that found
+    it has to be able to find it again."""
+    a, b, _ = build_corpus()
+    calls = []
+    _fake_tensions(monkeypatch, [{"claims": [a, b], "kind": "tension", "note": "n"}], calls)
+    extract.find_tensions("recovery-rate")
+    assert extract.find_tensions("recovery-rate")["skipped"] is True
+
+    store.delete_tension(store.tension_rows()[0]["id"])
+    assert store.tension_pass("recovery-rate") is None
+    assert extract.find_tensions("recovery-rate")["skipped"] is False
+    assert len(store.tension_rows()) == 1

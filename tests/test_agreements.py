@@ -27,6 +27,20 @@ def shown():
     return {r["id"]: r for r in store.claim_rows()}
 
 
+def test_a_rerun_that_says_nothing_takes_the_old_words_off():
+    """The answer on file was written under a prompt this rerun was not given.
+    Where the rerun explains the group differently — or not at all — what the
+    card shows is this answer, not the last one."""
+    a, b, *_ = build_corpus()
+    live = {r["id"]: r for r in store.claim_rows()}
+    store.record_agreements("recovery-rate", [
+        {"claims": [a, b], "note": "Both measure rollouts."}], live)
+    assert store.agreement_rows()[0]["note"] == "Both measure rollouts."
+
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": ""}], live)
+    assert store.agreement_rows()[0]["note"] == ""
+
+
 def test_record_adds_an_open_group_and_drops_one_paper_and_unknown_members():
     a, b, c, d = build_corpus()
     result = store.record_agreements("recovery-rate", [
@@ -185,7 +199,7 @@ def test_find_agreements_records_what_the_model_returns(monkeypatch):
 
     monkeypatch.setattr(extract, "client", lambda: type("C", (), {"messages": Messages()})())
     result = extract.find_agreements("recovery-rate")
-    assert result == {"added": 1, "grown": 0, "reopened": 0, "kept": 0, "returned": 1}
+    assert result == {"added": 1, "grown": 0, "reopened": 0, "kept": 0, "returned": 1, "skipped": False}
     assert "Doe (2026)" in calls[0]["messages"][0]["content"]
     assert extract.find_agreements("scaling")["returned"] == 0     # one paper: no call
     assert len(calls) == 1
@@ -230,3 +244,46 @@ def test_a_group_that_grows_on_a_stale_answer_is_left_alone():
     assert result == {"added": 0, "grown": 0, "reopened": 0, "kept": 1}
     [row] = store.agreement_rows()
     assert row["status"] == "confirmed" and row["n_papers"] == 2 and row["note"] == "two"
+
+
+def test_a_deleted_agreement_can_be_found_again():
+    """The pass that found it has to be able to find it again; the web app
+    has no force to fall back on."""
+    a, b, *_ = build_corpus()
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "n"}], shown(),
+                            signature="a-signature")
+    assert store.agreement_pass("recovery-rate") == "a-signature"
+    store.delete_agreement(store.agreement_rows()[0]["id"])
+    assert store.agreement_pass("recovery-rate") is None
+
+
+def test_a_topic_dropped_while_a_group_grows_loses_its_pass():
+    """Growing an agreement past a claim that does not carry X takes X off
+    the record, and X has to be findable again once that claim is gone."""
+    a, b, c, d = build_corpus()
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "n"}], shown(),
+                            signature="the-first-signature")
+    assert store.agreement_rows()[0]["topics"] == ["recovery-rate"]
+    assert store.agreement_pass("recovery-rate") == "the-first-signature"
+
+    # `c` carries scaling as well, and `d` carries recovery-rate; growing the
+    # group to one that lacks the topic takes it off the record.
+    store.update_claim("roe2024vectors", d, {"tags": ["scaling"]})
+    store.record_agreements("scaling", [{"claims": [a, b, d], "note": "grown"}], shown())
+    assert store.agreement_rows()[0]["topics"] == []
+    assert store.agreement_pass("recovery-rate") is None
+
+
+def test_a_pass_whose_answer_went_unattached_is_not_recorded():
+    """The returned group is part of a larger agreement whose extra member
+    does not carry the topic, so the topic goes on nothing; deleting that
+    member later must not find the pass already done."""
+    a, b, c, d = build_corpus()
+    store.record_agreements("recovery-rate", [{"claims": [a, b, c]}], shown())
+    store.update_claim("li2025steer", c, {"tags": ["scaling"]})     # c leaves the topic
+    assert store.agreement_rows()[0]["topics"] == []
+
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "the pair"}], shown(),
+                            signature="a-signature")
+    assert store.agreement_rows()[0]["topics"] == []      # still unattached
+    assert store.agreement_pass("recovery-rate") is None
