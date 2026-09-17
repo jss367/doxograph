@@ -34,8 +34,14 @@ from . import quotes, search, store
 # "Referenced work…" out either way.
 # The words that name a bibliography. A heading has to say one of them, or
 # "Suggested Reading" would be a heading and so would half a paper's sections.
-_HEADING_ANCHORS = frozenset({"references", "reference", "bibliography",
-                              "works", "literature"})
+_HEADING_ANCHORS = frozenset({"references", "reference", "bibliography"})
+# And the words that name one only in company. A section headed "Literature"
+# is as often the paper's own reading of the field, and one headed "Works" an
+# artist's output; "Literature Cited" and "Works Cited" are the forms that say
+# a bibliography follows. Taken alone they would make a heading of the review
+# section a paper puts before its references, and everything after it — the
+# body included — would be read as the list.
+_CITED_ANCHORS = frozenset({"works", "literature"})
 # What a heading may carry after the word, as words rather than as phrases: a
 # heading is built out of these — "References and Notes", "List of References",
 # "Selected Bibliography (Primary Sources)" — and
@@ -254,7 +260,10 @@ def _reads_as_heading(letters: str) -> bool:
             return False
         said.append(word)
         letters = letters[len(word):]
-    return bool(said) and any(word in _HEADING_ANCHORS for word in said)
+    if not said:
+        return False
+    return (any(word in _HEADING_ANCHORS for word in said)
+            or ("cited" in said and any(word in _CITED_ANCHORS for word in said)))
 
 
 def title_mark(paper: dict) -> str:

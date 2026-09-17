@@ -230,6 +230,12 @@ def test_a_heading_is_measured_by_its_letters_not_its_line():
     spaced = "R E F E R E N C E S  A N D  F U R T H E R  R E A D I N G"
     assert len(spaced) > 40
     assert cites.reference_text(f"Body.\n{spaced}\n[1] A paper.\n").strip() == "[1] A paper."
+    # "Literature" and "Works" name a bibliography only in company: a paper's
+    # reading of the field comes before its references, and taken as the
+    # heading it would make the body into the list.
+    assert cites.reference_text("Literature\nWe build on Attention is all you need.\n"
+                                "References\n[1] A paper.\n").strip() == "[1] A paper."
+    assert cites._is_heading("literaturecited") and cites._is_heading("workscited")
     # A long line of prose is still prose, however it squashes.
     long_prose = "References were consulted for every claim in this section of the paper."
     assert cites.reference_text(f"Body.\n{long_prose}\n[1] A paper.\n") == ""
