@@ -212,14 +212,23 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     if hit is not None:
         return hit
     marks = {paper["key"]: fingerprints(paper) for paper in papers}
-    read: dict[str, tuple] = {}
+    read: dict[str, tuple | None] = {}
     found = []
     for paper in papers:
-        text = search.paper_text(paper["key"])
         # The state each paper's text was in when it was read. A PDF arriving
         # for a paper this scan has already passed changes its text and not
         # its name, and the answer would be stored as though it had seen it.
-        read[paper["key"]] = _text_identity(paper["key"])
+        #
+        # Read on both sides of the reading, since a PDF can arrive during it
+        # and leave new text behind the old text this returned. Unchanged
+        # across the read is the text that was read; where there was none, the
+        # reading is what wrote it and it is the text that was read too.
+        # Anything else is a paper whose text this scan cannot speak for, and
+        # `None` says so.
+        was = _text_identity(paper["key"])
+        text = search.paper_text(paper["key"])
+        now = _text_identity(paper["key"])
+        read[paper["key"]] = now if now == was or not was else None
         if not text:
             continue
         references = reference_text(text)
@@ -238,7 +247,8 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     # Reading a paper for the first time is what writes its text down, so the
     # comparison is against what this scan saw rather than what was on disk
     # when it started.
-    steady = all(_text_identity(key) == was for key, was in read.items())
+    steady = all(was is not None and _text_identity(key) == was
+                 for key, was in read.items())
     if given or (steady and named == _named_signature(store.all_papers())):
         with _cache_lock:
             _cache.clear()  # one corpus at a time is all the map ever asks for

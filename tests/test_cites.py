@@ -508,6 +508,36 @@ def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["long"]
 
 
+def test_text_that_moved_while_it_was_being_read_is_not_cached():
+    """A read hands back what it found. A PDF landing before it comes back
+    leaves different text behind, and sampling the paper afterwards would
+    record that text as the one the scan read."""
+    a_corpus()
+    cites.edges()                       # every paper's text written down
+    cites._cache.clear()
+    real = search.paper_text
+    planted = False
+
+    def watching(key: str):
+        nonlocal planted
+        text = real(key)
+        if not planted:
+            planted = True
+            store.pdf_path(key).write_bytes(
+                minimal_pdf(["Another printing of this paper",
+                             "References\nNobody. A work nobody wrote. 1999."]))
+            store.text_path(key).unlink(missing_ok=True)
+            real(key)
+        return text
+
+    cites.search.paper_text = watching
+    try:
+        cites.edges()
+    finally:
+        cites.search.paper_text = real
+    assert not cites._cache, "an answer was stored for text it cannot speak for"
+
+
 def test_a_pdf_arriving_mid_scan_is_not_cached_as_though_it_were_read():
     """A paper this scan has already passed gets new text. Its name has not
     moved, so nothing but the text itself would notice."""
