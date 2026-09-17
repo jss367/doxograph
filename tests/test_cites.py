@@ -257,6 +257,10 @@ def test_a_numbered_list_is_read_one_entry_at_a_time():
     # A marker the extraction left alone on its line numbers the list too.
     assert [e.squashed for e in cites.entries("1\nA paper. 2017.\n2\nAnother paper. 2018.")] == [
         "apaper2017", "anotherpaper2018"]
+    # But a bare number at the foot or the head of a page is the page's own,
+    # and cutting the list there would part an entry from its second line.
+    assert len(cites.entries("Vaswani, A. Attention is all you need.\n12\n"
+                             "\farXiv:1706.03762, 2017.\n")) == 1
     # An author-year list says nothing about where its entries are, and is
     # read whole, as it always was.
     whole = cites.entries("Vaswani, A. Attention is all you need. 2017.\nRoe, A. Steering. 2026.")
