@@ -467,3 +467,18 @@ def test_editing_a_claim_does_not_throw_away_the_citations():
     store.save_paper({**paper, "title": "Steering and recovery, revisited"})
     cites.edges()
     assert list(cites._cache) != before
+
+
+def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
+    """An unnumbered list cites the longer paper by title and DOI; the shorter
+    corpus title reads inside that title and is cited nowhere."""
+    _paper("short", ATTENTION, [ATTENTION, "Text."])
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."],
+           doi="10.1234/restoration")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nSomebody. Attention is all you need for image restoration. "
+        "https://doi.org/10.1234/restoration, 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["long"]

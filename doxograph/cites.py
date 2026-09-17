@@ -245,6 +245,7 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]],
     coming back as a single work.
     """
     claims: dict[str, tuple[list[int], int, int]] = {}
+    covers: dict[str, list[tuple[int, int]]] = {}
     fallbacks: dict[str, tuple[list[int], int]] = {}
     for other, found in marks.items():
         if other == key:
@@ -260,6 +261,12 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]],
         if not named_by:
             continue
         claims[other] = (_occurrences(entry, named_by), len(named_by), bool(by_identifier))
+        # Everywhere this paper is named, whatever it is cited by here. An
+        # identifier settles which paper an entry means; it does not stop the
+        # paper's title covering a shorter title printed inside it.
+        for mark in found:
+            covers.setdefault(other, []).extend(
+                (at, len(mark)) for at in _occurrences(entry, mark))
         if by_identifier and named_by is not by_identifier:
             # Where every printing of its title turns out to be inside
             # somebody else's, the identifier is what it is cited by: an entry
@@ -268,9 +275,10 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]],
             fallbacks[other] = (_occurrences(entry, by_identifier), len(by_identifier))
 
     def swallowed(other: str, at: int, width: int) -> bool:
-        """Whether a claim at `at` lies inside a longer claim of somebody else's."""
-        return any(w > width and any(begin <= at and at + width <= begin + w for begin in wheres)
-                   for name, (wheres, w, _) in claims.items() if name != other)
+        """Whether a claim at `at` lies inside a longer name of somebody else's."""
+        return any(w > width and begin <= at and at + width <= begin + w
+                   for name, spans in covers.items() if name != other
+                   for begin, w in spans)
 
     # A paper whose every title printing is inside somebody else's title is
     # still cited where the entry names it by an identifier.
