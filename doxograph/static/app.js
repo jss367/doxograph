@@ -4093,6 +4093,12 @@ async function boot() {
   const before = [V.paper, V.tag, V.kind];
   dropMissingFilters();
   if (V.paper !== before[0] || V.tag !== before[1] || V.kind !== before[2]) renderAll();
+  // `refresh` went through `render`, whose editor guard leaves the content pane
+  // alone whenever the view is Research: the poll must not rebuild the form
+  // under the cursor. At boot there is no form yet, so that guard would leave a
+  // URL naming Research — a bookmark, or a reload of the page while on it —
+  // with an active nav entry and a blank main pane. Draw it once here.
+  else if (V.view === 'research') renderContent();
   setInterval(async () => {
     if (document.hidden) return;
     // Keep settings current while editing; the content guard below preserves

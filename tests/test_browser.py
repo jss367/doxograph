@@ -3303,3 +3303,27 @@ def test_a_kind_the_url_names_that_does_not_exist_is_dropped():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_url_naming_the_research_view_draws_it_at_boot():
+    """The editor guard in `render` skips the content pane whenever the view is
+    Research, so a bookmark or a reload of `#view=research` left the main pane
+    blank with only the nav marked active."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#view=research")
+                await page.locator("#research-form").wait_for(timeout=5000)
+                await page.locator('#research-nav [data-view="research"].active').wait_for()
+
+                # A reload of the same address redraws it too.
+                await page.reload()
+                await page.locator("#research-form").wait_for(timeout=5000)
+            await browser.close()
+
+    asyncio.run(scenario())
