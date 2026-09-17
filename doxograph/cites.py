@@ -646,9 +646,15 @@ def _ends_in_a_letter(printed: str) -> str:
 
 def _shape(text: str) -> str:
     """An identifier as its punctuation: which mark and where, with the
-    letters and digits taken out and the dashes read as one."""
+    letters and digits taken out and the dashes read as one.
+
+    Decomposed first, as `quotes.squash` decomposes: an extraction can write
+    `ffi` as one ligature, and counted as one letter it would not line up with
+    the three the stored identifier has. The marks it leaves go the same way
+    they go there."""
     return "".join("#" if char.isalnum() else "-" if char in _DASHES else char
-                   for char in text)
+                   for char in unicodedata.normalize("NFKD", text)
+                   if not unicodedata.combining(char))
 
 
 def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,

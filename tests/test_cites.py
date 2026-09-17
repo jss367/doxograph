@@ -728,6 +728,11 @@ def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
     # A different DOI is still a different DOI.
     assert not cites._whole(entry, entry.squashed.find(mark), len(mark),
                             printed="10.1234/fooba.r")
+    # A ligature is the letters it stands for, as it is to `quotes.squash`.
+    ligature = quotes.build("Nobody. A work. https://doi.org/10.1234/o\ufb03ce, 2026.")
+    office = quotes.squash("10.1234/office")
+    assert cites._whole(ligature, ligature.squashed.find(office), len(office),
+                        printed="10.1234/office")
     # And a dash the entry writes is where the identifier goes on, so a
     # shorter DOI does not end inside a longer one.
     longer = quotes.build("Nobody. A work. https://doi.org/10.1234/foo\u2013bar, 2026.")
