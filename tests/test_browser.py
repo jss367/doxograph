@@ -1367,6 +1367,52 @@ def test_a_reworded_quote_is_shown_beside_the_paper_and_can_take_its_wording():
 
 
 @pytest.mark.browser
+def test_the_query_takes_words_in_any_order_and_finds_them_in_the_pdfs():
+    from pdfs import minimal_pdf
+
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    store.update_claim("han2026reports", "han2026reports-c1",
+                       {"text": "Recovery under steering is path dependent."})
+    # A paper with nothing extracted from it, whose PDF is the only place the
+    # word appears at all.
+    store.save_paper(store.new_paper("wu2026silent", title="A silent paper", year=2026))
+    store.pdf_path("wu2026silent").write_bytes(minimal_pdf([
+        "A silent paper",
+        "Nobody has read this one yet, but it discusses sandbagging at length.",
+    ]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+
+                # Two words, in the other order, which no substring search finds.
+                await page.locator("#q").fill("steering recovery")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+                # A word that is in no claim at all, only in a PDF.
+                await page.locator("#q").fill("sandbagging")
+                hit = page.locator('.pdfhits .pdfhit [data-paper="wu2026silent"]')
+                await hit.wait_for()
+                passage = page.locator(".pdfhits .pp mark").first
+                assert await passage.inner_text() == "sandbagging"
+                assert "p. 2" in await page.locator(".pdfhits .pp").first.inner_text()
+
+                # The hit opens its paper, as a citation does.
+                await hit.click()
+                await page.locator("#papers li.active").wait_for()
+                assert await page.locator("#papers li.active").get_attribute("data-paper") == "wu2026silent"
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
     from pdfs import minimal_pdf
 
@@ -1433,6 +1479,60 @@ def test_a_passage_stands_aside_when_the_claim_changes_underneath_it():
                 store.update_claim(key, claim["id"], {"quote": "Recovery under steering"})
                 await page.locator(".qctx", has_text="changed while the passage was open").wait_for()
                 assert await page.get_by_role("button", name="Use the paper's wording").count() == 0
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_paper_arriving_after_the_search_still_turns_up_in_it():
+    from pdfs import minimal_pdf
+
+    _paper("han2026reports", "Introspection in language models", "introspection")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("sandbagging")
+                await page.locator(".pdfhits", has_text="No paper's text holds").wait_for()
+
+                # Imported while the query stands. Filtering the answer against
+                # the corpus can drop a hit that has gone but cannot add one
+                # that has arrived, so the question is asked again.
+                store.save_paper(store.new_paper("wu2026silent", title="A silent paper", year=2026))
+                store.pdf_path("wu2026silent").write_bytes(minimal_pdf([
+                    "A silent paper", "This one discusses sandbagging at length."]))
+                await page.locator('.pdfhits [data-paper="wu2026silent"]').wait_for()
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_query_with_no_words_in_it_matches_nothing():
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    _paper("ling2025gait", "Quadruped gait control", "locomotion")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                # No paper holds "---" as a phrase and it has no words to look
+                # for, so it narrows to nothing rather than to everything.
+                await page.locator("#q").fill("---")
+                await page.locator("#content .empty").wait_for()
+                assert await page.locator("#content .claim").count() == 0
+                # The "all papers" row stays; no paper does.
+                assert await page.locator('#papers li[data-paper]:not([data-paper=""])').count() == 0
 
             await browser.close()
 
@@ -1545,6 +1645,203 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
                 assert await page.locator(".qctx").count() == 1
                 second = page.locator(".claim").nth(1)
                 assert await second.locator(".qctx").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_finds_what_the_server_finds_whatever_the_case():
+    """JavaScript lowercases one character to one; the server folds properly.
+    A query that found the paper through its PDF must not lose the claim."""
+    _paper("weber2026strasse", "Die Straße als Metapher", "introspection")
+    store.update_claim("weber2026strasse", "weber2026strasse-c1",
+                       {"text": "Die Straße ist lang."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                for query in ("Straße", "STRASSE", "strasse"):
+                    await page.locator("#q").fill(query)
+                    await page.locator("#content .claim").first.wait_for()
+                    assert await page.locator("#content .claim").count() == 1, query
+                    assert await page.locator('#papers [data-paper="weber2026strasse"]').count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_pdf_result_can_be_reached_from_the_keyboard():
+    from pdfs import minimal_pdf
+
+    _paper("han2026reports", "Introspection in language models", "introspection")
+    store.save_paper(store.new_paper("wu2026silent", title="A silent paper", year=2026))
+    store.pdf_path("wu2026silent").write_bytes(minimal_pdf([
+        "A silent paper", "Nobody has read this one yet, but it discusses sandbagging."]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("sandbagging")
+                hit = page.locator('.pdfhits .pdfhit [data-paper="wu2026silent"]')
+                await hit.wait_for()
+                # The sidebar can omit a paper whose claims do not match, so
+                # this is the only way to the result — it has to be reachable.
+                await hit.focus()
+                await page.keyboard.press("Enter")
+                await page.locator("#papers li.active").wait_for()
+                assert await page.locator("#papers li.active").get_attribute("data-paper") == "wu2026silent"
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_folds_a_greek_iota_subscript_as_the_server_does():
+    """`casefold` calls the iota subscript a letter; everyone else calls it a
+    mark, and stripping it would hide the claim behind a PDF hit."""
+    _paper("pap2026greek", "Περὶ τῆς ᾳδούσης", "introspection")
+    store.update_claim("pap2026greek", "pap2026greek-c1", {"text": "Ἡ ᾳδουσα λέγει."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("αιδουσα")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_keeps_a_vowel_sign_the_server_keeps():
+    """A vowel sign in Devanagari is a letter of the word, not an accent: the
+    page must not fold काल and कल together where the papers do not."""
+    _paper("sharma2026kaal", "काल और समय", "introspection")
+    store.update_claim("sharma2026kaal", "sharma2026kaal-c1", {"text": "यह काल है।"})
+    _paper("verma2026kal", "कल और आज", "introspection")
+    store.update_claim("verma2026kal", "verma2026kal-c1", {"text": "यह कल है।"})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("काल")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_drops_an_arabic_vowel_mark_as_the_server_does():
+    """Arabic vocalization has a combining class, so the server drops it: a
+    query for كتاب has to keep the claim that spells it كِتاب."""
+    _paper("nasr2026kitab", "الكِتاب والقارئ", "introspection")
+    store.update_claim("nasr2026kitab", "nasr2026kitab-c1", {"text": "هذا كِتاب جيد."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("كتاب")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_word_whose_vowels_are_marks_is_one_term_on_the_page_too():
+    _paper("sharma2026kitab", "एक किताब", "introspection")
+    store.update_claim("sharma2026kitab", "sharma2026kitab-c1", {"text": "यह एक किताब है।"})
+    _paper("verma2026baat", "बात की कहानी", "introspection")
+    store.update_claim("verma2026baat", "verma2026baat-c1", {"text": "बात की एक नई कहानी।"})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("किताब")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_folds_a_historic_cyrillic_letter_as_the_server_does():
+    """`casefold` maps ᲀ to в and `toLowerCase` leaves it alone, so the search
+    found the paper by its text while the page hid the claim."""
+    _paper("ivanov2026old", "Стаᲀъ и новъ", "introspection")
+    store.update_claim("ivanov2026old", "ivanov2026old-c1", {"text": "Стаᲀъ текстъ."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("ставъ")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_folds_what_a_decomposition_produces():
+    """A compatibility character can decompose into one that folds: 𝛓 comes
+    out as ς, which is σ to the server and itself to `toLowerCase`."""
+    _paper("pap2026sigma", "On 𝛓 and its uses", "introspection")
+    store.update_claim("pap2026sigma", "pap2026sigma-c1", {"text": "The value 𝛓 is fixed."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("σ")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
 
             await browser.close()
 

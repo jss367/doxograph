@@ -20,7 +20,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from . import config, store
+from . import config, search, store
 
 class PaperRemoved(RuntimeError):
     """The paper was deleted while it was being ingested.
@@ -465,7 +465,13 @@ def publish_pdf(key: str, staging: Path) -> bool:
         # older than that text, so the freshness check alone would go on
         # serving it and quotes would be checked against the wrong paper.
         store.text_path(key).unlink(missing_ok=True)
-        return True
+        # Read the new text before letting go of the lock. Two publishes of one
+        # key can interleave otherwise: the first reads its PDF, the second
+        # replaces it and stores its text, and the first then writes the text
+        # of a paper that is no longer there. The lock is this paper's alone,
+        # and the parse is the price of the text being right.
+        search.cache_text(key)
+    return True
 
 
 def download_pdf(url: str, key: str, client: httpx.Client) -> bool:

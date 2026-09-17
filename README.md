@@ -83,6 +83,7 @@ doxograph add --no-extract paper.pdf  # fetch now, read later
 doxograph extract                     # read every paper that has no claims yet
 doxograph retag                       # reassign topics against the current vocabulary
 doxograph verify                      # check that every quote is in its paper's PDF
+doxograph search steering recovery    # find words in the papers' own text
 doxograph tensions                    # find claims from different papers that disagree
 doxograph tensions --list             # show what has been found, without calling the model
 doxograph agreements                  # find claims from different papers that say the same thing
@@ -107,6 +108,18 @@ the canonical link, `citation_doi`, `citation_pdf_url`). An arXiv link in a
 bibliography is not treated as the page's identity, since that would ingest a
 cited paper instead of the one you pasted. When nothing identifies the page,
 paste the arXiv ID, the DOI, or a direct PDF link.
+
+The search box takes a phrase or a set of words. Two characters are enough to
+ask the papers — `AI` and `RL` are words here — and a query in a script that
+writes without spaces is asked whatever its length. If the corpus holds what you
+typed as a phrase, that is what it finds; otherwise every word has to be there,
+in any order and at the start of a word, so `steering recovery` finds a claim
+that says "recovery under steering". Under the claims it matched, **In the
+PDFs** lists papers whose own text holds every word, best first, with the
+passages and their pages — which finds a word no claim mentions, and a paper
+nothing has been read out of yet. `doxograph search <words>` does the same from
+the shell. It reads the text already extracted for the quote checks; no model
+and no network are involved.
 
 In the web app: drop PDFs anywhere on the page, or paste references into the
 box. Use the workspace picker in the header to keep unrelated research
@@ -188,8 +201,9 @@ export/              generated HTML
 
 The text under `text/` is a cache: delete it and the next quote check writes
 it again from the PDF. It is what the quote checks, the passage shown beside a
-claim, and the page numbers are all read out of, so a paper is parsed once
-rather than once per claim.
+claim, the page numbers and the search over the papers are all read out of, so
+a paper is parsed once rather than once per claim. It is written when a PDF
+arrives, so the first search after an import does not have to wait for it.
 
 One file per paper, so every change to a claim is a readable diff. If you want
 version history for the corpus, `git init` inside the data directory.
