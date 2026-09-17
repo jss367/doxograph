@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
+from dataclasses import dataclass
 
 from . import quotes, search, store
 
@@ -198,25 +199,48 @@ def title_mark(paper: dict) -> str:
     return title if len(title) >= _TITLE_FLOOR else ""
 
 
-def fingerprints(paper: dict) -> list[str]:
+@dataclass(frozen=True)
+class Names:
+    """What a paper can be named by in somebody's reference list.
+
+    The arXiv id is kept apart from the rest because it is the one identifier
+    printed with a version: `1706.03762v5` is that paper, where `10.1234/foov2`
+    is a DOI of its own.
+    """
+
+    arxiv: str
+    identifiers: tuple[str, ...]
+    title: str
+
+    @property
+    def all(self) -> list[str]:
+        """Every mark, identifiers first and the title last, each once."""
+        return list(dict.fromkeys(mark for mark in (*self.identifiers, self.title) if mark))
+
+
+def names(paper: dict) -> Names:
     """What to look for in a reference list to find this paper named.
 
     An arXiv id and a DOI are near enough unique on their own. A title is not,
     strictly, but a twenty-character run of one paper's title inside another's
     bibliography is a citation and not a coincidence.
     """
-    marks: list[str] = []
     source = paper.get("source") or {}
+    arxiv = ""
     if source.get("kind") == "arxiv" and source.get("id"):
-        marks.append(quotes.squash(re.sub(r"v\d+$", "", str(source["id"]), flags=re.I)))
-    for value in (paper.get("doi"), source.get("id") if source.get("kind") == "doi" else ""):
-        if value:
-            marks.append(quotes.squash(str(value)))
-    if title_mark(paper):
-        marks.append(title_mark(paper))
+        arxiv = quotes.squash(re.sub(r"v\d+$", "", str(source["id"]), flags=re.I))
     # Crossref fills in `doi` and `source["id"]` alike, and one identifier
     # recorded twice is still one identifier.
-    return list(dict.fromkeys(mark for mark in marks if mark))
+    marks = [arxiv] + [quotes.squash(str(value)) for value in
+                       (paper.get("doi"), source.get("id") if source.get("kind") == "doi" else "")
+                       if value]
+    return Names(arxiv=arxiv, title=title_mark(paper),
+                 identifiers=tuple(dict.fromkeys(mark for mark in marks if mark)))
+
+
+def fingerprints(paper: dict) -> list[str]:
+    """Every mark a paper can be found by, identifiers first."""
+    return names(paper).all
 
 
 def edges(papers: list[dict] | None = None) -> list[dict]:
@@ -230,11 +254,10 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     named = _named_signature(papers)
     with _cache_lock:
         hit = _cache.get(f"{named}:{_read_signature(
-            {paper['key']: _text_identity(paper['key']) for paper in papers})}")
+            {paper['key']: _identity(paper['key']) for paper in papers})}")
     if hit is not None:
         return hit
-    marks = {paper["key"]: fingerprints(paper) for paper in papers}
-    titles = {paper["key"]: title_mark(paper) for paper in papers}
+    marks = {paper["key"]: names(paper) for paper in papers}
     read: dict[str, tuple | None] = {}
     found = []
     for paper in papers:
@@ -248,10 +271,14 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         # reading is what wrote it and it is the text that was read too.
         # Anything else is a paper whose text this scan cannot speak for, and
         # `None` says so.
-        was = _text_identity(paper["key"])
+        was = _identity(paper["key"])
         text = search.paper_text(paper["key"])
-        now = _text_identity(paper["key"])
-        read[paper["key"]] = now if now == was or not was else None
+        now = _identity(paper["key"])
+        # `was[0]` is the stored text: where there was none, this reading is
+        # what wrote it, and the text it wrote is the text it read — as long
+        # as the PDF it came from is the one that is still there.
+        read[paper["key"]] = (now if now == was or (not was[0] and now[1] == was[1])
+                              else None)
         if not text:
             continue
         references = reference_text(text)
@@ -262,7 +289,7 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         # by an identifier there has no entry to tie it to a printing of a
         # title somebody else may have cited.
         uncut = not _ENTRY_MARK.search(references)
-        for other in _cited(paper["key"], listing, marks, titles, uncut):
+        for other in _cited(paper["key"], listing, marks, uncut):
             found.append({"from": paper["key"], "to": other})
     found.sort(key=lambda edge: (edge["from"], edge["to"]))
     # Stored only if what it was read from is still what is there: the papers
@@ -270,7 +297,7 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     # Reading a paper for the first time is what writes its text down, so the
     # comparison is against what this scan saw rather than what was on disk
     # when it started.
-    steady = all(was is not None and _text_identity(key) == was
+    steady = all(was is not None and _identity(key) == was
                  for key, was in read.items())
     if given or (steady and named == _named_signature(store.all_papers())):
         with _cache_lock:
@@ -282,8 +309,8 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     return found
 
 
-def _cited(key: str, entries: list[quotes.Text], marks: dict[str, list[str]],
-           titles: dict[str, str], uncut: bool = False) -> list[str]:
+def _cited(key: str, entries: list[quotes.Text], marks: dict[str, Names],
+           uncut: bool = False) -> list[str]:
     """Which papers a reference list names, one entry at a time.
 
     An entry names one work. Within it the longest mark wins, so a title
@@ -296,12 +323,12 @@ def _cited(key: str, entries: list[quotes.Text], marks: dict[str, list[str]],
     """
     cited: set[str] = set()
     for entry in entries:
-        cited |= _cited_in(key, entry, marks, titles, uncut)
+        cited |= _cited_in(key, entry, marks, uncut)
     return sorted(cited)
 
 
-def _cited_in(key: str, entry: quotes.Text, marks: dict[str, list[str]],
-              titles: dict[str, str], uncut: bool = False) -> set[str]:
+def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
+              uncut: bool = False) -> set[str]:
     """The papers one stretch of a reference list names.
 
     A paper claims the places its title is printed, or — where the entry names
@@ -316,27 +343,26 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, list[str]],
     claims: dict[str, tuple[list[int], int, int]] = {}
     covers: dict[str, list[tuple[int, int]]] = {}
     fallbacks: dict[str, tuple[list[int], int]] = {}
-    where: dict[str, list[int]] = {}
+    where: dict[tuple, list[int]] = {}
 
-    def places(mark: str, identifier: bool) -> list[int]:
+    def places(mark: str, identifier: bool, versioned: bool = False) -> list[int]:
         """Where a mark is printed, an identifier only where it is the whole
         of one. Squashing takes the punctuation out of a DOI, and `10.1234/foo`
         reads straight through the middle of `10.1234/foo.bar`, which is
         somebody else's work."""
-        if mark not in where:
+        if (mark, identifier, versioned) not in where:
             at = _occurrences(entry.squashed, mark)
-            where[mark] = ([place for place in at if _whole(entry, place, len(mark))]
-                           if identifier else at)
-        return where[mark]
+            where[mark, identifier, versioned] = (
+                [place for place in at if _whole(entry, place, len(mark), versioned)]
+                if identifier else at)
+        return where[mark, identifier, versioned]
 
     for other, found in marks.items():
         if other == key:
             continue
-        # Everything that is not the title is an identifier, and a paper whose
-        # title is too short to name it has nothing else.
-        title = titles.get(other, "")
-        by_identifier = next((mark for mark in found
-                              if mark != title and places(mark, True)), "")
+        title = found.title
+        by_identifier = next((mark for mark in found.identifiers
+                              if places(mark, True, mark == found.arxiv)), "")
         # Where the list is one stretch, an identifier is the only thing that
         # points at this paper and nobody else's: a title printed somewhere in
         # a page of references may be somebody's citation of its twin.
@@ -344,20 +370,21 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, list[str]],
                     else (title if title and title in entry.squashed else by_identifier))
         if not named_by:
             continue
-        claims[other] = (places(named_by, named_by is not title),
+        claims[other] = (places(named_by, named_by is not title, named_by == found.arxiv),
                          len(named_by), bool(by_identifier))
         # Everywhere this paper is named, whatever it is cited by here. An
         # identifier settles which paper an entry means; it does not stop the
         # paper's title covering a shorter title printed inside it.
-        for mark in found:
+        for mark in found.all:
             covers.setdefault(other, []).extend(
-                (at, len(mark)) for at in places(mark, mark is not title))
+                (at, len(mark)) for at in places(mark, mark is not title, mark == found.arxiv))
         if by_identifier and named_by is not by_identifier:
             # Where every printing of its title turns out to be inside
             # somebody else's, the identifier is what it is cited by: an entry
             # naming this paper by its DOI alone is a citation of it, however
             # its title reads elsewhere in the list.
-            fallbacks[other] = (places(by_identifier, True), len(by_identifier))
+            fallbacks[other] = (places(by_identifier, True, by_identifier == found.arxiv),
+                                len(by_identifier))
 
     def swallowed(other: str, at: int, width: int) -> bool:
         """Whether a claim at `at` lies inside a longer name of somebody else's."""
@@ -402,26 +429,43 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, list[str]],
 # `v5` is not the identifier running on into somebody else's.
 _VERSION = re.compile(r"v\d+(?![0-9A-Za-z])")
 
+# What joins one part of an identifier to the next, and so says the identifier
+# has not ended where a fingerprint of it has.
+_JOINS = "./-_:"
 
-def _whole(entry: quotes.Text, at: int, width: int) -> bool:
+
+def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> bool:
     """Whether an identifier printed at `at` is the whole of the one there.
 
     Read off the entry's own text rather than the squashed form, since
     squashing is what took the dots and slashes out: `101234foo` reads through
     the middle of `101234foobar` with nothing to say where one ends, while
     `10.1234/foo` beside `10.1234/foo.bar` is plain enough.
+
+    Both ends, since an identifier can be read into from either: the arXiv id
+    `1706.03762` sits inside the DOI `10.1706/03762` and ends where it ends.
+
+    `versioned` for an arXiv id, which is printed with the version it is
+    cited at — `1706.03762v5` is that paper. A DOI is not: `10.1234/foov2` is
+    a DOI of its own and not a second printing of `10.1234/foo`.
     """
     stop = entry.offsets[at + width - 1] + 1
-    rest = entry.raw[stop:stop + 2]
-    version = _VERSION.match(entry.raw[stop:])
+    rest = entry.raw[stop:]
+    version = _VERSION.match(rest) if versioned else None
     if version:
-        rest = entry.raw[stop + version.end():stop + version.end() + 2]
-    if not rest:
-        return True
-    if rest[0].isalnum():
+        rest = rest[version.end():]
+    if rest[:1].isalnum():
         return False
     # A separator with more identifier after it: `.bar` of `10.1234/foo.bar`.
-    return not (rest[0] in "./-_:" and len(rest) > 1 and rest[1].isalnum())
+    if rest[:1] in _JOINS and rest[1:2].isalnum():
+        return False
+    begin = entry.offsets[at]
+    lead = entry.raw[:begin]
+    if lead[-1:].isalnum():
+        return False
+    # A separator with a number before it: the `10.` of `10.1706/03762`, where
+    # `doi:` and `doi.org/` in front of an identifier end in a letter.
+    return not (lead[-1:] in _JOINS and lead[-2:-1].isdigit())
 
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
@@ -447,10 +491,21 @@ def _named_signature(papers: list[dict]) -> str:
     return hashlib.sha1(named.encode("utf-8")).hexdigest()
 
 
-def _text_identity(key: str) -> tuple:
-    """A paper's stored text as it stands, or nothing if there is none."""
+def _identity(key: str) -> tuple:
+    """A paper's stored text and the PDF behind it, each as it stands now.
+
+    The PDF as well as the text, because a hit answers without reading a
+    paper: a PDF replaced by hand leaves text that `search.paper_text` would
+    throw away and extract again, and a key made of the text alone would not
+    move, so the map would go on being served the old arrows.
+    """
+    return (_stat(store.text_path(key)), _stat(store.pdf_path(key)))
+
+
+def _stat(path) -> tuple:
+    """A file as it stands, or nothing where there is no file."""
     try:
-        st = store.text_path(key).stat()
+        st = path.stat()
     except OSError:
         return ()
     return (st.st_size, st.st_mtime_ns, st.st_ino)

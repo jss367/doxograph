@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi.testclient import TestClient
 
 from doxograph import __main__, cites, search, server, store
@@ -527,6 +529,40 @@ def test_a_doi_another_doi_begins_with_is_not_cited():
     assert [e["to"] for e in cites.edges() if e["from"] == "citing2"] == ["short"]
 
 
+def test_an_identifier_is_read_from_both_ends():
+    """The arXiv id `1706.03762` is printed inside the DOI `10.1706/03762`,
+    and ends where it ends. A DOI is not versioned either: `10.1234/foov2` is
+    a DOI of its own, not a second printing of `10.1234/foo`."""
+    _paper("attention", "A paper with a very long title indeed",
+           ["A paper with a very long title indeed", "Text."],
+           source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("foo", "Another paper with a long enough title",
+           ["Another paper with a long enough title", "Text."], doi="10.1234/foo")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Nobody. A work nobody wrote. https://doi.org/10.1706/03762, 2026.\n"
+        "[2] Nobody. Another work. https://doi.org/10.1234/foov2, 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+
+
+def test_an_arxiv_id_is_cited_with_or_without_its_version():
+    _paper("attention", "A paper with a very long title indeed",
+           ["A paper with a very long title indeed", "Text."],
+           source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Somebody. A work. arXiv:1706.03762v5, 2017.",
+    ])
+    _paper("citing2", "Another citing paper", [
+        "Another citing paper",
+        "References\n[1] Somebody. A work. arXiv:1706.03762, 2017.",
+    ])
+    edges = cites.edges()
+    assert [e["to"] for e in edges if e["from"] == "citing"] == ["attention"]
+    assert [e["to"] for e in edges if e["from"] == "citing2"] == ["attention"]
+
+
 def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
     """An unnumbered list cites the longer paper by title and DOI; the shorter
     corpus title reads inside that title and is cited nowhere."""
@@ -572,6 +608,21 @@ def test_text_that_moved_while_it_was_being_read_is_not_cached():
     assert not cites._cache, "an answer was stored for text it cannot speak for"
 
 
+def test_a_pdf_replaced_by_hand_is_read_again():
+    """The stored text is a cache of the PDF, and a hit answers without
+    reading a paper. A key made of the text alone would not move, and the map
+    would go on being served the arrows of the paper that used to be there."""
+    a_corpus()
+    assert any(e["to"] == "vas2017attention" for e in cites.edges())
+
+    # The paper that cited it is replaced, its stored text left behind.
+    store.pdf_path("roe2026steering").write_bytes(
+        minimal_pdf(["A wholly different paper", "References\nNobody. A work. 1999."]))
+    stamp = store.text_path("roe2026steering").stat().st_mtime_ns + 1_000_000
+    os.utime(store.pdf_path("roe2026steering"), ns=(stamp, stamp))
+    assert not any(e["from"] == "roe2026steering" for e in cites.edges())
+
+
 def test_the_answer_is_filed_under_the_text_it_was_read_from():
     """Not under the text as it stands when the answer is stored: a paper
     replaced while the scan was finishing would file the old citations under
@@ -580,7 +631,7 @@ def test_the_answer_is_filed_under_the_text_it_was_read_from():
     cites._cache.clear()
     cites.edges()
     was_read = cites._read_signature(
-        {paper["key"]: cites._text_identity(paper["key"]) for paper in store.all_papers()})
+        {paper["key"]: cites._identity(paper["key"]) for paper in store.all_papers()})
     assert list(cites._cache)[0].endswith(was_read)
 
     # Text left behind by a paper that is no longer in the corpus is not part
