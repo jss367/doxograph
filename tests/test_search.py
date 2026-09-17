@@ -391,3 +391,20 @@ def test_a_term_repeated_in_one_place_does_not_hide_a_later_one():
     a_paper_of("many", ("AI " * 30) + "\x0c" + ("filler " * 30) + "AI again here.")
     passages = search.search_papers("AI")[0]["passages"]
     assert [p["page"] for p in passages] == [1, 2]
+
+
+def test_a_sign_that_changes_the_word_is_not_an_accent():
+    """A virama, a nukta and a kana voicing mark each change the word: क्ल is
+    not कल, and が is not か."""
+    a_paper_of("virama", "यह क्ल है।")
+    a_paper_of("plain", "यह कल है।")
+    assert [hit["key"] for hit in search.search_papers("क्ल")] == ["virama"]
+    assert [hit["key"] for hit in search.search_papers("कल")] == ["plain"]
+    a_paper_of("voiced", "これは が です。")
+    a_paper_of("unvoiced", "これは か です。")
+    assert [hit["key"] for hit in search.search_papers("が")] == ["voiced"]
+
+
+def test_javanese_is_a_script_without_spaces_too():
+    a_paper_of("jv", "A paper about ꦲꦤꦕꦫꦏ.")
+    assert [hit["key"] for hit in search.search_papers("ꦕꦫ")] == ["jv"]
