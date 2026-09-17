@@ -913,6 +913,11 @@ def summarize(paper: dict) -> dict:
         "n_proposed_tags": len(paper.get("proposed_tags", [])),
         "schema_version": (paper.get("extraction") or {}).get("schema_version"),
         "has_pdf": pdf_path(paper["key"]).exists(),
+        # What `refresh_status` reads when a paper has no claims: read once
+        # rather than inferred from `schema_version`, which a paper extracted
+        # before that field existed does not carry. The page needs it to work
+        # out the status of a paper whose last claim it is holding.
+        "has_extraction": bool(paper.get("extraction")),
     }
 
 

@@ -3694,3 +3694,78 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
     asyncio.run(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
     assert len(store.load_paper("paper-d")["claims"]) == 1
+
+
+def _extracted(key: str) -> None:
+    """Record that the model has read this paper, which is what `refresh_status`
+    looks at when a paper is left with no claims."""
+    paper = store.load_paper(key)
+    paper["extraction"] = {"model": "test-model", "at": store.now(), "schema_version": 1}
+    store.save_paper(paper)
+
+
+@pytest.mark.browser
+def test_a_held_claim_moves_the_paper_status_dot_with_it():
+    """The dot beside a paper is `refresh_status` read off its claims, and the
+    server runs that the moment a delete lands. A claim waiting out its undo
+    window is already off the page, so the dot goes with it: a paper whose last
+    unreviewed claim is held reads reviewed rather than still-to-review, and a
+    paper whose last claim of any kind is held falls back to where it was before
+    it had any — extracted when the model has read it, fetched when it has not.
+    Undo puts the dot back, since the delete was never sent."""
+    _, unreviewed = _paper_with_claims("paper-a", "Paper A", ["One.", "Two."])
+    store.update_claim("paper-a", unreviewed, {"reviewed": False})
+    _extracted("paper-a")
+    (only_b,) = _paper_with_claims("paper-b", "Paper B", ["Only."])
+    (only_c,) = _paper_with_claims("paper-c", "Paper C", ["Only."])
+    _extracted("paper-c")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+
+                def dot(key, status):
+                    return page.locator(f'#papers [data-paper="{key}"] .dot.{status}')
+
+                async def hold(claim):
+                    await page.locator(f'.claim[data-claim="{claim}"]').get_by_role(
+                        "button", name="delete").click()
+                    notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                    await notice.wait_for()
+                    return notice
+
+                async def undo(notice):
+                    await notice.get_by_role("button", name="Undo").click()
+                    await notice.wait_for(state="detached")
+
+                # The paper's last unreviewed claim: the sidebar already says it
+                # has no new ones, so the dot has to agree.
+                await dot("paper-a", "extracted").wait_for()
+                notice = await hold(unreviewed)
+                await dot("paper-a", "reviewed").wait_for(timeout=5000)
+                await undo(notice)
+                await dot("paper-a", "extracted").wait_for()
+
+                # The last claim on a paper nobody has read: back to fetched.
+                await dot("paper-b", "reviewed").wait_for()
+                notice = await hold(only_b)
+                await dot("paper-b", "fetched").wait_for(timeout=5000)
+                await undo(notice)
+                await dot("paper-b", "reviewed").wait_for()
+
+                # The last claim on a paper the model has read: extracted, which
+                # is not where that paper started.
+                await dot("paper-c", "reviewed").wait_for()
+                notice = await hold(only_c)
+                await dot("paper-c", "extracted").wait_for(timeout=5000)
+                await undo(notice)
+                await dot("paper-c", "reviewed").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-a")["claims"]) == 2
+    assert len(store.load_paper("paper-b")["claims"]) == 1
+    assert len(store.load_paper("paper-c")["claims"]) == 1

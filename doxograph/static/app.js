@@ -324,15 +324,27 @@ function pruneTrashed() {
     S.claims = kept;
     const counts = new Map();
     kept.forEach((row) => {
-      const count = counts.get(row.paper) || { claims: 0, unreviewed: 0 };
+      const count = counts.get(row.paper) || { claims: 0, unreviewed: 0, unverified: 0 };
       count.claims += 1;
       if (!row.reviewed) count.unreviewed += 1;
+      if (row.quote_verified === false) count.unverified += 1;
       counts.set(row.paper, count);
     });
     (S.papers || []).forEach((paper) => {
-      const count = counts.get(paper.key) || { claims: 0, unreviewed: 0 };
+      const count = counts.get(paper.key) || { claims: 0, unreviewed: 0, unverified: 0 };
       paper.n_claims = count.claims;
       paper.n_unreviewed = count.unreviewed;
+      paper.n_unverified = count.unverified;
+      // The status dot is the last of the per-paper summary to be recounted.
+      // `delete_claim` calls `refresh_status`, so the paper the server answers
+      // with once the wait is over reads its status off the claims that are
+      // left; holding the old one shows a paper with no new claims still
+      // marked as waiting to be reviewed, or a paper with nothing left on it
+      // still marked reviewed. Worked out the way `refresh_status` works it
+      // out, which needs to know whether the paper was ever read by the model
+      // for the case where the held claim was its last.
+      paper.status = count.claims === 0 ? (paper.has_extraction ? 'extracted' : 'fetched')
+        : count.unreviewed ? 'extracted' : 'reviewed';
     });
     // The topic sidebar draws `tag_counts` as the server sent it, so a held
     // claim would go on being counted under every topic it carries — and a
