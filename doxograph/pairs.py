@@ -50,6 +50,10 @@ _IRREGULAR = {
     "matrices": "matrix", "indices": "index", "vertices": "vertex",
     "appendices": "appendix", "criteria": "criterion", "phenomena": "phenomenon",
     "corpora": "corpus", "foci": "focus", "lemmas": "lemma", "lemmata": "lemma",
+    "nuclei": "nucleus", "radii": "radius", "stimuli": "stimulus",
+    "syllabi": "syllabus", "genera": "genus", "censuses": "census",
+    "apparatuses": "apparatus", "consensuses": "consensus", "bonuses": "bonus",
+    "lenses": "lens", "surpluses": "surplus", "gases": "gas",
 }
 
 

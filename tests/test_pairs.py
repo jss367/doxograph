@@ -85,5 +85,8 @@ def test_a_verb_and_its_past_tense_meet():
                         # Plurals no suffix rule reaches.
                         ("axis", "axes"), ("thesis", "theses"), ("crisis", "crises"),
                         ("matrix", "matrices"), ("index", "indices"),
-                        ("corpus", "corpora"), ("criterion", "criteria")):
+                        ("corpus", "corpora"), ("criterion", "criteria"),
+                        ("nucleus", "nuclei"), ("radius", "radii"),
+                        ("stimulus", "stimuli"), ("genus", "genera"),
+                        ("census", "censuses"), ("lens", "lenses")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)
