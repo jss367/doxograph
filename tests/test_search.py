@@ -346,3 +346,13 @@ def test_two_terms_either_side_of_a_page_break_are_two_passages():
     assert len(hit["passages"]) == 2
     marked = [part["text"] for passage in hit["passages"] for part in passage["parts"] if part["mark"]]
     assert sorted(marked) == ["Recovery", "Sandbagging"]
+
+
+def test_a_later_occurrence_is_shown_when_the_first_two_are_together():
+    """A term in the title and again in the abstract is one passage; the
+    occurrence worth showing beside it is further down."""
+    a_paper_of("thrice", "Sandbagging, and sandbagging again." + (" filler" * 60)
+               + "\x0cSandbagging once more, on another page.")
+    passages = search.search_papers("sandbagging")[0]["passages"]
+    assert len(passages) == 2
+    assert passages[1]["page"] == 2
