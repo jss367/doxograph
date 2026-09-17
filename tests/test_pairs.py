@@ -71,5 +71,9 @@ def test_a_verb_and_its_past_tense_meet():
                         ("recovered", "recovers"), ("steering", "steer"),
                         ("studied", "studies"), ("applied", "applies"),
                         ("controlled", "controls"), ("mapped", "maps"),
-                        ("planned", "plans"), ("added", "adds")):
+                        ("planned", "plans"), ("added", "adds"),
+                        ("analysis", "analyses"), ("hypothesis", "hypotheses"),
+                        ("diagnosis", "diagnoses"),
+                        # And the plurals the -sis rule must not swallow.
+                        ("phase", "phases"), ("dose", "doses")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)
