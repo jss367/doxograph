@@ -541,7 +541,9 @@ def test_an_identifier_is_read_from_both_ends():
     _paper("citing", "The citing paper", [
         "The citing paper",
         "References\n[1] Nobody. A work nobody wrote. https://doi.org/10.1706/03762, 2026.\n"
-        "[2] Nobody. Another work. https://doi.org/10.1234/foov2, 2026.",
+        "[2] Nobody. Another work. https://doi.org/10.1234/foov2, 2026.\n"
+        # A DOI suffix is allowed brackets and semicolons as well as dots.
+        "[3] Nobody. A third work. https://doi.org/10.1234/foo(2), 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
 

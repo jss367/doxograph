@@ -430,8 +430,9 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
 _VERSION = re.compile(r"v\d+(?![0-9A-Za-z])")
 
 # What joins one part of an identifier to the next, and so says the identifier
-# has not ended where a fingerprint of it has.
-_JOINS = "./-_:"
+# has not ended where a fingerprint of it has. The punctuation a DOI suffix is
+# allowed, which `ingest.DOI_RE` writes out as `[-._;()/:A-Za-z0-9]`.
+_JOINS = "./-_:;()"
 
 
 def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> bool:
