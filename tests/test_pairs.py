@@ -77,5 +77,9 @@ def test_a_verb_and_its_past_tense_meet():
                         # And the plurals the -sis rule must not swallow.
                         ("phase", "phases"), ("dose", "doses"),
                         # And the short stems the length guards used to part.
-                        ("died", "dies"), ("used", "uses"), ("used", "use")):
+                        ("died", "dies"), ("used", "uses"), ("used", "use"),
+                        # Singulars that end in s, and the plurals they own.
+                        ("bias", "biases"), ("status", "statuses"), ("virus", "viruses"),
+                        # And the plurals that must still lose their s.
+                        ("area", "areas"), ("paper", "papers"), ("model", "models")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)

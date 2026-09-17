@@ -30,6 +30,16 @@ except ValueError:
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 
+# Words that end in s without being plural. No rule tells `bias` from `areas`,
+# so the ones this corpus actually uses are written down: without them `bias`
+# stems to `bia` while `biases` stems to `bias`, and two claims about the same
+# thing lose their heaviest shared word.
+_SINGULAR_S = frozenset({
+    "bias", "status", "virus", "corpus", "focus", "campus", "consensus", "apparatus",
+    "bonus", "census", "genus", "lens", "nucleus", "radius", "stimulus", "surplus",
+    "syllabus", "thesis", "axis", "basis", "crisis", "ellipsis", "emphasis", "gas",
+})
+
 
 def stem(word: str) -> str:
     """A word with its commonest English endings off.
@@ -47,7 +57,8 @@ def stem(word: str) -> str:
         word = word[:-3] + "y"
     elif len(word) > 4 and word.endswith(("ches", "shes", "sses", "xes", "zes")):
         word = word[:-2]
-    elif len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+    elif (len(word) > 3 and word.endswith("s") and not word.endswith("ss")
+          and word not in _SINGULAR_S):
         word = word[:-1]
     if len(word) > 4 and word.endswith("ing"):
         word = word[:-3]
