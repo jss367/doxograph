@@ -505,10 +505,14 @@ def _run_syntheses(job: dict, topics: list[str], force: bool = False) -> None:
                 written += 1 if result["written"] else 0
                 skipped += 1 if result.get("skipped") else 0
             _set(job, detail=f"{done} of {len(topics)} topics")
+        # The topics nothing had changed in are said either way: a pass that
+        # failed somewhere still did not ask about those, and a summary that
+        # left them out would read as though it had.
         unchanged = f", {skipped} unchanged" if skipped else ""
         if failed:
             _set(job, state="error",
-                 detail=f"{failed} of {len(topics)} topics failed, {written} written; {last_failure}")
+                 detail=(f"{failed} of {len(topics)} topics failed, "
+                         f"{written} written{unchanged}; {last_failure}"))
         else:
             _set(job, state="done", detail=f"{written} of {len(topics)} topics written{unchanged}")
     except Exception as exc:

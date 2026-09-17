@@ -454,6 +454,22 @@ def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
     assert (job["state"], job["detail"]) == ("done", "1 of 1 topics written")
 
 
+def test_a_failed_pass_still_says_what_it_did_not_have_to_ask(monkeypatch):
+    """A topic nothing had changed in was not asked about, whether or not
+    another topic failed, and a summary leaving it out reads as though it had
+    been."""
+    def synth(topic, rows=None, tags=None, force=False):
+        if topic == "recovery-rate":
+            raise RuntimeError("no")
+        return {"written": False, "skipped": True, "claims": 1, "papers": 1}
+
+    monkeypatch.setattr(extract, "synthesize_topic", synth)
+    job = server._new_job("synthesis of 2 topics")
+    server._run_syntheses(job, ["recovery-rate", "scaling"])
+    assert job["detail"] == ("1 of 2 topics failed, 0 written, 1 unchanged; "
+                             "recovery-rate: RuntimeError: no")
+
+
 def test_export_puts_the_synthesis_under_its_topic_with_citations_as_markers():
     a, b, _ = build_corpus()
     store.record_synthesis("recovery-rate",
