@@ -1533,10 +1533,12 @@ def test_rewrite_asks_again_even_when_nothing_has_changed():
 
     async def scenario():
         posted = []
+        asked = asyncio.Event()
 
         async def capture(route):
             posted.append(route.request.post_data_json)
             await route.fulfill(status=200, json={"queued": 1})
+            asked.set()
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch()
@@ -1546,7 +1548,9 @@ def test_rewrite_asks_again_even_when_nothing_has_changed():
                 await page.locator(".synth").wait_for()
                 await page.route("**/api/syntheses", capture)
                 await page.get_by_role("button", name="Rewrite").click()
-                await page.wait_for_function("true")
+                # The click starts a fetch and comes back; what is asserted is
+                # what the fetch carried, so the wait is for the route.
+                await asyncio.wait_for(asked.wait(), timeout=10)
                 assert posted == [{"topics": ["recovery-rate"], "force": True}]
 
             await browser.close()

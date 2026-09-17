@@ -109,6 +109,22 @@ def test_the_basis_is_what_the_model_was_shown_not_what_is_on_disk():
     assert store.synthesis_rows()[0]["stale"] is True
 
 
+def test_a_rewritten_research_context_is_a_new_question():
+    """The prompt carries the research context, so a synthesis written under
+    an older one is worth writing again, and nothing in the corpus changing
+    would ever say so."""
+    build_corpus()
+    record = store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
+    assert record["prompt_basis"] == store.synthesis_prompt_basis("recovery-rate")
+
+    store.save_context("A different question altogether.")
+    assert record["prompt_basis"] != store.synthesis_prompt_basis("recovery-rate")
+    # And the basis is signed with the context the caller is sending, not with
+    # whatever is on disk by the time the answer comes back.
+    assert store.synthesis_prompt_basis("recovery-rate", context="The context as it was") != \
+        store.synthesis_prompt_basis("recovery-rate")
+
+
 def test_a_tension_reworded_by_a_rerun_makes_the_synthesis_stale():
     """The prompt carries the note, so a rerun that says the same disagreement
     in different words is a different thing to write a synthesis from."""

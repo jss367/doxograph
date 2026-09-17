@@ -140,8 +140,15 @@ def weights(rows: Iterable[dict]) -> dict[str, float]:
     """How much each word counts: rarer across the corpus, worth more.
 
     Over the whole corpus rather than one topic, so a word that is everywhere
-    — the topic's own name, most of all — weighs next to nothing wherever it
-    turns up.
+    — the topic's own name, most of all — weighs little against a word that is
+    not, and two claims sharing nothing else fall under the floor.
+
+    Little rather than nothing: a word in every row still weighs log(2), and
+    zeroing it would empty a small corpus, where every shared word is in every
+    row and a reader most wants the suggestion. The floor is what keeps the
+    corpus-wide word from carrying a pair on its own, and it does — in a pile
+    of fifty, two claims of four words each sharing only that one come to
+    0.027 against a floor of 0.08.
     """
     counts: dict[str, int] = {}
     total = 0
@@ -190,6 +197,10 @@ def similar_to(claim_id: str, rows: list[dict], weight: dict[str, float] | None 
             continue
         score = similarity(bag, words(row), weight)
         if score >= floor:
-            scored.append({"claim": row["id"], "score": round(score, 3)})
-    scored.sort(key=lambda row: (-row["score"], row["claim"]))
-    return scored[:limit]
+            scored.append((score, row["id"]))
+    # Sorted on the score as it was measured and rounded afterwards: two
+    # claims a ten-thousandth apart round to the same three places, and the
+    # lower one would be taken first on its id and keep the place `limit`
+    # gives away.
+    scored.sort(key=lambda found: (-found[0], found[1]))
+    return [{"claim": claim, "score": round(score, 3)} for score, claim in scored[:limit]]
