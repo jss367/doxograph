@@ -24,10 +24,23 @@ from .store import STOPWORDS
 # How much overlap a pair needs before it is worth showing. Low on purpose:
 # claims phrase the same measurement in very different ways, and a suggestion
 # the reader can dismiss at a glance costs less than one that never appears.
-try:
-    FLOOR = float(os.environ.get("DOXOGRAPH_PAIR_FLOOR", "0.08"))
-except ValueError:
-    FLOOR = 0.08
+_DEFAULT_FLOOR = 0.08
+
+
+def _floor(setting: str | None) -> float:
+    """The floor a setting asks for, or the default where it asks for nothing
+    a similarity can be measured against. A cosine runs from 0 to 1: below
+    that every pair is alike, above it none is, and `nan` compares false with
+    everything, so a corpus would come back with no suggestions and nothing to
+    say why."""
+    try:
+        wanted = float(setting)
+    except (TypeError, ValueError):
+        return _DEFAULT_FLOOR
+    return wanted if 0 <= wanted <= 1 else _DEFAULT_FLOOR
+
+
+FLOOR = _floor(os.environ.get("DOXOGRAPH_PAIR_FLOOR"))
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 

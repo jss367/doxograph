@@ -21,6 +21,15 @@ def a_corpus() -> tuple[str, str, str]:
     return tuple(ids)
 
 
+def test_a_floor_outside_the_range_a_similarity_lives_in_is_ignored():
+    """A cosine runs from 0 to 1. Below that every pair is alike and above it
+    none is, and `nan` compares false with everything, so a corpus would come
+    back with no suggestions and nothing to say why."""
+    assert pairs._floor("0.5") == 0.5
+    for setting in (None, "", "abc", "-1", "2", "nan", "inf"):
+        assert pairs._floor(setting) == pairs._DEFAULT_FLOOR, setting
+
+
 def test_an_accent_is_the_same_word_however_it_is_written():
     """A claim typed here has one character where one pasted out of a PDF has
     a letter and a combining mark, and `\\w+` would read the second as a word

@@ -88,7 +88,9 @@ doxograph tensions                    # find claims from different papers that d
 doxograph tensions --list             # show what has been found, without calling the model
 doxograph tensions --force            # ask again about topics nothing has changed in
 doxograph agreements                  # find claims from different papers that say the same thing
+doxograph agreements --force          # ask again about topics nothing has changed in
 doxograph synthesize                  # write what the papers hold on each topic
+doxograph synthesize --force          # write again for topics nothing has changed in
 doxograph synthesize --list           # show the syntheses on file
 doxograph list                        # what is in the corpus
 doxograph tags                        # topics and their use counts
