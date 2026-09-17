@@ -566,6 +566,14 @@ class RetagBody(BaseModel):
     keys: list[str] | None = None
 
 
+class ReviewBody(BaseModel):
+    """A bulk review decision. `claims` restricts it to those claims; without
+    it every claim on the paper is set."""
+
+    reviewed: bool = True
+    claims: list[str] | None = None
+
+
 class TensionsBody(BaseModel):
     topics: list[str] | None = None
 
@@ -936,6 +944,21 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
     return {"queued": job["id"]}
 
 
+@app.post("/api/papers/{key}/review")
+def review_paper_claims(key: str, body: ReviewBody) -> dict:
+    """Mark a paper's claims reviewed in one write.
+
+    Reviewing is the app's main work, and a paper arrives with a dozen claims
+    at once. The ids that changed come back so the page can offer an undo that
+    unreviews exactly those, leaving claims reviewed earlier alone.
+    """
+    try:
+        changed = store.review_claims(key, body.reviewed, body.claims)
+    except KeyError:
+        raise HTTPException(404, f"no paper {key}")
+    return {"key": key, "reviewed": body.reviewed, "changed": changed}
+
+
 @app.post("/api/papers/{key}/verify")
 def verify_quotes(key: str) -> dict:
     """Re-check every quote on a paper against its PDF. Fast enough to run
@@ -1207,6 +1230,17 @@ def put_context(body: ContextBody) -> dict:
 def api_export(body: ExportBody) -> dict:
     path = export.write(Path(body.path).expanduser() if body.path else None, title=body.title)
     return {"path": str(path)}
+
+
+@app.get("/export")
+def serve_export() -> FileResponse:
+    """Hand back the HTML this workspace last exported, so the page can offer
+    to open it instead of naming a path the reader has to go and find."""
+    path = config.export_path()
+    if not path.exists():
+        raise HTTPException(404, "nothing has been exported from this workspace yet")
+    return FileResponse(path, media_type="text/html", filename=path.name,
+                        content_disposition_type="inline")
 
 
 @app.get("/api/bibtex", response_class=PlainTextResponse)

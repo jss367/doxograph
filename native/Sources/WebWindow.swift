@@ -223,9 +223,10 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
 
     // MARK: - Page dialogs
     //
-    // Deleting a claim, deleting a paper and retagging everything all go
-    // through `confirm()`. A web view with no UI delegate answers false without
-    // asking, so without these the buttons would quietly do nothing.
+    // The page asks its own questions in HTML now, so nothing here is reached
+    // in the ordinary course of a session. It stays because a web view with no
+    // UI delegate answers `confirm()` false and `prompt()` nil without asking:
+    // anything that did reach one of these would fail silently and invisibly.
 
     func webView(
         _ webView: WKWebView,

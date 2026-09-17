@@ -384,3 +384,48 @@ def test_a_null_in_a_claim_patch_is_not_written():
         created = client.post("/api/papers/doe2026study/claims", json={"text": None}).json()
         assert created["text"] == "" and created["reviewed"] is False
         assert client.get("/api/state").status_code == 200
+
+
+# --- reviewing a whole paper at once -------------------------------------
+
+def paper_with_three_claims() -> list[str]:
+    store.save_paper(store.new_paper("doe2026study"))
+    ids = []
+    for text in ["One.", "Two.", "Three."]:
+        claim = store.add_claim("doe2026study", {"text": text, "reviewed": False})
+        ids.append(claim["id"])
+    return ids
+
+
+def test_reviewing_a_whole_paper_reports_only_what_it_changed():
+    """The ids that changed are what an undo needs: putting back every claim
+    would unreview one the reader had already been through."""
+    one, two, three = paper_with_three_claims()
+    store.update_claim("doe2026study", two, {"reviewed": True})
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        body = client.post("/api/papers/doe2026study/review", json={"reviewed": True}).json()
+    assert body["changed"] == [one, three]
+    assert store.load_paper("doe2026study")["status"] == "reviewed"
+    assert all(c["reviewed"] for c in store.load_paper("doe2026study")["claims"])
+
+
+def test_the_undo_of_a_bulk_review_names_the_claims_it_puts_back():
+    one, two, three = paper_with_three_claims()
+    store.update_claim("doe2026study", two, {"reviewed": True})
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        client.post("/api/papers/doe2026study/review", json={"reviewed": True})
+        body = client.post("/api/papers/doe2026study/review",
+                           json={"reviewed": False, "claims": [one, three]}).json()
+    assert body["changed"] == [one, three]
+    reviewed = {c["id"]: c["reviewed"] for c in store.load_paper("doe2026study")["claims"]}
+    assert reviewed == {one: False, two: True, three: False}
+
+
+def test_a_bulk_review_ignores_a_claim_that_is_no_longer_there():
+    """A claim deleted while the notice was up must not fail the undo."""
+    one, _two, _three = paper_with_three_claims()
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/papers/doe2026study/review",
+                               json={"reviewed": True, "claims": [one, "doe2026study-c99"]})
+        assert response.json()["changed"] == [one]
+        assert client.post("/api/papers/nothing/review", json={}).status_code == 404

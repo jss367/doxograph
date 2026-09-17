@@ -95,15 +95,22 @@ let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context:
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 let workspaces = [];
 let currentWorkspaceId = null;
+// The workspace change in flight, if any: its corpus is still on its way.
+let workspaceSwitch = null;
 let pendingMutations = 0;
-// The native app can receive a Finder/Dock drop while the first state request
-// is still loading. Publish the remembered choice synchronously so that drop
-// does not fall back to the default workspace during startup.
+// The page can be asked to write before the workspace registry has loaded: a
+// Finder or Dock drop in the native app, a paste into the box, an Export. Take
+// the workspace from the address, or from what this browser was last on, before
+// any of that is possible — a request sent with no workspace named goes to the
+// Default corpus, which is the one thing a link naming another must never do.
+// `loadWorkspaces` corrects this if the name turns out not to exist.
 try {
-  window.doxographWorkspaceId = localStorage.getItem('doxograph-workspace') || 'default';
+  const named = new URLSearchParams((location.hash || '').replace(/^#/, '')).get('ws');
+  currentWorkspaceId = named || localStorage.getItem('doxograph-workspace') || 'default';
 } catch (e) {
-  window.doxographWorkspaceId = 'default';
+  currentWorkspaceId = 'default';
 }
+window.doxographWorkspaceId = currentWorkspaceId;
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
 // onto claims one-to-one. newClaim holds a claim being written by hand; it lives
@@ -151,6 +158,20 @@ function blankClaim(paper) {
   };
 }
 
+// Counts the claims the user picks by hand: j/k, n, a click on a card, a jump
+// to a linked one. The `r` key reads it either side of its request, because a
+// claim chosen while the review PATCH is in flight is a newer choice than the
+// auto-advance and must not be overwritten by it. A count rather than a check
+// of `V.selectedId`, which moves on its own: the redraw after a toggle drops
+// the claim just reviewed out of an "only unreviewed" list and the selection
+// lands somewhere else without the user touching anything.
+let handPicked = 0;
+
+function selectClaim(id) {
+  V.selectedId = id;
+  handPicked += 1;
+}
+
 // Claims with a save in flight. Their form is read-only until the request
 // settles: text typed after Save was clicked is not in the request and would be
 // thrown away by the redraw that follows it, and a second click would post the
@@ -180,14 +201,670 @@ function applySavingState() {
   });
 }
 
+// Papers whose removal is in flight. Their cards and their header stay on
+// screen, and clickable, until the DELETE comes back: `removePaper` freezes the
+// claims by id, but that reaches only the claims the server has already told
+// the page about. A claim being written by hand has no id yet, and the
+// paper-level actions write claims of their own — a re-read makes a fresh set,
+// a retag and a quote check rewrite the ones on file, accepting a proposed
+// topic writes the paper itself. Each of them races the removal: land first and
+// the DELETE quietly throws the work away under a page that reported it saved,
+// land second and it fails with a 404 over a paper the reader did ask to
+// remove. Tracked by key, and asked before any of them goes out.
+const removingPapers = new Set();
+
+function isRemoving(paper) {
+  return removingPapers.has(paper);
+}
+
+// True when the action must not go ahead, having said why. `what` names the
+// work that would be lost, so the notice reads as a reason rather than a
+// refusal: "a new claim would be removed with it".
+function refuseWhileRemoving(paper, what) {
+  if (!isRemoving(paper)) return false;
+  toast(`That paper is being removed; ${what} would go with it.`, { tone: 'warn' });
+  return true;
+}
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// --- notices and dialogs --------------------------------------------------
+//
+// Native alert, confirm and prompt block the page, cannot be styled, and hold
+// the whole app still while they are up. They also cannot offer anything but
+// OK and Cancel, which rules out the one answer a delete wants: Undo. What the
+// app has to say goes through a notice; what it has to ask goes through one
+// dialog, reused.
+
+function toast(message, { actions = [], timeout = 6000, tone = '', onExpire = null } = {}) {
+  const el = document.createElement('div');
+  el.className = tone ? `toast ${tone}` : 'toast';
+  const text = document.createElement('span');
+  text.className = 'msg';
+  text.textContent = message;
+  el.appendChild(text);
+  let timer = null;
+  const handle = {
+    // `expired` separates running out of being dismissed by an action. A
+    // delete's notice commits the delete on the way out, and Undo is the one
+    // way of closing it that must not.
+    close(expired = false) {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      el.remove();
+      if (expired && onExpire) onExpire();
+    },
+  };
+  actions.forEach((action) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = action.label;
+    button.addEventListener('click', () => { handle.close(); action.onClick(); });
+    el.appendChild(button);
+  });
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'icon-button';
+  dismiss.textContent = '×';
+  dismiss.setAttribute('aria-label', `Dismiss: ${message}`);
+  dismiss.addEventListener('click', () => handle.close(true));
+  el.appendChild(dismiss);
+  if (timeout) timer = setTimeout(() => handle.close(true), timeout);
+  $('toasts').appendChild(el);
+  return handle;
+}
+
+let askResolve = null;
+
+function askDialog({ title, note = '', input = null, ok = 'OK', cancel = 'Cancel' }) {
+  const dialog = $('ask');
+  $('ask-title').textContent = title;
+  $('ask-note').textContent = note;
+  $('ask-note').hidden = !note;
+  const field = $('ask-input');
+  field.hidden = input === null;
+  field.value = input ? (input.value || '') : '';
+  field.placeholder = input ? (input.placeholder || '') : '';
+  $('ask-ok').textContent = ok;
+  $('ask-cancel').textContent = cancel;
+  dialog.showModal();
+  if (input) { field.focus(); field.select(); } else $('ask-ok').focus();
+  return new Promise((resolve) => { askResolve = resolve; });
+}
+
+// Every way out of the dialog lands here. The pending promise is taken first,
+// so closing the element does not settle it a second time with a cancel.
+function settleAsk(value) {
+  const resolve = askResolve;
+  askResolve = null;
+  if ($('ask').open) $('ask').close();
+  if (resolve) resolve(value);
+}
+
+$('ask-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  settleAsk($('ask-input').hidden ? true : $('ask-input').value);
+});
+$('ask-cancel').addEventListener('click', () => settleAsk(null));
+$('ask').addEventListener('cancel', () => settleAsk(null));   // Escape
+$('ask').addEventListener('close', () => settleAsk(null));
+
+const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
+  askDialog({ title, note, ok }).then((answer) => answer === true);
+const askText = (title, { note = '', placeholder = '', value = '' } = {}) =>
+  askDialog({ title, note, input: { placeholder, value } });
+
+// --- deletions, undone by not sending them --------------------------------
+//
+// A delete waits out its notice before it is sent, so Undo is simply not
+// sending it. Deleting at once and recreating on Undo would hand back a
+// different claim: a new id, and the tensions, agreements and syntheses that
+// cite the old one gone for good. Until it is sent, the row is kept out of
+// what the page draws, so the wait is invisible.
+const UNDO_MS = 8000;
+const trash = new Map();   // "kind:id" -> the request that is waiting
+
+function trashed(kind, id) {
+  return trash.has(`${kind}:${id}`);
+}
+
+// `pruneTrashed` takes rows out of the state the page is holding, so that
+// state no longer matches the tag the server gave it. Undoing a delete the
+// server never heard about changes nothing on its side, and the next poll
+// would be answered "not modified" and leave the row missing for good.
+function forgetStateTag() {
+  stateEtag = null;
+}
+
+// Whether a claim still says what a synthesis's basis on file recorded it
+// saying. The server writes each entry of that basis as a JSON list of the
+// three fields the model was shown, so it is read back rather than built again
+// here: building it would mean reproducing Python's spacing and its escaping of
+// everything above ASCII, and what the comparison is about is the values.
+function basisMatches(fingerprint, claim) {
+  let written;
+  try { written = JSON.parse(fingerprint); } catch { return false; }
+  return Array.isArray(written) && written.length === 3
+    && written[0] === (claim.text || '') && written[1] === (claim.evidence || '')
+    && written[2] === (claim.kind || 'finding');
+}
+
+// `synthesis_rows` reads `stale` off two comparisons: the topic's claims
+// against the basis the text was written from, and the topic's tensions against
+// the ones the model was shown. A held claim can settle either of them as
+// easily as unsettle it — a synthesis reading stale only because a claim had
+// been added since is current again once that claim is the one deleted — so the
+// flag is worked out again rather than simply turned on. `tensions` is the
+// pruned list: one citing a held claim is already out of it, as it is out of
+// the answer the server would give.
+function synthesisStale(row, live, tensions) {
+  const basis = row.claims || {};
+  if (Object.keys(basis).length !== live.length
+      || !live.every((claim) => claim.id in basis && basisMatches(basis[claim.id], claim))) {
+    return true;
+  }
+  const shown = (tensions || []).filter(
+    (tension) => (tension.topics || []).includes(row.topic) && tension.status !== 'dismissed');
+  const written = row.tensions || {};
+  if (Object.keys(written).length !== shown.length) return true;
+  // A record written before the tensions were part of the basis holds
+  // two-element lists, which match nothing here and leave it reading stale, as
+  // it does on the server: what the model was told is not known.
+  return !shown.every((tension) => {
+    const seen = written[tension.id];
+    return Array.isArray(seen) && seen.length === 3
+      && seen[0] === (tension.kind ?? null) && seen[1] === (tension.status ?? null)
+      && seen[2] === Boolean(tension.stale);
+  });
+}
+
+// Takes the waiting rows out of `S`. Called wherever `S` is replaced, and
+// written to be safe to run twice on the same state: the per-paper counts are
+// recounted from the claims that are left rather than decremented.
+function pruneTrashed() {
+  if (!trash.size) return;
+  const all = S.claims || [];
+  const kept = all.filter((row) => !trashed('claim', row.id));
+  if (kept.length !== all.length) {
+    S.claims = kept;
+    const counts = new Map();
+    kept.forEach((row) => {
+      const count = counts.get(row.paper) || { claims: 0, unreviewed: 0, unverified: 0 };
+      count.claims += 1;
+      if (!row.reviewed) count.unreviewed += 1;
+      if (row.quote_verified === false) count.unverified += 1;
+      counts.set(row.paper, count);
+    });
+    (S.papers || []).forEach((paper) => {
+      const count = counts.get(paper.key) || { claims: 0, unreviewed: 0, unverified: 0 };
+      paper.n_claims = count.claims;
+      paper.n_unreviewed = count.unreviewed;
+      paper.n_unverified = count.unverified;
+      // The status dot is the last of the per-paper summary to be recounted.
+      // `delete_claim` calls `refresh_status`, so the paper the server answers
+      // with once the wait is over reads its status off the claims that are
+      // left; holding the old one shows a paper with no new claims still
+      // marked as waiting to be reviewed, or a paper with nothing left on it
+      // still marked reviewed. Worked out the way `refresh_status` works it
+      // out, which needs to know whether the paper was ever read by the model
+      // for the case where the held claim was its last.
+      paper.status = count.claims === 0 ? (paper.has_extraction ? 'extracted' : 'fetched')
+        : count.unreviewed ? 'extracted' : 'reviewed';
+    });
+    // The topic sidebar draws `tag_counts` as the server sent it, so a held
+    // claim would go on being counted under every topic it carries — and a
+    // topic whose only claim is held would stay on the list at one, offering a
+    // filter that draws nothing. Recounted from what is left, like the per-paper
+    // counts above and in the server's own order — commonest first, ties by
+    // name — so the list does not reshuffle itself for the length of the wait.
+    const tags = new Map();
+    kept.forEach((row) => (row.tags || []).forEach(
+      (tag) => tags.set(tag, (tags.get(tag) || 0) + 1)));
+    const counted = Object.fromEntries([...tags].sort(
+      (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
+    // One exception to counting what is left: the topic being filtered on. Its
+    // entry in the sidebar is the only way back out of that filter, so dropping
+    // it for the length of the wait would leave the reader on a view with no
+    // claims and nothing to click — and clearing `V.tag` instead would make
+    // Undo a one-way trip, putting them back on the whole corpus rather than
+    // on the topic they were reading. Kept at zero, and only if it was there
+    // before the prune, so a topic named by a stale URL is still dropped by
+    // `dropMissingFilters`. The delete going through takes the entry with it:
+    // the trash is empty by then, this runs no more, and the filter goes with
+    // the count the server sends.
+    if (V.tag && !Object.hasOwn(counted, V.tag)
+        && Object.hasOwn(S.tag_counts || {}, V.tag)) counted[V.tag] = 0;
+    S.tag_counts = counted;
+  }
+  // The analysis views hold the server's own join: each tension and agreement
+  // carries the claim rows it cites, not their ids. Taking a held claim out of
+  // `S.claims` alone would leave those copies on screen, still open to a
+  // decision or a quote, so they are filtered the way `tension_rows` and
+  // `agreement_rows` filter them — a tension needs both of its claims, an
+  // agreement needs members from two papers. A tension that keeps both of its
+  // claims keeps its topics too: they are the ones both of them carry, and both
+  // of them are still here.
+  S.tensions = (S.tensions || []).filter(
+    (row) => !(row.claims || []).some((claim) => trashed('claim', claim.id)));
+  let regrouped = false;
+  S.agreements = (S.agreements || [])
+    .filter((row) => !trashed('agreement', row.id))
+    .map((row) => {
+      const members = (row.claims || []).filter((claim) => !trashed('claim', claim.id));
+      if (members.length === (row.claims || []).length) return row;
+      regrouped = true;
+      // A group that loses a member can gain a topic. `agreement_rows` files
+      // the topics under the agreement and then shows only the ones every
+      // member still carries, so a topic that one member alone had dropped is
+      // missing from the row the server sent; take that member out and the
+      // topic is good for everyone left, which is what the server will say
+      // once the delete lands. Keeping the filtered list would hide the group
+      // from its own topic for the length of the wait and then hand it back at
+      // the end. The page cannot un-filter a list, so the row carries the set
+      // the server filtered from, `topics_on_file`, and it is filtered again
+      // here against the members that are left.
+      //
+      // Stale, as on the server: the note and the decision on file were about
+      // a group that is not the one on screen.
+      const topics = (row.topics_on_file || row.topics || []).filter(
+        (topic) => members.every((claim) => (claim.tags || []).includes(topic)));
+      return { ...row, claims: members, topics,
+               n_papers: new Set(members.map((c) => c.paper)).size, stale: true };
+    })
+    .filter((row) => new Set((row.claims || []).map((claim) => claim.paper)).size >= 2);
+  if (regrouped) {
+    // `agreement_rows` orders by status, then by how many papers are in the
+    // group, then by when it was found. A group that lost a member to the wait
+    // is smaller than the one the server sorted, so the cards would shuffle
+    // themselves the moment the wait ended and the real answer arrived. Sorted
+    // here on the same key, and stably, so rows the delete did not touch keep
+    // the order they came in.
+    const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+    const rank = (row) => (statuses.indexOf(row.status) + 1 || 10) - 1;
+    const found = (row) => row.found || '';
+    S.agreements.sort((a, b) => rank(a) - rank(b) || b.n_papers - a.n_papers
+      || (found(a) < found(b) ? -1 : found(a) > found(b) ? 1 : 0));
+  }
+  // A synthesis is the same kind of derived row: `synthesis_rows` works out the
+  // counts and the stale flag from the claims its topic has now, not from the
+  // ids on file, and drops a topic that has none left. Held claims were taken
+  // out of only the syntheses deleted by topic, so a topic one of them carried
+  // went on claiming more claims and papers than it still had and cited a claim
+  // the page no longer knows — `citeHtml` leaves that bracket as written, a
+  // bare `[paper-a-c1]`. So the rows a held claim touches are rebuilt the way
+  // the server builds them: no claims left and the card goes, otherwise recount
+  // and read the stale flag off the basis on file. Undo is still the delete
+  // never being sent, so the next refresh brings the row back as the server
+  // has it.
+  const heldTopics = new Set();
+  all.forEach((row) => {
+    if (trashed('claim', row.id)) (row.tags || []).forEach((tag) => heldTopics.add(tag));
+  });
+  S.syntheses = (S.syntheses || [])
+    .filter((row) => !trashed('synthesis', row.topic))
+    .map((row) => {
+      if (!heldTopics.has(row.topic)) return row;
+      const live = kept.filter((claim) => (claim.tags || []).includes(row.topic));
+      if (!live.length) return null;
+      return { ...row, n_claims: live.length,
+               n_papers: new Set(live.map((claim) => claim.paper)).size,
+               stale: synthesisStale(row, live, S.tensions) };
+    })
+    .filter(Boolean);
+}
+
+async function deleteLater(kind, id, path, label, { paper = null } = {}) {
+  const token = `${kind}:${id}`;
+  if (trash.has(token)) return;
+  const workspace = currentWorkspaceId || 'default';
+  let notice = null;
+  // The entry stays in the trash until the request settles, so the row does not
+  // flash back on screen between the notice fading and the server answering.
+  // That leaves it visible to a second caller — the notice running out while an
+  // export flushes, say — so the request itself is what is shared: one delete,
+  // and no second one to come back 404 and leave a failure notice standing.
+  // It lives on the entry rather than in here, because the page closing has to
+  // see it too and has only the entry to look at.
+  const send = () => {
+    const entry = trash.get(token);
+    if (!entry) return Promise.resolve();   // already sent, or undone
+    if (entry.sending) return entry.sending;
+    if (notice) notice.close();
+    // Resolves to whether the row is really gone. A delete that failed leaves
+    // it on file, and the callers waiting on this — an export, a retag, a model
+    // pass — would go on to read a corpus that still holds a claim the reader
+    // watched disappear. They are told, rather than left to assume it settled.
+    entry.sending = (async () => {
+      let sent = true;
+      try {
+        // Named rather than implied: `flushTrash` sends these before a switch,
+        // and this makes that a guarantee rather than an ordering to preserve.
+        //
+        // `keepalive` because the page closing stands aside for this request
+        // rather than sending a second one: an ordinary fetch can be abandoned
+        // as the page goes, and the row would come back from a delete the
+        // reader watched happen. A DELETE carries no body, so the size limit
+        // that comes with it costs nothing.
+        await api(path, {
+          method: 'DELETE',
+          keepalive: true,
+          headers: { 'X-Doxograph-Workspace': workspace },
+        });
+      } catch (error) {
+        sent = false;
+        toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
+      } finally {
+        trash.delete(token);
+        forgetStateTag();
+      }
+      await refreshAll();
+      return sent;
+    })();
+    return entry.sending;
+  };
+  trash.set(token, { path, workspace, paper, send, sending: null });
+  forgetStateTag();
+  pruneTrashed();
+  // `pruneTrashed` only takes the row out of the state the page holds; what is
+  // on screen stands until something draws it. That draw happens here, before
+  // the refresh, because the refresh is a read from the server and a server
+  // restarting under the click rejects it — and then nothing redraws at all.
+  // The row would sit there under the "Deleted …" notice, still clickable and
+  // still open to an edit or a second delete, until the timer sent the DELETE
+  // out from under it.
+  renderAll();
+  // The redraw comes before the notice, so the row is off the screen before an
+  // offer to put it back appears over it. The refresh can still fail, and the
+  // notice is what carries the timer that finally sends the delete: raised only
+  // on the way out of a refresh that worked, it would leave the entry sitting in
+  // the trash with the row hidden, the DELETE never sent, and no Undo and no
+  // error to say so. So it goes up either way, and the failure still reaches
+  // the caller.
+  try {
+    await refreshAll();
+  } finally {
+    // The wait can end during that refresh — `flushTrash` sends what is waiting
+    // — and a notice raised afterwards would offer to undo a delete the server
+    // already has. The entry is still in the trash while its request is in
+    // flight, which is what keeps the row off the screen, so `sending` is the
+    // thing to ask: once it is set there is nothing left to undo.
+    if (trash.get(token) && !trash.get(token).sending) {
+      notice = toast(`Deleted ${label}.`, {
+        timeout: UNDO_MS,
+        onExpire: send,
+        actions: [{
+          label: 'Undo',
+          onClick: async () => {
+            // Sent between the notice going up and this being clicked. `send`
+            // closes the notice, so this is all but unreachable — but an Undo
+            // that quietly does nothing is worse than one that says so.
+            if (trash.get(token)?.sending) {
+              toast(`That delete has already been sent; ${label} is gone.`, { tone: 'warn' });
+              return;
+            }
+            trash.delete(token);
+            forgetStateTag();
+            await refreshAll();
+          },
+        }],
+      });
+    }
+  }
+}
+
+// A delete belongs to the workspace it was made in, so leaving one sends what
+// is still waiting rather than carrying it across, where the same claim id can
+// name a different claim. It is also what the server has to be told before it
+// is asked to work anything out from the corpus: for those eight seconds the
+// row is gone from the page but still on file, and an export or a model pass
+// started meanwhile would take it as live.
+// Settle the held deletes, then say which workspace the action was asked in.
+// The flush ends in a read and a read is not counted as a change in flight, so
+// the picker can move in the gap; anything sent afterwards has to name the
+// corpus the reader was looking at, not the one they have since gone to.
+// Null when a held delete came back an error: the row is still on file, the
+// reader has already been told so, and whatever was waiting on the deletion
+// must not go ahead against a corpus that still holds it. Every caller checks.
+async function settleDeletes(wanted = null) {
+  const workspace = currentWorkspaceId;
+  if (!await flushTrash(wanted)) return null;
+  return { 'X-Doxograph-Workspace': workspace };
+}
+
+// True when everything it sent is really gone.
+async function flushTrash(wanted = null) {
+  // Drained rather than snapshotted: the page stays interactive while this
+  // runs, so a row deleted during it has to go with the rest. A snapshot would
+  // leave that one on file for the export or the model pass waiting on this.
+  //
+  // This workspace's rows, though. Each delete leaves the trash before its own
+  // trailing read, and a read is not counted as a change in flight, so the
+  // picker can move while the drain is between rounds. A delete made after
+  // that belongs to the corpus the reader has gone to: taking it here would
+  // send it under an Undo the page is still offering, and its failure would
+  // call off an action in a workspace it has nothing to do with. It is left
+  // to its own eight seconds, and to the flush that leaving that workspace
+  // runs.
+  const workspace = currentWorkspaceId || 'default';
+  let settled = true;
+  for (;;) {
+    const waiting = [...trash.values()]
+      .filter((entry) => entry.workspace === workspace && (!wanted || wanted(entry)));
+    if (!waiting.length) return settled;
+    // `send` resolves to `undefined` for an entry that went while this was
+    // deciding; only an outright `false` is a failure.
+    const sent = await Promise.all(waiting.map((entry) => entry.send()));
+    if (sent.some((ok) => ok === false)) settled = false;
+  }
+}
+
+// Coming back to a page the browser froze rather than unloaded. `pagehide`
+// sent the held deletes, but the DOM came back as it was: the notices on it
+// offer to undo work that is finished, and their Undo would have nothing to
+// take back. They go, and the corpus is read again from the server.
+window.addEventListener('pageshow', (event) => {
+  if (!event.persisted) return;
+  $('toasts').innerHTML = '';
+  forgetStateTag();
+  refreshAll();
+});
+
+// A tab closed while a delete is still waiting sends it now rather than
+// silently dropping it: the row is already gone from the page, and coming back
+// to find it restored would be the app forgetting what it was told.
+window.addEventListener('pagehide', () => {
+  trash.forEach((entry) => {
+    // One already on its way needs nothing: a second request would race it, and
+    // whichever lost would come back 404 over a row that was deleted after all.
+    if (entry.sending) return;
+    const headers = { 'X-Doxograph-Workspace': entry.workspace };
+    try { fetch(entry.path, { method: 'DELETE', headers, keepalive: true }); } catch (e) { /* leaving anyway */ }
+  });
+  trash.clear();
+});
+
+// --- the URL says what is on screen ---------------------------------------
+//
+// Without this a reload lands back on the whole corpus, Back leaves the app,
+// and there is no way to hand someone a link to one topic. Navigation pushes a
+// history entry; a filter or a selection replaces one, so Back does not have to
+// walk through every keystroke.
+const HASH_VIEWS = ['claims', 'tensions', 'agreements', 'research', 'graph'];
+
+function hashParams() {
+  return new URLSearchParams((location.hash || '').replace(/^#/, ''));
+}
+
+function currentHash() {
+  const params = new URLSearchParams();
+  if (currentWorkspaceId && currentWorkspaceId !== 'default') params.set('ws', currentWorkspaceId);
+  if (V.view !== 'claims') params.set('view', V.view);
+  if (V.paper) params.set('paper', V.paper);
+  if (V.tag) params.set('tag', V.tag);
+  if (V.q.trim()) params.set('q', V.q);
+  if (V.kind) params.set('kind', V.kind);
+  if (V.unreviewed) params.set('unreviewed', '1');
+  if (V.unverified) params.set('unverified', '1');
+  if (!V.group) params.set('group', '0');
+  if (V.view === 'claims' && V.selectedId) params.set('sel', V.selectedId);
+  if (V.tensionStatus) params.set('tstatus', V.tensionStatus);
+  if (V.agreementStatus) params.set('astatus', V.agreementStatus);
+  return params.toString();
+}
+
+// Set while a popped entry is being restored. Everything between the pop and
+// the redraw — the workspace reset, its refresh, the render inside it — would
+// otherwise write the state it is passing through back into the URL being read
+// from, so an entry naming another workspace would lose its paper and filters
+// before `applyHash` ever saw them.
+let restoringHistory = false;
+
+function syncHash(push = false) {
+  if (restoringHistory) return;
+  const next = currentHash();
+  if (next === hashParams().toString()) return;
+  const url = `${location.pathname}${location.search}#${next}`;
+  if (push) history.pushState(null, '', url);
+  else history.replaceState(null, '', url);
+}
+
+// A status out of a URL is checked against the ones that exist, so a hand-edited
+// address cannot leave a view filtered to nothing with no way to see why.
+const STATUSES = ['open', 'confirmed', 'dismissed'];
+
+function readStatus(value) {
+  return STATUSES.includes(value) ? value : '';
+}
+
+// A paper, a topic or a kind named by a URL may be gone: at boot from a stale
+// bookmark, or on Back to an entry from before it was removed. A paper's key is
+// retired and will never come back; a topic can be renamed away; a kind can be
+// hand-typed into the address or left over from an older version. Any of them
+// would empty the list with nothing on screen to say why — and a topic the
+// sidebar cannot list leaves nothing to click to get out of it, short of
+// editing the address. The kind is worse still: the select has no option to
+// match it, so it shows blank while filtering every claim away.
+//
+// Runs once the corpus is in `S`, which is why it is not part of `applyHash`:
+// at boot the URL is read before the first read of the corpus comes back. Every
+// read runs it — see `pull` — so a filter is dropped whenever the corpus stops
+// holding what it names, not only when the reader arrives at one.
+function dropMissingFilters() {
+  if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) V.paper = null;
+  if (V.tag && !Object.hasOwn(S.tag_counts || {}, V.tag)) V.tag = null;
+  if (V.kind && !(S.kinds || []).includes(V.kind)) {
+    V.kind = '';
+    $('kind').value = '';
+  }
+}
+
+// Sets the view from the URL without drawing it. The controls are set here too:
+// they are the same state, and a filter the page has forgotten to tick is worse
+// than no filter at all.
+function applyHash() {
+  const params = hashParams();
+  const view = params.get('view') || 'claims';
+  V.view = HASH_VIEWS.includes(view) ? view : 'claims';
+  V.paper = params.get('paper') || null;
+  V.tag = params.get('tag') || null;
+  V.q = params.get('q') || '';
+  V.kind = params.get('kind') || '';
+  V.unreviewed = params.get('unreviewed') === '1';
+  V.unverified = params.get('unverified') === '1';
+  V.group = params.get('group') !== '0';
+  V.selectedId = params.get('sel') || null;
+  V.tensionStatus = readStatus(params.get('tstatus'));
+  V.agreementStatus = readStatus(params.get('astatus'));
+  V.editing = null;
+  // The focus is a drill-down from a claim's marker rather than a filter the
+  // reader chose, so it is not carried; the status they chose is.
+  V.tensionFocus = null;
+  V.agreementFocus = null;
+  // A new claim belongs to the paper it was started on. Arriving at another
+  // paper has to park it, exactly as clicking that paper in the list does, or
+  // it is offered as a draft under a header it does not belong to and saving
+  // it posts to the paper that is no longer on screen.
+  parkNewClaimForNavigation(V.paper);
+  $('q').value = V.q;
+  // Typing is not the only way to arrive at a query: a bookmark or Back can
+  // put one on screen, and the search over the papers' own text belongs to the
+  // query rather than to the keystroke that happened to produce it.
+  scheduleTextSearch();
+  $('kind').value = V.kind;
+  $('only-unreviewed').checked = V.unreviewed;
+  $('only-unverified').checked = V.unverified;
+  $('group-by-tag').checked = V.group;
+}
+
+// Restoring an entry can wait on a workspace switch, and Back or Forward held
+// down arrives faster than that. Each pop takes a number and the newest one
+// wins: an older one that wakes up afterwards has nothing left to say, and
+// must not draw its entry over the newer one or clear the guard it is using.
+let popSeq = 0;
+
+window.addEventListener('popstate', async () => {
+  const seq = ++popSeq;
+  // A question still on screen belongs to the move this one supersedes —
+  // Forward pressed while Back was asking about unsaved edits. Answering it
+  // afterwards would switch the corpus for a move that is no longer where the
+  // reader is, so it is withdrawn as a cancel: drafts kept, nothing switched.
+  if (askResolve) settleAsk(null);
+  // Moving through history is a view change like any other, and the editors
+  // keep their text across it: `applyHash` writes straight to `V`, so the
+  // bookkeeping `showView` would have done is done here.
+  if (V.view === 'research') captureResearchDraft();
+  captureOpenEditor();
+  parkSynthEditor();
+  const wanted = hashParams().get('ws') || 'default';
+  restoringHistory = true;
+  try {
+    // The workspace reset clears the filters; the URL being moved to puts back
+    // whatever it holds, which is the whole point of going back to it.
+    if (wanted !== currentWorkspaceId) {
+      if (workspaces.some((w) => w.id === wanted)) await switchWorkspace(wanted);
+      if (seq !== popSeq) return;
+      // The switch can be refused — a change still in flight, or the reader
+      // keeping their drafts — and a workspace this page does not know is
+      // never attempted at all. The entry then describes a corpus the page is
+      // not in, and applying its paper and filters to the one it is in would
+      // be worse than ignoring it: a key that exists in both corpora would
+      // open the wrong paper, which `dropMissingFilters` cannot catch.
+      if (currentWorkspaceId !== wanted) return;
+    } else if (workspaceSwitch) {
+      // A switch is running and this entry belongs to where the page is now —
+      // but `currentWorkspaceId` only changes once that switch's own flush is
+      // done, so the switch may be on its way somewhere else entirely. Wait
+      // for it, then ask again where it left us.
+      await workspaceSwitch;
+      if (seq !== popSeq) return;
+      if (currentWorkspaceId !== wanted) return;
+    }
+    applyHash();
+    dropMissingFilters();
+  } finally {
+    // Every exit redraws, including the refused one, and the redraw writes the
+    // URL back to what is on screen: an entry the page did not take must not
+    // be left standing as the address. A superseded pop does neither — the one
+    // that overtook it owns both.
+    if (seq === popSeq) {
+      restoringHistory = false;
+      renderAll();
+    }
+  }
+});
+
 async function api(path, options = {}) {
   const request = { ...options };
   const headers = new Headers(request.headers || {});
-  if (currentWorkspaceId) headers.set('X-Doxograph-Workspace', currentWorkspaceId);
+  // A caller that named a workspace meant that one. An undo offered in a
+  // notice can outlive the picker, and finishing it against whatever is
+  // selected by then would write to the wrong corpus — the same paper
+  // imported twice carries the same key and claim ids in both.
+  if (!headers.has('X-Doxograph-Workspace') && currentWorkspaceId) {
+    headers.set('X-Doxograph-Workspace', currentWorkspaceId);
+  }
   request.headers = headers;
   const method = (request.method || 'GET').toUpperCase();
   const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method);
@@ -245,6 +922,16 @@ async function pull() {
   } else {
     S.jobs = jobs;
   }
+  pruneTrashed();   // a delete that has not been sent yet is already gone here
+  // And the view is checked against the corpus that is left, which is where a
+  // filter naming something that has gone is dropped. Here rather than only at
+  // boot and on Back, because the corpus can lose a paper or a topic under a
+  // page that is sitting still: the poll picking up a rename or a removal made
+  // in another window, or the refresh that follows this page's own delete
+  // finally going out — the topic whose last claim it took is gone from the
+  // count, the sidebar entry the hold kept alive goes with it, and the filter
+  // has to go too or it outlives the Undo it was being kept for.
+  dropMissingFilters();
   return Boolean(next);
 }
 
@@ -308,25 +995,75 @@ function resetWorkspaceView() {
   closePaperMenu();
 }
 
+// Bumped by every selection, so a switch that stopped to wait for an earlier
+// one can tell it has since been overtaken and stand down rather than load a
+// workspace the reader has already moved on from.
+let switchSeq = 0;
+
 async function switchWorkspace(workspaceId) {
+  if (workspaceId === currentWorkspaceId && !workspaceSwitch) return;
+  const seq = ++switchSeq;
+  // The picker is a native select, so the browser has already moved it to the
+  // new name by the time this runs — and nothing here moves the corpus for a
+  // while yet. Every step below is a wait: an earlier switch to finish, the
+  // question about unsaved edits, and then the flush of held deletes inside
+  // `loadWorkspace`. `currentWorkspaceId` and `window.doxographWorkspaceId`
+  // name the workspace being left for all of it, and the rest of the page
+  // stays live, so a reference added, a PDF dropped, an export or a Dock
+  // upload made in that window would go to the corpus the picker had stopped
+  // showing. It is put back to the one that is actually live, and only moves
+  // when `loadWorkspace` has moved it — which is also what the refusals below
+  // used to each have to do for themselves.
+  renderWorkspacePicker();
+  // A switch spans several awaits, and the first of them sends the held
+  // deletes — a flush that ends in a read, which is not counted as a change in
+  // flight. The picker stays live for that stretch, so a second selection can
+  // arrive mid-switch. Two loads running together write `currentWorkspaceId`
+  // and `S` in whatever order their requests land, and the newer one can be
+  // overwritten by the older one finishing behind it: the page settles in the
+  // workspace that was superseded. So the switch already running finishes
+  // first, and only the newest selection goes on from there.
+  while (workspaceSwitch) {
+    // A switch that failed still ends this one's wait; its own caller reports it.
+    await workspaceSwitch.catch(() => {});
+    // Overtaken while waiting. The selection that overtook this one owns the
+    // picker from here, including putting it back if it refuses too.
+    if (seq !== switchSeq) return;
+  }
+  // The switch that just finished may have landed where this one was headed.
   if (workspaceId === currentWorkspaceId) return;
   if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
-    alert('Wait for the current change to finish before switching workspaces.');
-    renderWorkspacePicker();
+    toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
     return;
   }
   const hasDraft = V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || researchFormDirty();
-  if (hasDraft && !confirm('Switch workspaces and discard unsaved edits in this workspace?')) {
-    renderWorkspacePicker();
-    return;
+  if (hasDraft && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
+                                       { ok: 'Discard and switch' })) return;
+  // The dialog is another await the picker is live across.
+  if (seq !== switchSeq) return;
+  const run = loadWorkspace(workspaceId);
+  workspaceSwitch = run;
+  try {
+    await run;
+  } finally {
+    if (workspaceSwitch === run) workspaceSwitch = null;
   }
+}
+
+// The half of the switch that replaces the corpus, kept separate so that
+// anyone who arrives while it is running can wait for it. `currentWorkspaceId`
+// changes at the start and `S` only when the answer lands, so code that reads
+// both in between would be judging the new workspace by the old corpus.
+async function loadWorkspace(workspaceId) {
+  await flushTrash();
   currentWorkspaceId = workspaceId;
   stateEtag = null;   // the tag belongs to the other workspace's corpus
   try { localStorage.setItem('doxograph-workspace', workspaceId); } catch (e) { /* optional */ }
   resetWorkspaceView();
   renderWorkspacePicker();
+  syncHash(true);   // a no-op while a popped entry is being restored
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((kind) => `<option value="${esc(kind)}">${esc(kind)}</option>`).join('');
@@ -336,10 +1073,12 @@ async function loadWorkspaces() {
   const response = await fetch('/api/workspaces');
   if (!response.ok) throw new Error('Could not load workspaces');
   workspaces = (await response.json()).workspaces || [];
-  let remembered = null;
-  try { remembered = localStorage.getItem('doxograph-workspace'); } catch (e) { /* optional */ }
-  currentWorkspaceId = workspaces.some((workspace) => workspace.id === remembered)
-    ? remembered : 'default';
+  // `currentWorkspaceId` was taken from the address or from this browser's last
+  // choice before the page could send anything anywhere. This is where it is
+  // checked against the corpora that actually exist.
+  const wanted = currentWorkspaceId;
+  currentWorkspaceId = workspaces.some((workspace) => workspace.id === wanted) ? wanted : 'default';
+  try { localStorage.setItem('doxograph-workspace', currentWorkspaceId); } catch (e) { /* optional */ }
   renderWorkspacePicker();
 }
 
@@ -586,6 +1325,7 @@ function renderAll() {
   renderContent();
   renderJobs();
   syncAnalysisControls();
+  syncHash();
 }
 
 function renderStats() {
@@ -672,6 +1412,8 @@ function renderPapers() {
       <span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
         ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
+      <button type="button" class="pmenu" data-menu="${esc(p.key)}"
+        aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
 }
 
@@ -753,6 +1495,8 @@ function paperHeader(key) {
       <button type="button" data-act="reextract" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Re-read paper</button>
       <button type="button" data-act="retag-one" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Retag claims</button>
       ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
+      ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
+        title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
@@ -834,6 +1578,7 @@ function claimCard(row, shown, group = '') {
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer"
         title="${esc(row.paper_title || row.paper)}">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
+      ${claimPdfLink(row)}
       ${tensionMarker(row.id)}
       ${agreementMarker(row.id)}
       <span class="cact">
@@ -847,6 +1592,25 @@ function claimCard(row, shown, group = '') {
     ${quoteHtml(row, group)}
     ${links}
   </div>`;
+}
+
+// Checking a quote means reading the paper, so the paper is one click from the
+// claim, at the page its locator names when it names one.
+function claimPdfLink(row) {
+  const paper = S.papers.find((p) => p.key === row.paper);
+  if (!paper || !paper.has_pdf) return '';
+  const page = pdfPage(row.locator);
+  const href = `/pdf/${encodeURIComponent(row.paper)}?${workspaceQuery()}&inline=1${page ? `#page=${page}` : ''}`;
+  return `<a class="pdflink" href="${esc(href)}" target="_blank" rel="noopener"
+    title="${page ? `Open the PDF at page ${page}` : 'Open the PDF'}">PDF${page ? ' p.' + esc(page) : ''}</a>`;
+}
+
+// 'p. 4' and 'pp. 4-5' name a page. 'Table 2' and 'Sec. 3.1' do not, and a
+// section number followed as a page number would land the reader somewhere
+// else in the paper with nothing to say it had gone wrong.
+function pdfPage(locator) {
+  const match = /(?:^|[^a-z])p{1,2}\.?\s*(\d{1,4})|(?:^|[^a-z])pages?\s*(\d{1,4})/i.exec(locator || '');
+  return match ? (match[1] || match[2]) : null;
 }
 
 // The quote, flagged when it was not found in the paper's text. A quote the
@@ -867,7 +1631,9 @@ function quoteHtml(row, group = '') {
   const show = `<button type="button" class="qshow" data-act="quote-context"
     data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}"
     title="Read this quote where it sits in the PDF">${open ? 'hide the paper' : 'in the paper'}</button>`;
-  return `<blockquote>${flag}${esc(row.quote)} ${show}</blockquote>
+  const copy = `<button type="button" class="copy" data-act="copy-quote" data-claim="${esc(row.id)}"
+    title="Copy the quote">copy</button>`;
+  return `<blockquote>${flag}${esc(row.quote)} ${show}${copy}</blockquote>
     ${open ? quoteContextHtml(row) : ''}`;
 }
 
@@ -976,6 +1742,8 @@ function renderAgreements() {
   const scrollTop = main ? main.scrollTop : 0;
   const rows = visibleAgreements();
   const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+  // Drawn off `V`, as in `renderTensions`: the claim a focus names can go, and
+  // the way out of the focus must not go with it.
   const focus = V.agreementFocus ? S.claims.find((c) => c.id === V.agreementFocus) : null;
   let html = `<div class="paperhead">
     <h2>Where papers agree</h2>
@@ -988,7 +1756,9 @@ function renderAgreements() {
         ${statuses.map((st) => `<option value="${esc(st)}" ${V.agreementStatus === st ? 'selected' : ''}>${esc(st)}</option>`).join('')}
       </select>
       ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
-      ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
+      ${V.agreementFocus ? `<span class="hint">${focus
+          ? `involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em>`
+          : 'involving a claim that is no longer here'}</span>
                  <button type="button" data-act="agreement-unfocus">show all</button>` : ''}
       <button type="button" data-act="find-agreements" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} style="margin-left:auto">Find agreements</button>
     </div>
@@ -1007,9 +1777,13 @@ function renderAgreements() {
 
 async function findAgreements() {
   V.error = null;
+  // The pass reads the corpus, so it must not read a claim the reader has
+  // deleted — and it must read the corpus they were looking at.
+  const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   try {
     const result = await api('/api/agreements', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
     });
     if (!result.queued) {
       V.error = 'No topic has claims from two papers yet, so there is nothing to compare.';
@@ -1076,6 +1850,12 @@ function renderTensions() {
   const scrollTop = main ? main.scrollTop : 0;
   const rows = visibleTensions();
   const statuses = S.tension_statuses || ['open', 'confirmed', 'dismissed'];
+  // The claim a focus names can go while this view is standing: a delete made
+  // in another window, or a re-read of its paper landing behind a poll. The
+  // focus goes on filtering either way — every tension citing it has gone with
+  // it, so the list is empty — which is why "show all" is drawn off `V` rather
+  // than off the row it found. Keyed to the row, it would disappear at exactly
+  // the moment it is the only thing left to click.
   const focus = V.tensionFocus ? S.claims.find((c) => c.id === V.tensionFocus) : null;
   let html = `<div class="paperhead">
     <h2>Where papers disagree</h2>
@@ -1089,7 +1869,9 @@ function renderTensions() {
         ${statuses.map((st) => `<option value="${esc(st)}" ${V.tensionStatus === st ? 'selected' : ''}>${esc(st)}</option>`).join('')}
       </select>
       ${V.tag ? `<span class="hint">in #${esc(V.tag)}</span>` : ''}
-      ${focus ? `<span class="hint">involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em></span>
+      ${V.tensionFocus ? `<span class="hint">${focus
+          ? `involving: <em>${esc(focus.text.slice(0, 80))}${focus.text.length > 80 ? '…' : ''}</em>`
+          : 'involving a claim that is no longer here'}</span>
                  <button type="button" data-act="tension-unfocus">show all</button>` : ''}
       <button type="button" data-act="find-tensions" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} style="margin-left:auto">Find tensions</button>
     </div>
@@ -1247,6 +2029,7 @@ async function saveResearch() {
   showView('claims');       // captures the form on the way out, so clear after
   V.researchDraft = null;
   V.researchBase = null;
+  syncHash(true);           // as with Cancel: leaving the form is a move
   await refreshAll();
 }
 
@@ -1377,9 +2160,11 @@ function synthesizeButton(tag) {
 
 async function synthesize(topics) {
   V.error = null;
+  const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   try {
     const result = await api('/api/syntheses', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
       body: JSON.stringify(topics ? { topics } : {}),
     });
     if (!result.queued) {
@@ -1394,7 +2179,15 @@ async function synthesize(topics) {
   if (V.error) renderContent();
 }
 
+// Every path through the draw settles `V` first — the fallback selection, the
+// parked editors — so the URL is written once the drawing is done rather than
+// once per branch.
 function renderContent() {
+  drawContent();
+  syncHash();
+}
+
+function drawContent() {
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (V.view === 'tensions') { renderTensions(); return; }
@@ -1548,7 +2341,7 @@ $('jobs').addEventListener('click', async (event) => {
     await refresh();
   } catch (error) {
     button.disabled = false;
-    alert(`Could not dismiss notification: ${error.message}`);
+    toast(`Could not dismiss notification: ${error.message}`, { tone: 'warn' });
   }
 });
 
@@ -1973,6 +2766,7 @@ function graphOpenPaper(key) {
   closeEditorsNotBelongingTo(key);
   showView('claims');
   V.paper = key; V.tag = null; V.selectedId = null;
+  syncHash(true);   // leaving the map is navigation: Back returns to it
   renderAll();
 }
 
@@ -2148,6 +2942,7 @@ function renderGraph() {
 $('graph-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('graph');
+  syncHash(true);
   renderAll();
 });
 
@@ -2249,10 +3044,13 @@ function captureOpenEditor() {
   }
 }
 
+// Answers whether the review was actually taken, which is what the `r` key
+// needs: moving to the next claim after a toggle that did not happen would
+// leave this one unreviewed and nothing on screen to say so.
 async function toggleReviewed(row) {
   // Shared by the review button — including the duplicate cards a claim gets in
   // grouped mode — and the `r` key, so both keep an open editor in step.
-  if (isSaving(row.id)) return;   // a request for it is in flight
+  if (isSaving(row.id)) return false;   // a request for it is in flight
   const reviewed = !row.reviewed;
   if (V.editing === row.id) captureOpenEditor();
   // Freeze the claim's form for the toggle too. A full-form save started
@@ -2273,6 +3071,111 @@ async function toggleReviewed(row) {
   if (stillOpen) captureOpenEditor();
   if (V.drafts[row.id]) V.drafts[row.id] = { ...V.drafts[row.id], reviewed };
   if (stillOpen) renderContent();
+  return true;
+}
+
+// Reviewing is the app's main work and a paper arrives with a dozen claims at
+// once, so it is worth one request and one undo rather than a dozen clicks.
+// The undo unreviews only what this actually changed: a claim reviewed
+// earlier is not part of the decision being taken back.
+async function reviewWholePaper(paper) {
+  captureOpenEditor();
+  V.error = null;
+  // A claim already saving has a full-form PATCH on its way carrying the old
+  // checkbox. Freezing it here only stops a second submission; it cannot stop
+  // the first from landing after this write and taking the review back off
+  // again. So wait for it, rather than overwrite it and report success.
+  if (S.claims.some((row) => row.paper === paper && isSaving(row.id))) {
+    toast('Wait for the change in flight to finish, then mark the paper reviewed.',
+          { tone: 'warn' });
+    return;
+  }
+  // The notice outlives the picker, so the undo carries the workspace the
+  // decision was taken in rather than whichever one is selected when it is
+  // clicked: the same paper imported twice has the same claim ids in both.
+  const workspace = currentWorkspaceId;
+  // An open editor on this paper is frozen for the length of the request, as
+  // one is during a single toggle: a full-form Save started meanwhile carries
+  // the old checkbox, and landing after the bulk write would put it back.
+  const frozen = S.claims.filter((row) => row.paper === paper).map((row) => row.id);
+  frozen.forEach((id) => markSaving(id, true));
+  // The claims it names, not "all of them". A claim waiting out a delete is
+  // gone from the page and from the count on the button, but still on file:
+  // reviewing it would be a decision about something nobody can see, and
+  // undoing the delete would bring it back reviewed.
+  const wanted = S.claims.filter((row) => row.paper === paper && !row.reviewed).map((row) => row.id);
+  let changed = [];
+  try {
+    const result = await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewed: true, claims: wanted }),
+    });
+    changed = result.changed || [];
+  } catch (error) {
+    V.error = `Could not mark the claims reviewed: ${error.message}`;
+    renderContent();
+    return;
+  } finally {
+    frozen.forEach((id) => markSaving(id, false));
+  }
+  syncDraftReviews(changed, true);
+  await refreshAll();
+  if (!changed.length) return;
+
+  // A save already on its way carries the old checkbox and cannot be recalled,
+  // so the undo waits for it rather than being overtaken by it — and the offer
+  // comes back rather than being spent, since the reader did ask to undo.
+  async function undo() {
+    const mine = currentWorkspaceId === workspace;
+    if (mine && changed.some((id) => isSaving(id))) {
+      toast('Wait for the change in flight to finish, then undo.', { tone: 'warn' });
+      offerUndo();
+      return;
+    }
+    // Frozen for the length of the undo as they were for the review itself: an
+    // open form still holds the ticked box, and a Save landing after the undo
+    // would put the review back with nothing left on screen to say it had.
+    const held = mine ? changed : [];
+    held.forEach((id) => markSaving(id, true));
+    try {
+      await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+        body: JSON.stringify({ reviewed: false, claims: changed }),
+      });
+      // Only where the decision was taken. An editor open on the same claim id
+      // in another corpus is a different claim, and correcting its checkbox
+      // would unreview it when that form is saved.
+      if (currentWorkspaceId === workspace) syncDraftReviews(changed, false);
+    } catch (error) {
+      toast(`Could not undo: ${error.message}`, { tone: 'warn' });
+    } finally {
+      held.forEach((id) => markSaving(id, false));
+    }
+    await refreshAll();
+  }
+
+  function offerUndo() {
+    toast(`${changed.length} ${changed.length === 1 ? 'claim' : 'claims'} marked reviewed.`,
+          { actions: [{ label: 'Undo', onClick: undo }] });
+  }
+
+  offerUndo();
+}
+
+// An open editor holds the review flag as it was when the editor was opened.
+// Saving it afterwards would put the flag back, undoing the bulk decision
+// without anyone asking for that, so the flag moves with it.
+//
+// The form on screen is corrected as well as the stored draft: every redraw
+// reads the open form back first, so a draft corrected on its own is
+// overwritten from the stale checkbox before it is ever used.
+function syncDraftReviews(ids, reviewed) {
+  ids.forEach((id) => {
+    if (V.drafts[id]) V.drafts[id] = { ...V.drafts[id], reviewed };
+    const box = document.querySelector(`form[data-form="${CSS.escape(id)}"] [name="reviewed"]`);
+    if (box) box.checked = reviewed;
+  });
 }
 
 async function showQuoteContext(paper, claim, group = '') {
@@ -2382,6 +3285,14 @@ $('content').addEventListener('submit', async (event) => {
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
   if (isSaving(wrap.dataset.claim)) return;   // a request for it is in flight
+  // Which paper the save would land on: the one the card names, or for a claim
+  // being written by hand the one the draft was started on. A removal in
+  // flight for it takes the save, whichever way the race goes — the POST
+  // landing first makes a claim the DELETE behind it discards, and landing
+  // second it is a 404 over a claim the reader was told was saved.
+  const onPaper = wrap.dataset.claim === NEW_CLAIM_ID
+    ? (V.newClaim || {}).paper : wrap.dataset.paper;
+  if (refuseWhileRemoving(onPaper, 'what is typed here')) return;
   const patch = readForm(form);
   V.error = null;
   markSaving(wrap.dataset.claim, true);
@@ -2471,30 +3382,119 @@ async function saveClaim(wrap, patch) {
 // the paper list, so the menu can remove a paper that is not the one on screen.
 async function removePaper(paper) {
   const p = S.papers.find((x) => x.key === paper);
-  if (!confirm(`Remove ${p ? p.title || paper : paper} and its claims?`)) return;
-  await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE' });
-  // Close an editor that belonged to the deleted paper, so its form is not
-  // captured as a draft for a claim that no longer exists. An editor on some
-  // other paper's claim stays open, which is why this ends in `refreshAll`:
-  // `refresh` would leave the claim list alone while an editor is open and
-  // the deleted paper's cards would stay on screen with buttons that 404.
-  S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
-  if (V.editing && V.editing !== NEW_CLAIM_ID) {
-    const row = S.claims.find((c) => c.id === V.editing);
-    if (!row || row.paper === paper) V.editing = null;
+  // The one delete with no undo: a removed paper's key is retired for good, so
+  // adding it again would make a different paper. Hence a question first.
+  const go = await confirmDialog(`Remove ${p ? p.title || paper : paper} and its claims?`, {
+    note: 'The PDF and every claim on it go with it, and the key is never reissued.',
+    ok: 'Remove',
+  });
+  if (!go) return;
+  // The question is a wait like any other, and the header and the paper list
+  // stay live across it: a second Remove could have been answered first, and
+  // this one would ask the server for a paper that is already going.
+  if (refuseWhileRemoving(paper, 'a second removal')) return;
+  // A write already on its way cannot be recalled. It carries no claim id this
+  // could freeze — a re-read, a quote check, a retag and an accepted topic all
+  // write the paper itself — and whichever way it races the DELETE it ends
+  // badly: landing first it is thrown away under a page that reported it
+  // saved, landing second it is a 404 over a removal the reader did ask for.
+  // The guard below stops the next one; this is the one already in flight.
+  if (pendingMutations) {
+    toast('Wait for the change in flight to finish, then remove the paper.', { tone: 'warn' });
+    return;
   }
-  if (V.newClaim && V.newClaim.paper === paper) {
-    V.newClaim = null;
-    if (V.editing === NEW_CLAIM_ID) V.editing = null;
+  // Nothing else may be written to this paper from here on, and "here" is
+  // before the flush below rather than after it: the flush ends in a read of
+  // the whole corpus, long enough for a claim to be saved, a re-read started
+  // or a topic accepted, and the guard is no use to the DELETE if it goes up
+  // only once that window has closed. It is dropped in the `finally` at the
+  // end, so it covers the whole attempt and not just the request.
+  removingPapers.add(paper);
+  // Frozen claim ids, filled in once the flush has settled and the corpus is
+  // known. Declared out here so the `finally` can hand them back on the way
+  // out of a flush that failed too.
+  let frozen = [];
+  try {
+    // A claim of this paper still waiting out its notice has to go first. Left
+    // waiting, its Undo would have nothing to restore and its request would
+    // arrive under a paper that no longer exists, failing in the reader's face
+    // over a deletion they got what they asked for. Only this paper's, though:
+    // a claim of another paper, or a synthesis, was promised its own eight
+    // seconds and removing something else is no reason to take them away.
+    //
+    // That flush ends in a read, and nothing counts a read as a change in
+    // flight, so the picker can move in the gap before the paper's own request
+    // goes. It names the workspace it was asked in: the same paper imported
+    // into two corpora has the same key in both, and removing the wrong one is
+    // not something an undo could fix.
+    const headers = await settleDeletes((entry) => entry.paper === paper);
+    // That claim's delete failed. Removing the paper would take it anyway,
+    // under a notice that said the claim could not be deleted — so nothing
+    // happens. The `finally` drops the guard, handing the paper back to the
+    // reader who still has it on screen.
+    if (!headers) return;
+    const workspace = headers['X-Doxograph-Workspace'];
+    // The paper's cards stay on screen, and clickable, until this request comes
+    // back and the redraw takes them away. A claim deleted in that window is
+    // held for its own eight seconds under a paper that is already gone: the
+    // flush above has finished, so nothing sends it early, its Undo would have
+    // nothing to restore, and letting the notice run out sends a DELETE under a
+    // paper the server no longer has — a failure notice over a deletion the
+    // reader did ask for. They are frozen for the length of the removal, the
+    // same freeze a save or a bulk review puts on the claims it is writing.
+    //
+    // Worked out after the flush rather than before it, because the flush ends
+    // in a read and the claims the paper has once that lands are the ones the
+    // DELETE is about to take. Nothing can be clicked in between — there is no
+    // await between the read and this freeze — and the guard above held the
+    // paper for the whole of the flush itself.
+    frozen = S.claims.filter((c) => c.paper === paper).map((c) => c.id);
+    // A claim being written by hand is not among them: it has no id on the
+    // server, only the `__new__` the form is drawn under. Frozen by that name
+    // when it belongs to this paper, so the form goes read-only like the rest
+    // rather than staying open over a paper that is going. The set below is what
+    // actually refuses the save — the draft can be parked and restored by moving
+    // between papers, and a form restored after this was worked out would not be
+    // covered by it.
+    if (V.newClaim && V.newClaim.paper === paper) frozen.push(NEW_CLAIM_ID);
+    frozen.forEach((id) => markSaving(id, true));
+    await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
+    // Moved on meanwhile: the view belongs to another corpus now, and the drafts
+    // and selection this would tidy up went with `resetWorkspaceView`.
+    if (currentWorkspaceId !== workspace) {
+      await refreshAll();
+      return;
+    }
+    // Close an editor that belonged to the deleted paper, so its form is not
+    // captured as a draft for a claim that no longer exists. An editor on some
+    // other paper's claim stays open, which is why this ends in `refreshAll`:
+    // `refresh` would leave the claim list alone while an editor is open and
+    // the deleted paper's cards would stay on screen with buttons that 404.
+    S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
+    if (V.editing && V.editing !== NEW_CLAIM_ID) {
+      const row = S.claims.find((c) => c.id === V.editing);
+      if (!row || row.paper === paper) V.editing = null;
+    }
+    if (V.newClaim && V.newClaim.paper === paper) {
+      V.newClaim = null;
+      if (V.editing === NEW_CLAIM_ID) V.editing = null;
+    }
+    delete V.failedNewClaims[paper];
+    // Removing a paper from the list while reading another one keeps that one
+    // open; only a paper that was itself on screen falls back to "All papers".
+    if (V.paper === paper) V.paper = null;
+    const selected = S.claims.find((c) => c.id === V.selectedId);
+    if (!selected || selected.paper === paper) V.selectedId = null;
+    V.error = null;
+    await refreshAll();
+  } finally {
+    // In a `finally` so a removal that fails — or one called off by a held
+    // delete that would not go — does not leave the paper frozen with nothing
+    // left to unfreeze it: the cards are still there and the reader has to be
+    // able to work on them again.
+    frozen.forEach((id) => markSaving(id, false));
+    removingPapers.delete(paper);
   }
-  delete V.failedNewClaims[paper];
-  // Removing a paper from the list while reading another one keeps that one
-  // open; only a paper that was itself on screen falls back to "All papers".
-  if (V.paper === paper) V.paper = null;
-  const selected = S.claims.find((c) => c.id === V.selectedId);
-  if (!selected || selected.paper === paper) V.selectedId = null;
-  V.error = null;
-  await refreshAll();
 }
 
 $('content').addEventListener('click', async (event) => {
@@ -2529,6 +3529,7 @@ $('content').addEventListener('click', async (event) => {
       showView('claims');
       V.researchDraft = null;   // Cancel is the one way out that drops the edits
       V.researchBase = null;
+      syncHash(true);   // leaving the form is a move; Back goes back to it
       renderAll();
       return;
     }
@@ -2539,6 +3540,11 @@ $('content').addEventListener('click', async (event) => {
     }
     if (act === 'review') {
       await toggleReviewed(S.claims.find((c) => c.id === claim));
+      return;
+    }
+    if (act === 'copy-quote') {
+      const row = S.claims.find((c) => c.id === claim);
+      if (row) await copyText(row.quote, 'Quote copied.');
       return;
     }
     if (act === 'quote-context') {
@@ -2557,10 +3563,32 @@ $('content').addEventListener('click', async (event) => {
       await usePaperWording(paper, claim);
       return;
     }
+    if (act === 'review-all') {
+      // Covered by the frozen claim ids below as well — the button is only
+      // drawn when the paper has an unreviewed claim, and that claim is one of
+      // them — but said here too, so the reason the reader is given is the
+      // removal rather than a change in flight they did not make.
+      if (refuseWhileRemoving(paper, 'the reviews it writes')) return;
+      await reviewWholePaper(paper);
+      return;
+    }
     if (act === 'del') {
-      if (!confirm('Delete this claim?')) return;
-      await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
-                { method: 'DELETE' });
+      // Frozen means a request for this claim is already in flight — a save, a
+      // review toggle, or the removal of the paper it belongs to. Holding a
+      // delete for it now would put a row in the trash that the request coming
+      // back will contradict: an Undo with nothing to restore, and a DELETE
+      // sent eight seconds later against a claim that has since gone.
+      if (isSaving(claim)) {
+        toast('Wait for the change in flight to finish, then delete the claim.',
+              { tone: 'warn' });
+        return;
+      }
+      // The freeze above names the claims the paper had when its removal
+      // settled its held deletes. A claim the poll has brought in since — a
+      // re-read that finished while the DELETE was in flight — is not among
+      // them, and holding a delete for it would leave a notice offering to
+      // undo a claim that its paper is about to take anyway.
+      if (refuseWhileRemoving(paper, 'the delete it would hold')) return;
       // In grouped mode the same claim can be an editor in one topic group and
       // a plain card with a Delete button in another. Leaving `V.editing` set
       // would keep the deleted claim's form on screen, because `render()` skips
@@ -2568,10 +3596,11 @@ $('content').addEventListener('click', async (event) => {
       delete V.drafts[claim];
       if (V.editing === claim) { V.editing = null; V.error = null; }
       if (V.selectedId === claim) V.selectedId = null;
-      // Deleting any claim changes the list, including when the open editor
-      // belongs to a different one; without a content rebuild the deleted card
-      // stays visible and clickable and the next action on it 404s.
-      await refreshAll();
+      // `deleteLater` rebuilds the list: without it the deleted card stays
+      // visible and clickable even when the open editor is a different claim's.
+      await deleteLater('claim', claim,
+                        `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
+                        'the claim', { paper });
       return;
     }
     if (act === 'open-paper') {
@@ -2579,6 +3608,7 @@ $('content').addEventListener('click', async (event) => {
       closeEditorsNotBelongingTo(paper);
       showView('claims');
       V.paper = paper; V.tag = null; V.selectedId = null;
+      syncHash(true);
       renderAll();
       return;
     }
@@ -2586,6 +3616,7 @@ $('content').addEventListener('click', async (event) => {
       showView('tensions');
       V.tensionFocus = claim;
       V.tensionStatus = '';
+      syncHash(true);
       renderAll();
       return;
     }
@@ -2611,15 +3642,29 @@ $('content').addEventListener('click', async (event) => {
       showView('agreements');
       V.agreementFocus = claim;
       V.agreementStatus = '';
+      syncHash(true);
       renderAll();
       return;
     }
     if (act === 'agreement-unfocus') { V.agreementFocus = null; renderContent(); return; }
     if (act === 'agreement-status') {
       V.error = null;
+      // Deciding an agreement rewrites the record from the claims on file:
+      // `set_agreement_status` drops the members that have gone and
+      // fingerprints the ones that are left, "what the reviewer saw and
+      // judged". A claim waiting out its undo window is off the card but
+      // still on file, so it would be written back into the group as a member
+      // of a decision nobody made about it, and the moment the timer sent the
+      // delete the agreement would read stale again with a deleted id in its
+      // fingerprints. A group that keeps two papers without the held claim
+      // stays on screen and stays clickable, so this is reachable; a tension
+      // needs both of its claims and leaves the page entirely, which is why
+      // `tension-status` above has nothing to settle.
+      const headers = await settleDeletes();
+      if (!headers) return;   // the delete failed; the record would name the claim
       try {
         await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          method: 'PATCH', headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ status: button.dataset.status }),
         });
       } catch (error) {
@@ -2629,9 +3674,8 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'agreement-delete') {
-      if (!confirm('Delete this agreement?')) return;
-      await api(`/api/agreements/${encodeURIComponent(button.dataset.agreement)}`, { method: 'DELETE' });
-      await refreshAll();
+      const id = button.dataset.agreement;
+      await deleteLater('agreement', id, `/api/agreements/${encodeURIComponent(id)}`, 'the agreement');
       return;
     }
     if (act === 'find-agreements') { await findAgreements(); return; }
@@ -2659,14 +3703,32 @@ $('content').addEventListener('click', async (event) => {
       const field = document.querySelector(`textarea[data-synth="${CSS.escape(topic)}"]`);
       const text = field ? field.value : (V.synthDrafts[topic] || '');
       V.error = null;
-      // Freeze the editor until the answer comes back. Success redraws from
-      // the server value, so anything typed meanwhile would be lost.
       captureOpenEditor();
+      // A correction by hand is a judgment about the claims as they stand, and
+      // `set_synthesis_text` fingerprints the ones on file rather than the ones
+      // on screen. A claim waiting out its undo window is still on file, so the
+      // basis would record a claim the reader cannot see and the synthesis
+      // would go stale — with a deleted id in its basis — the moment the timer
+      // sent the delete. The held deletes go first, as they do before a
+      // rewrite, a retag or an export.
+      //
+      // The settle ends in a read and a redraw, so what was typed is parked
+      // first: the textarea is drawn from the draft, and the value in the DOM
+      // would otherwise be replaced by the text on file.
+      V.synthDrafts[topic] = text;
+      // Frozen from here rather than from the request: the settle is a wait
+      // like any other, and a second click during it would send the flush and
+      // the PATCH twice over.
       V.synthSaving = topic;
       renderContent();
       try {
+        const headers = await settleDeletes();
+        // The held delete failed. The claim is still on file, the reader has
+        // been told so, and a basis recorded against it would be a judgment
+        // about a corpus nobody can see.
+        if (!headers) return;
         await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          method: 'PATCH', headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ text }),
         });
         V.synthEditing = null;
@@ -2675,15 +3737,24 @@ $('content').addEventListener('click', async (event) => {
         V.synthDrafts[topic] = text;   // keep what was typed so the save can be retried
         V.error = `Could not save the synthesis: ${error.message}`;
       } finally {
+        // In the `finally` so the editor is handed back on the way out of a
+        // settle that failed too: that path leaves without a request, and a
+        // redraw it did not run would leave the editor frozen with nothing
+        // left to unfreeze it.
         V.synthSaving = null;
+        await refreshAll();
       }
-      await refreshAll();
       return;
     }
     if (act === 'del-synth') {
-      if (!confirm('Delete this synthesis?')) return;
-      await api(`/api/syntheses/${encodeURIComponent(button.dataset.topic)}`, { method: 'DELETE' });
-      await refreshAll();
+      const topic = button.dataset.topic;
+      // The draft goes with it, open or parked. Kept, it would come back under
+      // a synthesis written later and overwrite it with text belonging to the
+      // one that was deleted.
+      if (V.synthEditing === topic) V.synthEditing = null;
+      delete V.synthDrafts[topic];
+      await deleteLater('synthesis', topic, `/api/syntheses/${encodeURIComponent(topic)}`,
+                        `the synthesis of #${topic}`);
       return;
     }
     if (act === 'goto-claim') {
@@ -2700,17 +3771,29 @@ $('content').addEventListener('click', async (event) => {
         if (V.unverified && row.quote_verified !== false) { V.unverified = false; $('only-unverified').checked = false; }
         if (V.q.trim() && !queryMatcher()(haystack(row))) { V.q = ''; $('q').value = ''; }
       }
-      V.selectedId = claim;
+      selectClaim(claim);
+      syncHash(true);
       renderAll();   // a cleared topic or paper filter changes the sidebar too
       scrollToSelected();
       return;
     }
     if (act === 'reextract') {
-      await api(`/api/papers/${encodeURIComponent(paper)}/extract`, { method: 'POST' });
+      if (refuseWhileRemoving(paper, 'the claims it reads out')) return;
+      const workspace = await settleDeletes();
+      if (!workspace) return;   // the delete failed; the pass would read the claim
+      // The flush is a wait, and the header stays live across it: a removal
+      // answered during it holds the paper from before its own flush, and the
+      // check above is too old to have seen it. Asked again, against the guard
+      // as it stands now.
+      if (refuseWhileRemoving(paper, 'the claims it reads out')) return;
+      await api(`/api/papers/${encodeURIComponent(paper)}/extract`, {
+        method: 'POST', headers: workspace,
+      });
       await refresh();
       return;
     }
     if (act === 'verify') {
+      if (refuseWhileRemoving(paper, 'the check it writes on each quote')) return;
       V.error = null;
       try {
         await api(`/api/papers/${encodeURIComponent(paper)}/verify`, { method: 'POST' });
@@ -2721,8 +3804,14 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'retag-one') {
+      if (refuseWhileRemoving(paper, 'the topics it writes on the claims')) return;
+      const workspace = await settleDeletes();
+      if (!workspace) return;   // the delete failed; the pass would read the claim
+      // Asked again on the far side of the flush, as the re-read does: a
+      // removal answered while it ran took the paper after the check above.
+      if (refuseWhileRemoving(paper, 'the topics it writes on the claims')) return;
       await api('/api/retag', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
         body: JSON.stringify({ keys: [paper] }),
       });
       await refresh();
@@ -2744,6 +3833,10 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'add-claim') {
+      // The header stays on screen for the length of the removal, so this is
+      // still clickable. Opening the form would invite a claim the DELETE
+      // behind it is about to discard.
+      if (refuseWhileRemoving(paper, 'a new claim')) return;
       captureOpenEditor();
       // Resume a held draft rather than overwriting what was typed into it.
       if (!V.newClaim || V.newClaim.paper !== paper || !(V.newClaim.text || '').trim()) {
@@ -2754,10 +3847,19 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'del-paper') {
+      // The button goes with the header, which stands until the DELETE comes
+      // back. A second removal would ask the question again and send a second
+      // request, to come back 404 over a removal that is working.
+      if (refuseWhileRemoving(paper, 'a second removal')) return;
       await removePaper(paper);
       return;
     }
     if (act === 'accept-tag' || act === 'reject-tag') {
+      // The proposals are written back onto the paper, so this is the same
+      // race even though it writes no claim: accepting also puts the name into
+      // the vocabulary, and a topic accepted from a paper that then goes would
+      // be left declared with nothing under it.
+      if (refuseWhileRemoving(paper, 'the answer to its proposed topics')) return;
       const field = act === 'accept-tag' ? 'accept' : 'discard';
       await api(`/api/papers/${encodeURIComponent(paper)}/proposed-tags`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2777,6 +3879,7 @@ $('content').addEventListener('click', async (event) => {
   const tagEl = event.target.closest('[data-tag]');
   if (tagEl && !tagEl.dataset.act) {
     V.tag = V.tag === tagEl.dataset.tag ? null : tagEl.dataset.tag;
+    syncHash(true);
     renderAll();
     return;
   }
@@ -2785,12 +3888,19 @@ $('content').addEventListener('click', async (event) => {
     // Selecting another claim redraws the list, which would rebuild an open
     // editor from the server row; keep what is typed in it first.
     captureOpenEditor();
-    V.selectedId = card.dataset.claim;
+    selectClaim(card.dataset.claim);
     renderContent();
   }
 });
 
 $('papers').addEventListener('click', (event) => {
+  // The same menu the right-click opens, for the people who never try one.
+  const menuButton = event.target.closest('[data-menu]');
+  if (menuButton) {
+    const box = menuButton.getBoundingClientRect();
+    openPaperMenu(menuButton.dataset.menu, box.left, box.bottom + 4);
+    return;
+  }
   const li = event.target.closest('[data-paper]');
   if (!li) return;
   const next = li.dataset.paper || null;
@@ -2798,7 +3908,7 @@ $('papers').addEventListener('click', (event) => {
   // whole abandon path anyway, which threw away a new claim being written.
   // From the tensions view it is navigation: back to that paper's claims.
   if (next === V.paper && V.view === 'claims') return;
-  if (next === V.paper) { showView('claims'); renderAll(); return; }
+  if (next === V.paper) { showView('claims'); syncHash(true); renderAll(); return; }
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
   // that one was never persisted and belongs to the paper being left. A
   // synthesis being edited is parked too: `render` skips the list while one
@@ -2810,23 +3920,27 @@ $('papers').addEventListener('click', (event) => {
   V.paper = next;
   V.selectedId = null;
   V.editing = null;
+  syncHash(true);   // going to a paper is navigation: Back comes back here
   render();   // the editors are closed here, so render redraws the list anyway
 });
 
 $('tensions-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('tensions');
+  syncHash(true);
   renderAll();
 });
 
 $('agreements-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   showView('agreements');
+  syncHash(true);
   renderAll();
 });
 
 $('btn-agreements').addEventListener('click', async () => {
   showView('agreements');
+  syncHash(true);
   renderAll();
   await findAgreements();
 });
@@ -2837,14 +3951,17 @@ $('research-nav').addEventListener('click', (event) => {
   // rebuild the form from `S` and throw away whatever has been typed into it.
   if (V.view === 'research') return;
   showView('research');
+  syncHash(true);
   renderAll();
 });
 
 async function findTensions() {
   V.error = null;
+  const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   try {
     const result = await api('/api/tensions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
     });
     if (!result.queued) {
       V.error = 'No topic has claims from two papers yet, so there is nothing to compare.';
@@ -2857,6 +3974,7 @@ async function findTensions() {
 
 $('btn-tensions').addEventListener('click', async () => {
   showView('tensions');
+  syncHash(true);
   renderAll();
   await findTensions();
 });
@@ -2865,6 +3983,7 @@ $('btn-synth').addEventListener('click', async () => {
   showView('claims');
   V.group = true;
   $('group-by-tag').checked = true;
+  syncHash(true);
   renderAll();
   await synthesize(null);
 });
@@ -2957,6 +4076,7 @@ function openPaperMenu(paper, x, y) {
   const menu = $('ctxmenu');
   menu.innerHTML = `
     <li class="mh">${esc(p ? p.title || paper : paper)}</li>
+    ${p && p.has_pdf ? `<li><button type="button" data-act="open-pdf" data-paper="${esc(paper)}">Open the PDF</button></li>` : ''}
     <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
   menu.hidden = false;
   // Measure after showing, then keep the whole menu inside the window.
@@ -2980,7 +4100,16 @@ $('ctxmenu').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
   if (!button) return;
   closePaperMenu();
-  if (button.dataset.act === 'del-paper') await removePaper(button.dataset.paper);
+  const paper = button.dataset.paper;
+  // The paper stays in the list until its DELETE comes back, so the menu can
+  // be opened on it again and asked to remove it a second time.
+  if (button.dataset.act === 'del-paper') {
+    if (refuseWhileRemoving(paper, 'a second removal')) return;
+    await removePaper(paper);
+  }
+  if (button.dataset.act === 'open-pdf') {
+    window.open(`/pdf/${encodeURIComponent(paper)}?${workspaceQuery()}&inline=1`, '_blank');
+  }
 });
 
 // A press anywhere outside the menu dismisses it. Right-clicking another paper
@@ -2997,13 +4126,17 @@ $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
   if (!li) return;
   V.tag = V.tag === li.dataset.tag ? null : li.dataset.tag;
+  syncHash(true);
   renderAll();
 });
 
 $('workspace').addEventListener('change', (event) => switchWorkspace(event.target.value));
 
 $('btn-workspace-add').addEventListener('click', async () => {
-  const name = prompt('Name this workspace (for example, Consciousness or Animal locomotion):');
+  const name = await askText('Name this workspace', {
+    note: 'A workspace is an independent corpus: its own papers, topics, and exports.',
+    placeholder: 'Consciousness, or Animal locomotion',
+  });
   if (!name || !name.trim()) return;
   try {
     const result = await api('/api/workspaces', {
@@ -3014,22 +4147,52 @@ $('btn-workspace-add').addEventListener('click', async () => {
     renderWorkspacePicker();
     await switchWorkspace(result.workspace.id);
   } catch (error) {
-    alert(`Could not create workspace: ${error.message}`);
+    toast(`Could not create workspace: ${error.message}`, { tone: 'warn' });
   }
 });
 
-$('btn-add').addEventListener('click', async () => {
+async function addReferences() {
   const text = $('refs').value.trim();
   if (!text) return;
-  const result = await api('/api/ingest', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, extract: $('auto-extract').checked }),
-  });
-  $('refs').value = (result.unknown || []).join('\n');
-  if (result.unknown && result.unknown.length) {
-    alert(`Could not read ${result.unknown.length} reference(s); they are still in the box.`);
+  let result;
+  try {
+    result = await api('/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, extract: $('auto-extract').checked }),
+    });
+  } catch (error) {
+    // What was pasted stays in the box either way: a refused request is a
+    // reason to try again, not a reason to lose the list.
+    toast(`Could not add these references: ${error.message}`, { tone: 'warn' });
+    return;
   }
+  const unknown = result.unknown || [];
+  $('refs').value = unknown.join('\n');
+  // Which lines failed, not how many: a count leaves the reader to work out
+  // for themselves which of what they pasted is the problem.
+  showRefWarning(unknown);
   await refresh();
+}
+
+function showRefWarning(unknown) {
+  const warning = $('ref-warn');
+  warning.hidden = !unknown.length;
+  if (!unknown.length) return;
+  const shown = unknown.slice(0, 3).map((line) => `“${line}”`).join(', ');
+  const rest = unknown.length > 3 ? `, and ${unknown.length - 3} more` : '';
+  warning.textContent = `Nothing identifies ${shown}${rest}. `
+    + 'They are still in the box; paste an arXiv ID, a DOI, or a direct PDF link.';
+}
+
+$('btn-add').addEventListener('click', addReferences);
+
+// The box is where references are typed, so it takes the usual way of saying
+// "done": the button is a long way from the cursor otherwise.
+$('refs').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    addReferences();
+  }
 });
 
 $('btn-tag').addEventListener('click', async () => {
@@ -3044,21 +4207,61 @@ $('btn-tag').addEventListener('click', async () => {
 });
 
 $('btn-retag').addEventListener('click', async () => {
-  if (!confirm('Reassign topics on every paper against the current vocabulary?')) return;
+  const go = await confirmDialog('Reassign topics on every paper?', {
+    note: 'Every paper with claims is sent to the model again against the current vocabulary. '
+      + 'Claim text you have edited is left alone.',
+    ok: 'Retag all',
+  });
+  if (!go) return;
+  const workspace = await settleDeletes();
+  if (!workspace) return;   // the delete failed; the pass would read the claim
   await api('/api/retag', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
   });
   await refresh();
 });
 
 $('btn-export').addEventListener('click', async () => {
   const selected = currentWorkspace();
-  const result = await api('/api/export', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: selected ? selected.name : 'Doxograph' }),
+  // As with the review undo: the notice can outlive the picker, and Open must
+  // hand back the file this export wrote, not whatever the workspace selected
+  // by then last exported.
+  // The file is written from what is on file, so a delete still waiting out
+  // its notice would otherwise be exported as a live claim.
+  const headers = await settleDeletes();
+  // The delete failed, so the claim is still on file and the export would
+  // carry it. The notice about the delete is the one to answer first.
+  if (!headers) return;
+  const workspace = headers['X-Doxograph-Workspace'] || 'default';
+  let result;
+  try {
+    result = await api('/api/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ title: selected ? selected.name : 'Doxograph' }),
+    });
+  } catch (error) {
+    toast(`Could not export: ${error.message}`, { tone: 'warn' });
+    return;
+  }
+  // The path on its own is something to go and find. What the reader wants is
+  // the file, or the path where they can paste it.
+  toast(`Exported to ${result.path}`, {
+    timeout: 12000,
+    actions: [
+      { label: 'Open', onClick: () => window.open(`/export?workspace=${encodeURIComponent(workspace)}`, '_blank') },
+      { label: 'Copy path', onClick: () => copyText(result.path, 'Path copied.') },
+    ],
   });
-  alert(`Written to ${result.path}`);
 });
+
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(done, { timeout: 2500 });
+  } catch (error) {
+    toast(`Could not copy: ${error.message}`, { tone: 'warn' });
+  }
+}
 
 $('btn-bib').addEventListener('click', () => window.open(`/api/bibtex?${workspaceQuery()}`, '_blank'));
 
@@ -3087,13 +4290,19 @@ function graphOption(field) {
   }
   if (V.view === 'graph') renderGraph();
 }
-$('q').addEventListener('input', (e) => {
+function applyQuery(value) {
   captureOpenEditor();
-  V.q = e.target.value;
+  V.q = value;
   scheduleTextSearch();
   renderPapers();   // the query filters the paper list as well as the claims
   renderContent();
-});
+}
+
+function clearQuery() {
+  applyQuery('');
+}
+
+$('q').addEventListener('input', (e) => applyQuery(e.target.value));
 $('kind').addEventListener('change', (e) => { captureOpenEditor(); V.kind = e.target.value; renderContent(); });
 $('paper-sort').addEventListener('change', (e) => {
   V.paperSort = PAPER_SORTS.includes(e.target.value) ? e.target.value : PAPER_SORTS[0];
@@ -3116,12 +4325,46 @@ function moveSelection(rows, step) {
   captureOpenEditor();
   const at = rows.findIndex((row) => row.id === V.selectedId);
   const next = at < 0 ? 0 : Math.min(Math.max(at + step, 0), rows.length - 1);
-  V.selectedId = rows[next].id;
+  selectClaim(rows[next].id);
   renderContent();
   scrollToSelected();
 }
 
+// The next claim nobody has reviewed, wrapping round the end: review runs to
+// the bottom of the list and then wants the ones passed over on the way.
+function selectNextUnreviewed(rows) {
+  if (!rows.length) return;
+  const at = rows.findIndex((row) => row.id === V.selectedId);
+  const ordered = rows.slice(at + 1).concat(rows.slice(0, at + 1));
+  const next = ordered.find((row) => !row.reviewed);
+  if (!next) {
+    toast('Every claim on screen has been reviewed.', { timeout: 2500 });
+    return;
+  }
+  captureOpenEditor();
+  selectClaim(next.id);
+  renderContent();
+  scrollToSelected();
+}
+
+function openHelp() {
+  closePaperMenu();
+  closeSettings();
+  if (!$('help').open) $('help').showModal();
+}
+
+$('btn-help').addEventListener('click', openHelp);
+$('btn-close-help').addEventListener('click', () => $('help').close());
+// A click on the backdrop is the element itself: the sheet is something to
+// glance at, so anywhere off it puts it away.
+$('help').addEventListener('click', (event) => {
+  if (event.target === $('help')) $('help').close();
+});
+
 document.addEventListener('keydown', async (event) => {
+  // A modal owns the keyboard while it is up, Escape included: the dialog
+  // closes itself, and the editor branches below must not also fire.
+  if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape' && !$('settings-menu').hidden) {
     closeSettings({ restoreFocus: true });
     return;
@@ -3133,6 +4376,13 @@ document.addEventListener('keydown', async (event) => {
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key !== 'Escape') return;
+    // In the search box Escape belongs to the search: clear it, or leave it if
+    // it is already empty. It is the way back to the whole corpus, and it must
+    // not reach past the box and cancel an editor further down the page.
+    if (event.target.id === 'q') {
+      if (V.q) { $('q').value = ''; clearQuery(); } else $('q').blur();
+      return;
+    }
     // Only the editor holding the cursor is cancelled. With a claim editor and
     // a synthesis editor open together, cancelling both would drop a draft
     // the user never meant to give up.
@@ -3143,8 +4393,20 @@ document.addEventListener('keydown', async (event) => {
     }
     return;
   }
+  // The shortcuts nobody can see are the ones nobody uses, so the list is a
+  // keystroke away from anywhere.
+  if (event.key === '?') { event.preventDefault(); openHelp(); return; }
+  if (event.key === '/') {
+    // The box filters the claims, so it belongs to that view: reaching for it
+    // from the map or the tensions is a way of asking to go back.
+    event.preventDefault();
+    if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
+    $('q').focus();
+    $('q').select();
+    return;
+  }
   if (V.view !== 'claims') {
-    if (event.key === 'Escape') { showView('claims'); renderAll(); }
+    if (event.key === 'Escape') { showView('claims'); syncHash(true); renderAll(); }
     return;
   }
   const rows = visibleClaims();
@@ -3152,12 +4414,30 @@ document.addEventListener('keydown', async (event) => {
     moveSelection(rows, 1);
   } else if (event.key === 'k' || event.key === 'ArrowUp') {
     moveSelection(rows, -1);
+  } else if (event.key === 'n') {
+    selectNextUnreviewed(rows);
   } else if (event.key === 'e') {
     const row = selectedRow(rows);
     if (row) { captureOpenEditor(); V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
     const row = selectedRow(rows);
-    if (row) await toggleReviewed(row);
+    if (!row) return;
+    // Marking one reviewed moves to the next, so a paper is reviewed by
+    // holding one key rather than alternating between two. Taking a review
+    // back does not move: that is a correction, and it is made where it is.
+    const marking = !row.reviewed;
+    const following = rows[rows.findIndex((other) => other.id === row.id) + 1];
+    // The request is slow enough to press j again or click another claim while
+    // it runs, and that is the later decision: advancing on top of it would
+    // pull the selection back to where this review started.
+    const picked = handPicked;
+    const took = await toggleReviewed(row);
+    if (took && marking && following && handPicked === picked
+        && visibleClaims().some((other) => other.id === following.id)) {
+      V.selectedId = following.id;
+      renderContent();
+      scrollToSelected();
+    }
   } else if (event.key === 'Escape') {
     cancelEdit();
   }
@@ -3201,9 +4481,20 @@ document.addEventListener('drop', async (event) => {
 
 async function boot() {
   await loadWorkspaces();
+  applyHash();
   await refresh();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  // A filter the URL named that the corpus does not have is already gone: the
+  // read above went through `pull`, which drops them once the corpus is in `S`
+  // and before anything is drawn from it.
+  $('kind').value = V.kind;   // the kinds arrive with the corpus, after the URL was read
+  // `refresh` went through `render`, whose editor guard leaves the content pane
+  // alone whenever the view is Research: the poll must not rebuild the form
+  // under the cursor. At boot there is no form yet, so that guard would leave a
+  // URL naming Research — a bookmark, or a reload of the page while on it —
+  // with an active nav entry and a blank main pane. Draw it once here.
+  if (V.view === 'research') renderContent();
   setInterval(async () => {
     if (document.hidden) return;
     // Keep settings current while editing; the content guard below preserves
