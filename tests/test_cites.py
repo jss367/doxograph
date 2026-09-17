@@ -655,8 +655,9 @@ def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
         "References\n[1] Nobody. Attention is all you need for image "
         "restoration. 2026.\n"
         # A subtitle is the title going on too, however far down the page the
-        # line it is written on begins.
-        "[2] Nobody. Attention is all you need: for image restoration. 2027.",
+        # line it is written on begins, and either side of the colon.
+        "[2] Nobody. Attention is all you need: for image restoration. 2027.\n"
+        "[3] Nobody. Transformers: Attention is all you need. 2028.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
     wrapped = quotes.build("Nobody. Attention is all you need:\n"

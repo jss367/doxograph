@@ -647,6 +647,12 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     # next one, and that is where the title ends.
     if (after[:1] in _SUBTITLE or after[:1].isspace()) and after.strip():
         return False
+    # The other half of the subtitle rule: a title written after a colon is
+    # the second half of a longer one, and `Transformers: Attention is all you
+    # need` is a work of its own. Read back over the space between them, which
+    # is all an entry puts there.
+    if before.rstrip()[-1:] in _SUBTITLE and before.rstrip():
+        return False
     # A hyphen the entry wrapped at stands before the indentation of the line
     # the word goes on to: `Network-\n  based` is one word, and a title that
     # starts at `based` starts inside it.
