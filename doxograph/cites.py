@@ -212,25 +212,41 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
     coming back as a single work.
     """
     claims: dict[str, tuple[list[int], int, int]] = {}
+    fallbacks: dict[str, tuple[list[int], int]] = {}
     for other, found in marks.items():
         if other == key:
             continue
         # `fingerprints` puts a paper's identifiers first and its title last.
         title = found[-1] if found else ""
-        identifier = any(mark in entry for mark in found[:-1])
-        named_by = title if title and title in entry else next(
-            (mark for mark in found[:-1] if mark in entry), "")
+        by_identifier = next((mark for mark in found[:-1] if mark in entry), "")
+        named_by = title if title and title in entry else by_identifier
         if not named_by:
             continue
-        claims[other] = (_occurrences(entry, named_by), len(named_by), identifier)
+        claims[other] = (_occurrences(entry, named_by), len(named_by), bool(by_identifier))
+        if by_identifier and named_by is not by_identifier:
+            # Where every printing of its title turns out to be inside
+            # somebody else's, the identifier is what it is cited by: an entry
+            # naming this paper by its DOI alone is a citation of it, however
+            # its title reads elsewhere in the list.
+            fallbacks[other] = (_occurrences(entry, by_identifier), len(by_identifier))
+
+    def swallowed(other: str, at: int, width: int) -> bool:
+        """Whether a claim at `at` lies inside a longer claim of somebody else's."""
+        return any(w > width and any(begin <= at and at + width <= begin + w for begin in wheres)
+                   for name, (wheres, w, _) in claims.items() if name != other)
+
+    # A paper whose every title printing is inside somebody else's title is
+    # still cited where the entry names it by an identifier.
+    for other, (places, width) in fallbacks.items():
+        if all(swallowed(other, at, claims[other][1]) for at in claims[other][0]):
+            claims[other] = (places, width, 1)
 
     cited: set[str] = set()
     twins: dict[tuple[int, int], list[str]] = {}
     for other, (places, width, _) in claims.items():
         for at in places:
             # Inside a longer claim of somebody else's: part of that citation.
-            if any(w > width and any(begin <= at and at + width <= begin + w for begin in wheres)
-                   for name, (wheres, w, _) in claims.items() if name != other):
+            if swallowed(other, at, width):
                 continue
             twins.setdefault((at, width), []).append(other)
     for named_by in twins.values():

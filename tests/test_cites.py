@@ -353,3 +353,17 @@ def test_a_section_label_in_letters_comes_off_the_heading():
     # A prefix that leaves prose behind is still prose.
     assert cites.reference_text("Body.\nSee references below.\n[1] A.\n") == ""
     assert cites.reference_text("Body.\nReferenced work.\n[1] A.\n") == ""
+
+
+def test_a_paper_cited_by_its_identifier_survives_its_title_being_embedded():
+    """One entry names it by DOI alone; another cites a paper whose longer
+    title contains its title, and there are no entry markers to separate them."""
+    _paper("short", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nSomebody. Attention is all you need for image restoration. 2026.\n"
+        "Vaswani, A. https://doi.org/10.5555/3295222.3295349, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["long", "short"]
