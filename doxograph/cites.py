@@ -620,8 +620,11 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
         stop += 1
     while begin and unicodedata.combining(entry.raw[begin - 1]):
         begin -= 1
-    after = entry.raw[stop:stop + 12]
-    before = entry.raw[max(begin - 12, 0):begin]
+    # Far enough to read past what a page can put between a title and the
+    # rest of the entry: a wrap, and the indentation the next line is aligned
+    # with. Not the whole entry, which the caller reads for every mark.
+    after = entry.raw[stop:stop + 64]
+    before = entry.raw[max(begin - 64, 0):begin]
     if after[:1].isalnum() or before[-1:].isalnum():
         return False
     # A space after a title is more of the same title, and so is a colon with
@@ -718,7 +721,7 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
         if _shape(rest[:len(finish)]) != _shape(finish):
             return False
         rest = rest[len(finish):]
-    elif rest[:1] in _NEVER_LAST:
+    elif rest[:1] and rest[:1] in _NEVER_LAST:
         return False
     version = _ARXIV_TAIL.match(rest) if versioned else None
     if version:

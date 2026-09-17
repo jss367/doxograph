@@ -651,10 +651,15 @@ def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
         "The citing paper",
         "References\n[1] Nobody. Attention is all you need for image "
         "restoration. 2026.\n"
-        # A subtitle is the title going on too.
+        # A subtitle is the title going on too, however far down the page the
+        # line it is written on begins.
         "[2] Nobody. Attention is all you need: for image restoration. 2027.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+    wrapped = quotes.build("Nobody. Attention is all you need:\n"
+                           "            for image restoration. 2027.")
+    title = quotes.squash(ATTENTION)
+    assert not cites._bounded(wrapped, wrapped.squashed.find(title), len(title))
     # And the paper itself is still cited where the entry stops at its title.
     _paper("citing2", "Another citing paper", [
         "Another citing paper",
@@ -749,6 +754,10 @@ def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
     # A different DOI is still a different DOI.
     assert not cites._whole(entry, entry.squashed.find(mark), len(mark),
                             printed="10.1234/fooba.r")
+    # An entry that finishes with the identifier finishes it.
+    last = quotes.build("Nobody. A work. https://doi.org/10.1234/foo")
+    plain = quotes.squash("10.1234/foo")
+    assert cites._whole(last, last.squashed.find(plain), len(plain), printed="10.1234/foo")
     # A ligature is the letters it stands for, as it is to `quotes.squash`.
     ligature = quotes.build("Nobody. A work. https://doi.org/10.1234/o\ufb03ce, 2026.")
     office = quotes.squash("10.1234/office")
