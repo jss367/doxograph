@@ -4015,3 +4015,77 @@ def test_deciding_an_agreement_settles_a_held_claim_delete_first():
     assert record["claims"] == ["paper-a-c1", "paper-b-c1"]
     assert set(record["fingerprints"]) == {"paper-a-c1", "paper-b-c1"}
     assert store.agreement_rows()[0]["stale"] is False
+
+
+@pytest.mark.browser
+def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
+    """The paper's header and cards stay on screen until its DELETE comes back.
+    Freezing the claims by id reaches only the ones the server has named: a
+    claim being written by hand has no id yet, and the paper-level actions write
+    claims of their own. Either way the write races the removal — landing first
+    it is discarded by the DELETE behind it, under a page that reported it
+    saved; landing second it is a 404 over a removal the reader did ask for."""
+    from pdfs import minimal_pdf
+
+    _paper_with_claims("shared", "Shared paper", ["One."])
+    # A PDF on file is what puts "Check quotes" in the header.
+    store.pdf_path("shared").write_bytes(minimal_pdf("One."))
+
+    async def scenario():
+        in_flight = asyncio.Event()
+        release = asyncio.Event()
+        wrote = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_paper_delete(route, request):
+                if request.method == "DELETE":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            async def record_write(route, request):
+                if request.method == "POST":
+                    wrote.append(request.url)
+                await route.continue_()
+
+            await page.route("**/api/papers/shared", hold_paper_delete)
+            await page.route("**/api/papers/shared/claims", record_write)
+            await page.route("**/api/papers/shared/verify", record_write)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                add = page.get_by_role("button", name="Add claim by hand")
+                await add.click()
+                form = page.locator('form[data-form="__new__"]')
+                await form.wait_for()
+                await form.locator('[name="text"]').fill("Typed while it was going.")
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                # The open form goes read-only with the paper's other claims.
+                assert await form.locator('[name="text"]').is_disabled()
+                assert await form.get_by_role("button", name="Save").is_disabled()
+
+                # The header's own buttons are outside the form and stay
+                # clickable, so they refuse and say why.
+                await add.click()
+                await page.locator("#toasts .toast",
+                                   has_text="That paper is being removed").wait_for()
+                await page.get_by_role("button", name="Check quotes").click()
+                await page.locator(
+                    "#toasts .toast",
+                    has_text="the check it writes on each quote").wait_for()
+
+                release.set()
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+            await browser.close()
+
+        assert wrote == []
+
+    asyncio.run(scenario())
+    assert store.all_papers() == []

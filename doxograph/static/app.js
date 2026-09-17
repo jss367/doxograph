@@ -201,6 +201,31 @@ function applySavingState() {
   });
 }
 
+// Papers whose removal is in flight. Their cards and their header stay on
+// screen, and clickable, until the DELETE comes back: `removePaper` freezes the
+// claims by id, but that reaches only the claims the server has already told
+// the page about. A claim being written by hand has no id yet, and the
+// paper-level actions write claims of their own — a re-read makes a fresh set,
+// a retag and a quote check rewrite the ones on file, accepting a proposed
+// topic writes the paper itself. Each of them races the removal: land first and
+// the DELETE quietly throws the work away under a page that reported it saved,
+// land second and it fails with a 404 over a paper the reader did ask to
+// remove. Tracked by key, and asked before any of them goes out.
+const removingPapers = new Set();
+
+function isRemoving(paper) {
+  return removingPapers.has(paper);
+}
+
+// True when the action must not go ahead, having said why. `what` names the
+// work that would be lost, so the notice reads as a reason rather than a
+// refusal: "a new claim would be removed with it".
+function refuseWhileRemoving(paper, what) {
+  if (!isRemoving(paper)) return false;
+  toast(`That paper is being removed; ${what} would go with it.`, { tone: 'warn' });
+  return true;
+}
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -3219,6 +3244,14 @@ $('content').addEventListener('submit', async (event) => {
   event.preventDefault();
   const wrap = form.closest('[data-claim]');
   if (isSaving(wrap.dataset.claim)) return;   // a request for it is in flight
+  // Which paper the save would land on: the one the card names, or for a claim
+  // being written by hand the one the draft was started on. A removal in
+  // flight for it takes the save, whichever way the race goes — the POST
+  // landing first makes a claim the DELETE behind it discards, and landing
+  // second it is a 404 over a claim the reader was told was saved.
+  const onPaper = wrap.dataset.claim === NEW_CLAIM_ID
+    ? (V.newClaim || {}).paper : wrap.dataset.paper;
+  if (refuseWhileRemoving(onPaper, 'what is typed here')) return;
   const patch = readForm(form);
   V.error = null;
   markSaving(wrap.dataset.claim, true);
@@ -3341,7 +3374,16 @@ async function removePaper(paper) {
   // reader did ask for. They are frozen for the length of the removal, the
   // same freeze a save or a bulk review puts on the claims it is writing.
   const frozen = S.claims.filter((c) => c.paper === paper).map((c) => c.id);
+  // A claim being written by hand is not among them: it has no id on the
+  // server, only the `__new__` the form is drawn under. Frozen by that name
+  // when it belongs to this paper, so the form goes read-only like the rest
+  // rather than staying open over a paper that is going. The set below is what
+  // actually refuses the save — the draft can be parked and restored by moving
+  // between papers, and a form restored after this was worked out would not be
+  // covered by it.
+  if (V.newClaim && V.newClaim.paper === paper) frozen.push(NEW_CLAIM_ID);
   frozen.forEach((id) => markSaving(id, true));
+  removingPapers.add(paper);
   try {
     await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
     // Moved on meanwhile: the view belongs to another corpus now, and the drafts
@@ -3377,6 +3419,7 @@ async function removePaper(paper) {
     // frozen with nothing left to unfreeze them: the cards are still there and
     // the reader has to be able to work on them again.
     frozen.forEach((id) => markSaving(id, false));
+    removingPapers.delete(paper);
   }
 }
 
@@ -3447,6 +3490,11 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'review-all') {
+      // Covered by the frozen claim ids below as well — the button is only
+      // drawn when the paper has an unreviewed claim, and that claim is one of
+      // them — but said here too, so the reason the reader is given is the
+      // removal rather than a change in flight they did not make.
+      if (refuseWhileRemoving(paper, 'the reviews it writes')) return;
       await reviewWholePaper(paper);
       return;
     }
@@ -3650,6 +3698,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'reextract') {
+      if (refuseWhileRemoving(paper, 'the claims it reads out')) return;
       const workspace = await settleDeletes();
       if (!workspace) return;   // the delete failed; the pass would read the claim
       await api(`/api/papers/${encodeURIComponent(paper)}/extract`, {
@@ -3659,6 +3708,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'verify') {
+      if (refuseWhileRemoving(paper, 'the check it writes on each quote')) return;
       V.error = null;
       try {
         await api(`/api/papers/${encodeURIComponent(paper)}/verify`, { method: 'POST' });
@@ -3669,6 +3719,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'retag-one') {
+      if (refuseWhileRemoving(paper, 'the topics it writes on the claims')) return;
       const workspace = await settleDeletes();
       if (!workspace) return;   // the delete failed; the pass would read the claim
       await api('/api/retag', {
@@ -3694,6 +3745,10 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'add-claim') {
+      // The header stays on screen for the length of the removal, so this is
+      // still clickable. Opening the form would invite a claim the DELETE
+      // behind it is about to discard.
+      if (refuseWhileRemoving(paper, 'a new claim')) return;
       captureOpenEditor();
       // Resume a held draft rather than overwriting what was typed into it.
       if (!V.newClaim || V.newClaim.paper !== paper || !(V.newClaim.text || '').trim()) {
@@ -3704,10 +3759,19 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'del-paper') {
+      // The button goes with the header, which stands until the DELETE comes
+      // back. A second removal would ask the question again and send a second
+      // request, to come back 404 over a removal that is working.
+      if (refuseWhileRemoving(paper, 'a second removal')) return;
       await removePaper(paper);
       return;
     }
     if (act === 'accept-tag' || act === 'reject-tag') {
+      // The proposals are written back onto the paper, so this is the same
+      // race even though it writes no claim: accepting also puts the name into
+      // the vocabulary, and a topic accepted from a paper that then goes would
+      // be left declared with nothing under it.
+      if (refuseWhileRemoving(paper, 'the answer to its proposed topics')) return;
       const field = act === 'accept-tag' ? 'accept' : 'discard';
       await api(`/api/papers/${encodeURIComponent(paper)}/proposed-tags`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3949,7 +4013,12 @@ $('ctxmenu').addEventListener('click', async (event) => {
   if (!button) return;
   closePaperMenu();
   const paper = button.dataset.paper;
-  if (button.dataset.act === 'del-paper') await removePaper(paper);
+  // The paper stays in the list until its DELETE comes back, so the menu can
+  // be opened on it again and asked to remove it a second time.
+  if (button.dataset.act === 'del-paper') {
+    if (refuseWhileRemoving(paper, 'a second removal')) return;
+    await removePaper(paper);
+  }
   if (button.dataset.act === 'open-pdf') {
     window.open(`/pdf/${encodeURIComponent(paper)}?${workspaceQuery()}&inline=1`, '_blank');
   }
