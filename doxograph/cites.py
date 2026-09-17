@@ -433,6 +433,9 @@ _VERSION = re.compile(r"v\d+(?![0-9A-Za-z])")
 # has not ended where a fingerprint of it has. The punctuation a DOI suffix is
 # allowed, which `ingest.DOI_RE` writes out as `[-._;()/:A-Za-z0-9]`.
 _JOINS = "./-_:;()"
+_IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9]")
+# Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
+_DOI_HEAD = re.compile(r"10\.\d{4,9}/")
 
 
 def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> bool:
@@ -466,7 +469,17 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> 
         return False
     # A separator with a number before it: the `10.` of `10.1706/03762`, where
     # `doi:` and `doi.org/` in front of an identifier end in a letter.
-    return not (lead[-1:] in _JOINS and lead[-2:-1].isdigit())
+    if lead[-1:] in _JOINS and lead[-2:-1].isdigit():
+        return False
+    # Or further back: a DOI can have anything in its suffix, `10.1234/abc/`
+    # and an arXiv id after it included, and what is printed there is that
+    # DOI rather than the paper the id belongs to. Only as far back as the
+    # run of identifier characters the match sits in — `doi.org/` in front of
+    # a DOI is part of that run and is not a DOI itself.
+    start = len(lead)
+    while start and _IDENTIFIER_CHAR.match(lead[start - 1]):
+        start -= 1
+    return not _DOI_HEAD.search(lead[start:])
 
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
