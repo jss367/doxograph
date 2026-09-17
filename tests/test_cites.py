@@ -269,3 +269,29 @@ def test_an_entry_names_one_work_even_where_a_title_contains_another():
         "[2] Vaswani et al. Attention is all you need. 2017.",
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["long", "short"]
+
+
+def test_an_unnumbered_bibliography_keeps_every_citation():
+    """No entry markers means the list is read whole, and reading it whole
+    must not turn a page of references into a single work."""
+    _paper("cited", ATTENTION, [ATTENTION, "Text."])
+    _paper("other", "Steering and recovery in language models",
+           ["Steering and recovery in language models", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nVaswani, A. Attention is all you need. NeurIPS, 2017.\n"
+        "Roe, A. Steering and recovery in language models. 2026.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["cited", "other"]
+
+
+def test_a_roman_numeral_does_not_eat_the_heading_it_numbers():
+    for heading in ("VI. LITERATURE CITED", "IV. References", "Literature Cited"):
+        text = f"Body.\n{heading}\n[1] A paper.\n"
+        assert cites.reference_text(text).strip() == "[1] A paper.", heading
+
+
+def test_one_doi_recorded_twice_is_one_identifier():
+    paper = {"key": "x", "title": "A paper with a long enough title to look for",
+             "doi": "10.1234/abcd", "source": {"kind": "doi", "id": "10.1234/abcd"}}
+    assert cites.fingerprints(paper).count("101234abcd") == 1

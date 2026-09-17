@@ -103,7 +103,13 @@ def _is_heading(squashed: str) -> bool:
     squash to "vireferences". The Roman run is only taken off when what is
     left is a heading, since "literaturecited" starts with one of its letters.
     """
-    for candidate in (squashed.lstrip("0123456789"), squashed.lstrip("ivxlcdm0123456789")):
+    plain = squashed.lstrip("0123456789")
+    # A section number in Roman comes off, but only as far as a heading: the
+    # letters of a numeral are letters of "literature" too, and stripping the
+    # set would take the "li" off "literaturecited" along with the "vi".
+    candidates = [plain] + [plain[at:] for at in range(1, 8) if at < len(plain)
+                            and set(plain[:at]) <= set("ivxlcdm")]
+    for candidate in candidates:
         head = next((h for h in _HEADINGS if candidate.startswith(h)), None)
         if head is not None and candidate[len(head):] in _HEADING_TAIL:
             return True
@@ -117,7 +123,7 @@ def fingerprints(paper: dict) -> list[str]:
     strictly, but a twenty-character run of one paper's title inside another's
     bibliography is a citation and not a coincidence.
     """
-    marks = []
+    marks: list[str] = []
     source = paper.get("source") or {}
     if source.get("kind") == "arxiv" and source.get("id"):
         marks.append(quotes.squash(re.sub(r"v\d+$", "", str(source["id"]), flags=re.I)))
@@ -127,7 +133,9 @@ def fingerprints(paper: dict) -> list[str]:
     title = quotes.squash(paper.get("title") or "")
     if len(title) >= _TITLE_FLOOR:
         marks.append(title)
-    return [mark for mark in marks if mark]
+    # Crossref fills in `doi` and `source["id"]` alike, and one identifier
+    # recorded twice is still one identifier.
+    return list(dict.fromkeys(mark for mark in marks if mark))
 
 
 def edges(papers: list[dict] | None = None) -> list[dict]:
@@ -178,21 +186,40 @@ def _cited(key: str, entries: list[str], marks: dict[str, list[str]]) -> list[st
 
 
 def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
-    """The papers one reference entry names."""
-    hits: list[tuple[int, int, str]] = []
+    """The papers one stretch of a reference list names.
+
+    Within an entry the longest mark a paper is named by is its claim on the
+    text. A claim sitting strictly inside another paper's is part of that
+    citation rather than a second one — "Attention is all you need" inside
+    "Attention is all you need for image restoration" — and claims on the same
+    stretch are twins, told apart by an identifier if the entry carries one.
+    Claims that do not overlap are separate citations, which is what keeps an
+    unnumbered bibliography from coming back as a single work.
+    """
+    claims: dict[str, tuple[int, int, int]] = {}
     for other, found in marks.items():
         if other == key:
             continue
         # `fingerprints` puts a paper's identifiers first and its title last.
-        best = max(((1 if at < len(found) - 1 else 0, len(mark))
-                    for at, mark in enumerate(found) if mark in entry),
-                   default=None)
-        if best is not None:
-            hits.append((best[0], best[1], other))
-    if not hits:
-        return set()
-    top = max(hits)[:2]
-    return {other for identifier, width, other in hits if (identifier, width) == top}
+        places = [(entry.find(mark), len(mark), 1 if at < len(found) - 1 else 0)
+                  for at, mark in enumerate(found) if mark in entry]
+        if not places:
+            continue
+        identifier = max(named for _, _, named in places)
+        at, width, _ = max(places, key=lambda place: place[1])
+        claims[other] = (at, width, identifier)
+
+    cited: set[str] = set()
+    twins: dict[tuple[int, int], list[str]] = {}
+    for other, (at, width, _) in claims.items():
+        if any(w > width and begin <= at and at + width <= begin + w
+               for name, (begin, w, _) in claims.items() if name != other):
+            continue        # part of a longer paper's citation, not its own
+        twins.setdefault((at, width), []).append(other)
+    for named_by in twins.values():
+        best = max(claims[other][2] for other in named_by)
+        cited |= {other for other in named_by if claims[other][2] == best}
+    return cited
 
 
 def _text_signature() -> str:
