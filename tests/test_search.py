@@ -28,7 +28,7 @@ def a_corpus() -> None:
 
 
 def test_a_query_is_its_words_and_every_one_has_to_be_there():
-    assert search.terms("Steering, recovery -- STEERING") == ["Steering", "recovery"]
+    assert search.terms("Steering, recovery -- STEERING") == ["steering", "recovery"]
     a_corpus()
     both = search.search_papers("steering recovery")
     assert [hit["key"] for hit in both] == ["roe2026steering"]
@@ -133,7 +133,7 @@ def test_a_papers_length_is_weighed_against_the_whole_corpus():
 def test_a_term_is_searched_as_it_was_typed():
     """Case folding expands some letters — ß to ss — and the papers are
     searched as they are written, where IGNORECASE cannot put them back."""
-    assert search.terms("Steering RECOVERY steering") == ["Steering", "RECOVERY"]
+    assert search.terms("Steering RECOVERY steering") == ["steering", "recovery"]
     store.save_paper(store.new_paper("strasse", title="Strasse"))
     store.pdf_path("strasse").write_bytes(minimal_pdf("Die Straße war lang und leer."))
     assert [hit["key"] for hit in search.search_papers("Straße")] == ["strasse"]
@@ -311,7 +311,7 @@ def test_text_older_than_its_pdf_is_read_again(tmp_path):
 
 def test_a_query_saying_one_word_two_ways_says_it_once():
     a_paper_of("cafe", "A study of the cafe as a workplace.")
-    assert search.terms("café cafe") == ["café"]
+    assert search.terms("café cafe") == ["cafe"]
     assert search.search_papers("café cafe")[0]["occurrences"] == 1
 
 
@@ -356,3 +356,12 @@ def test_a_later_occurrence_is_shown_when_the_first_two_are_together():
     passages = search.search_papers("sandbagging")[0]["passages"]
     assert len(passages) == 2
     assert passages[1]["page"] == 2
+
+
+def test_a_mark_inside_a_word_does_not_cut_the_query_in_two():
+    """A combining mark is no part of a word, so `nai` + diaeresis + `ve`
+    would be two terms where naïve is one."""
+    assert search.terms("naïve") == ["naive"]
+    a_paper_of("naive", "A naive baseline recovers half the time.")
+    for query in ("naïve", "naïve", "naive"):
+        assert [hit["key"] for hit in search.search_papers(query)] == ["naive"], repr(query)
