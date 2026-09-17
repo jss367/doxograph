@@ -408,3 +408,12 @@ def test_a_sign_that_changes_the_word_is_not_an_accent():
 def test_javanese_is_a_script_without_spaces_too():
     a_paper_of("jv", "A paper about ꦲꦤꦕꦫꦏ.")
     assert [hit["key"] for hit in search.search_papers("ꦕꦫ")] == ["jv"]
+
+
+def test_a_term_does_not_start_a_word_in_the_middle_of_one():
+    """A vowel sign is part of the word it sits in, so the boundary before त
+    in किताब is not a word start."""
+    a_paper_of("hindi", "यह एक किताब है।")
+    assert search.search_papers("ताब") == []
+    a_paper_of("standalone", "यह ताब है।")
+    assert [hit["key"] for hit in search.search_papers("ताब")] == ["standalone"]
