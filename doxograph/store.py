@@ -615,6 +615,34 @@ def add_claim(key: str, patch: dict) -> dict:
 
 
 @_locked
+def review_claims(key: str, reviewed: bool, claim_ids: list[str] | None = None) -> list[str]:
+    """Mark a paper's claims reviewed, or unreviewed, in one write.
+
+    Returns the ids it actually changed, which is what an undo needs: setting
+    them back must not also unreview a claim the person had already reviewed
+    before. `claim_ids` is that undo's other half — a list restricts the change
+    to those claims, and one not on the paper is ignored rather than refused,
+    since the alternative is failing a bulk action over a claim deleted
+    meanwhile.
+    """
+    paper = load_paper(key)
+    wanted = set(claim_ids) if claim_ids is not None else None
+    changed = []
+    for claim in paper.get("claims", []):
+        if wanted is not None and claim.get("id") not in wanted:
+            continue
+        if bool(claim.get("reviewed")) == reviewed:
+            continue
+        claim["reviewed"] = reviewed
+        claim["updated"] = now()
+        changed.append(claim["id"])
+    if changed:
+        refresh_status(paper)
+        save_paper(paper)
+    return changed
+
+
+@_locked
 def delete_claim(key: str, claim_id: str) -> None:
     paper = load_paper(key)
     before = len(paper.get("claims", []))
@@ -909,6 +937,11 @@ def summarize(paper: dict) -> dict:
         "n_proposed_tags": len(paper.get("proposed_tags", [])),
         "schema_version": (paper.get("extraction") or {}).get("schema_version"),
         "has_pdf": pdf_path(paper["key"]).exists(),
+        # What `refresh_status` reads when a paper has no claims: read once
+        # rather than inferred from `schema_version`, which a paper extracted
+        # before that field existed does not carry. The page needs it to work
+        # out the status of a paper whose last claim it is holding.
+        "has_extraction": bool(paper.get("extraction")),
     }
 
 
@@ -1365,14 +1398,15 @@ def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
     new pair, does; so does re-judging a stale one against the current text.
     The note is in because the prompt carries it: a rerun that says the same
     disagreement in different words is a different thing to write a synthesis
-    from. It goes in as a digest, since what is wanted is whether it moved and
-    the whole of it would be a copy of the tensions file. `tensions` is
+    from. It goes in whole rather than as a digest, because the page works the
+    same comparison out for itself while a delete is held, and it cannot hash
+    anything without waiting for `crypto.subtle`. `tensions` is
     `tension_rows` output, whose `topics` are already filtered to what both
     claims still carry. A record from before a field was kept holds a shorter
     list, which never compares equal to these, so it reads as stale until
     rewritten: what the model was told is not known."""
     return {t["id"]: [t.get("kind"), t.get("status"), bool(t.get("stale")),
-                      hashlib.sha1((t.get("note") or "").encode("utf-8")).hexdigest()[:12]]
+                      t.get("note") or ""]
             for t in sorted(tensions, key=lambda t: t["id"])
             if topic in t.get("topics", []) and t.get("status") != "dismissed"}
 
@@ -1728,7 +1762,14 @@ def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
     those claims, with `stale`, `n_papers`, and topics filtered to what every
     member still carries. Stale when a member was edited or removed since the
     agreement was found or decided: the fingerprints name the members the
-    judgment was about, so a set of them other than the live members is stale."""
+    judgment was about, so a set of them other than the live members is stale.
+
+    `topics_on_file` is the unfiltered set the filtering starts from. A group
+    can lose a member and keep going — two papers is all it needs — and the
+    topics that member alone had dropped become good again for the ones left.
+    The page has to work that out for itself while a delete waits out its undo,
+    and it cannot recover a topic from a list this function has already taken
+    it out of, so the set it filters from is sent along with the result."""
     live = {c["id"]: c for c in (rows if rows is not None else claim_rows())}
     out = []
     for record in load_agreements():
@@ -1739,8 +1780,9 @@ def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
         row = dict(record)
         row["claims"] = [live[i] for i in ids]
         row["n_papers"] = len(_agreement_papers(ids, live))
-        row["topics"] = sorted(t for t in record.get("topics", [])
-                               if all(t in (live[i].get("tags") or []) for i in ids))
+        row["topics_on_file"] = sorted(record.get("topics", []))
+        row["topics"] = [t for t in row["topics_on_file"]
+                         if all(t in (live[i].get("tags") or []) for i in ids)]
         row["stale"] = (set(fingerprints) != set(ids)
                         or any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids))
         out.append(row)

@@ -1,4 +1,6 @@
-from doxograph import bib, export, store
+from fastapi.testclient import TestClient
+
+from doxograph import bib, export, server, store
 
 
 def build_corpus():
@@ -54,3 +56,17 @@ def test_bibtex_escapes_specials():
     text = bib.render()
     assert r"Cost \& Benefit of 50\% Steering" in text
     assert "@article{x2026y," in text
+
+
+def test_the_exported_file_is_served_back():
+    """The page offers to open what it just exported, rather than naming a
+    path the reader has to go and find."""
+    build_corpus()
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/export").status_code == 404
+        client.post("/api/export", json={"title": "Doxograph"})
+        response = client.get("/export")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "inline" in response.headers["content-disposition"]
+    assert "Llama-3 70B recovers" in response.text

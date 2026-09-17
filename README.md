@@ -127,8 +127,13 @@ box. Use the workspace picker in the header to keep unrelated research
 separate. The existing corpus is the Default workspace; creating a workspace
 makes an empty, independent corpus with its own papers, topics, research
 context, ledger, tensions, syntheses, and exports. The last selected workspace
-is restored when the page is reopened. Papers dropped on the Mac app's Dock
-icon go to the workspace currently shown in its window.
+is restored when the page is reopened, unless the address names another one.
+Papers dropped on the Mac app's Dock icon go to the workspace currently shown
+in its window.
+
+Export HTML writes the file and then offers to open it or to copy its path. A
+reference that nothing identifies stays in the box and is named underneath it,
+so it is clear which line of a pasted list is the problem.
 
 The Tensions entry in the sidebar shows where papers disagree; `Escape`
 returns to the claims. The Map entry draws the papers as a graph: each
@@ -139,8 +144,31 @@ papers that support, contradict, refine, or supply a method for them; a
 link marked independent is not drawn. A slider hides topic
 links below a chosen number of shared claims; it starts at the median so
 a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
-and click a paper to read it. `j` and `k` move between claims, `e` edits the selected one, `r` marks it
-reviewed, `Escape` cancels. Clicking a topic filters to it.
+and click a paper to read it. Clicking a topic filters to it.
+
+Review runs from the keyboard. `j` and `k` move between claims, `e` edits the
+selected one, `r` marks it reviewed and moves to the next, and `n` jumps to the
+next claim nobody has reviewed, wrapping round the end. `/` puts the cursor in
+the search box and `Escape` there clears it; `Escape` anywhere else cancels an
+editor or leaves the view you are in. `?` lists all of this, and so does the
+Shortcuts button in the header. A paper that arrives with a dozen claims you
+have read in one go has "Mark N reviewed" in its header; the notice that
+follows offers to take it back, and takes back only what that click changed.
+
+Deleting a claim, an agreement, or a synthesis is not confirmed first. It is
+undone instead: the row leaves the page at once and the request is held until
+its notice fades, so Undo is the delete never being sent and the claim comes
+back as itself, with the tensions and syntheses that cite it intact. Removing a
+paper is the exception and still asks, because a removed paper's key is retired
+for good. A claim carries a link to its own page of the PDF when its locator
+names one, and a quote has a copy button, so checking a quote against the paper
+does not mean going looking for the paper first.
+
+The URL follows what is on screen: the workspace, the paper or topic you are
+in, the view, the query, and the filters, including the status a tension or
+agreement list is narrowed to. A reload lands where you left off,
+Back walks the papers and topics you went through rather than every keystroke,
+and a link to a topic is something you can keep or send.
 
 The search box narrows the claims and the paper list together. It matches
 claim text, evidence, quotes, topics, paper titles, authors, keys, and
@@ -377,5 +405,8 @@ or too confidently worded. The retagger has its own, shorter prompt in
 The suite is offline: its browser smoke test runs against a temporary local
 server and corpus. It covers reference parsing, the store and its status
 transitions, tag renaming and deletion across claims, the extraction merge
-including the keep-reviewed path, HTML escaping in the export, and BibTeX.
-Nothing in it calls the API.
+including the keep-reviewed path, HTML escaping in the export, and BibTeX. In
+the browser it covers the review keys, an undone delete, the URL through a
+reload and the Back button, and the notices that replaced the browser's own
+dialogs. Nothing in it calls the model, and nothing reaches the network:
+the API tests drive the app itself through `TestClient`.
