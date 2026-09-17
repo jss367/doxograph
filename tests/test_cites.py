@@ -650,7 +650,9 @@ def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
     _paper("citing", "The citing paper", [
         "The citing paper",
         "References\n[1] Nobody. Attention is all you need for image "
-        "restoration. 2026.",
+        "restoration. 2026.\n"
+        # A subtitle is the title going on too.
+        "[2] Nobody. Attention is all you need: for image restoration. 2027.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
     # And the paper itself is still cited where the entry stops at its title.

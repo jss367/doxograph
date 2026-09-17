@@ -624,7 +624,11 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     before = entry.raw[max(begin - 12, 0):begin]
     if after[:1].isalnum() or before[-1:].isalnum():
         return False
-    if after[:1].isspace():
+    # A space after a title is more of the same title, and so is a colon with
+    # a subtitle after it: what a paper is recorded under carries its subtitle
+    # too, so an entry that writes one the record has not got is writing a
+    # different work's title.
+    if after[:1].isspace() or (after[:1] in _SUBTITLE and after[1:].strip()):
         return False
     # A hyphen the entry wrapped at stands before the indentation of the line
     # the word goes on to: `Network-\n  based` is one word, and a title that
@@ -638,6 +642,8 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
                 or (before[-1:] in _WORD_JOINS and _WRAP.sub("", before[:-1])[-1:].isalnum()))
 
 
+# What stands between a title and the subtitle it goes on with.
+_SUBTITLE = ":\uff1a"
 # What an identifier finishes with where it does not finish with a letter.
 _FINISH = re.compile(r"[^0-9A-Za-z]*$")
 # The marks a sentence never ends with, so an entry printing one straight after
