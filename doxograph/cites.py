@@ -73,6 +73,12 @@ def entries(listing: str) -> list[str]:
     return cut if len(cut) > 1 else [quotes.squash(listing)]
 
 
+# What marks a letter or numeral as a section label rather than the first word
+# of a sentence: the dot or bracket after it. "A. REFERENCES" is a heading and
+# "A reference" is the start of a line of prose.
+_LABEL = re.compile(r"^[ \t]*[0-9A-Za-z]{1,7}[.)\]]+[ \t]+")
+
+
 def reference_text(text: str) -> str:
     """Everything after the first references heading, or empty when there is none.
 
@@ -95,12 +101,12 @@ def reference_text(text: str) -> str:
         # and short as a heading.
         if len(squashed) > _HEADING_LETTERS:
             continue
-        if _is_heading(squashed):
+        if _is_heading(squashed, labelled=bool(_LABEL.match(line))):
             return text[at:]
     return ""
 
 
-def _is_heading(squashed: str) -> bool:
+def _is_heading(squashed: str, labelled: bool = False) -> bool:
     """Whether a line's letters say a reference list starts here.
 
     A section number comes off first, in either notation: IEEE numbers its
@@ -114,10 +120,14 @@ def _is_heading(squashed: str) -> bool:
     # heading: any alphabetic prefix would take the "see" off "see references"
     # and read the rest of the paper as a bibliography.
     candidates = [plain]
-    if len(plain) > 1 and plain[0].isalpha():
-        candidates.append(plain[1:])
-    candidates += [plain[at:] for at in range(2, 8)
-                   if at < len(plain) and set(plain[:at]) <= set("ivxlcdm")]
+    # A label only comes off where the line wrote one: a letter or a numeral
+    # followed by a dot or a bracket. Without that, the first letters are the
+    # first letters of a word — "A reference" is not "A. REFERENCES".
+    if labelled:
+        if len(plain) > 1 and plain[0].isalpha():
+            candidates.append(plain[1:])
+        candidates += [plain[at:] for at in range(2, 8)
+                       if at < len(plain) and set(plain[:at]) <= set("ivxlcdm")]
     for candidate in candidates:
         # Every heading it could begin with, not the first: "references" and
         # "reference" both fit the plural, and only one of them leaves a tail
@@ -261,7 +271,11 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
         # title and we cannot see which. As many printings as claimants means
         # each of them has one, and all are cited.
         printings = min(len(claims[other][0]) for other in named_by)
-        if printings >= len(named_by):
+        spoken_for = sum(1 for other in named_by if claims[other][2] == best)
+        if printings > spoken_for:
+            # More printings of the title than there are papers an identifier
+            # accounts for: the rest cite one of the others, and nothing here
+            # says which, so none of them is dropped.
             cited |= set(named_by)
         else:
             cited |= {other for other in named_by if claims[other][2] == best}

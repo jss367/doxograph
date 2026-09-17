@@ -392,3 +392,28 @@ def test_a_marker_alone_on_its_line_still_starts_an_entry():
         "[2]\nA Vaswani et al. Attention is all you need. NeurIPS, 2017.",
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]
+
+
+def test_a_label_is_a_label_because_of_what_follows_it():
+    """"A. REFERENCES" is a heading; "A reference" is the start of a line."""
+    for heading in ("A. REFERENCES", "VI. LITERATURE CITED", "3. References", "References",
+                    "B) Bibliography"):
+        assert cites.reference_text(f"Body.\n{heading}\n[1] A paper.\n").strip() == "[1] A paper.", heading
+    for prose in ("A reference", "No references", "See References", "I reference the above"):
+        assert cites.reference_text(f"Body.\n{prose}\n[1] A paper.\n") == "", prose
+
+
+def test_three_twins_and_two_printings_keep_them_all():
+    """One printing is beside an identifier and the other is beside nothing;
+    the second cites one of the two unidentified versions and the list does
+    not say which."""
+    for key, extra in (("preprint", {"source": {"kind": "arxiv", "id": "1706.03762"}}),
+                       ("published", {}), ("reissue", {})):
+        _paper(key, ATTENTION, [ATTENTION, "Text."], **extra)
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nVaswani, A. Attention is all you need. arXiv:1706.03762, 2017.\n"
+        "Vaswani, A. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == [
+        "preprint", "published", "reissue"]
