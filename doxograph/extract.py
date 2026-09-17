@@ -688,8 +688,15 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
 def _pass_extra(topic: str, description: str) -> str:
     """Everything a per-topic prompt carries that is not one of its claims,
     and who was asked: a different model is a different answer, so switching
-    `DOXOGRAPH_MODEL` puts every topic back in the queue."""
-    return f"{config.PASS_VERSION}\n{config.MODEL}\n{description}\n{context_block()}"
+    `DOXOGRAPH_MODEL` puts every topic back in the queue.
+
+    A list rather than four lines run together: the description and the
+    research context both hold newlines of their own, and joining them with
+    one more would let a line moved from the end of the description to the
+    front of the context read as the same prompt. It is a different prompt,
+    and the pass has to be asked again."""
+    return json.dumps([config.PASS_VERSION, config.MODEL, description,
+                       context_block()])
 
 
 def find_tensions(topic: str, rows: list[dict] | None = None,
