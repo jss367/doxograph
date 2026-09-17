@@ -1976,6 +1976,41 @@ def test_the_alike_panel_goes_even_while_an_editor_holds_the_content():
 
 
 @pytest.mark.browser
+def test_following_an_alike_suggestion_keeps_what_was_typed():
+    """The jump redraws the page, and a form rebuilt from the state it was
+    drawn with would lose whatever was typed into it since."""
+    _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
+    store.update_claim("doe2026recovery", "doe2026recovery-c1",
+                       {"text": "Llama-3 70B recovers the original task in 46% of rollouts."})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+                await card.locator(".alike .alikerow").wait_for()
+
+                await page.locator('.claim[data-claim="li2025steer-c1"]').get_by_role(
+                    "button", name="edit").click()
+                await page.locator('textarea[name="text"]').fill("Half-typed correction")
+                await card.locator(".alike .alikerow").first.click()
+
+                assert await page.locator(
+                    'textarea[name="text"]').input_value() == "Half-typed correction"
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
     _paper("doe2026recovery", "Recovery under steering", "recovery-rate")
     store.update_claim("doe2026recovery", "doe2026recovery-c1",
