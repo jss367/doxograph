@@ -230,8 +230,12 @@ def ledger_block() -> str:
     )
 
 
-def context_block() -> str:
-    return store.load_context() or "No research context has been recorded, so judge relevance broadly."
+def context_block(text: str | None = None) -> str:
+    """The research context as a prompt carries it, read from disk unless the
+    caller has it already — a caller that is also signing its answer with the
+    context has to sign it with the one it sent."""
+    text = store.load_context() if text is None else text
+    return text or "No research context has been recorded, so judge relevance broadly."
 
 
 def _pdf_fingerprint(pdf: Path) -> dict:
@@ -851,7 +855,8 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
     if not rows:
         return {"written": False, "skipped": False, "claims": 0, "papers": 0}
     tags = store.load_tags() if tags is None else tags
-    basis = store.synthesis_prompt_basis(topic, tags)
+    context = store.load_context()
+    basis = store.synthesis_prompt_basis(topic, tags, context)
     if not force:
         current = next((r for r in store.synthesis_rows(all_rows) if r["topic"] == topic), None)
         # The prompt as well as the claims and tensions: a synthesis written
@@ -880,7 +885,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
         messages=[{
             "role": "user",
             "content": (
-                f"My research:\n\n{context_block()}\n\n"
+                f"My research:\n\n{context_block(context)}\n\n"
                 f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
                 f"Claims, by paper:\n\n{_tension_listing(rows, mark_unreviewed=True)}\n\n"
                 f"{_tension_block(topic, tensions)}\n\n"

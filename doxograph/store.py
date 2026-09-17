@@ -698,12 +698,19 @@ def _move_pass(data: dict, old: str, new: str | None) -> bool:
     A deleted topic loses the pairs it was attached to. Recreating the tag over
     the same unchanged claims produces the same signature, so a pass left on
     file would be skipped and the topic never put back on those pairs.
+
+    Where the new name is a topic of its own — a merge rather than a rename —
+    its own pass stands. It was recorded against its own claims and its own
+    name, and the old topic's signature, which carries the old name, could
+    only say the destination had never been asked. If the merge brings claims
+    the destination did not have, its signature no longer matches what a pass
+    would compute now, and the pass runs again of its own accord.
     """
     passes = data.get("passes") or {}
     if old not in passes:
         return False
     signature = passes.pop(old)
-    if new:
+    if new and new not in passes:
         passes[new] = signature
     data["passes"] = passes
     return True
@@ -1310,17 +1317,26 @@ def topic_claims(topic: str, rows: list[dict] | None = None) -> list[dict]:
     return [r for r in (rows if rows is not None else claim_rows()) if topic in (r.get("tags") or [])]
 
 
-def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None) -> str:
+def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None,
+                           context: str | None = None) -> str:
     """What a synthesis was asked, apart from its claims and tensions.
 
-    The prompt version, the model asked, the topic's name, and its description
-    — all of them decide what comes back, and none of them is part of what
-    makes a synthesis stale, so without this a rename, a reworded description
-    or a change of model would never be written again.
+    The prompt version, the model asked, the topic's name, its description and
+    the research context — all of them decide what comes back, and none of
+    them is part of what makes a synthesis stale, so without this a rename, a
+    reworded description, a rewritten context or a change of model would never
+    be written again.
+
+    `context` is what the caller is putting in the prompt, so that the
+    synthesis is filed under the context the model was actually given; read
+    here only for a write that has no prompt behind it. A list rather than
+    five lines run together, since the description and the context both hold
+    newlines of their own.
     """
     tags = load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
-    return f"{config.PASS_VERSION}\n{config.MODEL}\n{topic}\n{description}"
+    context = load_context() if context is None else context
+    return json.dumps([config.PASS_VERSION, config.MODEL, topic, description, context])
 
 
 def synthesis_basis(rows: list[dict]) -> dict[str, str]:

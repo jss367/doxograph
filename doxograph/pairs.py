@@ -190,6 +190,10 @@ def similar_to(claim_id: str, rows: list[dict], weight: dict[str, float] | None 
             continue
         score = similarity(bag, words(row), weight)
         if score >= floor:
-            scored.append({"claim": row["id"], "score": round(score, 3)})
-    scored.sort(key=lambda row: (-row["score"], row["claim"]))
-    return scored[:limit]
+            scored.append((score, row["id"]))
+    # Sorted on the score as it was measured and rounded afterwards: two
+    # claims a ten-thousandth apart round to the same three places, and the
+    # lower one would be taken first on its id and keep the place `limit`
+    # gives away.
+    scored.sort(key=lambda found: (-found[0], found[1]))
+    return [{"claim": claim, "score": round(score, 3)} for score, claim in scored[:limit]]
