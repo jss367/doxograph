@@ -3452,8 +3452,9 @@ def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.wait_for()
 
-                # The read `deleteLater` ends in is refused, so the page never
-                # redraws — but the delete still has to be scheduled and offered.
+                # The read `deleteLater` ends in is refused, so the refresh
+                # after the delete throws — but the delete still has to be
+                # scheduled and offered.
                 refusing.set()
                 await card.get_by_role("button", name="delete").click()
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
@@ -3464,6 +3465,56 @@ def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
                 # The notice runs out and sends the delete it was holding.
                 await notice.wait_for(state="detached", timeout=20000)
                 await card.wait_for(state="detached", timeout=20000)
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
+
+
+@pytest.mark.browser
+def test_a_deleted_row_leaves_the_screen_when_the_redraw_after_it_fails():
+    """Holding the delete takes the row out of the state the page keeps, but only
+    a draw takes it off the screen — and the draw inside the refresh never runs
+    when that refresh's read is refused. The pruned state is drawn before the
+    read, so the card is gone while the undo notice stands rather than sitting
+    there clickable until the timer sends the delete out from under it."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        refusing = asyncio.Event()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_read(route, request):
+                if refusing.is_set():
+                    await route.abort()
+                    return
+                await route.continue_()
+
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator(f'.claim[data-claim="{one}"]')
+                await card.wait_for()
+
+                refusing.set()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+
+                # The notice is up, so the redraw either happened or never will:
+                # nothing else on the page is waiting to draw this row away.
+                assert await card.count() == 0
+
+                # The other claim and the counts are still there, so this is the
+                # pruned state drawn and not a page emptied by the refused read.
+                assert await page.locator(f'.claim[data-claim="{two}"]').count() == 1
+                assert "1 claims" in await page.locator("#stats").text_content()
+
+                refusing.clear()
+                await notice.wait_for(state="detached", timeout=20000)
             await browser.close()
 
     asyncio.run(scenario())

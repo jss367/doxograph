@@ -405,13 +405,21 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   trash.set(token, { path, workspace, paper, send, sending: null });
   forgetStateTag();
   pruneTrashed();
-  // The redraw goes first so the row is off the screen before a notice offering
-  // to put it back appears over it. But it reaches the server, and a server
-  // that is restarting rejects it — and the notice is what carries the timer
-  // that finally sends the delete. Raised only on the way out of a refresh that
-  // worked, it would leave the entry sitting in the trash: the row hidden, the
-  // DELETE never sent, and no Undo and no error to say so. So it goes up either
-  // way, and the failure still reaches the caller.
+  // `pruneTrashed` only takes the row out of the state the page holds; what is
+  // on screen stands until something draws it. That draw happens here, before
+  // the refresh, because the refresh is a read from the server and a server
+  // restarting under the click rejects it — and then nothing redraws at all.
+  // The row would sit there under the "Deleted …" notice, still clickable and
+  // still open to an edit or a second delete, until the timer sent the DELETE
+  // out from under it.
+  renderAll();
+  // The redraw comes before the notice, so the row is off the screen before an
+  // offer to put it back appears over it. The refresh can still fail, and the
+  // notice is what carries the timer that finally sends the delete: raised only
+  // on the way out of a refresh that worked, it would leave the entry sitting in
+  // the trash with the row hidden, the DELETE never sent, and no Undo and no
+  // error to say so. So it goes up either way, and the failure still reaches
+  // the caller.
   try {
     await refreshAll();
   } finally {
