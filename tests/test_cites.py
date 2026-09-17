@@ -367,3 +367,13 @@ def test_a_paper_cited_by_its_identifier_survives_its_title_being_embedded():
         "Vaswani, A. https://doi.org/10.5555/3295222.3295349, 2017.",
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["long", "short"]
+
+
+def test_a_line_of_prose_is_not_a_heading_with_its_first_word_taken_off():
+    """"See References" and "No references" are prose, and reading the rest of
+    the paper as a bibliography invents citations out of it."""
+    for prose in ("See References", "No references", "Cf. references", "Our references"):
+        assert cites.reference_text(f"Body.\n{prose}\n[1] A paper.\n") == "", prose
+    # The labels that are labels still come off.
+    for heading in ("A. REFERENCES", "VI. LITERATURE CITED", "3. References", "References"):
+        assert cites.reference_text(f"Body.\n{heading}\n[1] A paper.\n").strip() == "[1] A paper.", heading
