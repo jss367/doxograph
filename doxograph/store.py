@@ -1130,6 +1130,13 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
                     current["topics"].append(topic)
                     current["topics"].sort()
                 if current.get("fingerprints") == fingerprints:
+                    # The same pair over the same text: the finding stands, and
+                    # keeps the day it was found and whatever was decided about
+                    # it. A newer model or a newer prompt can still put it in
+                    # better words — unless a reviewer has ruled on the words
+                    # it has, which is a decision about what it says.
+                    if current.get("status") == "open":
+                        current.update(kind=kind, note=note)
                     kept += 1
                     continue
                 if any(fingerprints[i] != claim_fingerprint(live[i]) for i in (a, b)):
@@ -1622,6 +1629,10 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                     unattached = unattached or topic not in (current.get("topics") or [])
                     continue
                 if current.get("fingerprints") == fingerprints:
+                    # As the tensions pass: the group stands, and takes the new
+                    # wording only while nobody has ruled on the old.
+                    if current.get("status") == "open":
+                        current.update(note=note or current.get("note", ""))
                     kept += 1
                     continue
                 current.update(note=note, fingerprints=fingerprints, status="open", found=now())

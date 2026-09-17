@@ -72,6 +72,25 @@ def test_rerun_keeps_a_decision_and_the_pair_order_does_not_matter():
     assert tension["note"] == "first"          # the model does not get to remake a decision
 
 
+def test_a_rerun_puts_an_undecided_finding_in_the_new_words():
+    """A pass only runs again when something has changed — the model, the
+    prompt, or a claim elsewhere in the topic. What comes back for a pair
+    nobody has ruled on is this model's answer, and the note the topic shows
+    should be the one it just gave."""
+    a, b, _ = build_corpus()
+    store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "first"}], shown())
+    found = store.tension_rows()[0]["found"]
+
+    result = store.record_tensions("recovery-rate", [
+        {"claims": [a, b], "kind": "contradiction", "note": "second"},
+    ], shown())
+    assert result == {"added": 0, "reopened": 0, "kept": 1}
+    [tension] = store.tension_rows()
+    assert tension["note"] == "second" and tension["kind"] == "contradiction"
+    assert tension["found"] == found            # the same finding, not a new one
+    assert tension["stale"] is False
+
+
 def test_editing_a_claim_marks_the_tension_stale_and_a_rerun_reopens_it():
     a, b, _ = build_corpus()
     store.record_tensions("recovery-rate", [{"claims": [a, b], "kind": "tension", "note": "first"}], shown())
