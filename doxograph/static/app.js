@@ -428,9 +428,20 @@ async function flushTrash(wanted = null) {
   // Drained rather than snapshotted: the page stays interactive while this
   // runs, so a row deleted during it has to go with the rest. A snapshot would
   // leave that one on file for the export or the model pass waiting on this.
+  //
+  // This workspace's rows, though. Each delete leaves the trash before its own
+  // trailing read, and a read is not counted as a change in flight, so the
+  // picker can move while the drain is between rounds. A delete made after
+  // that belongs to the corpus the reader has gone to: taking it here would
+  // send it under an Undo the page is still offering, and its failure would
+  // call off an action in a workspace it has nothing to do with. It is left
+  // to its own eight seconds, and to the flush that leaving that workspace
+  // runs.
+  const workspace = currentWorkspaceId || 'default';
   let settled = true;
   for (;;) {
-    const waiting = [...trash.values()].filter((entry) => !wanted || wanted(entry));
+    const waiting = [...trash.values()]
+      .filter((entry) => entry.workspace === workspace && (!wanted || wanted(entry)));
     if (!waiting.length) return settled;
     // `send` resolves to `undefined` for an entry that went while this was
     // deciding; only an outright `false` is a failure.

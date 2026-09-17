@@ -2556,6 +2556,45 @@ def test_a_flush_takes_deletes_made_while_it_is_running():
 
 
 @pytest.mark.browser
+def test_a_flush_leaves_alone_a_delete_made_in_another_workspace():
+    """The picker can move while a flush is between rounds, and a delete made
+    in the workspace the reader went to is owed its own eight seconds — and
+    cannot be allowed to fail the action that started the flush."""
+    from doxograph import config
+
+    one, two, three = _paper_with_claims("doe2026study", "A study", ["One.", "Two.", "Three."])
+    config.create_workspace("Other")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim[data-claim="{one}"]').wait_for()
+                settled, waiting = await page.evaluate("""
+                  ([a, b]) => (async () => {
+                    const path = (id) => `/api/papers/doe2026study/claims/${id}`;
+                    deleteLater('claim', a, path(a), 'the claim');
+                    const flushing = flushTrash();
+                    // The gap the drain leaves: the reader moves on and deletes
+                    // something in the corpus they moved to.
+                    currentWorkspaceId = workspaces[1].id;
+                    deleteLater('claim', b, path(b), 'the claim');
+                    return [await flushing, trash.has(`claim:${b}`)];
+                  })()
+                """, [one, two])
+                # The other workspace's delete is still waiting out its notice,
+                # and its absence from the flush kept the flush a success.
+                assert waiting
+                assert settled
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two, three]
+
+
+@pytest.mark.browser
 def test_back_returns_to_the_research_form_after_leaving_it():
     _paper("paper-a", "Paper A", "recovery")
 
