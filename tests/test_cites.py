@@ -447,3 +447,23 @@ def test_a_bare_identifier_in_an_uncut_list_leaves_the_title_to_its_twin():
 def test_an_entry_marker_at_the_top_of_a_page_starts_an_entry():
     assert cites.entries("[1] A paper. 2017.\x0c[2] Another paper. 2018.") == [
         "apaper2017", "anotherpaper2018"]
+
+
+def test_editing_a_claim_does_not_throw_away_the_citations():
+    """A claim, a topic or a tension moving does not change a bibliography,
+    and rereading every paper for it is the whole corpus twice over."""
+    a_corpus()
+    assert cites.edges()
+    before = list(cites._cache)
+    assert before, "the answer was stored"
+
+    store.add_claim("roe2026steering", {"text": "A claim.", "tags": ["steering"]})
+    store.add_tag("steering", "Adding a direction to activations.")
+    assert list(cites._cache) == before, "a claim moved the key"
+    assert cites.edges() and list(cites._cache) == before
+
+    # What the citations are read from does move it.
+    paper = store.load_paper("roe2026steering")
+    store.save_paper({**paper, "title": "Steering and recovery, revisited"})
+    cites.edges()
+    assert list(cites._cache) != before

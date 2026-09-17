@@ -179,12 +179,12 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     which it is read from, so the map can ask for it on every opening.
     """
     given = papers is not None
-    signature = f"{store.corpus_signature()}:{_text_signature()}"
+    papers = papers if given else store.all_papers()
+    named = _named_signature(papers)
     with _cache_lock:
-        hit = _cache.get(signature)
+        hit = _cache.get(f"{named}:{_text_signature()}")
     if hit is not None:
         return hit
-    papers = papers if given else store.all_papers()
     marks = {paper["key"]: fingerprints(paper) for paper in papers}
     found = []
     for paper in papers:
@@ -202,14 +202,14 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         for other in _cited(paper["key"], listing, marks, uncut):
             found.append({"from": paper["key"], "to": other})
     found.sort(key=lambda edge: (edge["from"], edge["to"]))
-    # Only if the corpus stood still while it was being read. A paper added or
-    # removed in the middle leaves this describing neither the corpus before
-    # nor the one after, and storing it under the new signature would serve
-    # that to every later asking.
-    if given or signature == f"{store.corpus_signature()}:{_text_signature()}":
+    # Stored under the text as it stands at the end, since reading a paper for
+    # the first time is what writes its text down — and only if the papers
+    # themselves stood still, because one added or removed in the middle
+    # leaves this describing neither the corpus before nor the one after.
+    if given or named == _named_signature(store.all_papers()):
         with _cache_lock:
             _cache.clear()  # one corpus at a time is all the map ever asks for
-            _cache[signature] = found
+            _cache[f"{named}:{_text_signature()}"] = found
     return found
 
 
@@ -313,6 +313,19 @@ def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
         places.append(at)
         at = entry.find(mark, at + 1)
     return places
+
+
+def _named_signature(papers: list[dict]) -> str:
+    """The names every paper can be cited by, and nothing else.
+
+    Half of what the citations are read from; `_text_signature` is the other
+    half. Not the corpus signature: that moves when a claim is edited or a
+    topic renamed, neither of which changes a bibliography, and every such
+    move would throw the answer away and read the pile again.
+    """
+    named = "\n".join(f"{paper['key']} {' '.join(fingerprints(paper))}"
+                       for paper in sorted(papers, key=lambda p: p["key"]))
+    return hashlib.sha1(named.encode("utf-8")).hexdigest()
 
 
 def _text_signature() -> str:
