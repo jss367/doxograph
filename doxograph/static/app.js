@@ -319,6 +319,17 @@ function pruneTrashed() {
       paper.n_claims = count.claims;
       paper.n_unreviewed = count.unreviewed;
     });
+    // The topic sidebar draws `tag_counts` as the server sent it, so a held
+    // claim would go on being counted under every topic it carries — and a
+    // topic whose only claim is held would stay on the list at one, offering a
+    // filter that draws nothing. Recounted from what is left, like the per-paper
+    // counts above and in the server's own order — commonest first, ties by
+    // name — so the list does not reshuffle itself for the length of the wait.
+    const tags = new Map();
+    kept.forEach((row) => (row.tags || []).forEach(
+      (tag) => tags.set(tag, (tags.get(tag) || 0) + 1)));
+    S.tag_counts = Object.fromEntries([...tags].sort(
+      (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
   }
   // The analysis views hold the server's own join: each tension and agreement
   // carries the claim rows it cites, not their ids. Taking a held claim out of

@@ -3382,3 +3382,44 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
 
     asyncio.run(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
+
+
+@pytest.mark.browser
+def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
+    """The topic list is the server's count of claims per tag. A claim waiting
+    out its undo window is off the page, so it is off that count too: a topic it
+    shared drops by one, and a topic it held alone goes away rather than
+    offering a filter that would draw nothing. Undo puts both back."""
+    _paper("paper-a", "Paper A", "shared", "solo")
+    _paper("paper-b", "Paper B", "shared")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#tags [data-tag="solo"]').wait_for()
+                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
+
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                card = page.locator('.claim[data-claim="paper-a-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+
+                # The topic that claim held on its own is gone, not left at one.
+                # Well inside the undo window, so this is the sidebar keeping up
+                # with the hold rather than the delete having gone out.
+                await page.locator('#tags [data-tag="solo"]').wait_for(
+                    state="detached", timeout=3000)
+                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "1"
+
+                await notice.get_by_role("button", name="Undo").click()
+                await page.locator('#tags [data-tag="solo"]').wait_for()
+                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-a")["claims"]) == 1
