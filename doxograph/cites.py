@@ -280,6 +280,11 @@ class Names:
     arxiv: str
     identifiers: tuple[str, ...]
     title: str
+    # Each identifier as the paper records it, by the mark it squashes to.
+    # Squashing takes the punctuation out, and two DOIs that differ only in
+    # where theirs falls — `10.1234/foo.bar` and `10.1234/foob.ar` — come to
+    # the same letters. What is printed says which of them an entry means.
+    printed: dict[str, str]
 
     @property
     def all(self) -> list[str]:
@@ -295,16 +300,24 @@ def names(paper: dict) -> Names:
     bibliography is a citation and not a coincidence.
     """
     source = paper.get("source") or {}
-    arxiv = ""
+    written = []
     if source.get("kind") == "arxiv" and source.get("id"):
-        arxiv = quotes.squash(re.sub(r"v\d+$", "", str(source["id"]), flags=re.I))
+        # Without the version: an id is cited at whichever version, and the
+        # `v5` is not part of what names the paper.
+        written.append(re.sub(r"v\d+$", "", str(source["id"]), flags=re.I))
+    arxiv = quotes.squash(written[0]) if written else ""
     # Crossref fills in `doi` and `source["id"]` alike, and one identifier
     # recorded twice is still one identifier.
-    marks = [arxiv] + [quotes.squash(str(value)) for value in
-                       (paper.get("doi"), source.get("id") if source.get("kind") == "doi" else "")
-                       if value]
+    written += [str(value) for value in
+                (paper.get("doi"), source.get("id") if source.get("kind") == "doi" else "")
+                if value]
+    printed = {}
+    for value in written:
+        mark = quotes.squash(value)
+        if mark:
+            printed.setdefault(mark, value)
     return Names(arxiv=arxiv, title=title_mark(paper),
-                 identifiers=tuple(dict.fromkeys(mark for mark in marks if mark)))
+                 identifiers=tuple(printed), printed=printed)
 
 
 def fingerprints(paper: dict) -> list[str]:
@@ -414,19 +427,21 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
     fallbacks: dict[str, tuple[list[int], int]] = {}
     where: dict[tuple, list[int]] = {}
 
-    def places(mark: str, identifier: bool, versioned: bool = False) -> list[int]:
+    def places(mark: str, identifier: bool, versioned: bool = False,
+               printed: str = "") -> list[int]:
         """Where a mark is printed, an identifier only where it is the whole
         of one. Squashing takes the punctuation out of a DOI, and `10.1234/foo`
         reads straight through the middle of `10.1234/foo.bar`, which is
         somebody else's work."""
-        if (mark, identifier, versioned) not in where:
+        if (mark, identifier, versioned, printed) not in where:
             at = _occurrences(entry.squashed, mark)
-            where[mark, identifier, versioned] = (
-                [place for place in at if _whole(entry, place, len(mark), versioned)]
+            where[mark, identifier, versioned, printed] = (
+                [place for place in at
+                 if _whole(entry, place, len(mark), versioned, printed)]
                 if identifier else at)
-        return where[mark, identifier, versioned]
+        return where[mark, identifier, versioned, printed]
 
-    def beside(mark: str, versioned: bool, title: str) -> bool:
+    def beside(mark: str, versioned: bool, title: str, printed: str = "") -> bool:
         """Whether the one printing of a title has this identifier on its line.
 
         A line of a reference list is one entry naming one work, however the
@@ -435,12 +450,12 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
         printings are two entries, and the title in the other one is somebody
         else's to claim.
         """
-        printed = places(title, False)
-        if len(printed) != 1:
+        printings = places(title, False)
+        if len(printings) != 1:
             return False
-        begin = entry.offsets[printed[0]]
-        end = entry.offsets[printed[0] + len(title) - 1] + 1
-        for place in places(mark, True, versioned):
+        begin = entry.offsets[printings[0]]
+        end = entry.offsets[printings[0] + len(title) - 1] + 1
+        for place in places(mark, True, versioned, printed):
             at = entry.offsets[place]
             stop = entry.offsets[place + len(mark) - 1] + 1
             between = entry.raw[end:at] if at >= end else entry.raw[stop:begin]
@@ -453,32 +468,37 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
             continue
         title = found.title
         by_identifier = next((mark for mark in found.identifiers
-                              if places(mark, True, mark == found.arxiv)), "")
+                              if places(mark, True, mark == found.arxiv,
+                                        found.printed.get(mark, ""))), "")
         # Where the list is one stretch, an identifier is the only thing that
         # points at this paper and nobody else's: a title printed somewhere in
         # a page of references may be somebody's citation of its twin. Unless
         # the two are printed on one line, which is one entry naming one work.
         by_title = title if title and places(title, False) else ""
         if uncut and by_identifier and not beside(
-                by_identifier, by_identifier == found.arxiv, title):
+                by_identifier, by_identifier == found.arxiv, title,
+                found.printed.get(by_identifier, "")):
             by_title = ""
         named_by = by_title or by_identifier
         if not named_by:
             continue
-        claims[other] = (places(named_by, named_by is not title, named_by == found.arxiv),
+        claims[other] = (places(named_by, named_by is not title, named_by == found.arxiv,
+                                found.printed.get(named_by, "")),
                          len(named_by), bool(by_identifier))
         # Everywhere this paper is named, whatever it is cited by here. An
         # identifier settles which paper an entry means; it does not stop the
         # paper's title covering a shorter title printed inside it.
         for mark in found.all:
             covers.setdefault(other, []).extend(
-                (at, len(mark)) for at in places(mark, mark is not title, mark == found.arxiv))
+                (at, len(mark)) for at in places(mark, mark is not title, mark == found.arxiv,
+                                                 found.printed.get(mark, "")))
         if by_identifier and named_by is not by_identifier:
             # Where every printing of its title turns out to be inside
             # somebody else's, the identifier is what it is cited by: an entry
             # naming this paper by its DOI alone is a citation of it, however
             # its title reads elsewhere in the list.
-            fallbacks[other] = (places(by_identifier, True, by_identifier == found.arxiv),
+            fallbacks[other] = (places(by_identifier, True, by_identifier == found.arxiv,
+                                       found.printed.get(by_identifier, "")),
                                 len(by_identifier))
 
     def swallowed(other: str, at: int, width: int) -> bool:
@@ -531,15 +551,22 @@ _ARXIV_TAIL = re.compile(r"(?:v\d+)?(?:\.pdf)?(?![0-9A-Za-z])", re.I)
 # it has.
 _JOINS = "./-_:;()"
 # Where an identifier was split to fit the page: a line or page break, or the
-# soft hyphen an extraction leaves where a word may be broken.
-_BROKEN = "\n\r\f\u00ad"
+# soft hyphen an extraction leaves where a word may be broken, with whatever
+# the next line is indented by.
+_WRAP = re.compile(r"[ \t]*[\n\r\f\u00ad][ \t]*")
 _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9]")
 _IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9]*")
 # Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
 _DOI_HEAD = re.compile(r"10\.\d{4,9}/")
 
 
-def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> bool:
+def _shape(text: str) -> str:
+    """Where an identifier keeps its punctuation, with the rest taken out."""
+    return "".join("#" if char.isalnum() else "." for char in text)
+
+
+def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
+           printed: str = "") -> bool:
     """Whether an identifier printed at `at` is the whole of the one there.
 
     Read off the entry's own text rather than the squashed form, since
@@ -561,8 +588,14 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> 
     # Anything else is a run of digits that squashed into the same letters —
     # `Vol. 10, 1234. Foo.` is not a DOI, whatever it comes to with the commas
     # and the spaces taken out.
-    if any(not (char.isalnum() or char in _JOINS or char in _BROKEN)
-           for char in entry.raw[entry.offsets[at]:stop]):
+    span = _WRAP.sub("", entry.raw[entry.offsets[at]:stop])
+    if any(not (char.isalnum() or char in _JOINS) for char in span):
+        return False
+    # And in the same places: `10.1234/foo.bar` and `10.1234/foob.ar` are two
+    # DOIs and one fingerprint, and where the punctuation falls is all that
+    # tells them apart. The characters themselves are not compared, since an
+    # extraction can write a hyphen as a dash and mean the same identifier.
+    if printed and _shape(span) != _shape(printed):
         return False
     rest = entry.raw[stop:]
     tail = _ARXIV_TAIL.match(rest) if versioned else None

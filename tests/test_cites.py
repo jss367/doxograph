@@ -6,7 +6,7 @@ import os
 
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, cites, search, server, store
+from doxograph import __main__, cites, quotes, search, server, store
 
 from pdfs import minimal_pdf
 
@@ -580,6 +580,8 @@ def test_an_identifier_is_read_from_both_ends():
            source={"kind": "arxiv", "id": "1706.03762"})
     _paper("foo", "Another paper with a long enough title",
            ["Another paper with a long enough title", "Text."], doi="10.1234/foo")
+    _paper("foobar", "A third paper with a long enough title",
+           ["A third paper with a long enough title", "Text."], doi="10.1234/foob.ar")
     _paper("citing", "The citing paper", [
         "The citing paper",
         "References\n[1] Nobody. A work nobody wrote. https://doi.org/10.1706/03762, 2026.\n"
@@ -591,7 +593,9 @@ def test_an_identifier_is_read_from_both_ends():
         # However much punctuation stands between the DOI and the rest of it.
         "[5] Nobody. A fifth work. https://doi.org/10.1234/foo/(2), 2026.\n"
         # And text that only squashes into an identifier is not one.
-        "[6] Nobody. A sixth work. Vol. 10, 1234. Foo. 2026.",
+        "[6] Nobody. A sixth work. Vol. 10, 1234. Foo. 2026.\n"
+        # Nor is a DOI that keeps its punctuation somewhere else.
+        "[7] Nobody. A seventh work. https://doi.org/10.1234/fo.obar, 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
 
@@ -613,9 +617,15 @@ def test_an_arxiv_id_is_cited_with_or_without_its_version():
         "A third citing paper",
         "References\n[1] Somebody. A work. https://arxiv.org/pdf/1706.03762v5.pdf, 2017.",
     ])
+
     edges = cites.edges()
     for citing in ("citing", "citing2", "citing3"):
         assert [e["to"] for e in edges if e["from"] == citing] == ["attention"], citing
+    # Or wrapped onto an indented line. Written out rather than read from a
+    # PDF, since pypdf gives back no indentation however the page is laid out.
+    entry = quotes.build("Somebody. A work. arXiv:1706.\n    03762, 2017.")
+    mark = quotes.squash("1706.03762")
+    assert cites._whole(entry, entry.squashed.find(mark), len(mark), True, "1706.03762")
 
 
 def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
