@@ -530,6 +530,9 @@ _ARXIV_TAIL = re.compile(r"(?:v\d+)?(?:\.pdf)?(?![0-9A-Za-z])", re.I)
 # to the next, and so says the identifier has not ended where a fingerprint of
 # it has.
 _JOINS = "./-_:;()"
+# Where an identifier was split to fit the page: a line or page break, or the
+# soft hyphen an extraction leaves where a word may be broken.
+_BROKEN = "\n\r\f\u00ad"
 _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9]")
 _IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9]*")
 # Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
@@ -553,6 +556,14 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False) -> 
     `10.1234/foov2` is a DOI of its own, not a printing of `10.1234/foo`.
     """
     stop = entry.offsets[at + width - 1] + 1
+    # What the entry has between the characters the identifier is made of: the
+    # punctuation that writes one, and the break a wrapped one is split at.
+    # Anything else is a run of digits that squashed into the same letters —
+    # `Vol. 10, 1234. Foo.` is not a DOI, whatever it comes to with the commas
+    # and the spaces taken out.
+    if any(not (char.isalnum() or char in _JOINS or char in _BROKEN)
+           for char in entry.raw[entry.offsets[at]:stop]):
+        return False
     rest = entry.raw[stop:]
     tail = _ARXIV_TAIL.match(rest) if versioned else None
     if tail:

@@ -589,7 +589,9 @@ def test_an_identifier_is_read_from_both_ends():
         # And it is allowed to end with something that reads as an arXiv id.
         "[4] Nobody. A fourth work. https://doi.org/10.9999/abc/1706.03762, 2026.\n"
         # However much punctuation stands between the DOI and the rest of it.
-        "[5] Nobody. A fifth work. https://doi.org/10.1234/foo/(2), 2026.",
+        "[5] Nobody. A fifth work. https://doi.org/10.1234/foo/(2), 2026.\n"
+        # And text that only squashes into an identifier is not one.
+        "[6] Nobody. A sixth work. Vol. 10, 1234. Foo. 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
 
