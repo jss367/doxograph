@@ -343,3 +343,13 @@ def test_an_unnumbered_list_naming_both_twins_cites_both():
         "Vaswani, A. Attention is all you need. NeurIPS, 2017.",
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]
+
+
+def test_a_section_label_in_letters_comes_off_the_heading():
+    """Appendices number their sections by letter: "A. REFERENCES"."""
+    for heading in ("A. REFERENCES", "B. Bibliography", "VI. LITERATURE CITED", "3. References"):
+        text = f"Body.\n{heading}\n[1] A paper.\n"
+        assert cites.reference_text(text).strip() == "[1] A paper.", heading
+    # A prefix that leaves prose behind is still prose.
+    assert cites.reference_text("Body.\nSee references below.\n[1] A.\n") == ""
+    assert cites.reference_text("Body.\nReferenced work.\n[1] A.\n") == ""

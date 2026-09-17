@@ -108,11 +108,12 @@ def _is_heading(squashed: str) -> bool:
     left is a heading, since "literaturecited" starts with one of its letters.
     """
     plain = squashed.lstrip("0123456789")
-    # A section number in Roman comes off, but only as far as a heading: the
-    # letters of a numeral are letters of "literature" too, and stripping the
-    # set would take the "li" off "literaturecited" along with the "vi".
-    candidates = [plain] + [plain[at:] for at in range(1, 8) if at < len(plain)
-                            and set(plain[:at]) <= set("ivxlcdm")]
+    # A section label comes off, but only as far as a heading: sections are
+    # numbered in Arabic, in Roman and by letter — "A. REFERENCES" — and any
+    # of those prefixes could as easily be the start of a word. Every prefix
+    # is tried and the tail check below is what refuses the ones that are.
+    candidates = [plain] + [plain[at:] for at in range(1, 8)
+                            if at < len(plain) and plain[:at].isalpha()]
     for candidate in candidates:
         # Every heading it could begin with, not the first: "references" and
         # "reference" both fit the plural, and only one of them leaves a tail
