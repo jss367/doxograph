@@ -258,3 +258,18 @@ def test_a_topic_dropped_while_a_group_grows_loses_its_pass():
     store.record_agreements("scaling", [{"claims": [a, b, d], "note": "grown"}], shown())
     assert store.agreement_rows()[0]["topics"] == []
     assert store.agreement_pass("recovery-rate") is None
+
+
+def test_a_pass_whose_answer_went_unattached_is_not_recorded():
+    """The returned group is part of a larger agreement whose extra member
+    does not carry the topic, so the topic goes on nothing; deleting that
+    member later must not find the pass already done."""
+    a, b, c, d = build_corpus()
+    store.record_agreements("recovery-rate", [{"claims": [a, b, c]}], shown())
+    store.update_claim("li2025steer", c, {"tags": ["scaling"]})     # c leaves the topic
+    assert store.agreement_rows()[0]["topics"] == []
+
+    store.record_agreements("recovery-rate", [{"claims": [a, b], "note": "the pair"}], shown(),
+                            signature="a-signature")
+    assert store.agreement_rows()[0]["topics"] == []      # still unattached
+    assert store.agreement_pass("recovery-rate") is None

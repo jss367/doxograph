@@ -1570,6 +1570,7 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             pruned |= was - set(record["topics"])
             existing.append(record)
         added = grown = reopened = kept = 0
+        unattached = False
         for item in found:
             ids = sorted({i for i in item.get("claims", []) if i in claims_by_id and i in live})
             if len(_agreement_papers(ids, live)) < 2:
@@ -1613,6 +1614,12 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
                     continue
                 if wanted < have:
                     kept += 1   # a part of what is already on file adds nothing
+                    # But the topic goes unattached where a member of the
+                    # larger record does not carry it, and this answer is not
+                    # on file under the topic at all. Recording the signature
+                    # would skip the pass that has to run once that member
+                    # goes, and nothing else would ever put the topic back.
+                    unattached = unattached or topic not in (current.get("topics") or [])
                     continue
                 if current.get("fingerprints") == fingerprints:
                     kept += 1
@@ -1637,9 +1644,10 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
         # answer was read or while a group grew past it: each has to be found
         # again when it comes back, so its recorded pass goes with it.
         _forget_passes(data, pruned)
-        # Recorded only on the way out, and only while the topic still holds
-        # the claims it was asked about; see `record_tensions`.
-        if signature and _topic_unchanged(topic, claims_by_id, live):
+        # Recorded only on the way out, only while the topic still holds the
+        # claims it was asked about — see `record_tensions` — and only if
+        # everything the answer said is on file under the topic.
+        if signature and not unattached and _topic_unchanged(topic, claims_by_id, live):
             data.setdefault("passes", {})[topic] = signature
         _save_agreements(data)
         return {"added": added, "grown": grown, "reopened": reopened, "kept": kept}
