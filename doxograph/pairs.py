@@ -39,6 +39,10 @@ def stem(word: str) -> str:
     being wrong the same way for both claims still matches them to each other.
     A plural first, then a verb ending, so `scaled` and `scales` meet.
     """
+    if len(word) > 5 and word.endswith(("yses", "eses", "oses", "ises")):
+        # analyses/analysis, hypotheses/hypothesis. Narrow on purpose: phases
+        # is a plural of phase, and turning it into phasis would part the two.
+        word = word[:-3] + "sis"
     if len(word) > 4 and word.endswith("ies"):
         word = word[:-3] + "y"
     elif len(word) > 4 and word.endswith(("ches", "shes", "sses", "xes", "zes")):
