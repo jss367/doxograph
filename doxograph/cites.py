@@ -573,6 +573,9 @@ _JOINS = "./_:;()" + _DASHES
 # soft hyphen an extraction leaves where a word may be broken, with whatever
 # the next line is indented by.
 _WRAP = re.compile(r"[ \t]*[\n\r\f\u00ad][ \t]*")
+# What holds a word together across a mark that is not a letter: a hyphen in
+# any of its shapes, and the two apostrophes.
+_WORD_JOINS = _DASHES + "'\u2019"
 _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]")
 _IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]*")
 # Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
@@ -597,7 +600,16 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
         stop += 1
     while begin and unicodedata.combining(entry.raw[begin - 1]):
         begin -= 1
-    return not (entry.raw[:begin][-1:].isalnum() or entry.raw[stop:stop + 1].isalnum())
+    after = entry.raw[stop:stop + 12]
+    before = entry.raw[max(begin - 12, 0):begin]
+    if after[:1].isalnum() or before[-1:].isalnum():
+        return False
+    # A hyphen or an apostrophe with more word on the other side is inside a
+    # word too: `network-based` and `model's` are not `network` and `model`.
+    # Only there is a wrap read through, since a title at the end of a line is
+    # an entry ending and not a word going on.
+    return not ((after[:1] in _WORD_JOINS and _WRAP.sub("", after[1:])[:1].isalnum())
+                or (before[-1:] in _WORD_JOINS and _WRAP.sub("", before[:-1])[-1:].isalnum()))
 
 
 def _ends_in_a_letter(printed: str) -> str:

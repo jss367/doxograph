@@ -659,6 +659,18 @@ def test_a_title_inside_a_longer_word_is_not_a_citation():
     title = quotes.squash("Understanding the caf\u00e9")
     assert not cites._bounded(entry, entry.squashed.find(title), len(title))
 
+    # A hyphen or an apostrophe with more word on the other side is inside a
+    # word too, wrapped onto the next line or not.
+    mark = quotes.squash("Understanding neural network")
+    for text in ("Nobody. Understanding neural network-based methods. 2026.",
+                 "Nobody. Understanding neural network-\n  based methods. 2026.",
+                 "Nobody. Understanding neural network\u2019s reach. 2026."):
+        entry = quotes.build(text)
+        assert not cites._bounded(entry, entry.squashed.find(mark), len(mark)), text
+    # But a title at the end of a line is an entry ending, not a word going on.
+    entry = quotes.build("Nobody. Understanding neural network\nSmith, J. Another. 2026.")
+    assert cites._bounded(entry, entry.squashed.find(mark), len(mark))
+
 
 def test_a_doi_that_ends_in_a_bracket_is_cited_by_its_own_printing():
     """`10.1234/foo(2)` is a DOI and `normalize_doi` keeps the pair. Squashing
