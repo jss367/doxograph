@@ -2002,3 +2002,54 @@ def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_corpus_change_during_a_citation_scan_is_asked_again():
+    """The scan in flight took its snapshot before the change, so its answer
+    describes papers that have moved since."""
+    import httpx as _httpx
+
+    from pdfs import minimal_pdf
+
+    _paper("cited", "Attention is all you need", "architecture")
+    store.pdf_path("cited").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+
+    async def scenario():
+        release = asyncio.Event()
+        asked = []
+
+        async def hold(route):
+            asked.append(route.request.url)
+            if len(asked) == 1:
+                await release.wait()
+            await route.continue_()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.route("**/api/citations", hold)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+
+                # Imported while the first scan is held open.
+                dropped = minimal_pdf([
+                    "The citing paper",
+                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."])
+                assert _httpx.post(f"{url}/api/upload?extract_now=false",
+                                   files={"files": ("citing.pdf", dropped, "application/pdf")},
+                                   timeout=30).status_code == 200
+                await page.wait_for_timeout(3000)      # a poll or two, all suppressed
+                assert len(asked) == 1
+                release.set()
+
+                # The queued reading runs once the first is out of the way.
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
+
+            await browser.close()
+
+    asyncio.run(scenario())

@@ -278,6 +278,12 @@ papers gives way to the arrow between them. Turn the layer off with
 **citations** above the map. `doxograph cites` lists the same thing in the
 shell.
 
+A numbered list is read one entry at a time, and an entry names one work: the
+longest title in it wins, so a paper whose title contains another's is cited
+rather than both, and an identifier beats a title, so a preprint and its
+published version are told apart by the DOI or arXiv id the entry carries. A
+list that does not number its entries is read whole.
+
 A heading only has to begin with the word, so "References and Notes" and
 "Bibliography (Primary Sources)" are found too. A paper whose PDF has no
 "References" heading at all contributes no citations. That

@@ -1643,6 +1643,7 @@ let CITATIONS = [];
 let citationsSeq = 0;
 let citationsFailed = false;
 let citationsInFlight = null;   // the workspace an asking is out for, if any
+let citationsStale = false;     // the corpus moved while that asking was out
 
 async function loadCitations() {
   // Whose citations these are, and which asking. A request left in flight when
@@ -1655,8 +1656,14 @@ async function loadCitations() {
   // this a retry after a failure would start another scan on every tick until
   // one finished. A different corpus is a different question, and asks.
   const workspace = currentWorkspaceId;
-  if (citationsInFlight === workspace) return;
+  if (citationsInFlight === workspace) {
+    // The corpus moved while this one was reading it, so its answer describes
+    // papers that have changed since. Asked again once it is out of the way.
+    citationsStale = true;
+    return;
+  }
   citationsInFlight = workspace;
+  citationsStale = false;
   const seq = ++citationsSeq;
   let edges;
   try {
@@ -1675,6 +1682,13 @@ async function loadCitations() {
   citationsFailed = false;
   CITATIONS = edges;
   if (V.view === 'graph') renderGraph();
+  // These describe the corpus as it was when the reading started. Drawn
+  // anyway — they are closer to the truth than what was there — and then
+  // asked for again, now that the way is clear.
+  if (citationsStale) {
+    citationsStale = false;
+    loadCitations();
+  }
 }
 
 function graphCite(p) {

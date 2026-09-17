@@ -38,11 +38,6 @@ _HEADING_TAIL = ("", "cited", "andnotes", "notes", "andfurtherreading", "andbibl
 # How long a heading may be once it is down to its letters.
 _HEADING_LETTERS = 40
 
-# How far apart two things can be printed and still be one reference entry.
-# An entry is an author, a title, a venue and a year; squashed, a couple of
-# hundred characters covers a long one.
-_ENTRY = 300
-
 # How much of a title has to survive squashing before it can be looked for. A
 # title of two short words — "Scaling Laws" — occurs in prose that is not a
 # citation of it; twenty letters does not.
@@ -50,6 +45,27 @@ _TITLE_FLOOR = 20
 
 _cache: dict[str, list[dict]] = {}
 _cache_lock = threading.Lock()
+
+
+# Where a reference list numbers its entries. A bibliography that does not is
+# one entry as far as this is concerned, which is where this started.
+_ENTRY_MARK = re.compile(r"(?m)^[ \t]*(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)])[ \t]")
+
+
+def entries(listing: str) -> list[str]:
+    """A reference list cut into its entries, each squashed.
+
+    An entry names one work, and knowing where one ends is what tells a
+    citation of "Attention is all you need" from a citation of a paper whose
+    title contains it. Only a numbered list says where its entries are; an
+    author-year one comes back whole, and the rules fall back to reading the
+    list as one entry, which is where they started.
+    """
+    if not listing.strip():
+        return []
+    parts = [part for part in _ENTRY_MARK.split(listing) if part.strip()]
+    cut = [squashed for part in parts if (squashed := quotes.squash(part))]
+    return cut if len(cut) > 1 else [quotes.squash(listing)]
 
 
 def reference_text(text: str) -> str:
@@ -132,7 +148,7 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         text = search.paper_text(paper["key"])
         if not text:
             continue
-        listing = quotes.squash(reference_text(text))
+        listing = entries(reference_text(text))
         if not listing:
             continue
         for other in _cited(paper["key"], listing, marks):
@@ -144,96 +160,39 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     return found
 
 
-def _cited(key: str, listing: str, marks: dict[str, list[str]]) -> list[str]:
-    """Which papers this reference list names, longest title first.
+def _cited(key: str, entries: list[str], marks: dict[str, list[str]]) -> list[str]:
+    """Which papers a reference list names, one entry at a time.
 
-    One title can sit inside another — "Attention is all you need" inside
-    "Attention is all you need for image restoration" — and a reference to the
-    longer would otherwise be read as a citation of both. Where two marks land
-    on the same stretch of the list, only the longer is a citation; the shorter
-    is part of it.
+    An entry names one work. Within it the longest mark wins, so a title
+    printed inside a longer title — "Attention is all you need" inside
+    "Attention is all you need for image restoration" — is part of that
+    citation rather than another one; and an identifier beats a title, so a
+    preprint and its published version are told apart by the DOI or the arXiv
+    id the entry carries. Where nothing separates two papers, both are cited:
+    the entry does not say which, and neither do we.
     """
-    # Every mark a paper is named by, not the first that hits: an entry can
-    # carry the arXiv id and the title both, and it is the title's span that
-    # covers a shorter title printed inside it.
-    hits: list[tuple[int, str, list[int]]] = []
-    named: dict[str, bool] = {}
-    for other, found in marks.items():
-        if other == key:
-            continue
-        for at, mark in enumerate(found):
-            places = _occurrences(listing, mark)
-            if places:
-                hits.append((len(mark), other, places))
-                # An arXiv id or a DOI, rather than a title: `fingerprints`
-                # puts the identifiers first and the title last.
-                named[other] = named.get(other, False) or at < len(found) - 1
-    hits = [hit for hit in hits if _identified(hit[1], named, marks, listing)]
-    # Longest first, so a shorter mark inside one already taken is dropped —
-    # but only where every mention of it is inside one, and against every
-    # place the longer one was printed: a bibliography can name the same paper
-    # in the article's list and again in the supplement's. A list that cites
-    # both papers names the shorter one somewhere on its own.
-    taken: list[tuple[int, int]] = []
     cited: set[str] = set()
-    for width, other, places in sorted(hits, key=lambda hit: -hit[0]):
-        # Strictly wider: a mark swallows a shorter one printed inside it, but
-        # two papers whose titles are the same word for word — a preprint and
-        # its published version — do not swallow each other. Which of those is
-        # cited is settled by `_identified`, on the identifiers.
-        covered = all(any(width < end - begin and begin <= at and at + width <= end
-                          for begin, end in taken)
-                      for at in places)
-        # A paper already cited keeps contributing its spans — one edge per
-        # paper, whichever of its marks the list happens to carry.
-        if not covered or other in cited:
-            cited.add(other)
-            taken.extend((at, at + width) for at in places)
+    for entry in entries:
+        cited |= _cited_in(key, entry, marks)
     return sorted(cited)
 
 
-def _identified(key: str, named: dict[str, bool], marks: dict[str, list[str]],
-                listing: str) -> bool:
-    """Whether a paper survives a twin with the same title.
-
-    A preprint and its published version carry one title and two identifiers.
-    A reference to one of them names the title both share and only that one's
-    DOI, so the title alone cannot say which is cited — but the identifier
-    can, and a paper named by one takes the citation from a twin named by
-    nothing but the title they have in common.
-    """
-    title = marks[key][-1] if marks.get(key) else ""
-    if named.get(key, False) or not title:
-        return True
-    twins = [other for other, found in marks.items()
-             if other != key and found and found[-1] == title and named.get(other, False)]
-    if not twins:
-        return True
-    # A printing of the title belongs to an identified twin when that twin's
-    # identifier is printed beside it — inside the same entry, which is all a
-    # reference list gives us to go on. A twin cited by a bare identifier
-    # consumes no printing, and the printing further down is somebody else's.
-    printings = _occurrences(listing, title)
-    spoken_for: set[int] = set()
-    for other in twins:
-        for mark in marks[other][:-1]:          # its identifiers, not its title
-            for where in _occurrences(listing, mark):
-                near = [at for at in printings
-                        if at not in spoken_for and abs(where - at) <= _ENTRY]
-                if near:
-                    # One identifier, one entry, one printing: the nearest.
-                    spoken_for.add(min(near, key=lambda at: abs(where - at)))
-    return len(printings) > len(spoken_for)
-
-
-def _occurrences(listing: str, mark: str, cap: int = 20) -> list[int]:
-    """Where a mark falls in a reference list, up to `cap` places."""
-    places = []
-    at = listing.find(mark)
-    while at >= 0 and len(places) < cap:
-        places.append(at)
-        at = listing.find(mark, at + 1)
-    return places
+def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
+    """The papers one reference entry names."""
+    hits: list[tuple[int, int, str]] = []
+    for other, found in marks.items():
+        if other == key:
+            continue
+        # `fingerprints` puts a paper's identifiers first and its title last.
+        best = max(((1 if at < len(found) - 1 else 0, len(mark))
+                    for at, mark in enumerate(found) if mark in entry),
+                   default=None)
+        if best is not None:
+            hits.append((best[0], best[1], other))
+    if not hits:
+        return set()
+    top = max(hits)[:2]
+    return {other for identifier, width, other in hits if (identifier, width) == top}
 
 
 def _text_signature() -> str:

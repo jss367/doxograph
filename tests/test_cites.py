@@ -234,14 +234,38 @@ def test_a_heading_is_measured_by_its_letters_not_its_line():
 
 
 def test_a_twin_cited_by_a_bare_identifier_takes_no_title_printing():
-    """One entry is an arXiv id with no title; the title further down belongs
-    to the other version."""
+    """One entry is an arXiv id with no title; the title in the next entry
+    belongs to the other version, however close together they are printed."""
     _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
     _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
     _paper("citing", "The citing paper", [
         "The citing paper",
         "References\n[1] A Vaswani et al. arXiv:1706.03762, 2017.\n"
-        + "Filler to push the entries apart. " * 12
-        + "\n[2] A Vaswani et al. Attention is all you need. NeurIPS, 2017.",
+        "[2] A Vaswani et al. Attention is all you need. NeurIPS, 2017.",
     ])
     assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]
+
+
+def test_a_numbered_list_is_read_one_entry_at_a_time():
+    assert cites.entries("[1] A paper. 2017.\n[2] Another paper. 2018.") == [
+        "apaper2017", "anotherpaper2018"]
+    for numbering in ("1. ", "(1) ", "1) "):
+        assert len(cites.entries(f"{numbering}A paper.\n{numbering.replace('1', '2')}Another.")) == 2
+    # An author-year list says nothing about where its entries are, and is
+    # read whole, as it always was.
+    whole = cites.entries("Vaswani, A. Attention is all you need. 2017.\nRoe, A. Steering. 2026.")
+    assert len(whole) == 1
+
+
+def test_an_entry_names_one_work_even_where_a_title_contains_another():
+    """The long title's entry cites the long paper; the short paper's own
+    entry, printed right after it, cites the short one."""
+    _paper("short", "Attention is all you need", ["Attention is all you need", "Text."])
+    _paper("long", "Attention is all you need for image restoration",
+           ["Attention is all you need for image restoration", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Somebody. Attention is all you need for image restoration. 2026.\n"
+        "[2] Vaswani et al. Attention is all you need. 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["long", "short"]
