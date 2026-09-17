@@ -47,6 +47,10 @@ def stem(word: str) -> str:
         word = word[:-1]
     if len(word) > 5 and word.endswith("ing"):
         word = word[:-3]
+    elif len(word) > 4 and word.endswith("ied"):
+        # `studied` against `studies`: the plural rule above has already turned
+        # the one into `study`, and the past tense has to arrive at the same y.
+        word = word[:-3] + "y"
     elif len(word) > 4 and word.endswith("ed"):
         word = word[:-2]
     # A silent e goes last, from every word alike. Only stripping it after

@@ -303,7 +303,10 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     terms are found in the folded text and read back out of the original.
     """
     text, offsets = fold_with_offsets(raw)
-    found = [[(m.start(), m.end()) for m in islice(pattern.finditer(text), PASSAGES)]
+    # More matches than passages, because the ones near each other collapse
+    # into one: a term in the title and again in the abstract is a single
+    # passage, and the occurrence worth showing beside it may be the fourth.
+    found = [[(m.start(), m.end()) for m in islice(pattern.finditer(text), PASSAGES * 8)]
              for pattern in patterns]
     starts: list[tuple[int, int]] = []
 
@@ -315,7 +318,7 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     # word's second occurrence. Near enough to be one passage means near
     # enough and on the same page: a passage is cut to one page, so two terms
     # either side of a break cannot both be shown in one.
-    for nth in range(PASSAGES):
+    for nth in range(PASSAGES * 8):
         for places in found:
             if len(starts) >= PASSAGES:
                 break
@@ -326,6 +329,8 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
                    for at, _ in starts):
                 continue
             starts.append(places[nth])
+        if len(starts) >= PASSAGES:
+            break
     passages = []
     for folded_at, folded_end in sorted(starts)[:PASSAGES]:
         at = offsets[folded_at] if folded_at < len(offsets) else len(raw)
