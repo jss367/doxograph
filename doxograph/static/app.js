@@ -405,8 +405,9 @@ function pruneTrashed() {
   // `S.claims` alone would leave those copies on screen, still open to a
   // decision or a quote, so they are filtered the way `tension_rows` and
   // `agreement_rows` filter them — a tension needs both of its claims, an
-  // agreement needs members from two papers. Their `topics` stand: every
-  // member left still carries them.
+  // agreement needs members from two papers. A tension that keeps both of its
+  // claims keeps its topics too: they are the ones both of them carry, and both
+  // of them are still here.
   S.tensions = (S.tensions || []).filter(
     (row) => !(row.claims || []).some((claim) => trashed('claim', claim.id)));
   let regrouped = false;
@@ -416,9 +417,23 @@ function pruneTrashed() {
       const members = (row.claims || []).filter((claim) => !trashed('claim', claim.id));
       if (members.length === (row.claims || []).length) return row;
       regrouped = true;
+      // A group that loses a member can gain a topic. `agreement_rows` files
+      // the topics under the agreement and then shows only the ones every
+      // member still carries, so a topic that one member alone had dropped is
+      // missing from the row the server sent; take that member out and the
+      // topic is good for everyone left, which is what the server will say
+      // once the delete lands. Keeping the filtered list would hide the group
+      // from its own topic for the length of the wait and then hand it back at
+      // the end. The page cannot un-filter a list, so the row carries the set
+      // the server filtered from, `topics_on_file`, and it is filtered again
+      // here against the members that are left.
+      //
       // Stale, as on the server: the note and the decision on file were about
       // a group that is not the one on screen.
-      return { ...row, claims: members, n_papers: new Set(members.map((c) => c.paper)).size, stale: true };
+      const topics = (row.topics_on_file || row.topics || []).filter(
+        (topic) => members.every((claim) => (claim.tags || []).includes(topic)));
+      return { ...row, claims: members, topics,
+               n_papers: new Set(members.map((c) => c.paper)).size, stale: true };
     })
     .filter((row) => new Set((row.claims || []).map((claim) => claim.paper)).size >= 2);
   if (regrouped) {

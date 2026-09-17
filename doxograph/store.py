@@ -1561,7 +1561,14 @@ def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
     those claims, with `stale`, `n_papers`, and topics filtered to what every
     member still carries. Stale when a member was edited or removed since the
     agreement was found or decided: the fingerprints name the members the
-    judgment was about, so a set of them other than the live members is stale."""
+    judgment was about, so a set of them other than the live members is stale.
+
+    `topics_on_file` is the unfiltered set the filtering starts from. A group
+    can lose a member and keep going — two papers is all it needs — and the
+    topics that member alone had dropped become good again for the ones left.
+    The page has to work that out for itself while a delete waits out its undo,
+    and it cannot recover a topic from a list this function has already taken
+    it out of, so the set it filters from is sent along with the result."""
     live = {c["id"]: c for c in (rows if rows is not None else claim_rows())}
     out = []
     for record in load_agreements():
@@ -1572,8 +1579,9 @@ def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
         row = dict(record)
         row["claims"] = [live[i] for i in ids]
         row["n_papers"] = len(_agreement_papers(ids, live))
-        row["topics"] = sorted(t for t in record.get("topics", [])
-                               if all(t in (live[i].get("tags") or []) for i in ids))
+        row["topics_on_file"] = sorted(record.get("topics", []))
+        row["topics"] = [t for t in row["topics_on_file"]
+                         if all(t in (live[i].get("tags") or []) for i in ids)]
         row["stale"] = (set(fingerprints) != set(ids)
                         or any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids))
         out.append(row)

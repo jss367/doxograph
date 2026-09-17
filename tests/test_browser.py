@@ -3863,3 +3863,57 @@ def test_a_held_claim_leaves_the_agreements_in_the_order_the_server_would_send()
 
     asyncio.run(scenario())
     assert len(store.load_paper("paper-c")["claims"]) == 1
+
+
+@pytest.mark.browser
+def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
+    """`agreement_rows` shows only the topics every member still carries, so a
+    topic one member had taken off is missing from the row the server sends.
+    Holding that member for deletion makes the topic good for the members that
+    are left, and the server says so as soon as the delete lands — the page has
+    to say it too, or the topic filter hides the group for the length of the
+    undo window and hands it back at the end."""
+    for key in ("paper-a", "paper-b", "paper-c"):
+        _paper(key, f"Paper {key[-1].upper()}", "recovery")
+    shown = {r["id"]: r for r in store.topic_claims("recovery")}
+    store.record_agreements(
+        "recovery",
+        [{"claims": ["paper-a-c1", "paper-b-c1", "paper-c-c1"], "note": "Three of them."}],
+        shown)
+    # C's claim is re-tagged after the fact, the way a reviewer would do it in
+    # the editor: the agreement keeps the topic on file and stops showing it.
+    paper = store.load_paper("paper-c")
+    paper["claims"][0]["tags"] = ["outcomes"]
+    store.save_paper(paper)
+    [row] = store.agreement_rows()
+    assert row["topics"] == [] and row["topics_on_file"] == ["recovery"]
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            shows = ("() => [...document.querySelectorAll('.tcard[data-agreement]')]"
+                     ".map((node) => node.dataset.agreement).join(',') === '%s'")
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-c"]').click()
+                card = page.locator('.claim[data-claim="paper-c-c1"]')
+                await card.wait_for()
+                await card.get_by_role("button", name="delete").click()
+                notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
+                await notice.wait_for()
+
+                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.locator(".paperhead h2", has_text="Where papers agree").wait_for()
+                await page.locator('#tags [data-tag="recovery"]').click()
+                # A and B both carry the topic, so the pair the wait leaves
+                # behind is in #recovery until the delete settles.
+                await page.wait_for_function(shows % "a1", timeout=5000)
+
+                await notice.get_by_role("button", name="Undo").click()
+                # C is back and carries something else, so the topic goes again.
+                await page.wait_for_function(shows % "", timeout=5000)
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert len(store.load_paper("paper-c")["claims"]) == 1
