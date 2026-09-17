@@ -630,8 +630,10 @@ def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
     # A space after a title is more of the same title, and so is a colon with
     # a subtitle after it: what a paper is recorded under carries its subtitle
     # too, so an entry that writes one the record has not got is writing a
-    # different work's title.
-    if after[:1].isspace() or (after[:1] in _SUBTITLE and after[1:].strip()):
+    # different work's title. Only where there is something after the space:
+    # an entry whose last words are the title ends in the break before the
+    # next one, and that is where the title ends.
+    if (after[:1] in _SUBTITLE or after[:1].isspace()) and after.strip():
         return False
     # A hyphen the entry wrapped at stands before the indentation of the line
     # the word goes on to: `Network-\n  based` is one word, and a title that

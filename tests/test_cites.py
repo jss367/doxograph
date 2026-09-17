@@ -660,12 +660,20 @@ def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
                            "            for image restoration. 2027.")
     title = quotes.squash(ATTENTION)
     assert not cites._bounded(wrapped, wrapped.squashed.find(title), len(title))
-    # And the paper itself is still cited where the entry stops at its title.
+    # And the paper itself is still cited where the entry stops at its title,
+    # with a full stop after it or with the break before the next entry.
     _paper("citing2", "Another citing paper", [
         "Another citing paper",
         "References\n[1] A Vaswani et al. Attention is all you need. NeurIPS, 2017.",
     ])
-    assert [e["to"] for e in cites.edges() if e["from"] == "citing2"] == ["attention"]
+    _paper("citing3", "A third citing paper", [
+        "A third citing paper",
+        "References\n[1] A Vaswani et al. Attention is all you need\n"
+        "[2] Nobody. A work nobody wrote. 1999.",
+    ])
+    edges = cites.edges()
+    assert [e["to"] for e in edges if e["from"] == "citing2"] == ["attention"]
+    assert [e["to"] for e in edges if e["from"] == "citing3"] == ["attention"]
 
 
 def test_a_title_inside_a_longer_word_is_not_a_citation():
