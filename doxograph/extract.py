@@ -685,18 +685,23 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
     return "\n\n".join(blocks)
 
 
-def _pass_extra(topic: str, description: str) -> str:
+def _pass_extra(topic: str, description: str, context: str) -> str:
     """Everything a per-topic prompt carries that is not one of its claims,
     and who was asked: a different model is a different answer, so switching
     `DOXOGRAPH_MODEL` puts every topic back in the queue.
+
+    `context` is passed in rather than read here, so that the answer is filed
+    under the research context the model was actually given. Read twice, an
+    edit landing between the two would sign the answer with a context the
+    prompt never carried, and undoing the edit would leave that answer looking
+    current for a question it was never asked.
 
     A list rather than four lines run together: the description and the
     research context both hold newlines of their own, and joining them with
     one more would let a line moved from the end of the description to the
     front of the context read as the same prompt. It is a different prompt,
     and the pass has to be asked again."""
-    return json.dumps([config.PASS_VERSION, config.MODEL, description,
-                       context_block()])
+    return json.dumps([config.PASS_VERSION, config.MODEL, description, context])
 
 
 def find_tensions(topic: str, rows: list[dict] | None = None,
@@ -719,7 +724,8 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
     # would be given the same prompt and the merge would keep what it answered
     # last time, since a pair already on file with unchanged claims is left
     # alone. The call would cost money to learn nothing.
-    signature = store.pass_signature(topic, rows, _pass_extra(topic, description))
+    context = context_block()
+    signature = store.pass_signature(topic, rows, _pass_extra(topic, description, context))
     if not force and store.tension_pass(topic) == signature:
         return {"added": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": True}
     # The claims as the prompt shows them, keyed by id. The merge uses this to
@@ -739,7 +745,7 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
         messages=[{
             "role": "user",
             "content": (
-                f"My research:\n\n{context_block()}\n\n"
+                f"My research:\n\n{context}\n\n"
                 f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
                 f"Claims, by paper:\n\n{_tension_listing(rows)}\n\n"
                 "Return the pairs of claims from different papers that are in tension."
@@ -953,7 +959,8 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     # As the tensions pass: an unchanged topic would be asked the same question
     # and the merge would keep the answer it already has.
-    signature = store.pass_signature(topic, rows, _pass_extra(topic, description))
+    context = context_block()
+    signature = store.pass_signature(topic, rows, _pass_extra(topic, description, context))
     if not force and store.agreement_pass(topic) == signature:
         return {"added": 0, "grown": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": True}
     shown = {r["id"]: r for r in rows}
@@ -970,7 +977,7 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
         messages=[{
             "role": "user",
             "content": (
-                f"My research:\n\n{context_block()}\n\n"
+                f"My research:\n\n{context}\n\n"
                 f"Topic: {topic}" + (f" — {description}" if description else "") + "\n\n"
                 f"Claims, by paper:\n\n{_tension_listing(rows)}\n\n"
                 "Return the groups of claims from different papers that assert the same finding."
