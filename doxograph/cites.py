@@ -53,7 +53,8 @@ _cache_lock = threading.Lock()
 
 # Where a reference list numbers its entries. A bibliography that does not is
 # one entry as far as this is concerned, which is where this started.
-_ENTRY_MARK = re.compile(r"(?m)^[ \t]*(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)])[ \t]")
+_ENTRY_MARK = re.compile(
+    r"(?m)^[ \t]*(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)])(?=[ \t]|$)")
 
 
 def entries(listing: str) -> list[str]:

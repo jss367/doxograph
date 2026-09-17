@@ -377,3 +377,18 @@ def test_a_line_of_prose_is_not_a_heading_with_its_first_word_taken_off():
     # The labels that are labels still come off.
     for heading in ("A. REFERENCES", "VI. LITERATURE CITED", "3. References", "References"):
         assert cites.reference_text(f"Body.\n{heading}\n[1] A paper.\n").strip() == "[1] A paper.", heading
+
+
+def test_a_marker_alone_on_its_line_still_starts_an_entry():
+    """pypdf puts the number on its own line often enough, and a list that
+    does not split is read as one work."""
+    assert cites.entries("[1]\nA paper. 2017.\n[2]\nAnother. 2018.") == [
+        "apaper2017", "another2018"]
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1]\nA Vaswani et al. arXiv:1706.03762, 2017.\n"
+        "[2]\nA Vaswani et al. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]
