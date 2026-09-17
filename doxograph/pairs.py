@@ -49,20 +49,22 @@ def stem(word: str) -> str:
         word = word[:-2]
     elif len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
         word = word[:-1]
-    if len(word) > 5 and word.endswith("ing"):
+    if len(word) > 4 and word.endswith("ing"):
         word = word[:-3]
     elif len(word) > 4 and word.endswith("ied"):
         # `studied` against `studies`: the plural rule above has already turned
         # the one into `study`, and the past tense has to arrive at the same y.
         word = word[:-3] + "y"
-    elif len(word) > 4 and word.endswith("ed"):
+    elif len(word) > 3 and word.endswith("ed"):
+        # Short stems too: `died` is four letters and `dies` becomes `di`, so
+        # holding the line at five parted an ordinary pair of verb forms.
         word = word[:-2]
     # A silent e goes last, from every word alike, and so does a doubled final
     # consonant. Only stripping them after a suffix would leave `scaled` as
     # `scal` beside `scale` and `controlled` as `controll` beside `control`;
     # taking them off both is wrong about the word and right about the pair,
     # which is all this measure is for.
-    if len(word) > 3 and word.endswith("e"):
+    if len(word) > 2 and word.endswith("e"):
         word = word[:-1]
     if len(word) > 3 and word[-1] == word[-2] and word[-1].isalpha():
         word = word[:-1]

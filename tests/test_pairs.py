@@ -75,5 +75,7 @@ def test_a_verb_and_its_past_tense_meet():
                         ("analysis", "analyses"), ("hypothesis", "hypotheses"),
                         ("diagnosis", "diagnoses"),
                         # And the plurals the -sis rule must not swallow.
-                        ("phase", "phases"), ("dose", "doses")):
+                        ("phase", "phases"), ("dose", "doses"),
+                        # And the short stems the length guards used to part.
+                        ("died", "dies"), ("used", "uses"), ("used", "use")):
         assert pairs.stem(word) == pairs.stem(other), (word, other)
