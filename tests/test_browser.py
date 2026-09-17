@@ -1867,3 +1867,26 @@ def test_a_pdf_result_can_be_reached_from_the_keyboard():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_folds_a_greek_iota_subscript_as_the_server_does():
+    """`casefold` calls the iota subscript a letter; everyone else calls it a
+    mark, and stripping it would hide the claim behind a PDF hit."""
+    _paper("pap2026greek", "Περὶ τῆς ᾳδούσης", "introspection")
+    store.update_claim("pap2026greek", "pap2026greek-c1", {"text": "Ἡ ᾳδουσα λέγει."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("αιδουσα")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
