@@ -382,7 +382,9 @@ def test_a_section_label_in_letters_comes_off_the_heading():
                     "A.References", "IV.References", "[A]References",
                     # A supplement numbers its own: neither a letter nor a
                     # roman numeral accounts for "S1".
-                    "S1. References", "A1. Bibliography"):
+                    "S1. References", "A1. Bibliography",
+                    # And numbers it within its section.
+                    "A.1 References", "S1.2 Bibliography"):
         text = f"Body.\n{heading}\n[1] A paper.\n"
         assert cites.reference_text(text).strip() == "[1] A paper.", heading
     # A prefix that leaves prose behind is still prose.

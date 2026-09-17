@@ -159,8 +159,12 @@ def _at_a_page_edge(listing: str, mark: re.Match) -> bool:
 # of a sentence: the dot or bracket after it. "A. REFERENCES" is a heading and
 # "A reference" is the start of a line of prose. A bracket in front of it is
 # how some papers write the same label: "(A) References". The space after the
-# label is what an extraction is likeliest to lose, so it is not required.
-_LABEL = re.compile(r"^[ \t]*[\[(]?[0-9A-Za-z]{1,7}[.)\]]+[ \t]*")
+# label is what an extraction is likeliest to lose, so it is not required. A
+# label can be numbered within its section — "A.1 References" — and the whole
+# of it is the label; the last part goes in only where a space follows it, or
+# "Cf. references" would read as a label and a heading of nothing.
+_LABEL = re.compile(r"^[ \t]*[\[(]?(?:[0-9A-Za-z]{1,7}[.)\]]+)+"
+                    r"(?:[0-9A-Za-z]{1,7}(?=[ \t]))?[ \t]*")
 
 
 def reference_text(text: str) -> str:
