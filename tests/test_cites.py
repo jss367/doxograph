@@ -329,3 +329,17 @@ def test_a_bibliography_with_one_item_may_call_itself_reference():
     assert cites.reference_text("Body.\nReference\n[1] A paper.\n").strip() == "[1] A paper."
     assert cites.reference_text("Body.\nReferences\n[1] A paper.\n").strip() == "[1] A paper."
     assert cites.reference_text("Body.\nReferenced below.\n[1] A paper.\n") == ""
+
+
+def test_an_unnumbered_list_naming_both_twins_cites_both():
+    """The identifier sits beside one printing of the shared title and there
+    are no entry markers to say which; as many printings as claimants means
+    each of them has one."""
+    _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\nVaswani, A. Attention is all you need. arXiv:1706.03762, 2017.\n"
+        "Vaswani, A. Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert sorted(e["to"] for e in cites.edges() if e["from"] == "citing") == ["preprint", "published"]

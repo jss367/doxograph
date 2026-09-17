@@ -234,7 +234,16 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]]) -> set[str]:
             twins.setdefault((at, width), []).append(other)
     for named_by in twins.values():
         best = max(claims[other][2] for other in named_by)
-        cited |= {other for other in named_by if claims[other][2] == best}
+        # An identifier says which of two same-titled papers an entry means —
+        # unless this stretch is a whole bibliography that could not be cut
+        # into entries, where the identifier sits beside one printing of the
+        # title and we cannot see which. As many printings as claimants means
+        # each of them has one, and all are cited.
+        printings = min(len(claims[other][0]) for other in named_by)
+        if printings >= len(named_by):
+            cited |= set(named_by)
+        else:
+            cited |= {other for other in named_by if claims[other][2] == best}
     return cited
 
 

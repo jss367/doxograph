@@ -1658,6 +1658,7 @@ let CITATIONS = [];
 let citationsSeq = 0;
 let citationsFailed = false;
 const citationsInFlight = new Map();   // workspace -> the asking out for it
+const citationsLatest = new Map();    // workspace -> the newest asking made
 let citationsStale = false;           // the corpus moved while one was out
 
 async function loadCitations() {
@@ -1680,8 +1681,10 @@ async function loadCitations() {
   const seq = ++citationsSeq;
   // Kept per corpus and stamped with this asking: going A → B → A starts a
   // second reading for A, and the first to come back must not clear the
-  // guard the second is relying on.
+  // guard the second is relying on — nor be thrown away for being older than
+  // a reading of somebody else's corpus, which a single counter would do.
   citationsInFlight.set(workspace, seq);
+  citationsLatest.set(workspace, seq);
   citationsStale = false;
   let edges;
   try {
@@ -1696,7 +1699,7 @@ async function loadCitations() {
   } finally {
     if (citationsInFlight.get(workspace) === seq) citationsInFlight.delete(workspace);
   }
-  if (seq !== citationsSeq || workspace !== currentWorkspaceId) return;
+  if (seq !== citationsLatest.get(workspace) || workspace !== currentWorkspaceId) return;
   citationsFailed = false;
   CITATIONS = edges;
   if (V.view === 'graph') renderGraph();
