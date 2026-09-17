@@ -1800,3 +1800,26 @@ def test_a_word_whose_vowels_are_marks_is_one_term_on_the_page_too():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_folds_a_historic_cyrillic_letter_as_the_server_does():
+    """`casefold` maps ᲀ to в and `toLowerCase` leaves it alone, so the search
+    found the paper by its text while the page hid the claim."""
+    _paper("ivanov2026old", "Стаᲀъ и новъ", "introspection")
+    store.update_claim("ivanov2026old", "ivanov2026old-c1", {"text": "Стаᲀъ текстъ."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#q").fill("ставъ")
+                await page.locator("#content .claim").first.wait_for()
+                assert await page.locator("#content .claim").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
