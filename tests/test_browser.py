@@ -2941,6 +2941,46 @@ def test_alike_shows_claims_from_other_papers_worded_the_same_way():
 
 
 @pytest.mark.browser
+def test_the_map_draws_a_citation_from_one_paper_to_another():
+    from pdfs import minimal_pdf
+
+    _paper("vas2017attention", "Attention is all you need", "architecture")
+    store.pdf_path("vas2017attention").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+    _paper("roe2026steering", "Steering and recovery in language models", "architecture")
+    store.pdf_path("roe2026steering").write_bytes(minimal_pdf([
+        "Steering and recovery in language models",
+        "References\n[1] A Vaswani et al. Attention is all you need. 2017.",
+    ]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+                await page.wait_for_function(
+                    "window.doxographGraph && window.doxographGraph().edges.some((e) => e.type === 'cite')")
+                edges = await page.evaluate("window.doxographGraph().edges")
+                cite = [e for e in edges if e["type"] == "cite"]
+                assert cite == [{"type": "cite", "a": "p:roe2026steering", "b": "p:vas2017attention",
+                                 "w": None, "n": None, "relation": None}]
+                # The topic link between the same two papers gives way to it.
+                assert not [e for e in edges if e["type"] == "topic"]
+
+                # Turning the layer off takes the arrow with it.
+                await page.locator('[data-graph-opt="cites"]').uncheck()
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.every((e) => e.type !== 'cite')")
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
     from pdfs import minimal_pdf
 
@@ -3008,6 +3048,62 @@ def test_rewrite_asks_again_even_when_nothing_has_changed():
                 # what the fetch carried, so the wait is for the route.
                 await asyncio.wait_for(asked.wait(), timeout=10)
                 assert posted == [{"topics": ["recovery-rate"], "force": True}]
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_citations_do_not_cross_between_workspaces():
+    """A citation request left in flight when the workspace changes answers
+    with the other corpus's edges, and the paper keys can be the same."""
+    from doxograph import config
+    from pdfs import minimal_pdf
+
+    def corpus(reference: str) -> None:
+        store.save_paper(store.new_paper("cited", title="Attention is all you need", year=2026))
+        store.pdf_path("cited").write_bytes(minimal_pdf(["Attention is all you need", "A paper."]))
+        store.save_paper(store.new_paper("citing", title="The citing paper", year=2026))
+        store.pdf_path("citing").write_bytes(minimal_pdf([
+            "The citing paper", f"References\n[1] Somebody. {reference}. 2026."]))
+
+    corpus("Attention is all you need")          # the default workspace cites
+    other = config.create_workspace("Animal locomotion")
+    with config.use_workspace(other["id"]):
+        corpus("Something else entirely, by someone else")   # this one does not
+
+    async def scenario():
+        held = asyncio.Event()
+        first = []
+        answers = []
+
+        async def hold(route):
+            if not first:
+                first.append(True)
+                await held.wait()
+            await route.continue_()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            page.on("response", lambda r: answers.append(r.url) if "/api/citations" in r.url else None)
+            with _server() as url:
+                await page.goto(url)
+                await page.route("**/api/citations", hold)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await page.wait_for_function("window.doxographWorkspaceId !== 'default'")
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                held.set()                      # the default workspace's answer, late
+                while len(answers) < 2:
+                    await page.wait_for_timeout(50)
+                await page.wait_for_timeout(200)
+
+                edges = await page.evaluate("window.doxographGraph().edges")
+                assert [e for e in edges if e["type"] == "cite"] == []
 
             await browser.close()
 
@@ -3170,6 +3266,40 @@ def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
 
 
 @pytest.mark.browser
+def test_the_map_picks_up_a_paper_that_arrives_while_it_is_open():
+    from pdfs import minimal_pdf
+
+    _paper("cited", "Attention is all you need", "architecture")
+    store.pdf_path("cited").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+                assert await page.evaluate(
+                    "window.doxographGraph().edges.filter((e) => e.type === 'cite').length") == 0
+
+                # Imported with the map on screen: the poll redraws the papers,
+                # and the arrows are fetched on their own, so they have to be
+                # fetched again too.
+                store.save_paper(store.new_paper("citing", title="The citing paper", year=2026))
+                store.pdf_path("citing").write_bytes(minimal_pdf([
+                    "The citing paper",
+                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."]))
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=15000)
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
     """While an editor is open the poll leaves the content alone, so a passage
     can outlive the claim it describes without being redrawn."""
@@ -3241,6 +3371,42 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
                 assert await page.locator(".qctx").count() == 1
                 second = page.locator(".claim").nth(1)
                 assert await second.locator(".qctx").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_dropped_pdf_brings_its_arrows_while_the_map_is_open():
+    """A drop refreshes through its own handler, which consumes the change
+    and commits its ETag, so the next poll is told nothing happened."""
+    import httpx as _httpx
+
+    from pdfs import minimal_pdf
+
+    _paper("cited", "Attention is all you need", "architecture")
+    store.pdf_path("cited").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+
+                dropped = minimal_pdf([
+                    "The citing paper",
+                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."])
+                response = _httpx.post(f"{url}/api/upload?extract_now=false",
+                                       files={"files": ("citing.pdf", dropped, "application/pdf")},
+                                       timeout=30)
+                assert response.status_code == 200
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
 
             await browser.close()
 
@@ -3367,6 +3533,57 @@ def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
                 await cards.nth(1).get_by_role("button", name="alike", exact=True).click()
                 await cards.nth(1).locator(".alike .alikerow").wait_for()
                 assert await page.locator(".alike").count() == 1
+
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_corpus_change_during_a_citation_scan_is_asked_again():
+    """The scan in flight took its snapshot before the change, so its answer
+    describes papers that have moved since."""
+    import httpx as _httpx
+
+    from pdfs import minimal_pdf
+
+    _paper("cited", "Attention is all you need", "architecture")
+    store.pdf_path("cited").write_bytes(
+        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
+
+    async def scenario():
+        release = asyncio.Event()
+        asked = []
+
+        async def hold(route):
+            asked.append(route.request.url)
+            if len(asked) == 1:
+                await release.wait()
+            await route.continue_()
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.route("**/api/citations", hold)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator(".graph-wrap canvas").wait_for()
+
+                # Imported while the first scan is held open.
+                dropped = minimal_pdf([
+                    "The citing paper",
+                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."])
+                assert _httpx.post(f"{url}/api/upload?extract_now=false",
+                                   files={"files": ("citing.pdf", dropped, "application/pdf")},
+                                   timeout=30).status_code == 200
+                await page.wait_for_timeout(3000)      # a poll or two, all suppressed
+                assert len(asked) == 1
+                release.set()
+
+                # The queued reading runs once the first is out of the way.
+                await page.wait_for_function(
+                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
 
             await browser.close()
 

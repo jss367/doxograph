@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 
-from . import __version__, bib, config, export, extract, ingest, pairs, search, store
+from . import __version__, bib, cites, config, export, extract, ingest, pairs, search, store
 
 STATIC = Path(__file__).parent / "static"
 
@@ -984,6 +984,17 @@ def verify_quotes(key: str) -> dict:
     except KeyError:
         raise HTTPException(404, f"no paper {key}")
     return {"key": key, "n_unverified": store.summarize(paper)["n_unverified"]}
+
+
+@app.get("/api/citations")
+def citations() -> dict:
+    """Which papers in the corpus cite which, from their reference lists.
+
+    Read off the PDFs already on disk. The map asks for this when it opens
+    rather than with the rest of the state, since it is the only thing that
+    wants it and the whole corpus has to be read to answer.
+    """
+    return {"edges": cites.edges()}
 
 
 @app.get("/api/search")

@@ -149,7 +149,7 @@ const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverifi
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-            graph: { topics: true, minShared: null, tensions: true, ledger: true }, paperSort: null,
+            graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null };
 
 function blankClaim(paper) {
@@ -954,11 +954,23 @@ async function pull() {
   return Boolean(next);
 }
 
+// What has to be asked again when the corpus moves. Every path that pulls
+// state calls this, not just the poll: a drop or an import refreshes through
+// its own handler, which consumes the change and commits its ETag, so the
+// next poll is told nothing happened.
+function corpusChanged() {
+  rerunTextSearch();     // a paper imported since holds the query's words too
+  closeSimilar();        // and the claims it was compared against have moved
+  // A PDF that arrived while the map is open cites what it cites; the papers
+  // are redrawn from state but the arrows are fetched on their own.
+  if (V.view === 'graph') loadCitations();
+}
+
 async function refresh() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) { rerunTextSearch(); closeSimilar(); }
+  if (changed) corpusChanged();
   render();
 }
 
@@ -971,7 +983,7 @@ async function refreshAll() {
   const requestedWorkspace = currentWorkspaceId;
   const changed = await pull();
   if (requestedWorkspace !== currentWorkspaceId) return;
-  if (changed) { rerunTextSearch(); closeSimilar(); }
+  if (changed) corpusChanged();
   renderAll();
 }
 
@@ -1000,11 +1012,12 @@ function resetWorkspaceView() {
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-    graph: { topics: true, minShared: null, tensions: true, ledger: true },
+    graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
   dropTextSearch();
+  CITATIONS = [];
   graphReset();
   $('q').value = '';
   $('kind').value = '';
@@ -2462,6 +2475,68 @@ function renderGraphNav() {
     <span class="pm">${papers ? `${papers} papers as a map` : 'nothing to map yet'}</span></li>`;
 }
 
+// Which papers cite which, read off the PDFs by the server. Asked for when the
+// map opens rather than with the rest of the state: nothing else wants it, and
+// answering means reading every paper's reference list. The map draws without
+// them until the answer lands.
+let CITATIONS = [];
+let citationsSeq = 0;
+let citationsFailed = false;
+const citationsInFlight = new Map();   // workspace -> the asking out for it
+const citationsLatest = new Map();    // workspace -> the newest asking made
+let citationsStale = false;           // the corpus moved while one was out
+
+async function loadCitations() {
+  // Whose citations these are, and which asking. A request left in flight when
+  // the workspace changes answers with the other corpus's edges, and its paper
+  // keys can collide with this one's; two askings in the same workspace can
+  // also come back in the other order, the older last. Either way the answer
+  // that is not the current question is dropped.
+  // One asking per corpus at a time. Reading a corpus takes as long as it
+  // takes and the poll comes round every two and a half seconds, so without
+  // this a retry after a failure would start another scan on every tick until
+  // one finished. A different corpus is a different question, and asks.
+  const workspace = currentWorkspaceId;
+  if (citationsInFlight.has(workspace)) {
+    // The corpus moved while this one was reading it, so its answer describes
+    // papers that have changed since. Asked again once it is out of the way.
+    citationsStale = true;
+    return;
+  }
+  const seq = ++citationsSeq;
+  // Kept per corpus and stamped with this asking: going A → B → A starts a
+  // second reading for A, and the first to come back must not clear the
+  // guard the second is relying on — nor be thrown away for being older than
+  // a reading of somebody else's corpus, which a single counter would do.
+  citationsInFlight.set(workspace, seq);
+  citationsLatest.set(workspace, seq);
+  citationsStale = false;
+  let edges;
+  try {
+    const found = await api('/api/citations');
+    edges = found.edges || [];
+  } catch (error) {
+    // The server may be restarting. Leave the arrows that are drawn where
+    // they are and ask again on the next poll: the corpus need never change
+    // again, so waiting for it to would leave the map bare for the session.
+    citationsFailed = true;
+    return;
+  } finally {
+    if (citationsInFlight.get(workspace) === seq) citationsInFlight.delete(workspace);
+  }
+  if (seq !== citationsLatest.get(workspace) || workspace !== currentWorkspaceId) return;
+  citationsFailed = false;
+  CITATIONS = edges;
+  if (V.view === 'graph') renderGraph();
+  // These describe the corpus as it was when the reading started. Drawn
+  // anyway — they are closer to the truth than what was there — and then
+  // asked for again, now that the way is clear.
+  if (citationsStale) {
+    citationsStale = false;
+    loadCitations();
+  }
+}
+
 function graphCite(p) {
   const who = (p.authors || [])[0] ? p.authors[0].split(' ').pop() : p.key;
   return `${who} ${p.year || ''}`.trim();
@@ -2551,6 +2626,24 @@ function graphData() {
       if (edges[i].type === 'topic' && pairs.has(`${edges[i].a.slice(2)}|${edges[i].b.slice(2)}`)) edges.splice(i, 1);
     }
     edges.push(...pairs.values());
+  }
+  if (opts.cites) {
+    const drawn = new Set();
+    for (const edge of CITATIONS) {
+      if (!byPaper.has(edge.from) || !byPaper.has(edge.to) || edge.from === edge.to) continue;
+      const key = `${edge.from}|${edge.to}`;
+      if (drawn.has(key)) continue;
+      drawn.add(key);
+      edges.push({ type: 'cite', a: `p:${edge.from}`, b: `p:${edge.to}` });
+    }
+    // One paper citing another says more than the two sharing a tag, and the
+    // topic stroke under the arrow would only thicken it. Dropped as a tension
+    // drops one, in either direction, so the link count matches the screen.
+    for (let i = edges.length - 1; i >= 0; i -= 1) {
+      if (edges[i].type !== 'topic') continue;
+      const [a, b] = [edges[i].a.slice(2), edges[i].b.slice(2)];
+      if (drawn.has(`${a}|${b}`) || drawn.has(`${b}|${a}`)) edges.splice(i, 1);
+    }
   }
   if (opts.ledger) {
     const own = new Map((S.ledger || []).map((c) => [c.id, c]));
@@ -2720,6 +2813,13 @@ function graphDraw() {
     if (!fan.has(key)) fan.set(key, []);
     fan.get(key).push(e);
   }
+  // Two papers can both disagree and cite, and the two lines run between the
+  // same centres: drawn on top of each other the solid arrow fills the
+  // tension's dashes and hides the layer underneath. Moved aside far enough
+  // to read, which only arises for this one pair of types.
+  const alsoTense = new Set(GRAPH.edges
+    .filter((e) => e.type === 'tension')
+    .map((e) => [pairKey(e), `${e.b}|${e.a}`]).flat());
   for (const e of GRAPH.edges) {
     const { source: a, target: b } = e;
     const touching = hover && (a === hover || b === hover);
@@ -2734,6 +2834,19 @@ function graphDraw() {
         const d = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
         ox = (-(b.y - a.y) / d) * 4 * at; oy = ((b.x - a.x) / d) * 4 * at;
       }
+    }
+    if (e.type === 'cite') {
+      ctx.strokeStyle = colors.accent;
+      ctx.lineWidth = 1.2;
+      let sx = 0, sy = 0;
+      if (alsoTense.has(pairKey(e))) {
+        const d = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
+        sx = (-(b.y - a.y) / d) * 5; sy = ((b.x - a.x) / d) * 5;
+      }
+      ctx.beginPath(); ctx.moveTo(a.x + sx, a.y + sy); ctx.lineTo(b.x + sx, b.y + sy); ctx.stroke();
+      graphArrow(ctx, { x: a.x + sx, y: a.y + sy }, { x: b.x + sx, y: b.y + sy, r: b.r },
+                 colors.accent);
+      continue;
     }
     if (e.type === 'topic') {
       ctx.strokeStyle = colors.muted;
@@ -2942,6 +3055,7 @@ function graphHeader() {
     <div class="graph-legend">
       <span><i></i>claims share a topic</span>
       <span><i class="tension"></i>papers disagree (dashed while open)</span>
+      <span><i class="cite"></i>cites, arrow to the paper cited</span>
       <span><i class="supports"></i>supports my claim</span>
       <span><i class="contradicts"></i>contradicts it</span>
       <span><i class="other"></i>refines it or supplies a method</span>
@@ -2953,10 +3067,31 @@ function graphHeader() {
         <input type="range" min="1" max="${Math.max(1, GRAPH.maxShared || 1)}" value="${GRAPH.minShared || 1}" data-graph-opt="minShared">
         <span data-graph-min>${GRAPH.minShared || 1}</span> shared</label>
       <label><input type="checkbox" data-graph-opt="tensions" ${opts.tensions ? 'checked' : ''}> tensions</label>
+      <label><input type="checkbox" data-graph-opt="cites" ${opts.cites ? 'checked' : ''}> citations</label>
       <label><input type="checkbox" data-graph-opt="ledger" ${opts.ledger ? 'checked' : ''}> my claims</label>
       <span class="hint" data-graph-count style="margin-left:auto"></span>
     </div>
   </div>`;
+}
+
+// A head on the cited paper's end of a citation, just off its edge, so which
+// way the citation runs is readable without hovering.
+function graphArrow(ctx, from, to, color) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const distance = Math.max(Math.hypot(dx, dy), 1);
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const tipX = to.x - ux * (to.r + 1);
+  const tipY = to.y - uy * (to.r + 1);
+  const size = 6;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - ux * size - uy * size * 0.5, tipY - uy * size + ux * size * 0.5);
+  ctx.lineTo(tipX - ux * size + uy * size * 0.5, tipY - uy * size - ux * size * 0.5);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function graphStatus() {
@@ -3013,6 +3148,7 @@ $('graph-nav').addEventListener('click', (event) => {
   showView('graph');
   syncHash(true);
   renderAll();
+  loadCitations();
 });
 
 // For the browser tests and anyone poking at the console: where things are.
@@ -4599,9 +4735,14 @@ async function boot() {
     try {
       const changed = await pull();
       renderJobs();
-      if (!changed) return;
-      rerunTextSearch();     // a paper imported since holds the query's words too
-      closeSimilar();        // and the claims it was compared against have moved
+      if (!changed) {
+        if (citationsFailed && V.view === 'graph') loadCitations();
+        return;
+      }
+      corpusChanged();
+      // An asking that failed is asked again while the map is open, whether
+      // or not anything in the corpus has moved.
+      if (citationsFailed && V.view === 'graph') loadCitations();
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
