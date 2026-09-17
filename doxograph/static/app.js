@@ -439,8 +439,10 @@ function queryPatterns(query) {
     .map((term) => (UNSEGMENTED.test(term)
       ? new RegExp(term, 'u')
       // The underscore is a word character to the server's `\w`, so it is one
-      // here: `bar` does not start a word in `foo_bar` on either side.
-      : new RegExp(`(?:^|[^\\p{L}\\p{N}_])${term}`, 'u')));
+      // here: `bar` does not start a word in `foo_bar` on either side. So is
+      // a mark the folding kept — a vowel sign is part of the word it sits
+      // in, and a boundary inside किताब would find ताब there.
+      : new RegExp(`(?:^|[^\\p{L}\\p{N}_\\p{M}])${term}`, 'u')));
 }
 
 // A claim's searchable text. It carries its paper's key and year as well as
