@@ -655,15 +655,22 @@ def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
         "References\n[1] Nobody. Attention is all you need for image "
         "restoration. 2026.\n"
         # A subtitle is the title going on too, however far down the page the
-        # line it is written on begins, and either side of the colon.
-        "[2] Nobody. Attention is all you need: for image restoration. 2027.\n"
-        "[3] Nobody. Transformers: Attention is all you need. 2028.",
+        # line it is written on begins.
+        "[2] Nobody. Attention is all you need: for image restoration. 2027.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
     wrapped = quotes.build("Nobody. Attention is all you need:\n"
                            "            for image restoration. 2027.")
     title = quotes.squash(ATTENTION)
     assert not cites._bounded(wrapped, wrapped.squashed.find(title), len(title))
+    # A colon in front of the title is another matter: some styles put one
+    # between the authors and the title, and reading it as a subtitle would
+    # drop every citation in a paper written that way.
+    _paper("citing4", "A fourth citing paper", [
+        "A fourth citing paper",
+        "References\n[1] A Vaswani, N Shazeer: Attention is all you need. NeurIPS, 2017.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing4"] == ["attention"]
     # And the paper itself is still cited where the entry stops at its title,
     # with a full stop after it or with the break before the next entry.
     _paper("citing2", "Another citing paper", [
