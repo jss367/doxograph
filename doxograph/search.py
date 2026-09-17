@@ -126,7 +126,7 @@ def fold_with_offsets(text: str) -> tuple[str, array.array]:
             # mark, and a query is typed whichever way the keyboard does it.
             # Decomposing both and dropping the marks makes café and cafe
             # meet, as `quotes.squash` already has them meet for a quote.
-            if unicodedata.combining(out):
+            if unicodedata.combining(out) not in _KEEP_COMBINING:
                 continue
             folded.append(out)
             offsets.append(at)
@@ -206,9 +206,21 @@ def folded_text(key: str) -> str | None:
 # nothing inside a run of them — every character is a word character, so
 # `\b模型` only ever matches at the start of a run — and a term in one of them
 # is looked for wherever it falls.
+# Combining classes that are not accents: a nukta, a kana voicing mark and a
+# virama each change the word rather than decorate it — क्ल is not कल, and が
+# is not か — so they stay where an acute or an Arabic fatha comes off. Zero is
+# in here because a mark with no class is not reordered and not an accent
+# either, which is what keeps a Devanagari vowel sign.
+_KEEP_COMBINING = frozenset({0, 7, 8, 9})
+
 _UNSEGMENTED = re.compile(
+    # Scripts written without spaces between words. A list rather than a rule,
+    # because Unicode does not say which scripts these are; the ones a corpus
+    # might hold are here — CJK and kana, Hangul, Thai, Lao, Khmer, Burmese,
+    # Tibetan, Javanese, Balinese, Sundanese, Tai Tham, Cham.
     r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
-    r"\uac00-\ud7af\u0e00-\u0eff\u1780-\u17ff\u0f00-\u0fff\u1000-\u109f]"
+    r"\uac00-\ud7af\u0e00-\u0eff\u1780-\u17ff\u0f00-\u0fff\u1000-\u109f"
+    r"\ua980-\ua9df\u1b00-\u1b7f\u1b80-\u1bbf\u1a20-\u1aaf\uaa00-\uaa5f]"
 )
 
 
