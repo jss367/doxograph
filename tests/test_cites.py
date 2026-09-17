@@ -638,6 +638,33 @@ def test_an_arxiv_id_is_cited_with_or_without_its_version():
     assert cites._whole(entry, entry.squashed.find(mark), len(mark), True, "1706.03762")
 
 
+def test_a_title_inside_a_longer_word_is_not_a_citation():
+    """`Understanding neural network` reads straight through `Understanding
+    neural networks` once the spaces are gone, and the two are different
+    papers. A title has to start and end where a word does."""
+    _paper("singular", "Understanding neural network behaviour under steering",
+           ["Understanding neural network behaviour under steering", "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Nobody. Understanding neural network behaviour under "
+        "steerings and other things. 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+
+
+def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
+    """A PDF can write a hyphen as an en dash, and it is the same DOI. Read
+    against the entry rather than through one, since the test PDFs are
+    latin-1 and cannot carry the dash."""
+    entry = quotes.build("Nobody. A work. https://doi.org/10.1234/foo\u2013bar, 2026.")
+    mark = quotes.squash("10.1234/foo-bar")
+    assert cites._whole(entry, entry.squashed.find(mark), len(mark),
+                        printed="10.1234/foo-bar")
+    # A different DOI is still a different DOI.
+    assert not cites._whole(entry, entry.squashed.find(mark), len(mark),
+                            printed="10.1234/fooba.r")
+
+
 def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
     """An unnumbered list cites the longer paper by title and DOI; the shorter
     corpus title reads inside that title and is cited nowhere."""

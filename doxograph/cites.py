@@ -438,16 +438,21 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
 
     def places(mark: str, identifier: bool, versioned: bool = False,
                printed: str = "") -> list[int]:
-        """Where a mark is printed, an identifier only where it is the whole
-        of one. Squashing takes the punctuation out of a DOI, and `10.1234/foo`
-        reads straight through the middle of `10.1234/foo.bar`, which is
-        somebody else's work."""
+        """Where a mark is printed, and printed whole.
+
+        An identifier only where the entry writes that identifier: squashing
+        takes the punctuation out of a DOI, and `10.1234/foo` reads straight
+        through the middle of `10.1234/foo.bar`, which is somebody else's
+        work. A title only where it starts and ends with a word: `Understanding
+        neural network` reads through `Understanding neural networks`, which is
+        a paper of its own.
+        """
         if (mark, identifier, versioned, printed) not in where:
             at = _occurrences(entry.squashed, mark)
-            where[mark, identifier, versioned, printed] = (
-                [place for place in at
-                 if _whole(entry, place, len(mark), versioned, printed)]
-                if identifier else at)
+            where[mark, identifier, versioned, printed] = [
+                place for place in at
+                if (_whole(entry, place, len(mark), versioned, printed)
+                    if identifier else _bounded(entry, place, len(mark)))]
         return where[mark, identifier, versioned, printed]
 
     def beside(mark: str, versioned: bool, title: str, printed: str = "") -> bool:
@@ -574,6 +579,18 @@ _DOI_HEAD = re.compile(r"10\.\d{4,9}/")
 _DASHES = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 
 
+def _bounded(entry: quotes.Text, at: int, width: int) -> bool:
+    """Whether a title is printed at `at` with a word ending either side of it.
+
+    Squashing takes the spaces out, so a title reads straight through a longer
+    word at either end: `Understanding neural network` is inside
+    `Understanding neural networks`, and the two are different papers.
+    """
+    begin = entry.offsets[at]
+    stop = entry.offsets[at + width - 1] + 1
+    return not (entry.raw[:begin][-1:].isalnum() or entry.raw[stop:stop + 1].isalnum())
+
+
 def _shape(text: str) -> str:
     """An identifier as its punctuation: which mark and where, with the
     letters and digits taken out and the dashes read as one."""
@@ -605,7 +622,7 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     # `Vol. 10, 1234. Foo.` is not a DOI, whatever it comes to with the commas
     # and the spaces taken out.
     span = _WRAP.sub("", entry.raw[entry.offsets[at]:stop])
-    if any(not (char.isalnum() or char in _JOINS) for char in span):
+    if any(not (char.isalnum() or char in _JOINS or char in _DASHES) for char in span):
         return False
     # And the same punctuation in the same places: `10.1234/foo.bar` and
     # `10.1234/foob.ar` are two DOIs and one fingerprint, and so are
