@@ -65,8 +65,9 @@ _ENTRY_MARK = re.compile(
     r"(?m)(?:^|(?<=\f))[ \t]*(?:\[\d{1,3}\]|\(\d{1,3}\)|\d{1,3}[.)])(?=[ \t\f]|$)")
 
 
-def entries(listing: str) -> list[str]:
-    """A reference list cut into its entries, each squashed.
+def entries(listing: str) -> list[quotes.Text]:
+    """A reference list cut into its entries, each squashed beside its own raw
+    text: an identifier is read against the raw, where its punctuation is.
 
     An entry names one work, and knowing where one ends is what tells a
     citation of "Attention is all you need" from a citation of a paper whose
@@ -77,8 +78,8 @@ def entries(listing: str) -> list[str]:
     if not listing.strip():
         return []
     parts = [part for part in _ENTRY_MARK.split(listing) if part.strip()]
-    cut = [squashed for part in parts if (squashed := quotes.squash(part))]
-    return cut if len(cut) > 1 else [quotes.squash(listing)]
+    cut = [built for part in parts if (built := quotes.build(part)).squashed]
+    return cut if len(cut) > 1 else [quotes.build(listing)]
 
 
 # What marks a letter or numeral as a section label rather than the first word
@@ -98,12 +99,14 @@ def reference_text(text: str) -> str:
     twice.
     """
     at = 0
+    page = 1
     found: list[tuple[int, bool]] = []
     # `splitlines` breaks on the page separator too, so a heading at the top of
     # a page is found like any other.
     lines = text.splitlines(keepends=True)
     for i, line in enumerate(lines):
         at += len(line)
+        here, page = page, page + line.count(quotes.PAGE_BREAK)
         squashed = quotes.squash(line)
         # Measured on the letters, not the line: a small-capitals heading can
         # come out of pypdf with a space between every letter, and "R E F E R
@@ -112,7 +115,7 @@ def reference_text(text: str) -> str:
         if len(squashed) > _HEADING_LETTERS:
             continue
         if _is_heading(squashed, labelled=bool(_LABEL.match(line))):
-            found.append((at, _points_at_a_page(lines, i + 1)))
+            found.append((at, _points_at_a_page(lines, i + 1, here)))
     # A contents page writes the word too, and the list it points at is further
     # down. Passed over only when there is another heading to pass to: a
     # bibliography whose first entry is a bare number on a line of its own
@@ -128,15 +131,24 @@ def reference_text(text: str) -> str:
 # dot leaders the extraction put on the line. `[1]` and `1.` are not this —
 # they are how a reference list numbers its first entry, and the brackets and
 # the dot are what say so.
-_PAGE_NUMBER = re.compile(r"^[ 	.·•…‐-―]*\d{1,4}[ 	]*$")
+_PAGE_NUMBER = re.compile(r"^[ 	.·•…‐-―]*(\d{1,4})[ 	]*$")
 
 
-def _points_at_a_page(lines: list[str], start: int) -> bool:
-    """Whether the lines after a heading are a page number and nothing else."""
+def _points_at_a_page(lines: list[str], start: int, page: int) -> bool:
+    """Whether a bare number under a heading is a page for it to point at.
+
+    Larger than the page the heading is on, because a contents entry points
+    forward and a bibliography numbers its first entry 1 on a page well past
+    the first. The shape alone does not tell them apart — `References` over
+    `12` reads the same either way — and a paper with a supplement has a
+    second heading for the loop below to fall back to, so having another
+    heading says nothing about which of the two this is.
+    """
     for line in lines[start:start + 3]:
         if not line.strip():
             continue
-        return bool(_PAGE_NUMBER.match(line.rstrip("\n\r\f")))
+        number = _PAGE_NUMBER.match(line.rstrip("\n\r\f"))
+        return bool(number) and int(number.group(1)) > page
     return False
 
 
@@ -176,6 +188,17 @@ def _reads_as_heading(letters: str) -> bool:
     return bool(said) and any(word in _HEADING_ANCHORS for word in said)
 
 
+def title_mark(paper: dict) -> str:
+    """The squashed title, where it is long enough to name a paper on its own.
+
+    Empty for a short title, and a paper left with nothing but its identifiers
+    is named by those alone — which is why the callers ask for this rather
+    than reading `fingerprints` from the end.
+    """
+    title = quotes.squash(paper.get("title") or "")
+    return title if len(title) >= _TITLE_FLOOR else ""
+
+
 def fingerprints(paper: dict) -> list[str]:
     """What to look for in a reference list to find this paper named.
 
@@ -190,9 +213,8 @@ def fingerprints(paper: dict) -> list[str]:
     for value in (paper.get("doi"), source.get("id") if source.get("kind") == "doi" else ""):
         if value:
             marks.append(quotes.squash(str(value)))
-    title = quotes.squash(paper.get("title") or "")
-    if len(title) >= _TITLE_FLOOR:
-        marks.append(title)
+    if title_mark(paper):
+        marks.append(title_mark(paper))
     # Crossref fills in `doi` and `source["id"]` alike, and one identifier
     # recorded twice is still one identifier.
     return list(dict.fromkeys(mark for mark in marks if mark))
@@ -212,6 +234,7 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     if hit is not None:
         return hit
     marks = {paper["key"]: fingerprints(paper) for paper in papers}
+    titles = {paper["key"]: title_mark(paper) for paper in papers}
     read: dict[str, tuple | None] = {}
     found = []
     for paper in papers:
@@ -239,7 +262,7 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         # by an identifier there has no entry to tie it to a printing of a
         # title somebody else may have cited.
         uncut = not _ENTRY_MARK.search(references)
-        for other in _cited(paper["key"], listing, marks, uncut):
+        for other in _cited(paper["key"], listing, marks, titles, uncut):
             found.append({"from": paper["key"], "to": other})
     found.sort(key=lambda edge: (edge["from"], edge["to"]))
     # Stored only if what it was read from is still what is there: the papers
@@ -256,8 +279,8 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     return found
 
 
-def _cited(key: str, entries: list[str], marks: dict[str, list[str]],
-           uncut: bool = False) -> list[str]:
+def _cited(key: str, entries: list[quotes.Text], marks: dict[str, list[str]],
+           titles: dict[str, str], uncut: bool = False) -> list[str]:
     """Which papers a reference list names, one entry at a time.
 
     An entry names one work. Within it the longest mark wins, so a title
@@ -270,12 +293,12 @@ def _cited(key: str, entries: list[str], marks: dict[str, list[str]],
     """
     cited: set[str] = set()
     for entry in entries:
-        cited |= _cited_in(key, entry, marks, uncut)
+        cited |= _cited_in(key, entry, marks, titles, uncut)
     return sorted(cited)
 
 
-def _cited_in(key: str, entry: str, marks: dict[str, list[str]],
-              uncut: bool = False) -> set[str]:
+def _cited_in(key: str, entry: quotes.Text, marks: dict[str, list[str]],
+              titles: dict[str, str], uncut: bool = False) -> set[str]:
     """The papers one stretch of a reference list names.
 
     A paper claims the places its title is printed, or — where the entry names
@@ -290,32 +313,48 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]],
     claims: dict[str, tuple[list[int], int, int]] = {}
     covers: dict[str, list[tuple[int, int]]] = {}
     fallbacks: dict[str, tuple[list[int], int]] = {}
+    where: dict[str, list[int]] = {}
+
+    def places(mark: str, identifier: bool) -> list[int]:
+        """Where a mark is printed, an identifier only where it is the whole
+        of one. Squashing takes the punctuation out of a DOI, and `10.1234/foo`
+        reads straight through the middle of `10.1234/foo.bar`, which is
+        somebody else's work."""
+        if mark not in where:
+            at = _occurrences(entry.squashed, mark)
+            where[mark] = ([place for place in at if _whole(entry, place, len(mark))]
+                           if identifier else at)
+        return where[mark]
+
     for other, found in marks.items():
         if other == key:
             continue
-        # `fingerprints` puts a paper's identifiers first and its title last.
-        title = found[-1] if found else ""
-        by_identifier = next((mark for mark in found[:-1] if mark in entry), "")
+        # Everything that is not the title is an identifier, and a paper whose
+        # title is too short to name it has nothing else.
+        title = titles.get(other, "")
+        by_identifier = next((mark for mark in found
+                              if mark != title and places(mark, True)), "")
         # Where the list is one stretch, an identifier is the only thing that
         # points at this paper and nobody else's: a title printed somewhere in
         # a page of references may be somebody's citation of its twin.
         named_by = (by_identifier if uncut and by_identifier
-                    else (title if title and title in entry else by_identifier))
+                    else (title if title and title in entry.squashed else by_identifier))
         if not named_by:
             continue
-        claims[other] = (_occurrences(entry, named_by), len(named_by), bool(by_identifier))
+        claims[other] = (places(named_by, named_by is not title),
+                         len(named_by), bool(by_identifier))
         # Everywhere this paper is named, whatever it is cited by here. An
         # identifier settles which paper an entry means; it does not stop the
         # paper's title covering a shorter title printed inside it.
         for mark in found:
             covers.setdefault(other, []).extend(
-                (at, len(mark)) for at in _occurrences(entry, mark))
+                (at, len(mark)) for at in places(mark, mark is not title))
         if by_identifier and named_by is not by_identifier:
             # Where every printing of its title turns out to be inside
             # somebody else's, the identifier is what it is cited by: an entry
             # naming this paper by its DOI alone is a citation of it, however
             # its title reads elsewhere in the list.
-            fallbacks[other] = (_occurrences(entry, by_identifier), len(by_identifier))
+            fallbacks[other] = (places(by_identifier, True), len(by_identifier))
 
     def swallowed(other: str, at: int, width: int) -> bool:
         """Whether a claim at `at` lies inside a longer name of somebody else's."""
@@ -354,6 +393,32 @@ def _cited_in(key: str, entry: str, marks: dict[str, list[str]],
         else:
             cited |= {other for other in named_by if claims[other][2] == best}
     return cited
+
+
+# A version an arXiv id is printed with: `1706.03762v5` is that paper, and the
+# `v5` is not the identifier running on into somebody else's.
+_VERSION = re.compile(r"v\d+(?![0-9A-Za-z])")
+
+
+def _whole(entry: quotes.Text, at: int, width: int) -> bool:
+    """Whether an identifier printed at `at` is the whole of the one there.
+
+    Read off the entry's own text rather than the squashed form, since
+    squashing is what took the dots and slashes out: `101234foo` reads through
+    the middle of `101234foobar` with nothing to say where one ends, while
+    `10.1234/foo` beside `10.1234/foo.bar` is plain enough.
+    """
+    stop = entry.offsets[at + width - 1] + 1
+    rest = entry.raw[stop:stop + 2]
+    version = _VERSION.match(entry.raw[stop:])
+    if version:
+        rest = entry.raw[stop + version.end():stop + version.end() + 2]
+    if not rest:
+        return True
+    if rest[0].isalnum():
+        return False
+    # A separator with more identifier after it: `.bar` of `10.1234/foo.bar`.
+    return not (rest[0] in "./-_:" and len(rest) > 1 and rest[1].isalnum())
 
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:

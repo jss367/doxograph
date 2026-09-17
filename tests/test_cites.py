@@ -247,7 +247,8 @@ def test_a_twin_cited_by_a_bare_identifier_takes_no_title_printing():
 
 
 def test_a_numbered_list_is_read_one_entry_at_a_time():
-    assert cites.entries("[1] A paper. 2017.\n[2] Another paper. 2018.") == [
+    assert [e.squashed for e in
+            cites.entries("[1] A paper. 2017.\n[2] Another paper. 2018.")] == [
         "apaper2017", "anotherpaper2018"]
     for numbering in ("1. ", "(1) ", "1) "):
         assert len(cites.entries(f"{numbering}A paper.\n{numbering.replace('1', '2')}Another.")) == 2
@@ -382,7 +383,8 @@ def test_a_line_of_prose_is_not_a_heading_with_its_first_word_taken_off():
 def test_a_marker_alone_on_its_line_still_starts_an_entry():
     """pypdf puts the number on its own line often enough, and a list that
     does not split is read as one work."""
-    assert cites.entries("[1]\nA paper. 2017.\n[2]\nAnother. 2018.") == [
+    assert [e.squashed for e in
+            cites.entries("[1]\nA paper. 2017.\n[2]\nAnother. 2018.")] == [
         "apaper2017", "another2018"]
     _paper("preprint", ATTENTION, [ATTENTION, "Text."], source={"kind": "arxiv", "id": "1706.03762"})
     _paper("published", ATTENTION, [ATTENTION, "Text."], doi="10.5555/3295222.3295349")
@@ -445,7 +447,8 @@ def test_a_bare_identifier_in_an_uncut_list_leaves_the_title_to_its_twin():
 
 
 def test_an_entry_marker_at_the_top_of_a_page_starts_an_entry():
-    assert cites.entries("[1] A paper. 2017.\x0c[2] Another paper. 2018.") == [
+    assert [e.squashed for e in
+            cites.entries("[1] A paper. 2017.\x0c[2] Another paper. 2018.")] == [
         "apaper2017", "anotherpaper2018"]
 
 
@@ -482,6 +485,20 @@ def test_a_contents_page_is_not_where_the_reference_list_starts():
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
 
 
+def test_a_supplement_does_not_make_the_main_list_a_contents_entry():
+    """The main list's first marker comes out as a bare `1` and a supplement
+    gives the paper a second heading. Read as a contents entry, the main list
+    and every work it cites would be passed over."""
+    _paper("attention", ATTENTION, [ATTENTION, "Text."])
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "Body text about steering.",
+        "References\n1\nA Vaswani et al. Attention is all you need. 2017.",
+        "Additional References\nNobody. A work nobody wrote. 1999.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["attention"]
+
+
 def test_a_list_whose_first_entry_is_a_number_on_its_own_line_is_still_the_list():
     """The only heading a paper has is taken however the line under it reads:
     a bare `1` there is the first entry, not a page number."""
@@ -491,6 +508,23 @@ def test_a_list_whose_first_entry_is_a_number_on_its_own_line_is_still_the_list(
         "References\n1\nA Vaswani et al. Attention is all you need. 2017.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["attention"]
+
+
+def test_a_doi_another_doi_begins_with_is_not_cited():
+    """`10.1234/foo` reads straight through `10.1234/foo.bar` once the dots
+    are squashed out, and the two are different works."""
+    _paper("short", "One paper", ["One paper", "Text."], doi="10.1234/foo")
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Nobody. Another work. https://doi.org/10.1234/foo.bar, 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == []
+    # The identifier itself still cites it, version and all.
+    _paper("citing2", "Another citing paper", [
+        "Another citing paper",
+        "References\n[1] Nobody. One paper. https://doi.org/10.1234/foo, 2026.",
+    ])
+    assert [e["to"] for e in cites.edges() if e["from"] == "citing2"] == ["short"]
 
 
 def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
