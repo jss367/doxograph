@@ -186,9 +186,14 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     if hit is not None:
         return hit
     marks = {paper["key"]: fingerprints(paper) for paper in papers}
+    read: dict[str, tuple] = {}
     found = []
     for paper in papers:
         text = search.paper_text(paper["key"])
+        # The state each paper's text was in when it was read. A PDF arriving
+        # for a paper this scan has already passed changes its text and not
+        # its name, and the answer would be stored as though it had seen it.
+        read[paper["key"]] = _text_identity(paper["key"])
         if not text:
             continue
         references = reference_text(text)
@@ -202,11 +207,13 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
         for other in _cited(paper["key"], listing, marks, uncut):
             found.append({"from": paper["key"], "to": other})
     found.sort(key=lambda edge: (edge["from"], edge["to"]))
-    # Stored under the text as it stands at the end, since reading a paper for
-    # the first time is what writes its text down — and only if the papers
-    # themselves stood still, because one added or removed in the middle
-    # leaves this describing neither the corpus before nor the one after.
-    if given or named == _named_signature(store.all_papers()):
+    # Stored only if what it was read from is still what is there: the papers
+    # unchanged, and every paper's text as it was when this scan read it.
+    # Reading a paper for the first time is what writes its text down, so the
+    # comparison is against what this scan saw rather than what was on disk
+    # when it started.
+    steady = all(_text_identity(key) == was for key, was in read.items())
+    if given or (steady and named == _named_signature(store.all_papers())):
         with _cache_lock:
             _cache.clear()  # one corpus at a time is all the map ever asks for
             _cache[f"{named}:{_text_signature()}"] = found
@@ -334,6 +341,15 @@ def _named_signature(papers: list[dict]) -> str:
     named = "\n".join(f"{paper['key']} {' '.join(fingerprints(paper))}"
                        for paper in sorted(papers, key=lambda p: p["key"]))
     return hashlib.sha1(named.encode("utf-8")).hexdigest()
+
+
+def _text_identity(key: str) -> tuple:
+    """A paper's stored text as it stands, or nothing if there is none."""
+    try:
+        st = store.text_path(key).stat()
+    except OSError:
+        return ()
+    return (st.st_size, st.st_mtime_ns, st.st_ino)
 
 
 def _text_signature() -> str:

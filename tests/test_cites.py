@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, cites, server, store
+from doxograph import __main__, cites, search, server, store
 
 from pdfs import minimal_pdf
 
@@ -482,3 +482,34 @@ def test_an_identified_paper_still_covers_a_title_printed_inside_its_own():
         "https://doi.org/10.1234/restoration, 2026.",
     ])
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["long"]
+
+
+def test_a_pdf_arriving_mid_scan_is_not_cached_as_though_it_were_read():
+    """A paper this scan has already passed gets new text. Its name has not
+    moved, so nothing but the text itself would notice."""
+    a_corpus()
+    cites._cache.clear()
+    seen: list[str] = []
+    real = search.paper_text
+    planted = False
+
+    def watching(key: str):
+        nonlocal planted
+        seen.append(key)
+        if len(seen) == 2 and not planted:
+            # The paper read first has just had its PDF replaced.
+            planted = True
+            first = seen[0]
+            store.pdf_path(first).write_bytes(
+                minimal_pdf(["A much later printing of this paper",
+                             "References\nNobody. A work nobody wrote. 1999."]))
+            store.text_path(first).unlink(missing_ok=True)
+            search.paper_text(first)
+        return real(key)
+
+    cites.search.paper_text = watching
+    try:
+        cites.edges()
+    finally:
+        cites.search.paper_text = real
+    assert not cites._cache, "an answer that did not see every paper was stored"
