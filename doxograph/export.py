@@ -51,6 +51,9 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .paper .title { font-weight: 600; }
 .paper .authors, .paper .rel { font-size: .87rem; color: var(--muted); }
 .paper .summary { font-size: .92rem; margin: .4rem 0 0; }
+.paper .labels { margin: .4rem 0 0; }
+.label { display: inline-block; font-size: .74rem; padding: .05rem .4rem; margin-right: .35rem;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
 .synth { background: var(--panel); padding: .85rem 1rem; border-radius: 5px; margin: .5rem 0 1rem; }
 .synth p { margin: 0 0 .6rem; }
 .synth p:last-child { margin: 0; }
@@ -167,7 +170,7 @@ def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
     hay = " ".join([
         row.get("text", ""), row.get("evidence", ""), row.get("quote", ""),
         row.get("paper_title", ""), " ".join(row.get("paper_authors", [])),
-        " ".join(row.get("tags", [])),
+        " ".join(row.get("tags", [])), " ".join(row.get("paper_labels", [])),
     ]).lower()
     cite = f"{_authors(row.get('paper_authors', []))} ({row.get('paper_year') or 'n.d.'})"
     tags = "".join(f'<span class="tag">#{_e(t)}</span>' for t in row.get("tags", []))
@@ -311,6 +314,9 @@ def render(title: str = "Doxograph") -> str:
             + f' · <code>{_e(paper["key"])}</code></div>'
             + (f'<p class="summary">{_e(paper.get("summary"))}</p>' if paper.get("summary") else "")
             + (f'<p class="rel">Why it is here: {_e(paper.get("relevance"))}</p>' if paper.get("relevance") else "")
+            + (('<div class="labels">'
+                + "".join(f'<span class="label">{_e(l)}</span>' for l in paper.get("labels") or [])
+                + "</div>") if paper.get("labels") else "")
             + "</div>"
         )
 
