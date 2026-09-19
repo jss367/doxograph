@@ -1,0 +1,56 @@
+.research-tools-nav { display: flex; flex-wrap: wrap; gap: .35rem; }
+.research-tools-nav h2 { width: 100%; }
+.selection-tools { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center;
+  padding: .6rem 0; margin-bottom: .5rem; border-bottom: 1px solid var(--line); }
+#selection-count { font-size: .8rem; color: var(--muted); margin-right: auto; }
+.claim-selection { display: flex; gap: .5rem; justify-content: space-between; align-items: center; margin-bottom: .4rem; font-size: .76rem; color: var(--muted); }
+.paper-selection { float: left; margin: .2rem .5rem .2rem 0; }
+.research-sheet { width: min(1300px, 96vw); max-width: 96vw; height: 90vh; max-height: 94vh;
+  padding: 1.2rem; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--ink); overflow: auto; }
+.research-sheet::backdrop { background: rgb(0 0 0 / .45); }
+.research-sheet .sheet-head { display: flex; align-items: center; justify-content: space-between; }
+#research-tabs, .tool-actions, .entry-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .75rem 0; }
+#research-tabs { border-bottom: 1px solid var(--line); padding-bottom: .7rem; }
+#research-tabs [aria-current] { background: var(--sel); border-color: var(--accent); }
+.research-sheet label { display: block; font-size: .85rem; color: var(--muted); margin: .5rem 0; }
+.research-sheet label input:not([type=checkbox]), .research-sheet label textarea, .research-sheet label select { display: block; margin-top: .3rem; max-width: 100%; }
+.research-sheet textarea { width: 100%; min-height: 5rem; resize: vertical; }
+.research-sheet fieldset { border: 1px solid var(--line); border-radius: 6px; padding: .75rem; margin: 1rem 0; }
+.research-sheet blockquote { white-space: pre-wrap; margin: .7rem 0; padding: .6rem .8rem; border-left: 3px solid var(--accent); background: var(--panel); font-size: .9rem; }
+.research-sheet h3 { font-size: 1rem; line-height: 1.5; }
+.research-sheet p { white-space: pre-wrap; }
+.research-sheet .comparison { display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 1rem; align-items: stretch; }
+.comparison-card { flex: 0 0 340px; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 1rem; overflow-wrap: anywhere; }
+.board-entry, .reading-entry { border: 1px solid var(--line); border-radius: 6px; margin: .8rem 0; padding: 1rem; }
+.entry-actions { justify-content: flex-end; }
+.entry-actions .hint { margin-right: auto; }
+.connection-pair, .history-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.history-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); padding: .7rem; }
+.history-diff > div, .connection-pair > div { min-width: 0; }
+.research-sheet.is-busy #research-body, .research-sheet.is-busy #research-tabs { pointer-events: none; opacity: .7; }
+.reader-controls input { width: 5rem; }
+.reader-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 1rem; }
+.pdf-scroll { overflow: auto; max-height: 65vh; padding: .5rem; background: #555; }
+#pdf-page { position: relative; background: white; color: black; }
+#capture-form { min-width: 0; }
+#capture-form textarea { min-height: 6rem; }
+#reader-hint { background: var(--bg); padding: .5rem; }
+/* Text layer adapted from Mozilla PDF.js 6.3.289 (Apache 2.0; vendor/PDFJS-LICENSE). */
+#pdf-page .textLayer { color-scheme: only light; position: absolute; text-align: initial; inset: 0;
+  overflow: clip; opacity: 1; line-height: 1; letter-spacing: normal; word-spacing: normal;
+  -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0;
+  --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size)); }
+#pdf-page .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre;
+  cursor: text; transform-origin: 0% 0%; -webkit-user-select: text; user-select: text; }
+#pdf-page .textLayer > :not(.markedContent), #pdf-page .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+#pdf-page .textLayer .markedContent { display: contents; }
+#pdf-page .textLayer ::selection { background: rgb(30 110 230 / .35); }
+@media (max-width: 800px) {
+  .reader-layout, .connection-pair, .history-diff { grid-template-columns: 1fr; }
+  .comparison-card { flex-basis: 85vw; }
+  .research-sheet { padding: .7rem; }
+}

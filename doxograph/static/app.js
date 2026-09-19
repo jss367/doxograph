@@ -1054,6 +1054,7 @@ let switchSeq = 0;
 
 async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId && !workspaceSwitch) return;
+  if (!await ResearchTools.beforeWorkspaceSwitch()) { renderWorkspacePicker(); return; }
   const seq = ++switchSeq;
   // The picker is a native select, so the browser has already moved it to the
   // new name by the time this runs — and nothing here moves the corpus for a
@@ -1403,6 +1404,7 @@ function render() {
   if (!editorHolds()) renderContent();
   renderJobs();
   syncAnalysisControls();
+  ResearchTools.sync();
 }
 
 // Whether something is being typed into the content pane. A poll redrawing it
@@ -1430,6 +1432,7 @@ function renderAll() {
   renderContent();
   renderJobs();
   syncAnalysisControls();
+  ResearchTools.sync();
   syncHash();
 }
 
@@ -1514,7 +1517,7 @@ function renderPapers() {
     <span class="pm">${meta}</span></li>`;
   $('papers').innerHTML = all + sortedPapers(shown, V.paperSort).map((p) => `
     <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
-      <span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
+      ${ResearchTools.paperCheckbox(p)}<span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
         ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
       <button type="button" class="pmenu" data-menu="${esc(p.key)}"
@@ -1618,6 +1621,9 @@ function paperHeader(key) {
       ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
       ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
         title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
+      ${p.has_pdf ? `<button type="button" data-tool="reader" data-paper="${esc(key)}">Read & capture</button>` : ''}
+      <button type="button" data-tool="queue-paper" data-paper="${esc(key)}">Add to reading queue</button>
+      <button type="button" data-tool="history" data-paper="${esc(key)}">Edit history</button>
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
       ${noteOpen(key) ? '' : `<button type="button" data-act="edit-note" data-paper="${esc(key)}">Write a note</button>`}
       <button type="button" data-act="labels" data-paper="${esc(key)}"
@@ -1843,6 +1849,7 @@ function claimCard(row, shown, group = '') {
   }).join('');
   return `<div class="claim ${esc(row.strength)} ${row.reviewed ? '' : 'unreviewed'} ${row.id === V.selectedId ? 'sel' : ''}"
        data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}" data-group="${esc(group)}">
+    ${ResearchTools.claimCheckbox(row)}
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
@@ -1859,6 +1866,7 @@ function claimCard(row, shown, group = '') {
         <button type="button" data-act="similar" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
           data-group="${esc(group)}"
           title="Claims from other papers that use the same words">${similarOpen(row.id, group) ? 'hide alike' : 'alike'}</button>
+        <button type="button" data-tool="history" data-paper="${esc(row.paper)}" data-claim="${esc(row.id)}">history</button>
         <button type="button" data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
       </span>
     </div>
@@ -5101,6 +5109,7 @@ async function boot() {
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
       if (!editorHolds()) renderContent();
       syncAnalysisControls();
+      ResearchTools.sync();
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
 }

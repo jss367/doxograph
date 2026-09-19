@@ -1,0 +1,8 @@
+# Vendored PDF.js assets are upstream distributions, not hand-written changes.
+# Keep them out of the review file limit so application code is reviewed.
+reviews:
+  path_filters:
+    - "!doxograph/static/vendor/cmaps/**"
+    - "!doxograph/static/vendor/standard_fonts/**"
+    - "!doxograph/static/vendor/wasm/**"
+    - "!doxograph/static/vendor/*.mjs"
