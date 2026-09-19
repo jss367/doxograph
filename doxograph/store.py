@@ -403,6 +403,7 @@ def _migrate(paper: dict) -> dict:
         moves = note.startswith(LEGACY_ERROR)
         paper["error"] = note if moves else ""
         paper["notes"] = "" if moves else note
+    ensure_claim_seq(paper)
     return paper
 
 
@@ -486,15 +487,18 @@ def ensure_claim_seq(paper: dict) -> int:
     """Set and return the paper's claim high-water mark.
 
     Corpora written before `claim_seq` existed derive it from the ids they
-    already hold. Call this on the *whole* paper before filtering its claims:
+    already hold, including deleted claims retained in edit history. Call this
+    on the *whole* paper before filtering its claims:
     deriving it from a subset lets an id belonging to a filtered-out claim be
     issued again, and ids travel in flight.
     """
     seq = paper.get("claim_seq")
     if seq is None:
         used = []
-        for claim in paper.get("claims", []):
-            match = re.search(r"-c(\d+)$", claim.get("id", ""))
+        identifiers = [claim.get("id", "") for claim in paper.get("claims", [])]
+        identifiers.extend(entry.get("claim") or "" for entry in paper.get("history", []))
+        for identifier in identifiers:
+            match = re.search(r"-c(\d+)$", identifier)
             if match:
                 used.append(int(match.group(1)))
         seq = max(used, default=0)

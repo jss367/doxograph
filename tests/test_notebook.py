@@ -175,3 +175,31 @@ def test_bulk_topics_on_explicitly_selected_papers(client):
     result = client.post('/api/notebook/bulk', json={'papers':['one'], 'field':'tags', 'values':['methods']})
     assert result.status_code == 200 and result.json()['changed'] == 2
     assert all('methods' in c['tags'] for c in store.load_paper('one')['claims'])
+
+
+@pytest.mark.parametrize('retain_low_claim', [False, True])
+def test_restore_deleted_legacy_claim_does_not_overwrite_replacement(client, retain_low_claim):
+    ref = seed()
+    if retain_low_claim:
+        ref['claim'] = store.add_claim('one', {'text':'Legacy highest claim'})['id']
+    legacy = store.load_paper('one')
+    legacy.pop('claim_seq')
+    store.write_json(store.paper_path('one'), legacy)
+    store.delete_claim('one', ref['claim'])
+    replacement = store.add_claim('one', {'text':'Unrelated replacement'})
+    assert replacement['id'] != ref['claim']
+    latest = client.get('/api/notebook/history/one').json()
+    assert client.post('/api/notebook/history/one/restore', json={
+        'revision':latest['entries'][0]['id'], 'expected':latest['expected']}).status_code == 200
+    claims = {c['id']: c for c in store.load_paper('one')['claims']}
+    assert claims[replacement['id']]['text'] == 'Unrelated replacement'
+    assert ref['claim'] in claims
+
+
+def test_legacy_sequence_recovers_deleted_identifiers_from_history(client):
+    ref = seed()
+    store.delete_claim('one', ref['claim'])
+    legacy = store.load_paper('one')
+    legacy.pop('claim_seq')
+    store.write_json(store.paper_path('one'), legacy)
+    assert store.add_claim('one', {'text':'New research'})['id'] != ref['claim']
