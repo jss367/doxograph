@@ -5145,3 +5145,36 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
     asyncio.run(scenario())
     assert store.load_paper("paper-a")["notes"] == "A's note."
     assert store.load_paper("paper-b")["notes"] == ""
+
+
+@pytest.mark.browser
+def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
+    """`render` leaves the pane alone while the note editor holds it, so a
+    claim form whose save has landed would stay on screen untracked and the
+    next thing typed into it would go nowhere."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="paper-a"]').fill("Mine.")
+
+                form = page.locator('form[data-form="paper-a-c1"]')
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await form.locator('[name="text"]').fill("Corrected by hand.")
+                await form.get_by_role("button", name="Save").click()
+
+                # The form goes, the note editor stays.
+                await form.wait_for(state="detached", timeout=10000)
+                await page.locator('.claim[data-claim="paper-a-c1"]').get_by_text(
+                    "Corrected by hand.").wait_for()
+                assert await page.locator('textarea[data-note="paper-a"]').input_value() == "Mine."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."

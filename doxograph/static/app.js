@@ -3856,12 +3856,13 @@ async function saveClaim(wrap, patch) {
   try {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
     delete V.drafts[wrap.dataset.claim];
-    // `render` leaves the content alone while a synthesis editor is open, so
-    // the saved claim's form would stay on screen with nothing tracking it.
-    // The synthesis draft is in V.synthDrafts, kept current by the input
+    // `render` leaves the content alone while another editor is open — a
+    // synthesis, a note — so the saved claim's form would stay on screen with
+    // nothing tracking it, and text typed into it afterwards would be thrown
+    // away by the next redraw. Their drafts are kept current by the input
     // listener, so redrawing here loses nothing; a claim editor opened while
     // the request ran has already redrawn the form away, so leave it be.
-    if (V.synthEditing && !V.editing) renderContent();
+    if (editorHolds() && !V.editing) renderContent();
   } catch (error) {
     // Only this form was frozen during the request, so the open editor may now
     // belong to a different claim, holding text that exists only in the DOM.
