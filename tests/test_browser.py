@@ -4984,3 +4984,74 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
 
     asyncio.run(scenario())
     assert [p["key"] for p in store.all_papers()] == ["other"]
+
+
+@pytest.mark.browser
+def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_saved():
+    """The same contract the synthesis editor has: a note action redraws the
+    whole pane, so it must read the claim form first or the typing since the
+    last redraw is replaced by the older draft."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                note_field = page.locator('textarea[data-note="paper-a"]')
+                claim_field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Claim text typed before the note editor opened.")
+
+                await page.get_by_role("button", name="Write a note").click()
+                await claim_field.fill("Claim text typed while the note editor was open.")
+                await page.locator(".note").get_by_role("button", name="Cancel").click()
+                await note_field.wait_for(state="hidden")
+                assert await claim_field.input_value() == "Claim text typed while the note editor was open."
+
+                await page.get_by_role("button", name="Write a note").click()
+                await note_field.fill("A note of my own.")
+                await claim_field.fill("Claim text typed before the note was saved.")
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await note_field.wait_for(state="hidden")
+                await page.locator(".paperhead .note").get_by_text("A note of my own.").wait_for()
+                assert await claim_field.input_value() == "Claim text typed before the note was saved."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["notes"] == "A note of my own."
+    # The claim itself was never saved: its editor was reopened, not submitted.
+    assert store.load_paper("paper-a")["claims"][0]["text"] == "A claim from Paper A."
+
+
+@pytest.mark.browser
+def test_the_background_poll_leaves_a_note_being_written_alone():
+    """The poll in `boot` redraws the content pane on its own schedule. A
+    corpus changed from outside must not take the textarea away mid-sentence."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                field = page.locator('textarea[data-note="paper-a"]')
+                await field.fill("Half a sentence")
+                await field.focus()
+
+                # Another process adds a paper to the same corpus. The poll
+                # picks it up — the sidebar entry appearing is the proof that
+                # it redrew — and the note editor holds the content pane.
+                _paper("paper-b", "Paper B", "recovery")
+                await page.locator('#papers [data-paper="paper-b"]').wait_for(timeout=10000)
+
+                assert await field.input_value() == "Half a sentence"
+                assert await field.evaluate("el => el === document.activeElement")
+            await browser.close()
+
+    asyncio.run(scenario())

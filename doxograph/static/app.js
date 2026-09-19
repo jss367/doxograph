@@ -1362,11 +1362,18 @@ function render() {
   renderResearchNav();
   renderGraphNav();
   renderTags();
-  // The research form is an editor too: a poll must not redraw it under the
-  // cursor. Nor must it redraw a note being written in the paper's header.
-  if (!V.editing && !V.synthEditing && !V.noteEditing && V.view !== 'research') renderContent();
+  if (!editorHolds()) renderContent();
   renderJobs();
   syncAnalysisControls();
+}
+
+// Whether something is being typed into the content pane. A poll redrawing it
+// would rebuild the form under the cursor and drop focus, so every background
+// path asks this — one function rather than a condition written out at each
+// of them, which is how the poll in `boot` came to know about one editor
+// fewer than `render` did.
+function editorHolds() {
+  return Boolean(V.editing || V.synthEditing || V.noteEditing) || V.view === 'research';
 }
 
 // `renderAll` is for a view change the user asked for. The draft is captured
@@ -1630,6 +1637,9 @@ function parkNoteEditor() {
 }
 
 function cancelNoteEdit() {
+  // A claim editor open alongside holds its text in the DOM until it is read,
+  // and the redraw below rebuilds it from the draft on file.
+  captureOpenEditor();
   if (V.noteEditing) delete V.noteDrafts[V.noteEditing];   // discard only this paper's draft
   V.noteEditing = null;
   renderContent();
@@ -1644,6 +1654,7 @@ async function saveNote(key) {
   const field = document.querySelector(`textarea[data-note="${CSS.escape(key)}"]`);
   const text = field ? field.value : (V.noteDrafts[key] || '');
   V.error = null;
+  captureOpenEditor();        // as on cancel: a claim editor's text is only in the DOM
   V.noteDrafts[key] = text;   // the redraw draws the editor from the draft
   V.noteSaving = key;
   renderContent();
@@ -4912,7 +4923,7 @@ async function boot() {
       if (citationsFailed && V.view === 'graph') loadCitations();
       renderStats();
       renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
-      if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
+      if (!editorHolds()) renderContent();
       syncAnalysisControls();
     } catch (e) { /* the server may be restarting; try again next tick */ }
   }, 2500);
