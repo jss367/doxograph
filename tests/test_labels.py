@@ -248,3 +248,39 @@ def test_taking_the_filtered_label_off_the_open_paper_clears_the_filter():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_citation_opens_a_paper_the_label_filter_excludes():
+    # The tensions view is not narrowed by the label filter, so a citation in
+    # it can land on a paper the filter leaves out. Arriving at an empty paper
+    # would be the filter outliving the instruction that replaced it.
+    from test_browser import _paper as _browser_paper, _server
+    from playwright.async_api import async_playwright
+
+    _browser_paper("open2026model", "An Open Model", "recovery", year=2026)
+    _browser_paper("shut2026model", "A Shut Model", "recovery", year=2025)
+    store.set_labels("open2026model", ["open-source"])
+    store.record_tensions(
+        "recovery",
+        [{"claims": ["open2026model-c1", "shut2026model-c1"],
+          "kind": "contradiction", "note": "They disagree."}],
+        {r["id"]: r for r in store.claim_rows()},
+    )
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}#view=tensions&label=open-source")
+                cite = page.locator('[data-act="open-paper"][data-paper="shut2026model"]').first
+                await cite.click()
+
+                await page.locator('.paperhead h2', has_text="A Shut Model").wait_for()
+                assert await page.locator('.claim').count() == 1
+                assert "label=" not in page.url
+
+            await browser.close()
+
+    asyncio.run(scenario())

@@ -786,10 +786,9 @@ function dropMissingFilters() {
   // A paper on screen and a label filter that excludes it: the header would
   // stand there with every one of its claims filtered away. It happens when
   // the label is taken off the paper being read — here or in another window —
-  // and from a hand-written address naming both. The paper wins, as it does
-  // when the map opens one the filter excludes.
-  const open = V.paper && S.papers.find((paper) => paper.key === V.paper);
-  if (V.label && open && !(open.labels || []).includes(V.label)) V.label = null;
+  // and from a hand-written address naming both. The paper wins, as it does on
+  // every other path that opens one.
+  keepLabelFor(V.paper);
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -1328,6 +1327,16 @@ function matchingPapers() {
     .filter((row) => matches(haystack(row)))
     .map((row) => row.paper));
   return within.filter((p) => owners.has(p.key) || matches(paperHaystack(p)));
+}
+
+// A destination the label filter excludes arrives empty: a paper's header
+// with nothing under it, or a citation that selects some other card instead of
+// the one that was clicked. Every path that opens a paper drops the filter
+// when the paper it lands on does not carry the label, and keeps it when it
+// does — the filter says which papers are in view, and this one now is.
+function keepLabelFor(key) {
+  const paper = key && S.papers.find((p) => p.key === key);
+  if (V.label && paper && !(paper.labels || []).includes(V.label)) V.label = null;
 }
 
 // The keys the label filter allows, or null when no label is chosen. A label
@@ -3033,11 +3042,10 @@ function graphOpenPaper(key) {
   captureOpenEditor();
   closeEditorsNotBelongingTo(key);
   showView('claims');
-  // Both filters go, not just the topic: the map leaves the papers a filter
-  // excludes on screen and clickable, so this is the one place a paper is
-  // opened that the filter in force would empty. Opening it is the newer
-  // instruction of the two.
-  V.paper = key; V.tag = null; V.label = null; V.selectedId = null;
+  // The map leaves the papers a filter excludes on screen and clickable, so
+  // the label has to give way here for a dimmed one to open onto anything.
+  keepLabelFor(key);
+  V.paper = key; V.tag = null; V.selectedId = null;
   syncHash(true);   // leaving the map is navigation: Back returns to it
   renderAll();
 }
@@ -3930,6 +3938,10 @@ $('content').addEventListener('click', async (event) => {
       captureOpenEditor();
       closeEditorsNotBelongingTo(paper);
       showView('claims');
+      // A citation opens a paper from the tensions, agreements and synthesis
+      // views, none of which the label filter narrows, so the paper it lands
+      // on may be one the filter excludes.
+      keepLabelFor(paper);
       V.paper = paper; V.tag = null; V.selectedId = null;
       syncHash(true);
       renderAll();
@@ -4089,6 +4101,7 @@ $('content').addEventListener('click', async (event) => {
       if (row && !visibleClaims().some((c) => c.id === claim)) {
         if (V.paper && row.paper !== V.paper) V.paper = null;
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
+        keepLabelFor(row.paper);
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
         if (V.unverified && row.quote_verified !== false) { V.unverified = false; $('only-unverified').checked = false; }
