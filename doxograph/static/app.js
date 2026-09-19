@@ -3862,7 +3862,10 @@ async function saveClaim(wrap, patch) {
     // away by the next redraw. Their drafts are kept current by the input
     // listener, so redrawing here loses nothing; a claim editor opened while
     // the request ran has already redrawn the form away, so leave it be.
-    if (editorHolds() && !V.editing) renderContent();
+    // In the claims view alone: that is where the saved form is, and
+    // `editorHolds` is true for the research form too, which has its own
+    // save to finish and must not be rebuilt — enabled — from under it.
+    if (V.view === 'claims' && editorHolds() && !V.editing) renderContent();
   } catch (error) {
     // Only this form was frozen during the request, so the open editor may now
     // belong to a different claim, holding text that exists only in the DOM.

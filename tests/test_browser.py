@@ -5178,3 +5178,50 @@ def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
 
     asyncio.run(scenario())
     assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."
+
+
+@pytest.mark.browser
+def test_a_claim_save_landing_late_leaves_the_research_form_alone():
+    """A claim PATCH is slow enough to walk to What I am studying and start
+    typing. The saved claim's form is not on that page, and the research form
+    has its own save to finish, so the answer must not redraw it."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            in_flight = asyncio.Event()
+            release = asyncio.Event()
+
+            async def hold_claim_patch(route, request):
+                if request.method == "PATCH":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route("**/api/papers/paper-a/claims/*", hold_claim_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                form = page.locator('form[data-form="paper-a-c1"]')
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await form.locator('[name="text"]').fill("Corrected by hand.")
+                await form.get_by_role("button", name="Save").click()
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                await page.locator('#research-nav [data-view="research"]').click()
+                context = page.locator("#research-context")
+                await context.fill("What I am studying, typed while the claim saved.")
+                await context.focus()
+                await context.evaluate("el => el.setSelectionRange(7, 7)")
+
+                release.set()
+                await page.wait_for_timeout(1500)
+                assert await context.input_value() == "What I am studying, typed while the claim saved."
+                assert await context.evaluate("el => el === document.activeElement")
+                assert await context.evaluate("el => el.selectionStart") == 7
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."
