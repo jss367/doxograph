@@ -3846,6 +3846,12 @@ async function removePaper(paper) {
       if (V.editing === NEW_CLAIM_ID) V.editing = null;
     }
     delete V.failedNewClaims[paper];
+    // The note draft goes the same way as the claim drafts. The key is retired
+    // for good, so a draft kept under it can never be reopened or cancelled —
+    // and every entry in `noteDrafts` counts as an unsaved edit, so one left
+    // behind would ask about discarding it on every later workspace switch.
+    if (V.noteEditing === paper) V.noteEditing = null;
+    delete V.noteDrafts[paper];
     // Removing a paper from the list while reading another one keeps that one
     // open; only a paper that was itself on screen falls back to "All papers".
     if (V.paper === paper) V.paper = null;

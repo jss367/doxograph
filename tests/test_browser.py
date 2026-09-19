@@ -4945,3 +4945,42 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
 
     asyncio.run(scenario())
     assert store.all_papers() == []
+
+
+@pytest.mark.browser
+def test_removing_a_paper_takes_its_note_draft_with_it():
+    """A retired key can never be opened again, so a note draft left under one
+    could be neither resumed nor cancelled — and every draft counts as an
+    unsaved edit, so it would ask about discarding on every workspace switch
+    from then on."""
+    from doxograph import config
+
+    _paper("shared", "Shared paper", "recovery")
+    _paper("other", "Other paper", "recovery")
+    animal = config.create_workspace("Animal locomotion")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="shared"]').fill("Typed and then removed.")
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+
+                assert await page.evaluate("Object.keys(V.noteDrafts).length") == 0
+                # And the switch goes through without asking about an edit
+                # nothing can reopen.
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await page.wait_for_function(
+                    "typeof S !== 'undefined' && S.workspace && S.papers.length === 0")
+                assert await page.locator("#ask").is_hidden()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [p["key"] for p in store.all_papers()] == ["other"]
