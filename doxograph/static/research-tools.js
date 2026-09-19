@@ -389,8 +389,9 @@ const ResearchTools = (() => {
     if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper,data.claim); return; }
     if (name === 'restore') {
       if (!await confirmDialog('Restore this earlier version? The current version will remain in history.',{ok:'Restore version'})) return;
-      await request(`/history/${encodeURIComponent(historyPaper)}/restore`,'POST',{revision:data.revision,expected:historyData.expected});
-      await refreshAll(); await showHistory(historyPaper,historyClaim); message('Version restored.'); return;
+      const restored = await request(`/history/${encodeURIComponent(historyPaper)}/restore`,'POST',{revision:data.revision,expected:historyData.expected});
+      await refreshAll(); await showHistory(historyPaper,historyClaim);
+      message(restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
     if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page); return; }
     if (['previous-page','next-page','go-page'].includes(name)) {

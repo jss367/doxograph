@@ -203,3 +203,33 @@ def test_legacy_sequence_recovers_deleted_identifiers_from_history(client):
     legacy.pop('claim_seq')
     store.write_json(store.paper_path('one'), legacy)
     assert store.add_claim('one', {'text':'New research'})['id'] != ref['claim']
+
+
+@pytest.mark.parametrize('change', ['rename', 'delete'])
+def test_restore_omits_obsolete_topics_and_reports_them(client, change):
+    ref = seed()
+    store.add_tag('testing')
+    store.add_tag('methods')
+    store.update_claim('one', ref['claim'], {'tags':['testing', 'methods']})
+    if change == 'rename':
+        store.rename_tag('testing', 'renamed')
+    else:
+        store.delete_tag('testing')
+    state = client.get('/api/notebook/history/one').json()
+    response = client.post('/api/notebook/history/one/restore', json={
+        'revision':state['entries'][0]['id'], 'expected':state['expected']})
+    assert response.status_code == 200
+    assert response.json()['omitted_topics'] == ['testing']
+    assert store.load_paper('one')['claims'][0]['tags'] == ['methods']
+    assert 'testing' not in store.tag_counts(store.claim_rows())
+
+
+def test_restore_keeps_valid_historical_topics(client):
+    ref = seed()
+    store.add_tag('testing')
+    store.update_claim('one', ref['claim'], {'tags':[]})
+    state = client.get('/api/notebook/history/one').json()
+    response = client.post('/api/notebook/history/one/restore', json={
+        'revision':state['entries'][0]['id'], 'expected':state['expected']})
+    assert response.json()['omitted_topics'] == []
+    assert store.load_paper('one')['claims'][0]['tags'] == ['testing']

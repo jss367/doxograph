@@ -249,7 +249,8 @@ class Restore(Model):
 
 @router.post("/history/{key}/restore")
 def restore(key: str, body: Restore) -> dict:
-    with store.paper_lock(key):
+    # Vocabulary precedes the paper lock, as it does during topic renames.
+    with store.vocab_lock(), store.paper_lock(key):
         try:
             paper = store.load_paper(key)
             entry = next(e for e in paper.get("history", []) if e["id"] == body.revision)
@@ -257,6 +258,7 @@ def restore(key: str, body: Restore) -> dict:
             raise HTTPException(404, "History entry no longer exists")
         if fingerprint(paper) != body.expected:
             raise HTTPException(409, "This paper changed. Reopen history before restoring.")
+        omitted_topics = []
         if entry["claim"] is None:
             paper["notes"] = entry["fields"]["notes"]
         else:
@@ -264,12 +266,16 @@ def restore(key: str, body: Restore) -> dict:
             if claim is None:
                 claim = {"id": entry["claim"]}
                 paper.setdefault("claims", []).append(claim)
-            claim.update(copy.deepcopy(entry["fields"]))
+            fields = copy.deepcopy(entry["fields"])
+            vocabulary = {tag["name"] for tag in store.load_tags()}
+            omitted_topics = sorted(set(fields.get("tags", [])) - vocabulary)
+            fields["tags"] = sorted(set(fields.get("tags", [])) & vocabulary)
+            claim.update(fields)
             store.check_quote(key, claim)
             claim["updated"] = store.now()
             store.refresh_status(paper)
         store.save_paper(paper)
-        return {"restored": entry["id"]}
+        return {"restored": entry["id"], "omitted_topics": omitted_topics}
 
 
 class Selection(Model):
