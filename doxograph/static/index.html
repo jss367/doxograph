@@ -6,6 +6,7 @@
 <title>Doxograph</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/research-tools.css">
 </head>
 <body>
 <header>
@@ -110,6 +111,13 @@
     </div>
     <p class="warn" id="ref-warn" hidden></p>
 
+    <div class="sec research-tools-nav">
+      <h2>Your research tools</h2>
+      <button type="button" data-tool="boards">Evidence boards</button>
+      <button type="button" data-tool="reading">Reading queue</button>
+      <button type="button" data-tool="searches">Saved searches</button>
+      <button type="button" data-tool="connections">Claim connections</button>
+    </div>
     <div class="sec">
       <div class="sechead">
         <h2>Papers</h2>
@@ -176,6 +184,13 @@
       <label title="Claims whose quote was not found in the PDF text"><input type="checkbox" id="only-unverified"> quote not found</label>
       <label><input type="checkbox" id="group-by-tag" checked> group by topic</label>
     </div>
+    <div id="selection-tools" class="selection-tools">
+      <span id="selection-count">Select claims or papers to work with them</span>
+      <button type="button" data-tool="select-visible">Select visible claims</button>
+      <button type="button" data-tool="compare">Compare & organize</button>
+      <button type="button" data-tool="save-search">Save this search</button>
+      <button type="button" data-tool="clear-selection">Clear selection</button>
+    </div>
     <div id="content"></div>
   </section>
 </div>
@@ -214,6 +229,14 @@
   </form>
 </dialog>
 
+<dialog id="research-tools" class="research-sheet" aria-labelledby="research-tools-title">
+  <div class="sheet-head"><h2 id="research-tools-title">Research tools</h2>
+    <button type="button" data-tool="close" aria-label="Close research tools">×</button></div>
+  <nav id="research-tabs" aria-label="Research tools"></nav>
+  <p id="research-message" role="status"></p>
+  <div id="research-body"></div>
+</dialog>
+<script src="/research-tools.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

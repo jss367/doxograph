@@ -407,8 +407,17 @@ def _migrate(paper: dict) -> dict:
 
 
 def save_paper(paper: dict) -> None:
-    paper["updated"] = now()
-    write_json(paper_path(paper["key"]), paper)
+    from .notebook import record_history
+
+    with paper_lock(paper["key"]):
+        try:
+            previous = load_paper(paper["key"])
+        except KeyError:
+            previous = None
+        if previous is not None:
+            record_history(previous, paper)
+        paper["updated"] = now()
+        write_json(paper_path(paper["key"]), paper)
 
 
 def paper_keys() -> list[str]:
@@ -912,7 +921,7 @@ def corpus_signature() -> str:
         except FileNotFoundError:
             pass
     for path in (config.tags_path(), config.ledger_path(), tensions_path(), syntheses_path(),
-                 agreements_path(), context_path()):
+                 agreements_path(), context_path(), config.data_dir() / "notebook.json"):
         try:
             st = path.stat()
             parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino))

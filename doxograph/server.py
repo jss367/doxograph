@@ -15,13 +15,16 @@ from urllib.parse import parse_qs, urlsplit
 from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
+from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import __version__, bib, cites, config, export, extract, ingest, pairs, search, store
+from . import __version__, bib, cites, config, export, extract, ingest, pairs, search, store, notebook
 
 STATIC = Path(__file__).parent / "static"
 
 app = FastAPI(title="Doxograph")
+app.include_router(notebook.router)
+app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
 
 _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
 _jobs: dict[int, dict] = {}
@@ -749,6 +752,16 @@ def app_js() -> PlainTextResponse:
     )
 
 
+@app.get("/research-tools.js")
+def research_tools_js() -> FileResponse:
+    return FileResponse(STATIC / "research-tools.js", media_type="text/javascript")
+
+
+@app.get("/research-tools.css")
+def research_tools_css() -> FileResponse:
+    return FileResponse(STATIC / "research-tools.css", media_type="text/css")
+
+
 @app.get("/favicon.png")
 def favicon() -> FileResponse:
     return FileResponse(STATIC / "favicon.png", media_type="image/png")
@@ -801,6 +814,7 @@ def _build_state() -> dict:
     rows = store.claim_rows(papers)
     return {
         "workspace": config.get_workspace(),
+        "notebook": notebook.load(),
         "papers": [store.summarize(p) for p in papers],
         "claims": rows,
         "tags": store.load_tags(),

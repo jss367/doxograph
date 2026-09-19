@@ -351,7 +351,7 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.get_by_role("button", name="Add claim by hand").click()
                 await page.locator('form[data-form="__new__"] textarea[name="text"]').fill(draft_text)
-                await page.get_by_role("button", name="Save").click()
+                await page.get_by_role("button", name="Save", exact=True).click()
                 await asyncio.wait_for(request_started.wait(), timeout=5)
 
                 await page.locator('#papers [data-paper="paper-b"]').click()
@@ -624,10 +624,10 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
                 await synth.get_by_role("button", name="edit").click()
                 field = page.locator('textarea[data-synth="recovery"]')
                 await field.fill("Corrected [paper-a-c1].")
-                await page.get_by_role("button", name="Save").click()
+                await page.get_by_role("button", name="Save", exact=True).click()
                 await page.locator('textarea[data-synth="recovery"]:disabled').wait_for()
                 assert await page.get_by_role("button", name="Cancel").is_disabled()
-                assert await page.get_by_role("button", name="Save").is_disabled()
+                assert await page.get_by_role("button", name="Save", exact=True).is_disabled()
                 release_save.set()
                 synth = page.locator('.synth[data-topic="recovery"]')
                 await synth.get_by_text("written by hand", exact=False).wait_for()
@@ -3006,10 +3006,10 @@ def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
                 # Correcting the quote by hand makes the passage describe a
                 # claim that no longer exists, so it goes rather than offering
                 # to write the old suggestion back over the new quote.
-                await page.get_by_role("button", name="edit").click()
+                await page.get_by_role("button", name="edit", exact=True).click()
                 await page.locator('textarea[name="quote"]').fill(
                     "Recovery under steering is a path-dependent outcome across all scales.")
-                await page.get_by_role("button", name="Save").click()
+                await page.get_by_role("button", name="Save", exact=True).click()
                 await page.locator(".claim .qflag").wait_for(state="detached")
                 assert await page.locator(".qctx").count() == 0
 
@@ -4836,7 +4836,7 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
                 await page.get_by_role("button", name="Write a note").click()
                 assert await field.input_value() == "Read this one for the method."
 
-                await page.get_by_role("button", name="Save").click()
+                await page.get_by_role("button", name="Save", exact=True).click()
                 await field.wait_for(state="hidden")
                 await page.locator(".paperhead .note").get_by_text(
                     "Read this one for the method.").wait_for()

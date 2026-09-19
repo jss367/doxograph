@@ -31,7 +31,7 @@ doxograph = "doxograph.__main__:main"
 packages = ["doxograph"]
 
 [tool.setuptools.package-data]
-doxograph = ["static/*"]
+doxograph = ["static/*", "static/vendor/*", "static/vendor/cmaps/*", "static/vendor/standard_fonts/*", "static/vendor/wasm/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["tests"]
