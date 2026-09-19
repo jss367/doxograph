@@ -39,7 +39,7 @@ def test_add_returns_zero_when_the_reference_lands(monkeypatch):
 def test_add_reports_a_paper_that_arrived_without_its_pdf(monkeypatch, capsys):
     def land_without_pdf(ref, client=None):
         paper = store.new_paper("doe2026study")
-        paper["notes"] = "PDF download failed: 503"
+        paper["error"] = "PDF download failed: 503"
         store.save_paper(paper)
         return "doe2026study", True
 

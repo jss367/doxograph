@@ -4807,3 +4807,421 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
 
     asyncio.run(scenario())
     assert store.all_papers() == []
+
+
+@pytest.mark.browser
+def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                field = page.locator('textarea[data-note="paper-a"]')
+                await page.click('#papers [data-paper="paper-a"]')
+                await page.get_by_role("button", name="Write a note").click()
+                await field.fill("Read this one for the method.")
+
+                # Leaving the paper takes the header with it, so the editor is
+                # parked rather than left pointing at a textarea nobody can see.
+                await page.click('#papers [data-paper="paper-b"]')
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
+                assert await page.locator("textarea[data-note]").count() == 0
+
+                # Coming back offers the draft again rather than a blank box.
+                await page.click('#papers [data-paper="paper-a"]')
+                await page.get_by_role("button", name="Write a note").click()
+                assert await field.input_value() == "Read this one for the method."
+
+                await page.get_by_role("button", name="Save").click()
+                await field.wait_for(state="hidden")
+                await page.locator(".paperhead .note").get_by_text(
+                    "Read this one for the method.").wait_for()
+                # With a note on file the header offers to edit it instead.
+                assert await page.get_by_role("button", name="Write a note").count() == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["notes"] == "Read this one for the method."
+    assert store.load_paper("paper-b")["notes"] == ""
+
+
+@pytest.mark.browser
+def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    noted = store.load_paper("paper-a")
+    noted["notes"] = "Read this one for the method."
+    store.save_paper(noted)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await page.locator('form[data-form="paper-a-c1"] textarea[name="note"]').fill(
+                    "Overstated: the appendix contradicts this.")
+                await page.locator('form[data-form="paper-a-c1"]').get_by_role(
+                    "button", name="Save").click()
+                await page.locator('.claim[data-claim="paper-a-c1"] .note').get_by_text(
+                    "Overstated: the appendix contradicts this.").wait_for()
+
+                # A word only the reader wrote still finds the claim, and the
+                # paper list narrows with it.
+                await page.fill("#q", "appendix")
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="detached")
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                await page.locator('#papers [data-paper="paper-b"]').wait_for(state="detached")
+
+                # A word from a paper's own note lists the paper and its
+                # claims with it: a paper in the sidebar that is empty when
+                # opened is worse than one that is not listed at all.
+                await page.fill("#q", "method")
+                await page.locator('#papers [data-paper="paper-a"]').wait_for()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                await page.click('#papers [data-paper="paper-a"]')
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["claims"][0]["note"] == (
+        "Overstated: the appendix contradicts this.")
+
+
+@pytest.mark.browser
+def test_a_note_is_refused_while_the_paper_is_being_removed():
+    """The header stands until the removal comes back, so its buttons are
+    still clickable. A note saved into that window would be reported saved
+    and then thrown away with the paper."""
+    _paper("shared", "Shared paper", "recovery")
+
+    async def scenario():
+        in_flight = asyncio.Event()
+        release = asyncio.Event()
+        wrote = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_delete_record_patch(route, request):
+                if request.method == "DELETE":
+                    in_flight.set()
+                    await release.wait()
+                if request.method == "PATCH":
+                    wrote.append(request.url)
+                await route.continue_()
+
+            await page.route("**/api/papers/shared", hold_delete_record_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="shared"]').fill("Typed while it was going.")
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await page.locator("#toasts .toast", has_text="the note would go with it").wait_for()
+
+                # And the box is not offered again either.
+                await page.locator(".note").get_by_role("button", name="Cancel").click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator("#toasts .toast", has_text="a note would go with it").wait_for()
+                assert await page.locator("textarea[data-note]").count() == 0
+
+                release.set()
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+            await browser.close()
+
+        assert wrote == []
+
+    asyncio.run(scenario())
+    assert store.all_papers() == []
+
+
+@pytest.mark.browser
+def test_removing_a_paper_takes_its_note_draft_with_it():
+    """A retired key can never be opened again, so a note draft left under one
+    could be neither resumed nor cancelled — and every draft counts as an
+    unsaved edit, so it would ask about discarding on every workspace switch
+    from then on."""
+    from doxograph import config
+
+    _paper("shared", "Shared paper", "recovery")
+    _paper("other", "Other paper", "recovery")
+    animal = config.create_workspace("Animal locomotion")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="shared"]').fill("Typed and then removed.")
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+
+                assert await page.evaluate("Object.keys(V.noteDrafts).length") == 0
+                # And the switch goes through without asking about an edit
+                # nothing can reopen.
+                await page.locator("#workspace").select_option(label="Animal locomotion")
+                await page.wait_for_function(
+                    "typeof S !== 'undefined' && S.workspace && S.papers.length === 0")
+                assert await page.locator("#ask").is_hidden()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert [p["key"] for p in store.all_papers()] == ["other"]
+
+
+@pytest.mark.browser
+def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_saved():
+    """The same contract the synthesis editor has: a note action redraws the
+    whole pane, so it must read the claim form first or the typing since the
+    last redraw is replaced by the older draft."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                note_field = page.locator('textarea[data-note="paper-a"]')
+                claim_field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Claim text typed before the note editor opened.")
+
+                await page.get_by_role("button", name="Write a note").click()
+                await claim_field.fill("Claim text typed while the note editor was open.")
+                await page.locator(".note").get_by_role("button", name="Cancel").click()
+                await note_field.wait_for(state="hidden")
+                assert await claim_field.input_value() == "Claim text typed while the note editor was open."
+
+                await page.get_by_role("button", name="Write a note").click()
+                await note_field.fill("A note of my own.")
+                await claim_field.fill("Claim text typed before the note was saved.")
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await note_field.wait_for(state="hidden")
+                await page.locator(".paperhead .note").get_by_text("A note of my own.").wait_for()
+                assert await claim_field.input_value() == "Claim text typed before the note was saved."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["notes"] == "A note of my own."
+    # The claim itself was never saved: its editor was reopened, not submitted.
+    assert store.load_paper("paper-a")["claims"][0]["text"] == "A claim from Paper A."
+
+
+@pytest.mark.browser
+def test_the_background_poll_leaves_a_note_being_written_alone():
+    """The poll in `boot` redraws the content pane on its own schedule. A
+    corpus changed from outside must not take the textarea away mid-sentence."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                field = page.locator('textarea[data-note="paper-a"]')
+                await field.fill("Half a sentence")
+                await field.focus()
+
+                # Another process adds a paper to the same corpus. The poll
+                # picks it up — the sidebar entry appearing is the proof that
+                # it redrew — and the note editor holds the content pane.
+                _paper("paper-b", "Paper B", "recovery")
+                await page.locator('#papers [data-paper="paper-b"]').wait_for(timeout=10000)
+
+                assert await field.input_value() == "Half a sentence"
+                assert await field.evaluate("el => el === document.activeElement")
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
+    """A search started before the note was opened redraws the pane when it
+    comes back. The text is drawn from the draft, so it survives; the cursor
+    has to be put back or the next keystroke goes nowhere."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            held = asyncio.Event()
+
+            async def hold_search(route, request):
+                await held.wait()
+                await route.continue_()
+
+            await page.route("**/api/search*", hold_search)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                # Asked for first, and still in flight while the note opens.
+                await page.fill("#q", "recovery")
+                await page.get_by_role("button", name="Write a note").click()
+                field = page.locator('textarea[data-note="paper-a"]')
+                await field.fill("Half a sentence")
+                await field.focus()
+                await field.evaluate("el => el.setSelectionRange(4, 4)")
+
+                held.set()
+                await page.locator(".pdfhits").wait_for(timeout=10000)
+
+                assert await field.input_value() == "Half a sentence"
+                assert await field.evaluate("el => el === document.activeElement")
+                assert await field.evaluate("el => el.selectionStart") == 4
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
+    """A slow save must not close the note the reader moved on to write."""
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            in_flight = asyncio.Event()
+            release = asyncio.Event()
+
+            async def hold_a(route, request):
+                if request.method == "PATCH":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route("**/api/papers/paper-a", hold_a)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="paper-a"]').fill("A's note.")
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                # Move to B and start a note there while A's save is held.
+                await page.click('#papers [data-paper="paper-b"]')
+                await page.get_by_role("button", name="Write a note").click()
+                field_b = page.locator('textarea[data-note="paper-b"]')
+                await field_b.fill("B's note, still being written.")
+
+                # B's Save is drawn enabled, and says why it will not run.
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await page.locator("#toasts .toast",
+                                   has_text="Wait for the note being saved").wait_for()
+
+                release.set()
+                # A's answer lands: B's editor is still open on B's text.
+                await page.wait_for_timeout(1500)
+                assert await field_b.input_value() == "B's note, still being written."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["notes"] == "A's note."
+    assert store.load_paper("paper-b")["notes"] == ""
+
+
+@pytest.mark.browser
+def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
+    """`render` leaves the pane alone while the note editor holds it, so a
+    claim form whose save has landed would stay on screen untracked and the
+    next thing typed into it would go nowhere."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="paper-a"]').fill("Mine.")
+
+                form = page.locator('form[data-form="paper-a-c1"]')
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await form.locator('[name="text"]').fill("Corrected by hand.")
+                await form.get_by_role("button", name="Save").click()
+
+                # The form goes, the note editor stays.
+                await form.wait_for(state="detached", timeout=10000)
+                await page.locator('.claim[data-claim="paper-a-c1"]').get_by_text(
+                    "Corrected by hand.").wait_for()
+                assert await page.locator('textarea[data-note="paper-a"]').input_value() == "Mine."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."
+
+
+@pytest.mark.browser
+def test_a_claim_save_landing_late_leaves_the_research_form_alone():
+    """A claim PATCH is slow enough to walk to What I am studying and start
+    typing. The saved claim's form is not on that page, and the research form
+    has its own save to finish, so the answer must not redraw it."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            in_flight = asyncio.Event()
+            release = asyncio.Event()
+
+            async def hold_claim_patch(route, request):
+                if request.method == "PATCH":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route("**/api/papers/paper-a/claims/*", hold_claim_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                form = page.locator('form[data-form="paper-a-c1"]')
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await form.locator('[name="text"]').fill("Corrected by hand.")
+                await form.get_by_role("button", name="Save").click()
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                await page.locator('#research-nav [data-view="research"]').click()
+                context = page.locator("#research-context")
+                await context.fill("What I am studying, typed while the claim saved.")
+                await context.focus()
+                await context.evaluate("el => el.setSelectionRange(7, 7)")
+
+                release.set()
+                await page.wait_for_timeout(1500)
+                assert await context.input_value() == "What I am studying, typed while the claim saved."
+                assert await context.evaluate("el => el === document.activeElement")
+                assert await context.evaluate("el => el.selectionStart") == 7
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."

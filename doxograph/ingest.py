@@ -29,7 +29,7 @@ class PaperRemoved(RuntimeError):
 
     Publication returns False in that case. Reporting success anyway would mark
     a job done for a paper that no longer exists, and the CLI would then crash
-    trying to read its notes.
+    trying to read why it has no PDF.
     """
 
 
@@ -600,7 +600,7 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
                             raise PaperRemoved(
                                 f"{existing} was removed while its PDF was being recovered"
                             ) from None
-                        paper["notes"] = ""
+                        paper["error"] = ""
                         store.save_paper(paper)
             return existing, False
 
@@ -614,20 +614,20 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]), **meta)
 
         pdf_url = (meta.get("source") or {}).get("pdf_url")
-        notes = ""
+        failure = ""
         if pdf_url:
             try:
                 if not download_pdf(pdf_url, key, client):
                     raise PaperRemoved(f"{key} was removed while its PDF was being fetched")
             except (httpx.HTTPError, ValueError) as exc:
-                notes = f"PDF download failed: {exc}"
-        if notes:
+                failure = f"PDF download failed: {exc}"
+        if failure:
             with store.paper_lock(key):
                 try:
                     paper = store.load_paper(key)
                 except KeyError:
                     raise PaperRemoved(f"{key} was removed while it was being added") from None
-                paper["notes"] = notes
+                paper["error"] = failure
                 store.save_paper(paper)
         return key, True
     finally:

@@ -69,3 +69,27 @@ def test_replace_reviewed_discards_them():
 
     paper = extract.merge_extraction("doe2026recovery", dict(PAYLOAD), keep_reviewed=False)
     assert [c["text"] for c in paper["claims"]] == [PAYLOAD["claims"][0]["text"]]
+
+
+def test_a_claim_with_a_note_survives_a_re_read():
+    """A note is the one thing on a claim a re-read cannot write again, so it
+    is kept even under `--replace-reviewed`, which asks for review decisions
+    to be thrown away rather than for the reader's writing to be."""
+    setup_paper()
+    extract.merge_extraction("doe2026recovery", dict(PAYLOAD))
+    key = store.load_paper("doe2026recovery")["claims"][0]["id"]
+    store.update_claim("doe2026recovery", key, {"note": "Check the appendix; 46% is the best case."})
+
+    paper = extract.merge_extraction("doe2026recovery", dict(PAYLOAD), keep_reviewed=False)
+    kept = [c for c in paper["claims"] if c["id"] == key]
+    assert kept and kept[0]["note"] == "Check the appendix; 46% is the best case."
+
+
+def test_a_blank_note_does_not_keep_a_claim():
+    setup_paper()
+    extract.merge_extraction("doe2026recovery", dict(PAYLOAD))
+    key = store.load_paper("doe2026recovery")["claims"][0]["id"]
+    store.update_claim("doe2026recovery", key, {"note": "   "})
+
+    paper = extract.merge_extraction("doe2026recovery", dict(PAYLOAD), keep_reviewed=False)
+    assert [c["id"] for c in paper["claims"]] != [key]

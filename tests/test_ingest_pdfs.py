@@ -201,12 +201,12 @@ def test_re_adding_a_paper_recovers_a_missing_pdf(monkeypatch):
     key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
     assert created
     assert not store.pdf_path(key).exists()
-    assert "PDF download failed" in store.load_paper(key)["notes"]
+    assert "PDF download failed" in store.load_paper(key)["error"]
 
     again, created_again = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
     assert (again, created_again) == (key, False)
     assert store.pdf_path(key).read_bytes() == b"%PDF-1.4\nrecovered"
-    assert store.load_paper(key)["notes"] == ""
+    assert store.load_paper(key)["error"] == ""
     assert len(store.paper_keys()) == 1
 
 
@@ -479,7 +479,7 @@ def test_add_reports_a_paper_removed_mid_ingest_without_crashing(monkeypatch, ca
 def recovery_corpus(monkeypatch):
     """An existing paper with no PDF and a recorded download failure."""
     store.save_paper(store.new_paper(
-        "doe2026study", title="A Study", notes="PDF download failed: 503",
+        "doe2026study", title="A Study", error="PDF download failed: 503",
         source={"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
     ))
     meta = {
@@ -500,7 +500,7 @@ def test_recovery_keeps_the_note_when_the_retry_fails(monkeypatch):
     monkeypatch.setattr(ingest, "download_pdf", still_down)
     key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
     assert (key, created) == ("doe2026study", False)
-    assert store.load_paper("doe2026study")["notes"] == "PDF download failed: 503"
+    assert store.load_paper("doe2026study")["error"] == "PDF download failed: 503"
 
 
 def test_recovery_reports_a_paper_removed_mid_retry(monkeypatch):
@@ -520,7 +520,7 @@ def test_recovery_clears_the_note_when_the_retry_lands(monkeypatch):
 
     monkeypatch.setattr(ingest, "download_pdf", lands)
     ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
-    assert store.load_paper("doe2026study")["notes"] == ""
+    assert store.load_paper("doe2026study")["error"] == ""
 
 
 # --- removal detected after the PDF landed -------------------------------
@@ -549,7 +549,7 @@ def test_a_failed_retry_is_still_tolerated(monkeypatch):
     monkeypatch.setattr(ingest, "download_pdf", fails)
     key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
     assert (key, created) == ("doe2026study", False)
-    assert store.load_paper("doe2026study")["notes"] == "PDF download failed: 503"
+    assert store.load_paper("doe2026study")["error"] == "PDF download failed: 503"
 
 
 # --- the web job must say a paper cannot be read -------------------------
