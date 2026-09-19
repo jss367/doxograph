@@ -17,7 +17,8 @@ async def ready(page):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_research_tools_workflow(engine):
+@pytest.mark.parametrize("uuid_available", [True, False])
+def test_research_tools_workflow(engine, uuid_available):
     config.set_ai_enabled(False)
     for key, title in [('one','Steering and recovery'), ('two','Recovery under different conditions')]:
         store.save_paper(store.new_paper(key,title=title,authors=['Ada Researcher'],year=2026))
@@ -29,6 +30,8 @@ def test_research_tools_workflow(engine):
         async with async_playwright() as p:
             browser = await getattr(p, engine).launch()
             page = await browser.new_page(viewport={'width':1440,'height':1000})
+            if not uuid_available:
+                await page.add_init_script("Object.defineProperty(crypto, 'randomUUID', {value: undefined})")
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
@@ -98,7 +101,13 @@ def test_research_tools_workflow(engine):
                 await dialog.get_by_role('button',name='Open search',exact=True).click()
                 await dialog.wait_for(state='hidden', timeout=5000)
                 assert await page.locator('#q').input_value() == 'Steering'
-                assert len(httpx.get(url+'/api/notebook').json()['boards']) == 1
+                saved = httpx.get(url+'/api/notebook').json()
+                assert len(saved['boards']) == 1
+                identifiers = [saved['boards'][0]['id'], saved['connections'][0]['id'], saved['searches'][0]['id']]
+                identifiers.extend(entry['id'] for entry in saved['boards'][0]['entries'])
+                assert len(identifiers) == len(set(identifiers))
+                if not uuid_available:
+                    assert all(len(value) == 32 and int(value, 16) >= 0 for value in identifiers)
                 assert not errors
             await browser.close()
     asyncio.run(scenario())

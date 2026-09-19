@@ -6,7 +6,11 @@ const ResearchTools = (() => {
   let epoch = 0;
   const el = (id) => document.getElementById(id);
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
-  const uid = () => crypto.randomUUID();
+  const uid = () => {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    // LAN deployments over HTTP lack randomUUID, but support getRandomValues.
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+  };
   const promptDialog = (title, value, {ok}) => askDialog({title, input:{value}, ok});
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
