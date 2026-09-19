@@ -382,18 +382,27 @@ def load_paper(key: str) -> dict:
     return _migrate(json.loads(path.read_text(encoding="utf-8")))
 
 
+#: The only thing the ingest ever wrote into the old `notes`. Matching on it
+#: is what lets the migration below tell the machine's text from a person's.
+LEGACY_ERROR = "PDF download failed:"
+
+
 def _migrate(paper: dict) -> dict:
     """Bring a paper written by an older version up to the current shape.
 
     `notes` used to hold the reason a PDF never arrived, written by the
     ingest. It now holds what the reader writes about the paper, and the
     failure has `error` to itself. A file with no `error` key at all predates
-    the split, so whatever is in its `notes` is the machine's, not a person's:
-    nothing could put a note there before this.
+    the split, and only the ingest's own message is moved across: the web app
+    never wrote there, but `PATCH /api/papers/{key}` accepted `notes` before
+    this, so a hand-edited corpus can hold a real note and anything that is
+    not recognisably the ingest's is left as one.
     """
     if "error" not in paper:
-        paper["error"] = paper.get("notes") or ""
-        paper["notes"] = ""
+        note = paper.get("notes") or ""
+        moves = note.startswith(LEGACY_ERROR)
+        paper["error"] = note if moves else ""
+        paper["notes"] = "" if moves else note
     return paper
 
 

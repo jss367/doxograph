@@ -4853,6 +4853,9 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
 def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
+    noted = store.load_paper("paper-a")
+    noted["notes"] = "Read this one for the method."
+    store.save_paper(noted)
 
     async def scenario():
         async with async_playwright() as playwright:
@@ -4874,6 +4877,15 @@ def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="detached")
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
                 await page.locator('#papers [data-paper="paper-b"]').wait_for(state="detached")
+
+                # A word from a paper's own note lists the paper and its
+                # claims with it: a paper in the sidebar that is empty when
+                # opened is worse than one that is not listed at all.
+                await page.fill("#q", "method")
+                await page.locator('#papers [data-paper="paper-a"]').wait_for()
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                await page.click('#papers [data-paper="paper-a"]')
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
             await browser.close()
 
     asyncio.run(scenario())

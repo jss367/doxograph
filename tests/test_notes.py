@@ -90,19 +90,29 @@ def test_a_note_is_not_the_reason_a_pdf_is_missing():
     assert loaded["error"] == "PDF download failed: 503"
 
 
-def test_an_older_papers_notes_are_read_as_the_failure_they_were():
-    """A paper written before the split has no `error` key at all, and
-    nothing could have put a note in `notes` then, so what is there is the
-    ingest's."""
-    path = store.paper_path("doe2026study")
+def write_pre_split_paper(notes: str) -> None:
+    """A paper file as an older version wrote it: `notes`, and no `error`."""
     paper = store.new_paper("doe2026study", title="A Study")
     paper.pop("error")
-    paper["notes"] = "PDF download failed: 503"
-    path.write_text(json.dumps(paper), encoding="utf-8")
+    paper["notes"] = notes
+    store.paper_path("doe2026study").write_text(json.dumps(paper), encoding="utf-8")
 
+
+def test_an_older_papers_notes_are_read_as_the_failure_they_were():
+    write_pre_split_paper("PDF download failed: 503")
     loaded = store.load_paper("doe2026study")
     assert loaded["error"] == "PDF download failed: 503"
     assert loaded["notes"] == ""
+
+
+def test_an_older_note_that_is_not_the_ingests_stays_a_note():
+    """`PATCH /api/papers/{key}` took `notes` before the split, so a corpus
+    driven from a script or edited by hand can hold a real note in the old
+    field. Only the ingest's own message is moved across."""
+    write_pre_split_paper("Read this for the method.")
+    loaded = store.load_paper("doe2026study")
+    assert loaded["notes"] == "Read this for the method."
+    assert loaded["error"] == ""
 
 
 # --- the export ------------------------------------------------------------
