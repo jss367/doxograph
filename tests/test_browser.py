@@ -4891,3 +4891,57 @@ def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
     asyncio.run(scenario())
     assert store.load_paper("paper-a")["claims"][0]["note"] == (
         "Overstated: the appendix contradicts this.")
+
+
+@pytest.mark.browser
+def test_a_note_is_refused_while_the_paper_is_being_removed():
+    """The header stands until the removal comes back, so its buttons are
+    still clickable. A note saved into that window would be reported saved
+    and then thrown away with the paper."""
+    _paper("shared", "Shared paper", "recovery")
+
+    async def scenario():
+        in_flight = asyncio.Event()
+        release = asyncio.Event()
+        wrote = []
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def hold_delete_record_patch(route, request):
+                if request.method == "DELETE":
+                    in_flight.set()
+                    await release.wait()
+                if request.method == "PATCH":
+                    wrote.append(request.url)
+                await route.continue_()
+
+            await page.route("**/api/papers/shared", hold_delete_record_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="shared"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="shared"]').fill("Typed while it was going.")
+
+                await page.get_by_role("button", name="Remove", exact=True).click()
+                await _answer(page, "Remove")
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await page.locator("#toasts .toast", has_text="the note would go with it").wait_for()
+
+                # And the box is not offered again either.
+                await page.locator(".note").get_by_role("button", name="Cancel").click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator("#toasts .toast", has_text="a note would go with it").wait_for()
+                assert await page.locator("textarea[data-note]").count() == 0
+
+                release.set()
+                await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
+            await browser.close()
+
+        assert wrote == []
+
+    asyncio.run(scenario())
+    assert store.all_papers() == []

@@ -1637,6 +1637,10 @@ function cancelNoteEdit() {
 
 async function saveNote(key) {
   if (V.noteSaving) return;   // a save is in flight
+  // The header stands until the removal comes back, so this is still
+  // clickable. The PATCH landing first would report a note saved that the
+  // DELETE behind it throws away; landing second it is a 404.
+  if (refuseWhileRemoving(key, 'the note')) return;
   const field = document.querySelector(`textarea[data-note="${CSS.escape(key)}"]`);
   const text = field ? field.value : (V.noteDrafts[key] || '');
   V.error = null;
@@ -4065,6 +4069,9 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'edit-note') {
+      // As Add claim does: opening the box would invite writing that the
+      // removal behind it is about to discard.
+      if (refuseWhileRemoving(button.dataset.paper, 'a note')) return;
       // As with a synthesis: opening one note's editor parks any other, and a
       // claim editor's text lives in the DOM until it is read.
       captureOpenEditor();
