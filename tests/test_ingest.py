@@ -1,3 +1,8 @@
+import time
+
+import httpx
+import pytest
+
 from doxograph import ingest
 
 
@@ -41,3 +46,84 @@ def test_flags_unreadable_tokens():
 def test_deduplicates_within_one_paste():
     refs, _ = ingest.parse_refs("2602.06941 https://arxiv.org/abs/2602.06941")
     assert len(refs) == 1
+
+
+# --- arXiv rate limiting --------------------------------------------------
+#
+# export.arxiv.org answers 406 Not Acceptable, not 429, when it is queried
+# faster than it likes. Ingesting a pasted batch runs several fetches at once,
+# so a burst used to fail papers that were perfectly fetchable a second later.
+
+FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2607.07916v1</id>
+    <published>2026-07-10T00:00:00Z</published>
+    <title>Persona Cartography</title>
+    <summary>An abstract.</summary>
+    <author><name>A Researcher</name></author>
+  </entry>
+</feed>"""
+
+
+class FakeArxivResponse:
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"{self.status_code}", request=None, response=None)
+
+
+class FakeArxivClient:
+    """Hands out canned responses in order and records when each was asked for."""
+
+    def __init__(self, *responses: FakeArxivResponse):
+        self._responses = list(responses)
+        self.asked_at: list[float] = []
+
+    def get(self, url, **kwargs):
+        self.asked_at.append(time.monotonic())
+        return self._responses.pop(0)
+
+
+@pytest.fixture
+def quick_arxiv(monkeypatch):
+    """Keep the real spacing logic, at a hundredth of the real interval."""
+    monkeypatch.setattr(ingest, "ARXIV_INTERVAL", 0.03)
+    monkeypatch.setattr(ingest, "_arxiv_last", 0.0)
+    return 0.03
+
+
+def test_a_rate_limited_query_is_retried(quick_arxiv):
+    client = FakeArxivClient(
+        FakeArxivResponse(406), FakeArxivResponse(200, FEED))
+    meta = ingest.fetch_arxiv("2607.07916", client)
+    assert meta["title"] == "Persona Cartography"
+    assert len(client.asked_at) == 2
+
+
+def test_persistent_rate_limiting_says_so(quick_arxiv):
+    client = FakeArxivClient(*[FakeArxivResponse(406)] * ingest.ARXIV_ATTEMPTS)
+    with pytest.raises(ValueError, match="rate-limiting"):
+        ingest.fetch_arxiv("2607.07916", client)
+    assert len(client.asked_at) == ingest.ARXIV_ATTEMPTS
+
+
+def test_queries_are_spaced_out(quick_arxiv):
+    """Two fetches in a row do not go out together."""
+    client = FakeArxivClient(
+        FakeArxivResponse(200, FEED), FakeArxivResponse(200, FEED))
+    ingest.fetch_arxiv("2607.07916", client)
+    ingest.fetch_arxiv("2607.07917", client)
+    assert client.asked_at[1] - client.asked_at[0] >= quick_arxiv
+
+
+def test_a_real_failure_still_raises(quick_arxiv):
+    """404 is not congestion, so it fails on the first try."""
+    client = FakeArxivClient(FakeArxivResponse(404))
+    with pytest.raises(httpx.HTTPStatusError):
+        ingest.fetch_arxiv("2607.07916", client)
+    assert len(client.asked_at) == 1

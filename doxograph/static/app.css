@@ -260,6 +260,10 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .paperhead h2 { font-size: 1.1rem; margin: 0 0 .2rem; }
 .paperhead .pm { color: var(--muted); font-size: .85rem; }
 .paperhead .ps { font-size: .9rem; margin: .4rem 0 0; }
+.labels { display: flex; flex-wrap: wrap; gap: .3rem; margin: .35rem 0 0; }
+.label { font-size: .75rem; padding: .05rem .45rem; border: 1px solid var(--line);
+  border-radius: 999px; color: var(--muted); cursor: pointer; }
+.label:hover { color: var(--ink); border-color: var(--accent); }
 
 /* A form whose save is in flight: read-only until the request settles. */
 form[data-form].saving, #research-form.saving { opacity: .6; }

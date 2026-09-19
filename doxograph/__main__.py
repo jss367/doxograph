@@ -299,6 +299,33 @@ def cmd_tags(args) -> int:
     return 0
 
 
+def cmd_label(args) -> int:
+    """Read or set the labels on a paper, or list the ones in use.
+
+    One command rather than three, because they are one question asked at
+    three depths: what labels exist, what is on this paper, and make it these.
+    Setting replaces, as the label editor in the web app does — the labels on
+    a paper are short enough to retype and a merge would give no way to take
+    one off.
+    """
+    if not args.key:
+        counts = store.label_counts(store.all_papers())
+        for name, count in counts.items():
+            print(f"{count:>4} {name}")
+        if not counts:
+            print("no labels yet", file=sys.stderr)
+        return 0
+    try:
+        paper = store.load_paper(args.key)
+    except KeyError:
+        print(f"no paper {args.key}", file=sys.stderr)
+        return 1
+    if args.labels or args.clear:
+        paper = store.set_labels(args.key, [] if args.clear else args.labels)
+    print(" ".join(paper.get("labels") or []))
+    return 0
+
+
 def cmd_export(args) -> int:
     path = export.write(Path(args.out).expanduser() if args.out else None, title=args.title)
     print(path)
@@ -425,6 +452,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("tags", help="list topics and their use counts")
     p.set_defaults(func=cmd_tags)
+
+    p = sub.add_parser("label", help="read or set a paper's labels, or list the ones in use")
+    p.add_argument("key", nargs="?", help="the paper to read or label")
+    p.add_argument("labels", nargs="*", help="the labels it should carry, replacing the ones it has")
+    p.add_argument("--clear", action="store_true", help="take every label off the paper")
+    p.set_defaults(func=cmd_label)
 
     p = sub.add_parser("export", help="write the self-contained HTML view")
     p.add_argument("--out")

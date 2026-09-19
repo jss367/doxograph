@@ -697,6 +697,15 @@ class PaperPatch(BaseModel):
     # The reader's own note on the paper. Why the ingest has no PDF is
     # `error`, which is the machine's to write and not offered here.
     notes: str | None = None
+    labels: list[str] | None = None
+
+    @field_validator("labels")
+    @classmethod
+    def _slug_labels(cls, value: list[str] | None) -> list[str] | None:
+        # A null clears them. Every reader of the field treats it as a list —
+        # `label_counts` walks it, the page joins it — and writing None would
+        # leave a paper none of them can read.
+        return store.normalize_labels(value or [])
 
 
 class LedgerClaim(BaseModel):
@@ -796,6 +805,7 @@ def _build_state() -> dict:
         "claims": rows,
         "tags": store.load_tags(),
         "tag_counts": store.tag_counts(rows),
+        "label_counts": store.label_counts(papers),
         "ledger": store.load_ledger(),
         "context": store.load_context(),
         "tensions": store.tension_rows(rows),

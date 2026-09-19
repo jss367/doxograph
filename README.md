@@ -99,6 +99,8 @@ doxograph synthesize --force          # write again for topics nothing has chang
 doxograph synthesize --list           # show the syntheses on file
 doxograph list                        # what is in the corpus
 doxograph tags                        # topics and their use counts
+doxograph label                       # labels in use, and how many papers carry each
+doxograph label <key> open-source     # label one paper, replacing the labels it has
 doxograph export --out notes.html     # one self-contained HTML file
 doxograph bibtex --out refs.bib
 ```
@@ -223,7 +225,7 @@ Command-line commands operate on the Default workspace.
 ```text
 workspaces.json       named workspace registry
 workspaces/<id>/      an independent named corpus
-papers/<key>.json    one paper and its claims
+papers/<key>.json    one paper, its labels, and its claims
 pdfs/<key>.pdf       the paper itself
 text/<key>.txt       its text, extracted once and reused (pages split by \f)
 locks/               lock files, so two processes do not write at once
@@ -274,6 +276,26 @@ recorded as a *proposal* rather than silently becoming a tag. Accept the
 proposals worth keeping in the web app. When you add a tag later, `doxograph
 retag` reassigns topics on the papers you already have, which is much cheaper
 than re-reading them and leaves hand-edited claim text alone.
+
+### Labels on papers
+
+A topic is about a claim and comes out of the model. A label is about the
+paper and is put on by hand: that it is open source, that a model of it is on
+HuggingFace, that it is worth rereading. **Labels** in a paper's header opens
+a field for them, separated by spaces or commas, and they appear as a Labels
+list in the sidebar that filters the corpus to the papers carrying one.
+
+They are deliberately not part of the topic vocabulary. The vocabulary goes
+into the extraction prompt as the list of things to look for in a paper's
+text, and nothing in a paper's text says it is on your reading list. So no
+pass writes a label, `retag` cannot take one off, and labelling a paper does
+not stale its syntheses. Labels are slugs: several words are written with
+hyphens, as topics are.
+
+Labels are searched along with everything else, so `huggingface` in the search
+box finds the papers carrying it and their claims. `doxograph label` reads and
+sets them from the shell. They live on the paper in `papers/<key>.json`,
+under `labels`.
 
 ### ledger.yaml
 

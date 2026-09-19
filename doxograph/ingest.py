@@ -11,6 +11,8 @@ import io
 import os
 import shutil
 import tempfile
+import threading
+import time
 import html as html_module
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -33,6 +35,17 @@ class PaperRemoved(RuntimeError):
 
 USER_AGENT = "doxograph/0.1 (+https://github.com/jss367/doxograph)"
 TIMEOUT = httpx.Timeout(60.0, connect=15.0)
+
+ARXIV_API = "https://export.arxiv.org/api/query"
+# arXiv answers 406 rather than 429 when it is queried faster than it likes,
+# which is about one request every three seconds. A pasted batch of references
+# is ingested several at a time, so the queries have to be spaced out, and a
+# refusal has to be retried rather than failing the paper.
+ARXIV_INTERVAL = 3.0
+ARXIV_ATTEMPTS = 4
+ARXIV_BUSY = (406, 429, 503)
+_arxiv_gate = threading.Lock()
+_arxiv_last = 0.0
 
 ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?"
 ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
@@ -124,13 +137,39 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 
 
+def _arxiv_turn() -> None:
+    """Block until this thread's turn to query arXiv comes round.
+
+    Sleeping while holding the gate is the point: waiting threads queue up on
+    it and each one adds another interval, so eight references pasted at once
+    go out as eight spaced queries rather than eight at once.
+    """
+    global _arxiv_last
+    with _arxiv_gate:
+        wait = _arxiv_last + ARXIV_INTERVAL - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _arxiv_last = time.monotonic()
+
+
+def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
+    """Query the arXiv API, waiting out a refusal rather than raising it."""
+    for attempt in range(ARXIV_ATTEMPTS):
+        _arxiv_turn()
+        response = client.get(ARXIV_API, params=params)
+        if response.status_code not in ARXIV_BUSY:
+            response.raise_for_status()
+            return response
+        if attempt + 1 < ARXIV_ATTEMPTS:
+            time.sleep(ARXIV_INTERVAL * (attempt + 1))
+    raise ValueError(
+        f"arXiv refused {ARXIV_ATTEMPTS} queries in a row with "
+        f"{response.status_code}; it is rate-limiting us. Try again shortly.")
+
+
 def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict:
     bare = re.sub(r"v\d+$", "", arxiv_id)
-    response = client.get(
-        "https://export.arxiv.org/api/query",
-        params={"id_list": bare, "max_results": 1},
-    )
-    response.raise_for_status()
+    response = query_arxiv({"id_list": bare, "max_results": 1}, client)
     entry = ET.fromstring(response.text).find(f"{ATOM}entry")
     if entry is None or entry.find(f"{ATOM}title") is None:
         raise ValueError(f"arXiv has no record for {arxiv_id}")
