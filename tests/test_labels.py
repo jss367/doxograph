@@ -210,3 +210,41 @@ def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_taking_the_filtered_label_off_the_open_paper_clears_the_filter():
+    # Otherwise the header stands on screen with every one of its claims
+    # filtered away, and nothing on the page says why.
+    from test_browser import _answer, _paper as _browser_paper, _server
+    from playwright.async_api import async_playwright
+
+    _browser_paper("open2026model", "An Open Model", "steering")
+    _browser_paper("other2026model", "Another Open Model", "steering")
+    # Two papers carry it, so taking it off one leaves the label in use and
+    # the filter standing: the one that has to give way is the filter against
+    # the paper on screen, not the label itself.
+    store.set_labels("open2026model", ["open-source"])
+    store.set_labels("other2026model", ["open-source"])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}#label=open-source&paper=open2026model")
+                await page.locator('.claim', has_text="An Open Model").wait_for()
+
+                await page.get_by_role("button", name="Labels").click()
+                await _answer(page, "OK", "")
+                await page.locator('.paperhead .label').wait_for(state="detached")
+
+                # The paper is still open, and still shows its claims.
+                assert await page.locator('.claim').count() == 1
+                assert "label=" not in page.url
+                # The label is still on the other paper, so the section stays.
+                await page.locator('#labels [data-label="open-source"]').wait_for()
+
+            await browser.close()
+
+    asyncio.run(scenario())

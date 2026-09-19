@@ -783,6 +783,13 @@ function dropMissingFilters() {
     V.kind = '';
     $('kind').value = '';
   }
+  // A paper on screen and a label filter that excludes it: the header would
+  // stand there with every one of its claims filtered away. It happens when
+  // the label is taken off the paper being read — here or in another window —
+  // and from a hand-written address naming both. The paper wins, as it does
+  // when the map opens one the filter excludes.
+  const open = V.paper && S.papers.find((paper) => paper.key === V.paper);
+  if (V.label && open && !(open.labels || []).includes(V.label)) V.label = null;
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -3026,7 +3033,11 @@ function graphOpenPaper(key) {
   captureOpenEditor();
   closeEditorsNotBelongingTo(key);
   showView('claims');
-  V.paper = key; V.tag = null; V.selectedId = null;
+  // Both filters go, not just the topic: the map leaves the papers a filter
+  // excludes on screen and clickable, so this is the one place a paper is
+  // opened that the filter in force would empty. Opening it is the newer
+  // instruction of the two.
+  V.paper = key; V.tag = null; V.label = null; V.selectedId = null;
   syncHash(true);   // leaving the map is navigation: Back returns to it
   renderAll();
 }
