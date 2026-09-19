@@ -172,6 +172,22 @@ def test_pdf_selection_capture_bookmarks_history_and_conflict(engine):
                 await _answer(page,'Restore version')
                 await ready(page)
                 assert httpx.get(url+'/api/state').json()['claims'][0]['text'] == 'Recovery is conditional.'
+                await dialog.get_by_role('button',name='Close research tools').click()
+                await dialog.wait_for(state='hidden', timeout=5000)
+                httpx.delete(url+f"/api/papers/paper/claims/{claim['id']}")
+                await page.get_by_role('button',name='Edit history',exact=True).click()
+                await ready(page)
+                await dialog.get_by_role('button',name='Restore this version').first.click()
+                await _answer(page,'Restore version')
+                await ready(page)
+                await dialog.get_by_role('button',name='Restore deletion',exact=True).first.click()
+                await _answer(page,'Restore deletion')
+                await ready(page)
+                assert not httpx.get(url+'/api/state').json()['claims']
+                await dialog.get_by_role('button',name='Restore this version').first.click()
+                await _answer(page,'Restore version')
+                await ready(page)
+                assert httpx.get(url+'/api/state').json()['claims'][0]['id'] == claim['id']
                 await dialog.get_by_role('button',name='Evidence boards',exact=True).click()
                 await ready(page)
                 await dialog.get_by_role('button',name='New board',exact=True).click()

@@ -238,6 +238,8 @@ and are stored in `notebook.json`. They are never sent to a model.
   version of the app; it is stored with the paper and removed with that paper.
   Restoring omits historical topics that are no longer in the vocabulary and
   reports which ones were omitted; existing claims keep their current review decision.
+  Restoring a deleted claim also keeps its deletion in history, so the restoration
+  can itself be undone.
 
 Open research-tool forms keep unsaved writing until you save or explicitly
 choose to discard it. If another window changes the same workspace's research

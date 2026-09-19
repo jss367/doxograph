@@ -250,3 +250,26 @@ def test_restore_wording_preserves_current_review_decision(client, reviewed):
     assert paper['claims'][0]['text'] == 'Original finding'
     assert paper['claims'][0]['reviewed'] is reviewed
     assert paper['status'] == ('reviewed' if reviewed else 'extracted')
+
+
+
+def test_restoring_a_deleted_claim_can_be_undone_and_redone(client):
+    ref = seed()
+    store.delete_claim('one', ref['claim'])
+    state = client.get('/api/notebook/history/one').json()
+    content_revision = state['entries'][0]['id']
+    assert client.post('/api/notebook/history/one/restore', json={
+        'revision':content_revision, 'expected':state['expected']}).status_code == 200
+    state = client.get('/api/notebook/history/one').json()
+    deletion = state['entries'][0]
+    assert deletion['claim'] == ref['claim'] and deletion['fields'] is None
+    result = client.post('/api/notebook/history/one/restore', json={
+        'revision':deletion['id'], 'expected':state['expected']})
+    assert result.json()['deleted'] is True
+    assert store.load_paper('one')['claims'] == []
+    state = client.get('/api/notebook/history/one').json()
+    assert state['entries'][0]['fields']['text'] == 'Original finding'
+    result = client.post('/api/notebook/history/one/restore', json={
+        'revision':state['entries'][0]['id'], 'expected':state['expected']})
+    assert result.status_code == 200
+    assert store.load_paper('one')['claims'][0]['id'] == ref['claim']

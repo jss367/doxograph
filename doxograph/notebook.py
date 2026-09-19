@@ -220,6 +220,14 @@ def record_history(previous: dict, paper: dict) -> None:
         after = claim_fields(current[claim["id"]]) if claim["id"] in current else None
         if after is None or {k: v for k, v in before.items() if k != "reviewed"} != {k: v for k, v in after.items() if k != "reviewed"}:
             history.append({"id": uuid.uuid4().hex, "at": store.now(), "claim": claim["id"], "fields": before})
+    # Reintroducing an identity from history is a restoration, not a new
+    # claim. Keep its previous absence so that restoration can itself be undone.
+    prior_ids = {claim["id"] for claim in previous.get("claims", [])}
+    historical_ids = {entry["claim"] for entry in previous.get("history", [])}
+    for claim_id in current.keys() - prior_ids:
+        if claim_id in historical_ids:
+            history.append({"id": uuid.uuid4().hex, "at": store.now(),
+                            "claim": claim_id, "fields": None})
     if previous.get("notes", "") != paper.get("notes", ""):
         history.append({"id": uuid.uuid4().hex, "at": store.now(), "claim": None,
                         "fields": {"notes": previous.get("notes", "")}})
@@ -259,8 +267,12 @@ def restore(key: str, body: Restore) -> dict:
         if fingerprint(paper) != body.expected:
             raise HTTPException(409, "This paper changed. Reopen history before restoring.")
         omitted_topics = []
+        deleted = entry["claim"] is not None and entry["fields"] is None
         if entry["claim"] is None:
             paper["notes"] = entry["fields"]["notes"]
+        elif deleted:
+            paper["claims"] = [c for c in paper.get("claims", []) if c["id"] != entry["claim"]]
+            store.refresh_status(paper)
         else:
             claim = next((c for c in paper.get("claims", []) if c["id"] == entry["claim"]), None)
             current_review = bool(claim.get("reviewed")) if claim is not None else None
@@ -278,7 +290,7 @@ def restore(key: str, body: Restore) -> dict:
             claim["updated"] = store.now()
             store.refresh_status(paper)
         store.save_paper(paper)
-        return {"restored": entry["id"], "omitted_topics": omitted_topics}
+        return {"restored": entry["id"], "omitted_topics": omitted_topics, "deleted": deleted}
 
 
 class Selection(Model):
