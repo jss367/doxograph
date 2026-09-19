@@ -263,6 +263,7 @@ def restore(key: str, body: Restore) -> dict:
             paper["notes"] = entry["fields"]["notes"]
         else:
             claim = next((c for c in paper.get("claims", []) if c["id"] == entry["claim"]), None)
+            current_review = bool(claim.get("reviewed")) if claim is not None else None
             if claim is None:
                 claim = {"id": entry["claim"]}
                 paper.setdefault("claims", []).append(claim)
@@ -270,6 +271,8 @@ def restore(key: str, body: Restore) -> dict:
             vocabulary = {tag["name"] for tag in store.load_tags()}
             omitted_topics = sorted(set(fields.get("tags", [])) - vocabulary)
             fields["tags"] = sorted(set(fields.get("tags", [])) & vocabulary)
+            if current_review is not None:
+                fields["reviewed"] = current_review
             claim.update(fields)
             store.check_quote(key, claim)
             claim["updated"] = store.now()

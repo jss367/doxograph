@@ -207,7 +207,7 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = `<p class="hint">Earlier claim wording and paper notes are captured from now on. Restore changes only that claim or note, and keeps the current version in history.</p>
       ${entries.map(e => {
         const current = e.claim ? historyData.claims.find(c => c.id === e.claim) : {notes:historyData.notes};
-        const fields = Object.keys(e.fields).filter(k => JSON.stringify(e.fields[k]) !== JSON.stringify(current?.[k]));
+        const fields = Object.keys(e.fields).filter(k => (!current || k !== 'reviewed') && JSON.stringify(e.fields[k]) !== JSON.stringify(current?.[k]));
         return `<article class="board-entry"><h3>${e.claim ? html(e.claim) : 'Paper note'} · ${html(new Date(e.at).toLocaleString())}</h3>
           <div class="history-diff"><div><h4>Earlier version</h4>${fields.map(k => `<strong>${html(k)}</strong><pre>${html(typeof e.fields[k] === 'string' ? e.fields[k] : JSON.stringify(e.fields[k],null,2))}</pre>`).join('')}</div>
           <div><h4>Current version</h4>${!current ? '<p class="warn">Claim deleted</p>' : fields.map(k => `<strong>${html(k)}</strong><pre>${html(typeof current[k] === 'string' ? current[k] : JSON.stringify(current[k],null,2))}</pre>`).join('')}</div></div>

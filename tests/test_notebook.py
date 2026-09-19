@@ -233,3 +233,20 @@ def test_restore_keeps_valid_historical_topics(client):
         'revision':state['entries'][0]['id'], 'expected':state['expected']})
     assert response.json()['omitted_topics'] == []
     assert store.load_paper('one')['claims'][0]['tags'] == ['testing']
+
+
+@pytest.mark.parametrize('reviewed', [False, True])
+def test_restore_wording_preserves_current_review_decision(client, reviewed):
+    ref = seed()
+    store.update_claim('one', ref['claim'], {'reviewed':not reviewed})
+    store.update_claim('one', ref['claim'], {'text':'Revised wording'})
+    store.review_claims('one', reviewed)
+    state = client.get('/api/notebook/history/one').json()
+    assert state['entries'][0]['fields']['reviewed'] is not reviewed
+    result = client.post('/api/notebook/history/one/restore', json={
+        'revision':state['entries'][0]['id'], 'expected':state['expected']})
+    assert result.status_code == 200
+    paper = store.load_paper('one')
+    assert paper['claims'][0]['text'] == 'Original finding'
+    assert paper['claims'][0]['reviewed'] is reviewed
+    assert paper['status'] == ('reviewed' if reviewed else 'extracted')
