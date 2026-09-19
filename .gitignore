@@ -13,3 +13,6 @@ venv/
 /doxograph-data/
 native/build/
 native/Doxograph.icns
+
+# Local research screenshots and review artifacts.
+.context/
