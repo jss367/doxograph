@@ -145,10 +145,15 @@ const NEW_CLAIM_ID = '__new__';
 // away the first one's text. synthSaving is the topic whose hand save is in
 // flight: its editor is frozen, as a claim form is while it saves, because
 // success redraws from the server value and typing meanwhile would be lost.
+// noteEditing, noteDrafts and noteSaving are the same three for the note a
+// reader writes on a paper, keyed by paper key. A note is nobody's judgment
+// but the reader's, so unlike a synthesis it is saved without flushing the
+// held deletes: no claim is read to write one.
 const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
+            noteEditing: null, noteDrafts: {}, noteSaving: null,
             graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null };
 
@@ -156,7 +161,7 @@ function blankClaim(paper) {
   return {
     id: NEW_CLAIM_ID, paper, text: '', kind: S.kinds[0] || 'finding',
     strength: 'supporting', tags: [], evidence: '', quote: '', locator: '',
-    ledger_links: [], reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
+    ledger_links: [], note: '', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
   };
 }
 
@@ -836,6 +841,7 @@ window.addEventListener('popstate', async () => {
   if (V.view === 'research') captureResearchDraft();
   captureOpenEditor();
   parkSynthEditor();
+  parkNoteEditor();
   const wanted = hashParams().get('ws') || 'default';
   restoringHistory = true;
   try {
@@ -1012,6 +1018,7 @@ function resetWorkspaceView() {
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
+    noteEditing: null, noteDrafts: {}, noteSaving: null,
     graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
@@ -1064,13 +1071,13 @@ async function switchWorkspace(workspaceId) {
   }
   // The switch that just finished may have landed where this one was headed.
   if (workspaceId === currentWorkspaceId) return;
-  if (pendingMutations || savingClaims.size || V.synthSaving || V.researchSaving) {
+  if (pendingMutations || savingClaims.size || V.synthSaving || V.noteSaving || V.researchSaving) {
     toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
     return;
   }
-  const hasDraft = V.editing || V.synthEditing || V.newClaim
+  const hasDraft = V.editing || V.synthEditing || V.noteEditing || V.newClaim
     || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
-    || Object.keys(V.synthDrafts).length || researchFormDirty();
+    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty();
   if (hasDraft && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
                                        { ok: 'Discard and switch' })) return;
   // The dialog is another await the picker is live across.
@@ -1209,7 +1216,7 @@ function queryPatterns(query) {
 // claims: listing a paper in the sidebar and then showing it as empty when
 // clicked would be worse than not listing it at all.
 function haystack(row) {
-  return [row.text, row.evidence, row.quote, row.paper, row.paper_title,
+  return [row.text, row.evidence, row.quote, row.note, row.paper, row.paper_title,
           row.paper_year, (row.paper_authors || []).join(' '),
           (row.tags || []).join(' ')]
     .join(' ').toLowerCase();
@@ -1219,7 +1226,7 @@ function haystack(row) {
 // claims; this covers one that has none yet, which is exactly the paper a
 // title search is most likely to be looking for.
 function paperHaystack(paper) {
-  return [paper.title, paper.key, (paper.authors || []).join(' '), paper.year]
+  return [paper.title, paper.key, (paper.authors || []).join(' '), paper.year, paper.notes]
     .join(' ').toLowerCase();
 }
 
@@ -1336,8 +1343,9 @@ function render() {
   renderResearchNav();
   renderGraphNav();
   renderTags();
-  // The research form is an editor too: a poll must not redraw it under the cursor.
-  if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
+  // The research form is an editor too: a poll must not redraw it under the
+  // cursor. Nor must it redraw a note being written in the paper's header.
+  if (!V.editing && !V.synthEditing && !V.noteEditing && V.view !== 'research') renderContent();
   renderJobs();
   syncAnalysisControls();
 }
@@ -1523,6 +1531,7 @@ function paperHeader(key) {
       ${p.has_pdf ? `· <a href="/pdf/${esc(key)}?${workspaceQuery()}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
+    ${paperNote(key)}
     <div class="row">
       <button type="button" data-act="reextract" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Re-read paper</button>
       <button type="button" data-act="retag-one" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Retag claims</button>
@@ -1530,10 +1539,107 @@ function paperHeader(key) {
       ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
         title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
+      ${noteOpen(key) ? '' : `<button type="button" data-act="edit-note" data-paper="${esc(key)}">Write a note</button>`}
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
     ${proposedPanel(key)}
   </div>`;
+}
+
+// A note is shown as the reader typed it: blank lines make paragraphs and
+// nothing else is interpreted. The same in the export.
+function paragraphs(text) {
+  return String(text || '').split(/\n\s*\n/).filter((p) => p.trim());
+}
+
+function noteHtml(text, label, actions = '') {
+  return `<div class="note">
+    <span class="who">${esc(label)}</span>
+    ${paragraphs(text).map((p) => `<p>${esc(p)}</p>`).join('')}
+    ${actions}
+  </div>`;
+}
+
+// Whether the paper's note is already on screen, as text or as an editor. The
+// header button is "Write a note", so it stands down once there is one to
+// edit: the block carries its own edit button, next to what it would change.
+function noteOpen(key) {
+  const paper = S.papers.find((x) => x.key === key);
+  return V.noteEditing === key || Boolean(((paper || {}).notes || '').trim());
+}
+
+// The reader's own note on the paper, under the model's summary of it. No
+// pass reads it and no pass writes it, which is the point: it is the place
+// for what you think that no extraction could have told you.
+function paperNote(key) {
+  const paper = S.papers.find((x) => x.key === key);
+  if (!paper) return '';
+  if (V.noteEditing === key) {
+    const draft = V.noteDrafts[key];
+    const text = draft !== undefined ? draft : (paper.notes || '');
+    // Frozen from state rather than from the elements, so a redraw during the
+    // save cannot hand back an editor whose request is still running.
+    const busy = V.noteSaving === key ? ' disabled' : '';
+    return `<div class="note editing${busy ? ' saving' : ''}">
+      <textarea data-note="${esc(key)}" rows="4"${busy}
+        placeholder="What you make of this paper: what to read it for, what it gets wrong, what to do about it.">${esc(text)}</textarea>
+      <div class="smeta">
+        <span class="hint">Yours. Nothing sends it to a model.</span>
+        <span class="cact" style="margin-left:auto">
+          <button type="button" data-act="save-note" data-paper="${esc(key)}" class="primary"${busy}>Save</button>
+          <button type="button" data-act="cancel-note" data-paper="${esc(key)}"${busy}>Cancel</button>
+        </span>
+      </div>
+    </div>`;
+  }
+  if (!(paper.notes || '').trim()) return '';
+  return noteHtml(paper.notes, 'my note', `<div class="smeta">
+    <span class="cact" style="margin-left:auto">
+      <button type="button" data-act="edit-note" data-paper="${esc(key)}">edit</button>
+    </span></div>`);
+}
+
+// Keep what was typed, close the editor — as `parkSynthEditor` does, and for
+// the same reason: the header goes with the paper, so leaving it must not
+// leave `V.noteEditing` pointing at a textarea nobody can see, which would
+// also stop the background poll.
+function parkNoteEditor() {
+  if (!V.noteEditing) return;
+  const field = document.querySelector(`textarea[data-note="${CSS.escape(V.noteEditing)}"]`);
+  if (field) V.noteDrafts[V.noteEditing] = field.value;
+  V.noteEditing = null;
+}
+
+function cancelNoteEdit() {
+  if (V.noteEditing) delete V.noteDrafts[V.noteEditing];   // discard only this paper's draft
+  V.noteEditing = null;
+  renderContent();
+}
+
+async function saveNote(key) {
+  if (V.noteSaving) return;   // a save is in flight
+  const field = document.querySelector(`textarea[data-note="${CSS.escape(key)}"]`);
+  const text = field ? field.value : (V.noteDrafts[key] || '');
+  V.error = null;
+  V.noteDrafts[key] = text;   // the redraw draws the editor from the draft
+  V.noteSaving = key;
+  renderContent();
+  try {
+    await api(`/api/papers/${encodeURIComponent(key)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: text }),
+    });
+    V.noteEditing = null;
+    delete V.noteDrafts[key];
+  } catch (error) {
+    V.noteDrafts[key] = text;   // keep what was typed so the save can be retried
+    V.error = `Could not save the note: ${error.message}`;
+  } finally {
+    // In the `finally`, as the synthesis save is: a failure leaves the editor
+    // frozen otherwise, with nothing left to hand it back.
+    V.noteSaving = null;
+    await refreshAll();
+  }
 }
 
 function paperCache() {
@@ -1625,6 +1731,7 @@ function claimCard(row, shown, group = '') {
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
+    ${(row.note || '').trim() ? noteHtml(row.note, 'my note') : ''}
     ${similarHtml(row, group)}
     ${links}
   </div>`;
@@ -1890,6 +1997,7 @@ function tensionClaimCard(row, group = '') {
     </div>
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
+    ${(row.note || '').trim() ? noteHtml(row.note, 'my note') : ''}
   </div>`;
 }
 
@@ -2125,6 +2233,7 @@ function showView(view) {
   captureOpenEditor();
   V.editing = null;
   parkSynthEditor();
+  parkNoteEditor();
   V.error = null;
   V.view = view;
   if (view !== 'tensions') V.tensionFocus = null;
@@ -2160,6 +2269,8 @@ function editForm(row) {
         <textarea name="quote" rows="2">${esc(row.quote || '')}</textarea></div>
       <div><label>Bearing on my own claims</label>
         <div class="links">${links.map(linkRow).join('')}</div></div>
+      <div><label>My note — what you make of it. No model reads it.</label>
+        <textarea name="note" rows="2">${esc(row.note || '')}</textarea></div>
       <div class="row right">
         <label class="hint"><input type="checkbox" name="reviewed" ${row.reviewed ? 'checked' : ''}> reviewed</label>
         <button type="button" data-act="cancel">Cancel</button>
@@ -2291,6 +2402,9 @@ function drawContent() {
   // Likewise a synthesis editor whose topic heading is not about to be drawn:
   // under a paper there are no topic headings, and a filter can empty a group.
   if (V.synthEditing && !synthesisTopicsOnScreen(rows).has(V.synthEditing)) parkSynthEditor();
+  // A note editor lives in the header of the paper it belongs to, so leaving
+  // that paper — or the paper being removed — takes it off screen.
+  if (V.noteEditing && V.noteEditing !== V.paper) parkNoteEditor();
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
   let html = V.paper ? paperHeader(V.paper) : '';
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
@@ -3502,6 +3616,8 @@ function readForm(form) {
     quote: value('quote').trim(),
     tags: value('tags').split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean),
     ledger_links: links,
+    // `[name="note"]` is the claim's own; a link's is `link-note`, read above.
+    note: value('note').trim(),
     reviewed: form.querySelector('[name="reviewed"]').checked,
   };
 }
@@ -3929,6 +4045,19 @@ $('content').addEventListener('click', async (event) => {
       renderContent();
       return;
     }
+    if (act === 'edit-note') {
+      // As with a synthesis: opening one note's editor parks any other, and a
+      // claim editor's text lives in the DOM until it is read.
+      captureOpenEditor();
+      parkNoteEditor();
+      V.noteEditing = button.dataset.paper;
+      renderContent();
+      const field = document.querySelector(`textarea[data-note="${CSS.escape(V.noteEditing)}"]`);
+      if (field) field.focus();
+      return;
+    }
+    if (act === 'cancel-note') { cancelNoteEdit(); return; }
+    if (act === 'save-note') { await saveNote(button.dataset.paper); return; }
     if (act === 'cancel-synth') { cancelSynthEdit(); return; }
     if (act === 'save-synth') {
       if (V.synthSaving) return;   // a save is in flight
@@ -4149,6 +4278,9 @@ $('papers').addEventListener('click', (event) => {
   captureOpenEditor();
   parkNewClaimForNavigation(next);
   parkSynthEditor();
+  // The note editor belongs to the paper being left, and `render` below skips
+  // the list while one is open, so it would never be drawn away.
+  parkNoteEditor();
   showView('claims');
   V.paper = next;
   V.selectedId = null;
@@ -4500,6 +4632,7 @@ $('btn-bib').addEventListener('click', () => window.open(`/api/bibtex?${workspac
 
 $('content').addEventListener('input', (e) => {
   if (e.target.matches('textarea[data-synth]')) V.synthDrafts[e.target.dataset.synth] = e.target.value;
+  if (e.target.matches('textarea[data-note]')) V.noteDrafts[e.target.dataset.note] = e.target.value;
 });
 
 // Each filter keeps whatever is typed in an open editor before redrawing.
@@ -4621,6 +4754,8 @@ document.addEventListener('keydown', async (event) => {
     // the user never meant to give up.
     if (event.target.closest('.synth')) {
       if (V.synthEditing && !V.synthSaving) cancelSynthEdit();
+    } else if (event.target.closest('.note')) {
+      if (V.noteEditing && !V.noteSaving) cancelNoteEdit();
     } else if (V.editing) {
       cancelEdit();
     }

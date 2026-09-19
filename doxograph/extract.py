@@ -456,8 +456,13 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
         before = claims_before.get(claim["id"])
         return before is None or before != claim_state(claim)
 
+    # A claim the reader has written a note on is kept whatever the flags say.
+    # `--replace-reviewed` asks for their review decisions to be thrown away,
+    # not their writing, and a note is the one thing on a claim that a re-read
+    # cannot produce again.
     kept = [c for c in paper.get("claims", [])
-            if (keep_reviewed and c.get("reviewed")) or changed_during_the_call(c)]
+            if (keep_reviewed and c.get("reviewed")) or (c.get("note") or "").strip()
+            or changed_during_the_call(c)]
     known = set(store.tag_names())
 
     # Names that were in the vocabulary when the prompt was built and are not in

@@ -4807,3 +4807,75 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
 
     asyncio.run(scenario())
     assert store.all_papers() == []
+
+
+@pytest.mark.browser
+def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                field = page.locator('textarea[data-note="paper-a"]')
+                await page.click('#papers [data-paper="paper-a"]')
+                await page.get_by_role("button", name="Write a note").click()
+                await field.fill("Read this one for the method.")
+
+                # Leaving the paper takes the header with it, so the editor is
+                # parked rather than left pointing at a textarea nobody can see.
+                await page.click('#papers [data-paper="paper-b"]')
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
+                assert await page.locator("textarea[data-note]").count() == 0
+
+                # Coming back offers the draft again rather than a blank box.
+                await page.click('#papers [data-paper="paper-a"]')
+                await page.get_by_role("button", name="Write a note").click()
+                assert await field.input_value() == "Read this one for the method."
+
+                await page.get_by_role("button", name="Save").click()
+                await field.wait_for(state="hidden")
+                await page.locator(".paperhead .note").get_by_text(
+                    "Read this one for the method.").wait_for()
+                # With a note on file the header offers to edit it instead.
+                assert await page.get_by_role("button", name="Write a note").count() == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["notes"] == "Read this one for the method."
+    assert store.load_paper("paper-b")["notes"] == ""
+
+
+@pytest.mark.browser
+def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await page.locator('form[data-form="paper-a-c1"] textarea[name="note"]').fill(
+                    "Overstated: the appendix contradicts this.")
+                await page.locator('form[data-form="paper-a-c1"]').get_by_role(
+                    "button", name="Save").click()
+                await page.locator('.claim[data-claim="paper-a-c1"] .note').get_by_text(
+                    "Overstated: the appendix contradicts this.").wait_for()
+
+                # A word only the reader wrote still finds the claim, and the
+                # paper list narrows with it.
+                await page.fill("#q", "appendix")
+                await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="detached")
+                await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
+                await page.locator('#papers [data-paper="paper-b"]').wait_for(state="detached")
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["claims"][0]["note"] == (
+        "Overstated: the appendix contradicts this.")

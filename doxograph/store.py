@@ -379,7 +379,22 @@ def load_paper(key: str) -> dict:
     path = paper_path(key)
     if not path.exists():
         raise KeyError(key)
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _migrate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _migrate(paper: dict) -> dict:
+    """Bring a paper written by an older version up to the current shape.
+
+    `notes` used to hold the reason a PDF never arrived, written by the
+    ingest. It now holds what the reader writes about the paper, and the
+    failure has `error` to itself. A file with no `error` key at all predates
+    the split, so whatever is in its `notes` is the machine's, not a person's:
+    nothing could put a note there before this.
+    """
+    if "error" not in paper:
+        paper["error"] = paper.get("notes") or ""
+        paper["notes"] = ""
+    return paper
 
 
 def save_paper(paper: dict) -> None:
@@ -432,7 +447,11 @@ def new_paper(key: str, **fields) -> dict:
         "extraction": None,
         "proposed_tags": [],
         "claims": [],
+        # What the reader writes about the paper: no model reads it and no pass
+        # writes it. `error` is the other half of what `notes` used to be —
+        # why the ingest has no PDF — kept apart so a note means one thing.
         "notes": "",
+        "error": "",
     }
     paper.update(fields)
     return paper
@@ -481,6 +500,11 @@ def new_claim(paper: dict, **fields) -> dict:
         "quote": "",
         "locator": "",
         "ledger_links": [],
+        # The reader's own note on this claim: what they make of it, what the
+        # extraction got wrong, what to check. Never sent to a model, and not
+        # part of `claim_fingerprint`, so writing one stales nothing and
+        # cannot put a topic back in the queue for a pass.
+        "note": "",
         "reviewed": False,
         # True when the quote was found in the PDF, False when it was not, None
         # when there was nothing to check (no quote, or no readable PDF).
@@ -574,7 +598,7 @@ def clean_ledger_links(links: Any) -> list[dict]:
 
 CLAIM_FIELDS = {
     "text", "kind", "strength", "tags", "evidence", "quote", "locator",
-    "ledger_links", "reviewed",
+    "ledger_links", "note", "reviewed",
 }
 
 
@@ -928,6 +952,10 @@ def summarize(paper: dict) -> dict:
         "status": paper.get("status", "fetched"),
         "summary": paper.get("summary", ""),
         "relevance": paper.get("relevance", ""),
+        # The reader's note travels with the listing rather than behind a fetch
+        # of its own: the page shows it in the paper's header and searches it,
+        # both of which happen on every keystroke.
+        "notes": paper.get("notes", ""),
         "source": paper.get("source", {}),
         "added": paper.get("added"),
         "updated": paper.get("updated"),

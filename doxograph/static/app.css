@@ -265,6 +265,21 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 form[data-form].saving, #research-form.saving { opacity: .6; }
 .synth.saving { opacity: .6; }
 
+/* The reader's own note, on a paper or on a claim. Marked off from the
+   model's text around it by its rule and its label: everything else on a card
+   was written by an extraction, and this was not. */
+.note { border-left: 2px solid var(--accent); background: var(--panel);
+  border-radius: 0 5px 5px 0; padding: .4rem .6rem; margin: .35rem 0 0; }
+.note p { margin: 0 0 .4rem; font-size: .9rem; white-space: pre-wrap; }
+.note p:last-of-type { margin-bottom: 0; }
+.note .who { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); display: block; margin-bottom: .15rem; }
+.note textarea { width: 100%; min-height: 5rem; font: inherit; font-size: .92rem; }
+.note .smeta { font-size: .78rem; color: var(--muted); margin-top: .35rem;
+  display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+.note.saving { opacity: .6; }
+.paperhead .note { margin: .5rem 0 0; }
+
 /* A topic's synthesis: what the papers, taken together, hold. */
 .synth { background: var(--panel); border-radius: 6px; padding: .6rem .8rem; margin: .3rem 0 .6rem; }
 .synth p { margin: 0 0 .5rem; font-size: .92rem; }

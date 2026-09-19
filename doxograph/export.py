@@ -51,6 +51,12 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .paper .title { font-weight: 600; }
 .paper .authors, .paper .rel { font-size: .87rem; color: var(--muted); }
 .paper .summary { font-size: .92rem; margin: .4rem 0 0; }
+.note { border-left: 2px solid var(--accent); background: var(--panel); border-radius: 0 4px 4px 0;
+  padding: .45rem .75rem; margin: .45rem 0 0; font-size: .9rem; }
+.note p { margin: 0 0 .5rem; white-space: pre-wrap; }
+.note p:last-child { margin: 0; }
+.note .who { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); display: block; margin-bottom: .2rem; }
 .synth { background: var(--panel); padding: .85rem 1rem; border-radius: 5px; margin: .5rem 0 1rem; }
 .synth p { margin: 0 0 .6rem; }
 .synth p:last-child { margin: 0; }
@@ -163,9 +169,20 @@ def _split_cites(text: str) -> list[str]:
     return out
 
 
+def _note_html(text: str, label: str) -> str:
+    """A note as the reader typed it: blank lines make paragraphs and nothing
+    else is interpreted, which is what the app shows too."""
+    paragraphs = [p.strip() for p in (text or "").split("\n\n") if p.strip()]
+    if not paragraphs:
+        return ""
+    body = "".join(f"<p>{_e(p)}</p>" for p in paragraphs)
+    return f'<div class="note"><span class="who">{_e(label)}</span>{body}</div>'
+
+
 def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
     hay = " ".join([
         row.get("text", ""), row.get("evidence", ""), row.get("quote", ""),
+        row.get("note", ""),
         row.get("paper_title", ""), " ".join(row.get("paper_authors", [])),
         " ".join(row.get("tags", [])),
     ]).lower()
@@ -187,6 +204,8 @@ def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
         flag = ('<span class="rel-tag warn">not found in the PDF</span>'
                 if row.get("quote_verified") is False else "")
         parts.append(f"<blockquote>{flag}{_e(row['quote'])}</blockquote>")
+    if (row.get("note") or "").strip():
+        parts.append(_note_html(row["note"], "my note"))
     for link in row.get("ledger_links", []):
         own = ledger_by_id.get(link.get("claim", ""), {})
         label = own.get("text") or link.get("claim", "")
@@ -311,6 +330,7 @@ def render(title: str = "Doxograph") -> str:
             + f' · <code>{_e(paper["key"])}</code></div>'
             + (f'<p class="summary">{_e(paper.get("summary"))}</p>' if paper.get("summary") else "")
             + (f'<p class="rel">Why it is here: {_e(paper.get("relevance"))}</p>' if paper.get("relevance") else "")
+            + _note_html(paper.get("notes") or "", "my note")
             + "</div>"
         )
 

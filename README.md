@@ -41,6 +41,10 @@ Then you review. Extraction gets claims subtly wrong — wording that is too
 strong, a result attributed to the wrong condition, a missing caveat — so every
 claim starts unreviewed and the web app is built for correcting them quickly.
 
+What you think is yours to write. A paper takes a note and so does a claim,
+in your own words, and nothing in the program reads either back to a model.
+See [Notes of your own](#notes-of-your-own).
+
 One error the machine can catch on its own: a quote that is not in the paper.
 Every quote is checked against the PDF's text when it is extracted or edited,
 on letters and digits alone so line breaks and hyphenation do not count against
@@ -344,6 +348,30 @@ anyway, so a repeat call over unchanged claims could only re-derive what is
 there. Skipping also leaves a synthesis you corrected by hand alone, where a
 rerun used to write over it.
 
+## Notes of your own
+
+A claim is the machine's sentence about the paper. A note is yours, and it is
+the only thing here no model writes and no model reads.
+
+A paper's note sits under the summary in its header: **Write a note** opens a
+box, Save puts it on the paper, and it is there the next time you open it.
+Write what the paper is for, what to read it for, what is wrong with it, what
+to do about it — whatever the extraction could not have told you. A claim's
+note is a field in its editor, under the links to your own claims: press `e`,
+write it, Save. It shows under the claim on its card, marked *my note*, so
+what you wrote is never mistaken for what the model read out.
+
+Both are searched along with everything else, so a word only you wrote finds
+the claim or the paper it is on. Both go into the HTML export under the claim
+and the paper they belong to. Neither is part of what makes a topic stale, so
+writing one never puts a topic back in the queue for a tensions, agreements or
+synthesis pass: a note costs nothing and changes nothing the model was asked.
+
+A paper also has an `error`, which is the other thing `notes` used to hold:
+why the ingest has no PDF. That one is the program's to write, so a note means
+one thing. A corpus written before the split has its old `notes` read as the
+`error` it was.
+
 ## Claims worded alike
 
 **alike** on a claim lists claims from other papers that use the same words:
@@ -408,7 +436,10 @@ Syntheses appear under their topic in the HTML export.
 
 `doxograph extract --all` re-reads papers that already have claims. Claims you
 have marked reviewed are kept by default and the rest are replaced; pass
-`--replace-reviewed` to discard yours too.
+`--replace-reviewed` to discard yours too. A claim you have written a note on
+is kept either way: `--replace-reviewed` asks for your review decisions to be
+thrown out, not your writing, and a note is the one thing on a claim a re-read
+cannot produce again. Delete the claim to be rid of it.
 
 The PDF is sent with a cache breakpoint on it, so a second read of the same
 paper within the hour hits the prompt cache. On a 77k-token paper that is the
@@ -442,6 +473,6 @@ server and corpus. It covers reference parsing, the store and its status
 transitions, tag renaming and deletion across claims, the extraction merge
 including the keep-reviewed path, HTML escaping in the export, and BibTeX. In
 the browser it covers the review keys, an undone delete, the URL through a
-reload and the Back button, and the notices that replaced the browser's own
-dialogs. Nothing in it calls the model, and nothing reaches the network:
+reload and the Back button, the notes written on a paper and on a claim, and
+the notices that replaced the browser's own dialogs. Nothing in it calls the model, and nothing reaches the network:
 the API tests drive the app itself through `TestClient`.

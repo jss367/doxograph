@@ -323,7 +323,7 @@ def _finish(job: dict, key: str) -> None:
     """
     if key and not store.pdf_path(key).exists():
         try:
-            note = store.load_paper(key).get("notes") or "no PDF available"
+            note = store.load_paper(key).get("error") or "no PDF available"
         except (KeyError, json.JSONDecodeError):
             note = "the paper was removed"
         _set(job, state="error", detail=f"no PDF stored ({note}). Add it again to retry.")
@@ -643,6 +643,9 @@ class ClaimPatch(BaseModel):
     quote: str | None = None
     locator: str | None = None
     ledger_links: list[LedgerLink] | None = None
+    # The reader's own note on the claim. Free text: it is the one field here
+    # nothing but a person writes, so there is nothing to validate it against.
+    note: str | None = None
     reviewed: bool | None = None
 
     @field_validator("kind")
@@ -691,6 +694,8 @@ class PaperPatch(BaseModel):
     doi: str | None = None
     summary: str | None = None
     relevance: str | None = None
+    # The reader's own note on the paper. Why the ingest has no PDF is
+    # `error`, which is the machine's to write and not offered here.
     notes: str | None = None
 
 
