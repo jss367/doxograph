@@ -5055,3 +5055,93 @@ def test_the_background_poll_leaves_a_note_being_written_alone():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
+    """A search started before the note was opened redraws the pane when it
+    comes back. The text is drawn from the draft, so it survives; the cursor
+    has to be put back or the next keystroke goes nowhere."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            held = asyncio.Event()
+
+            async def hold_search(route, request):
+                await held.wait()
+                await route.continue_()
+
+            await page.route("**/api/search*", hold_search)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                # Asked for first, and still in flight while the note opens.
+                await page.fill("#q", "recovery")
+                await page.get_by_role("button", name="Write a note").click()
+                field = page.locator('textarea[data-note="paper-a"]')
+                await field.fill("Half a sentence")
+                await field.focus()
+                await field.evaluate("el => el.setSelectionRange(4, 4)")
+
+                held.set()
+                await page.locator(".pdfhits").wait_for(timeout=10000)
+
+                assert await field.input_value() == "Half a sentence"
+                assert await field.evaluate("el => el === document.activeElement")
+                assert await field.evaluate("el => el.selectionStart") == 4
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
+    """A slow save must not close the note the reader moved on to write."""
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            in_flight = asyncio.Event()
+            release = asyncio.Event()
+
+            async def hold_a(route, request):
+                if request.method == "PATCH":
+                    in_flight.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route("**/api/papers/paper-a", hold_a)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.get_by_role("button", name="Write a note").click()
+                await page.locator('textarea[data-note="paper-a"]').fill("A's note.")
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await asyncio.wait_for(in_flight.wait(), 10)
+
+                # Move to B and start a note there while A's save is held.
+                await page.click('#papers [data-paper="paper-b"]')
+                await page.get_by_role("button", name="Write a note").click()
+                field_b = page.locator('textarea[data-note="paper-b"]')
+                await field_b.fill("B's note, still being written.")
+
+                # B's Save is drawn enabled, and says why it will not run.
+                await page.locator(".note").get_by_role("button", name="Save").click()
+                await page.locator("#toasts .toast",
+                                   has_text="Wait for the note being saved").wait_for()
+
+                release.set()
+                # A's answer lands: B's editor is still open on B's text.
+                await page.wait_for_timeout(1500)
+                assert await field_b.input_value() == "B's note, still being written."
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert store.load_paper("paper-a")["notes"] == "A's note."
+    assert store.load_paper("paper-b")["notes"] == ""

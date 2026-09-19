@@ -391,8 +391,10 @@ synthesis pass: a note costs nothing and changes nothing the model was asked.
 
 A paper also has an `error`, which is the other thing `notes` used to hold:
 why the ingest has no PDF. That one is the program's to write, so a note means
-one thing. A corpus written before the split has its old `notes` read as the
-`error` it was.
+one thing. In a corpus written before the split, an old `notes` that begins
+with the ingest's own `PDF download failed:` is read as the `error` it was;
+anything else there is left as the note it is, since the API accepted `notes`
+then and a corpus driven from a script may hold a real one.
 
 ## Claims worded alike
 

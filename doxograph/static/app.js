@@ -1702,7 +1702,13 @@ function cancelNoteEdit() {
 }
 
 async function saveNote(key) {
-  if (V.noteSaving) return;   // a save is in flight
+  if (V.noteSaving) {
+    // One at a time, as a synthesis is. Another paper's Save is drawn enabled
+    // — the freeze is keyed to the paper being written — so it says why
+    // rather than doing nothing.
+    if (V.noteSaving !== key) toast('Wait for the note being saved to finish.', { tone: 'warn' });
+    return;
+  }
   // The header stands until the removal comes back, so this is still
   // clickable. The PATCH landing first would report a note saved that the
   // DELETE behind it throws away; landing second it is a 404.
@@ -1719,7 +1725,10 @@ async function saveNote(key) {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ notes: text }),
     });
-    V.noteEditing = null;
+    // Only this paper's editor. The save is slow enough to move to another
+    // paper and open its note meanwhile, and closing that one would take the
+    // reader out of a note they are still writing.
+    if (V.noteEditing === key) V.noteEditing = null;
     delete V.noteDrafts[key];
   } catch (error) {
     V.noteDrafts[key] = text;   // keep what was typed so the save can be retried
@@ -2500,8 +2509,29 @@ async function synthesize(topics, force = false) {
 // parked editors — so the URL is written once the drawing is done rather than
 // once per branch.
 function renderContent() {
+  // A redraw replaces the note's textarea with a fresh one built from the
+  // draft, so the text survives but the cursor does not — and a redraw can
+  // arrive from a text search, a lookalike or a passage that was asked for
+  // before the note was opened. Standing those off would keep answers the
+  // reader did ask for off the screen, so the cursor is put back instead.
+  const cursor = noteCursor();
   drawContent();
+  restoreNoteCursor(cursor);
   syncHash();
+}
+
+function noteCursor() {
+  const field = document.activeElement;
+  if (!field || !field.matches || !field.matches('textarea[data-note]')) return null;
+  return { key: field.dataset.note, start: field.selectionStart, end: field.selectionEnd };
+}
+
+function restoreNoteCursor(cursor) {
+  if (!cursor) return;
+  const field = document.querySelector(`textarea[data-note="${CSS.escape(cursor.key)}"]`);
+  if (!field) return;
+  field.focus();
+  field.setSelectionRange(cursor.start, cursor.end);
 }
 
 function drawContent() {

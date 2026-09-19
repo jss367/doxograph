@@ -130,6 +130,20 @@ def test_the_export_carries_both_notes():
     assert html.count("my note") >= 2
 
 
+def test_a_claim_is_found_in_the_export_by_its_papers_note():
+    """The export filters claims on one string each. A paper's note is part
+    of every one of its claims' strings, so a word only the note holds does
+    not hide the claims of the paper it is on."""
+    paper_with_a_claim()
+    paper = store.load_paper("doe2026study")
+    paper["notes"] = "Read this one for the method."
+    store.save_paper(paper)
+
+    html = export.render()
+    hay = html.split('data-hay="')[1].split('"')[0]
+    assert "read this one for the method." in hay
+
+
 def test_a_claim_is_found_in_the_export_by_its_note():
     """The export filters on one string per claim. A note is part of it, so a
     word only the reader wrote still finds the claim."""

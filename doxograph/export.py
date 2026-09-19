@@ -185,7 +185,7 @@ def _note_html(text: str, label: str) -> str:
 def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
     hay = " ".join([
         row.get("text", ""), row.get("evidence", ""), row.get("quote", ""),
-        row.get("note", ""),
+        row.get("note", ""), row.get("paper_notes", ""),
         row.get("paper_title", ""), " ".join(row.get("paper_authors", [])),
         " ".join(row.get("tags", [])), " ".join(row.get("paper_labels", [])),
     ]).lower()
@@ -223,6 +223,15 @@ def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
 def render(title: str = "Doxograph") -> str:
     papers = store.all_papers()
     rows = store.claim_rows(papers)
+    # A paper's note is searched through its claims as well as on its own, so
+    # filtering for a word only the note holds does not hide every claim of
+    # the paper it is on — the same rule the app's own filter follows. Written
+    # onto the rows here rather than in `claim_rows`, which also feeds the
+    # page: there the note would be repeated once per claim in a payload the
+    # browser re-reads on every change.
+    notes = {paper["key"]: (paper.get("notes") or "") for paper in papers}
+    for row in rows:
+        row["paper_notes"] = notes.get(row.get("paper"), "")
     tags = store.load_tags()
     tag_descriptions = {t["name"]: t.get("description", "") for t in tags}
     counts = store.tag_counts(rows)
