@@ -91,7 +91,7 @@ appearanceQuery.addEventListener('change', () => {
   if (themeSettings.appearance === 'system') applyThemeSettings(themeSettings);
 });
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
+let S = { papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
           kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
 let workspaces = [];
 let currentWorkspaceId = null;
@@ -145,7 +145,7 @@ const NEW_CLAIM_ID = '__new__';
 // away the first one's text. synthSaving is the topic whose hand save is in
 // flight: its editor is frozen, as a claim form is while it saves, because
 // success redraws from the server value and typing meanwhile would be lost.
-const V = { paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
@@ -722,6 +722,7 @@ function currentHash() {
   if (V.view !== 'claims') params.set('view', V.view);
   if (V.paper) params.set('paper', V.paper);
   if (V.tag) params.set('tag', V.tag);
+  if (V.label) params.set('label', V.label);
   if (V.q.trim()) params.set('q', V.q);
   if (V.kind) params.set('kind', V.kind);
   if (V.unreviewed) params.set('unreviewed', '1');
@@ -773,6 +774,11 @@ function readStatus(value) {
 function dropMissingFilters() {
   if (V.paper && !S.papers.some((paper) => paper.key === V.paper)) V.paper = null;
   if (V.tag && !Object.hasOwn(S.tag_counts || {}, V.tag)) V.tag = null;
+  // A label is dropped the same way, and for the same reason: the last paper
+  // carrying it can be removed, or renamed out from under a bookmark, and the
+  // sidebar hides the section entirely when no label is in use — which would
+  // leave a filter on with nothing on screen to turn it off.
+  if (V.label && !Object.hasOwn(S.label_counts || {}, V.label)) V.label = null;
   if (V.kind && !(S.kinds || []).includes(V.kind)) {
     V.kind = '';
     $('kind').value = '';
@@ -788,6 +794,7 @@ function applyHash() {
   V.view = HASH_VIEWS.includes(view) ? view : 'claims';
   V.paper = params.get('paper') || null;
   V.tag = params.get('tag') || null;
+  V.label = params.get('label') || null;
   V.q = params.get('q') || '';
   V.kind = params.get('kind') || '';
   V.unreviewed = params.get('unreviewed') === '1';
@@ -1005,10 +1012,10 @@ function renderWorkspacePicker() {
 }
 
 function resetWorkspaceView() {
-  S = { papers: [], claims: [], tags: [], tag_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
+  S = { papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
         kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
   Object.assign(V, {
-    paper: null, tag: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+    paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
@@ -1211,7 +1218,7 @@ function queryPatterns(query) {
 function haystack(row) {
   return [row.text, row.evidence, row.quote, row.paper, row.paper_title,
           row.paper_year, (row.paper_authors || []).join(' '),
-          (row.tags || []).join(' ')]
+          (row.tags || []).join(' '), (row.paper_labels || []).join(' ')]
     .join(' ').toLowerCase();
 }
 
@@ -1219,7 +1226,8 @@ function haystack(row) {
 // claims; this covers one that has none yet, which is exactly the paper a
 // title search is most likely to be looking for.
 function paperHaystack(paper) {
-  return [paper.title, paper.key, (paper.authors || []).join(' '), paper.year]
+  return [paper.title, paper.key, (paper.authors || []).join(' '), paper.year,
+          (paper.labels || []).join(' ')]
     .join(' ').toLowerCase();
 }
 
@@ -1305,18 +1313,30 @@ function drawSearchProgress() {
 // claim match ignores the selected paper, so narrowing to one paper does not
 // empty the list you would use to leave it.
 function matchingPapers() {
-  if (!V.q.trim()) return S.papers;
+  const labelled = labelledPapers();
+  const within = labelled ? S.papers.filter((p) => labelled.has(p.key)) : S.papers;
+  if (!V.q.trim()) return within;
   const matches = queryMatcher();
   const owners = new Set(S.claims
     .filter((row) => matches(haystack(row)))
     .map((row) => row.paper));
-  return S.papers.filter((p) => owners.has(p.key) || matches(paperHaystack(p)));
+  return within.filter((p) => owners.has(p.key) || matches(paperHaystack(p)));
+}
+
+// The keys the label filter allows, or null when no label is chosen. A label
+// belongs to the paper, so it narrows the claims by way of the papers that
+// carry it rather than by anything on the claim itself.
+function labelledPapers() {
+  if (!V.label) return null;
+  return new Set(S.papers.filter((p) => (p.labels || []).includes(V.label)).map((p) => p.key));
 }
 
 function visibleClaims() {
   const matches = queryMatcher();
+  const labelled = labelledPapers();
   return S.claims.filter((row) =>
     (!V.paper || row.paper === V.paper)
+    && (!labelled || labelled.has(row.paper))
     && (!V.tag || (row.tags || []).includes(V.tag))
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
@@ -1336,6 +1356,7 @@ function render() {
   renderResearchNav();
   renderGraphNav();
   renderTags();
+  renderLabels();
   // The research form is an editor too: a poll must not redraw it under the cursor.
   if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
   renderJobs();
@@ -1354,6 +1375,7 @@ function renderAll() {
   renderResearchNav();
   renderGraphNav();
   renderTags();
+  renderLabels();
   renderContent();
   renderJobs();
   syncAnalysisControls();
@@ -1497,6 +1519,19 @@ function tensionsFor(claimId) {
     && t.claims.some((c) => c.id === claimId));
 }
 
+// The section hides itself when nothing is labelled. An empty list under a
+// heading reads as a feature that is broken rather than one nobody has used,
+// and the way in is the button on a paper, not this.
+function renderLabels() {
+  const entries = Object.entries(S.label_counts || {});
+  $('labels-sec').hidden = entries.length === 0;
+  $('labels').innerHTML = entries.map(([name, count]) => `
+    <li class="${V.label === name ? 'active' : ''}" data-label="${esc(name)}">
+      <span>${esc(name)}</span>
+      <span class="n">${count}</span>
+    </li>`).join('');
+}
+
 function renderTags() {
   const entries = Object.entries(S.tag_counts);
   const declared = new Set(S.tags.map((t) => t.name));
@@ -1521,6 +1556,8 @@ function paperHeader(key) {
       ${p.year ? '· ' + esc(p.year) : ''} ${p.venue ? '· ' + esc(p.venue) : ''}
       · <code>${esc(key)}</code>
       ${p.has_pdf ? `· <a href="/pdf/${esc(key)}?${workspaceQuery()}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
+    ${(p.labels || []).length ? `<div class="labels">${(p.labels || [])
+      .map((l) => `<span class="label" data-label="${esc(l)}">${esc(l)}</span>`).join('')}</div>` : ''}
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
     <div class="row">
@@ -1530,10 +1567,46 @@ function paperHeader(key) {
       ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
         title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
+      <button type="button" data-act="labels" data-paper="${esc(key)}"
+        title="Mark this paper — open source, has a model on HuggingFace, anything you sort papers by">Labels</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
     ${proposedPanel(key)}
   </div>`;
+}
+
+// Labels are typed into one field, as a claim's topics are, rather than
+// added and removed one at a time: there are rarely more than two or three on
+// a paper, and one field is one request and nothing to keep in sync. The
+// labels already in use are offered in the note, since the point of a label is
+// that other papers carry the same one and a typo makes a second list of one.
+async function editLabels(key) {
+  const paper = S.papers.find((x) => x.key === key);
+  if (!paper) return;
+  const inUse = Object.keys(S.label_counts || {});
+  const answer = await askText(`Labels for ${paper.title || key}`, {
+    note: 'Separate labels with spaces or commas; a label of several words is written with hyphens.'
+      + (inUse.length ? ` In use: ${inUse.join(', ')}` : ''),
+    placeholder: 'open-source huggingface',
+    value: (paper.labels || []).join(' '),
+  });
+  if (answer === null) return;   // cancelled: not the same as clearing them
+  const labels = answer.split(/[\s,]+/).map((l) => l.trim()).filter(Boolean);
+  try {
+    await api(`/api/papers/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels }),
+    });
+  } catch (e) {
+    toast(`Could not save the labels: ${e.message}`);
+    return;
+  }
+  // `refreshAll` rather than `refresh`: the chips are part of the paper's
+  // header, which `render` leaves alone while a claim editor is open, and the
+  // labels would not appear until that editor was closed. The draft in it is
+  // kept across the rebuild.
+  await refreshAll();
 }
 
 function paperCache() {
@@ -2567,6 +2640,7 @@ function graphData() {
     nodes.push({
       id: `p:${p.key}`, type: 'paper', key: p.key, label: p.title || p.key, cite: graphCite(p),
       n: p.n_claims || 0, topic: ranked.length ? ranked[0][0] : null, tags: new Set(counts.keys()),
+      labels: new Set(p.labels || []),
       r: 6 + 3 * Math.sqrt(p.n_claims || 0),
     });
   }
@@ -2797,7 +2871,12 @@ function graphDraw() {
   ctx.clearRect(0, 0, w, h);
   ctx.translate(w / 2 + GRAPH.tx, h / 2 + GRAPH.ty);
   ctx.scale(GRAPH.zoom, GRAPH.zoom);
-  const dim = (n) => V.tag && n.type === 'paper' && !n.tags.has(V.tag);
+  // A filter greys the papers it leaves out rather than removing them, so the
+  // shape of the corpus stays visible behind the ones picked out. A label
+  // dims the same way a topic does; a claim node carries neither and is left
+  // alone by both.
+  const dim = (n) => n.type === 'paper'
+    && ((V.tag && !n.tags.has(V.tag)) || (V.label && !(n.labels || new Set()).has(V.label)));
   const hover = GRAPH.hover;
   const linked = new Set();
   if (hover) GRAPH.edges.forEach((e) => { if (e.source === hover) linked.add(e.target); if (e.target === hover) linked.add(e.source); });
@@ -4079,6 +4158,12 @@ $('content').addEventListener('click', async (event) => {
       renderContent();
       return;
     }
+    if (act === 'labels') {
+      // Nothing to guard against a removal in flight: the dialog is modal, and
+      // a PATCH landing on a paper that has gone comes back 404 and says so.
+      await editLabels(paper);
+      return;
+    }
     if (act === 'del-paper') {
       // The button goes with the header, which stands until the DELETE comes
       // back. A second removal would ask the question again and send a second
@@ -4114,6 +4199,11 @@ $('content').addEventListener('click', async (event) => {
     V.tag = V.tag === tagEl.dataset.tag ? null : tagEl.dataset.tag;
     syncHash(true);
     renderAll();
+    return;
+  }
+  const labelEl = event.target.closest('[data-label]');
+  if (labelEl && !labelEl.dataset.act) {
+    chooseLabel(labelEl.dataset.label);
     return;
   }
   const card = event.target.closest('.claim[data-claim]');
@@ -4354,6 +4444,33 @@ document.addEventListener('mousedown', (event) => {
 // so closing the menu does not also cancel an open editor.
 $('side').addEventListener('scroll', closePaperMenu);
 window.addEventListener('resize', closePaperMenu);
+
+// Choosing a label from the sidebar or from a paper's own header. A label is
+// a property of the paper, so it is read as "show me the papers like this
+// one": a paper open on screen that does not carry the label is left, rather
+// than sitting there unchanged while the list behind it narrows to papers the
+// reader cannot see.
+function chooseLabel(name) {
+  const next = V.label === name ? null : name;
+  const open = V.paper && S.papers.find((p) => p.key === V.paper);
+  if (next && open && !(open.labels || []).includes(next)) {
+    captureOpenEditor();
+    parkNewClaimForNavigation(null);
+    parkSynthEditor();
+    V.paper = null;
+    V.selectedId = null;
+    V.editing = null;
+  }
+  V.label = next;
+  syncHash(true);
+  renderAll();
+}
+
+$('labels').addEventListener('click', (event) => {
+  const li = event.target.closest('[data-label]');
+  if (!li) return;
+  chooseLabel(li.dataset.label);
+});
 
 $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
@@ -4744,7 +4861,7 @@ async function boot() {
       // or not anything in the corpus has moved.
       if (citationsFailed && V.view === 'graph') loadCitations();
       renderStats();
-      renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags();
+      renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
       if (!V.editing && !V.synthEditing && V.view !== 'research') renderContent();
       syncAnalysisControls();
     } catch (e) { /* the server may be restarting; try again next tick */ }

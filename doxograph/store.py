@@ -431,6 +431,13 @@ def new_paper(key: str, **fields) -> dict:
         "status": "fetched",
         "extraction": None,
         "proposed_tags": [],
+        # Labels are about the paper rather than about anything it claims: that
+        # it is open source, that a model is on HuggingFace, that it is on the
+        # reading list. They are set by hand and no pass touches them, which is
+        # why they are not topics: the vocabulary goes into the extraction
+        # prompt, and a topic there is something the model is asked to find in
+        # the text. Nothing in a paper's text says it is on your reading list.
+        "labels": [],
         "claims": [],
         "notes": "",
     }
@@ -892,8 +899,47 @@ def claim_rows(papers: list[dict] | None = None) -> list[dict]:
             row["paper_title"] = paper.get("title", "")
             row["paper_authors"] = paper.get("authors", [])
             row["paper_year"] = paper.get("year")
+            # The labels travel with the claim so that a query matching a
+            # paper matches its claims too, as the title and the year already
+            # do. Nothing a model pass reads includes them: `claim_fingerprint`
+            # and `synthesis_claim_basis` name their fields one by one, so
+            # labelling a paper does not stale a synthesis.
+            row["paper_labels"] = paper.get("labels") or []
             rows.append(row)
     return rows
+
+
+def normalize_labels(values: list[str]) -> list[str]:
+    """Labels as they are stored: slugs, deduplicated, in one order.
+
+    Written by hand in one text field, so "Open Source, open-source" arrives
+    as one label rather than three, and the sidebar counts a label once per
+    paper however it was typed.
+    """
+    return sorted({slug for slug in (slugify(v) for v in values) if slug})
+
+
+def set_labels(key: str, labels: list[str]) -> dict:
+    """Replace one paper's labels, under its lock."""
+    with paper_lock(key):
+        paper = load_paper(key)
+        paper["labels"] = normalize_labels(labels)
+        save_paper(paper)
+        return paper
+
+
+def label_counts(papers: list[dict]) -> dict[str, int]:
+    """How many papers carry each label, commonest first, ties by name.
+
+    The same shape and order as `tag_counts`, which counts claims: the two
+    lists sit next to each other in the sidebar and should not be read
+    differently.
+    """
+    counts: dict[str, int] = {}
+    for paper in papers:
+        for label in paper.get("labels") or []:
+            counts[label] = counts.get(label, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def tag_counts(rows: list[dict]) -> dict[str, int]:
@@ -926,6 +972,7 @@ def summarize(paper: dict) -> dict:
         "year": paper.get("year"),
         "venue": paper.get("venue", ""),
         "status": paper.get("status", "fetched"),
+        "labels": paper.get("labels") or [],
         "summary": paper.get("summary", ""),
         "relevance": paper.get("relevance", ""),
         "source": paper.get("source", {}),
