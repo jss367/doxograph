@@ -195,6 +195,57 @@ one, the draft is held and a line at the top of the list offers to resume or
 discard it. Leaving the paper abandons it, since the draft belongs to that paper. A proposed topic is added to the vocabulary only
 by Accept; Discard just clears the proposal.
 
+## Research without AI
+
+All of these tools work with **Enable AI analysis** turned off. Your boards,
+connections, reading progress, and saved searches belong to the selected workspace
+and are stored in `notebook.json`. They are never sent to a model.
+
+- **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
+  passage on the page and choose **Capture selected passage** to fill the quote
+  and page fields. Write the claim in your own words, optionally add a note, and
+  save. Quotes receive the same local verification as ordinary manual claims.
+  Pages with no selectable text can still be read and transcribed by hand.
+- **Compare & organize** uses the checkboxes on claim cards and beside paper
+  titles. Selections stay pinned across filters and navigation, and survive a
+  reload in the same browser tab. Compare sources, quotes, evidence, and notes
+  side by side. Clear or unpin items when finished.
+- **Claim connections** lets you connect two selected claims as agreeing,
+  contradicting, or qualifying one another and write your explanation. A
+  qualification runs from the first claim to the second. These manual judgments
+  are separate from model-generated agreements and tensions.
+- **Evidence boards** collect selected claims in an order you choose. Add
+  headings and commentary, move entries with the arrow buttons, and save the
+  board. Source claims remain linked to their papers; if a source is removed,
+  the board marks it as missing and keeps your commentary.
+- **Saved searches** remember the current query, paper, topic, label, claim kind,
+  review and quote-verification filters, and grouping. Opening one runs those
+  filters against the current corpus, so new matching claims appear naturally.
+- **Reading queue** keeps an ordered list of papers with queued, reading, and
+  finished states, independently of claim review. The reader saves your page
+  position; bookmark pages and resume them from the queue.
+- **Bulk organization**, under Compare & organize, adds, removes, or replaces
+  topics on selected claims and labels on their papers. Explicitly selected
+  papers can have topics changed across all their claims. New topics must first
+  be added to the vocabulary. Replacing values asks before removing existing ones.
+- **Export Markdown** and **Export CSV** download the selected claims or papers,
+  or a whole evidence board, with citations, quotes, locations, evidence, and
+  notes. Board exports retain entry order, headings, and commentary. HTML and
+  BibTeX export remain in the main toolbar.
+- **Edit history**, on a paper, and **history**, on a claim, show earlier claim
+  wording and paper notes alongside their current versions. Restore an earlier
+  version without changing other claims. History starts with edits made in this
+  version of the app; it is stored with the paper and removed with that paper.
+  Restoring omits historical topics that are no longer in the vocabulary and
+  reports which ones were omitted; existing claims keep their current review decision.
+  Restoring a deleted claim also keeps its deletion in history, so the restoration
+  can itself be undone.
+
+Open research-tool forms keep unsaved writing until you save or explicitly
+choose to discard it. If another window changes the same workspace's research
+tools, a save reports the conflict and keeps your form. **Reload saved version**
+loads that window's changes after asking about your unsaved work.
+
 ## The Mac app
 
 ```
@@ -488,7 +539,7 @@ or too confidently worded. The retagger has its own, shorter prompt in
 
 ```
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m playwright install chromium
+.venv/bin/python -m playwright install chromium webkit
 .venv/bin/python -m pytest
 ```
 
