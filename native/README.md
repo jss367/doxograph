@@ -102,6 +102,14 @@ and then relaunching the app.
   from a package the server cannot read back, is read as no answer and refuses
   nothing.
 
+  The two endpoints are two requests, and a port is not a promise between them:
+  the server that answers the first can exit before the second and leave its
+  successor to answer that one. Both report the release, and a pair that names
+  two different ones is thrown away rather than combined into a description of a
+  server that never existed. It is asked twice, and a port changing hands twice
+  in a row settles for the health read alone — one server's answer, and the
+  release check this had before the digests existed.
+
   A server that answers `/api/health` as Doxograph and then 404s on `/api/code`
   is refused rather than adopted, even when the release matches. This app's own
   code serves that route, so a Doxograph without it is provably not running this

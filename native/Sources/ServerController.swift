@@ -739,6 +739,14 @@ final class ServerController {
         /// The request did not come back — a timeout, a dropped connection, a
         /// 500, a body that would not parse. Nothing is concluded from it.
         case unavailable
+        /// It answered, naming a release other than the one `/api/health` had
+        /// just named. A port is not a promise between two requests: the
+        /// server that answered the first can exit before the second and leave
+        /// its successor to answer that one. These digests belong to a
+        /// different server than those counts, and the pair is thrown away
+        /// rather than combined into a description of a server that never
+        /// existed.
+        case otherServer
 
         /// The digests, when there are any. A server that cannot report them
         /// still has a version, and that is all its identity can be built from.
@@ -748,20 +756,32 @@ final class ServerController {
         }
     }
 
-    /// Ask the server which code it is running.
+    /// Ask the server which code it is running, having just been told by
+    /// `/api/health` which release it is.
+    ///
+    /// The release is passed in so the answer can be checked against it. Both
+    /// endpoints report it, and a reply that names a different one is a reply
+    /// from a different server — which is the only way this app can notice that
+    /// the port changed hands between the two requests.
     ///
     /// The timeout is fixed and generous rather than inherited from the walk.
     /// This runs at most once per launch — on the one port that answered as
     /// Doxograph, after which the walk returns either way — so patience here
     /// cannot add up, and unlike `/api/health` the endpoint stats every file
     /// behind every module the server imported before it replies.
-    private func codeReport(on port: Int) -> CodeReport {
+    private func codeReport(on port: Int, naming release: String) -> CodeReport {
         let (status, body) = fetchJSON("/api/code", on: port, timeout: 3)
+        // A 404 carries no release to check, so it is the one answer here that
+        // a handoff could misattribute. It only ever raises a question, never
+        // takes an action, and `replaceStale` describes the port again before
+        // signalling anything — so the cost of being wrong is one alert about a
+        // server that has already gone, not a signal sent to a stranger.
         if status == 404 { return .absent }
         guard let body, body["app"] as? String == "doxograph",
               let running = body["running"] as? String,
               let onDisk = body["onDisk"] as? String
         else { return .unavailable }
+        guard body["version"] as? String == release else { return .otherServer }
         return .answered(Code(running: running, onDisk: onDisk))
     }
 
@@ -809,6 +829,25 @@ final class ServerController {
     /// permissive than the first, a server the walk had just refused could be
     /// adopted a moment later by the code that was supposed to replace it.
     private func inspect(_ port: Int, timeout: TimeInterval) -> Verdict {
+        // Asked twice, because describing a port takes two requests and one
+        // handoff between them is a coincidence. A port that changes hands
+        // twice inside four loopback requests is past describing from outside.
+        for _ in 0..<2 {
+            if let settled = describe(port, timeout: timeout) { return settled }
+        }
+        // So settle for the health read on its own, which is one server's
+        // answer and coherent whatever happens after it: the release check this
+        // had before the digests existed, and nothing combined with anything.
+        switch probe(on: port, timeout: timeout) {
+        case .unreachable: return .gone
+        case .unresponsive: return .unidentified
+        case .answered(let health): return verdict(port, health, .unavailable)
+        }
+    }
+
+    /// One coherent description of what is on a port, or nil when the port
+    /// changed hands while it was being described.
+    private func describe(_ port: Int, timeout: TimeInterval) -> Verdict? {
         switch probe(on: port, timeout: timeout) {
         case .unreachable:
             return .gone
@@ -819,25 +858,33 @@ final class ServerController {
             // digest is also the better half of `Stale.identity` — and the
             // thing most worth being able to recognise again is exactly the
             // server an alert is about to stand open over.
-            let report = self.codeReport(on: port)
-            func stale(_ reason: Stale.Reason) -> Verdict {
-                .stale(Stale(port: port, version: health.version, health: health,
-                             reason: reason, code: report.code))
-            }
-            if health.version != Self.appVersion { return stale(.version) }
-            switch report {
-            case .absent:
-                return stale(.olderThanTheCheck)
-            case .answered(let code):
-                return code.moved ? stale(.code) : .adoptable(health)
-            case .unavailable:
-                // The one case that adopts on silence. A server that answered
-                // health a moment ago and then failed this request has said
-                // nothing either way, and refusing every server the app cannot
-                // finish a second conversation with would turn a slow moment
-                // into an alert about nothing.
-                return .adoptable(health)
-            }
+            let report = codeReport(on: port, naming: health.version)
+            if case .otherServer = report { return nil }
+            return verdict(port, health, report)
+        }
+    }
+
+    /// What one server's two answers add up to.
+    private func verdict(_ port: Int, _ health: Health, _ report: CodeReport) -> Verdict {
+        func stale(_ reason: Stale.Reason) -> Verdict {
+            .stale(Stale(port: port, version: health.version, health: health,
+                         reason: reason, code: report.code))
+        }
+        if health.version != Self.appVersion { return stale(.version) }
+        switch report {
+        case .absent:
+            return stale(.olderThanTheCheck)
+        case .answered(let code):
+            return code.moved ? stale(.code) : .adoptable(health)
+        case .unavailable, .otherServer:
+            // The cases that adopt on silence. A server that answered health a
+            // moment ago and then failed this request has said nothing either
+            // way, and refusing every server the app cannot finish a second
+            // conversation with would turn a slow moment into an alert about
+            // nothing. `otherServer` cannot arrive here from `describe`, which
+            // throws that pair away; it reaches this only as the last resort
+            // above, where the code report was never asked for.
+            return .adoptable(health)
         }
     }
 

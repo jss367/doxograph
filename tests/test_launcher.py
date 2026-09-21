@@ -76,6 +76,16 @@ def test_code_reports_what_was_loaded_not_what_is_there_now(monkeypatch):
     assert body["running"] != body["onDisk"]
 
 
+def test_code_and_health_name_the_same_release():
+    """The launcher reads the two in separate requests, and a port can change
+    hands between them. Matching releases are how it notices that the digests it
+    just read belong to a different server than the counts, so both endpoints
+    have to report the release for that check to mean anything."""
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/code").json()["version"] == \
+            client.get("/api/health").json()["version"]
+
+
 def test_code_answers_without_a_workspace():
     """The launcher asks this during the port walk, before any corpus has been
     chosen, and has to get an answer even from a registry that is broken."""
