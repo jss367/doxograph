@@ -245,19 +245,25 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // the other view preferences, since it is about the screen being read on.
 
 const SIDE_WIDTH_KEY = 'doxograph-side-width';
-const SIDE_WIDTH_DEFAULT = 320;   // the 20rem the pane has always been
 const SIDE_WIDTH_MIN = 180;
+// The 20rem the pane has always been, measured rather than written as 320px: a
+// browser set to a larger default font size draws the lists larger too, and the
+// width it starts at has to grow with them.
+const sideWidthDefault = () =>
+  20 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
 // Half the window is as far as the divider goes. Past that the side pane has
-// stopped being a side pane and there is nothing left to read beside it.
-const sideWidthMax = () => Math.max(SIDE_WIDTH_MIN, Math.round(window.innerWidth / 2));
-const clampSideWidth = (px) => Math.min(sideWidthMax(), Math.max(SIDE_WIDTH_MIN, Math.round(px)));
+// stopped being a side pane and there is nothing left to read beside it. The
+// floor gives way to that ceiling on a window too narrow to hold both.
+const sideWidthMax = () => Math.round(window.innerWidth / 2);
+const sideWidthMin = () => Math.min(SIDE_WIDTH_MIN, sideWidthMax());
+const clampSideWidth = (px) => Math.min(sideWidthMax(), Math.max(sideWidthMin(), Math.round(px)));
 
 function readSideWidth() {
   try {
     const saved = Number(localStorage.getItem(SIDE_WIDTH_KEY));
-    return Number.isFinite(saved) && saved > 0 ? saved : SIDE_WIDTH_DEFAULT;
+    return Number.isFinite(saved) && saved > 0 ? saved : sideWidthDefault();
   } catch (error) {
-    return SIDE_WIDTH_DEFAULT;
+    return sideWidthDefault();
   }
 }
 
@@ -283,7 +289,7 @@ function fitSideWidth() {
   $('layout').style.setProperty('--side-width', `${width}px`);
   const handle = $('side-resize');
   handle.setAttribute('aria-valuenow', String(width));
-  handle.setAttribute('aria-valuemin', String(SIDE_WIDTH_MIN));
+  handle.setAttribute('aria-valuemin', String(sideWidthMin()));
   handle.setAttribute('aria-valuemax', String(sideWidthMax()));
   return width;
 }
@@ -323,12 +329,12 @@ window.addEventListener('resize', fitSideWidth);
   };
   handle.addEventListener('pointerup', release);
   handle.addEventListener('pointercancel', release);
-  handle.addEventListener('dblclick', () => applySideWidth(SIDE_WIDTH_DEFAULT, true));
+  handle.addEventListener('dblclick', () => applySideWidth(sideWidthDefault(), true));
   handle.addEventListener('keydown', (event) => {
     const step = event.shiftKey ? 48 : 12;
     if (event.key === 'ArrowLeft') applySideWidth(sideWidthNow() - step, true);
     else if (event.key === 'ArrowRight') applySideWidth(sideWidthNow() + step, true);
-    else if (event.key === 'Home') applySideWidth(SIDE_WIDTH_DEFAULT, true);
+    else if (event.key === 'Home') applySideWidth(sideWidthDefault(), true);
     else return;
     event.preventDefault();
   });

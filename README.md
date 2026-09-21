@@ -182,7 +182,8 @@ reading papers can give the side pane more of the window and a session spent
 reading claims can give it less. Focus the divider and the left and right arrow
 keys move it too, with Shift for a bigger step and Home to put it back.
 Double-clicking it also puts it back. It goes no wider than half the window,
-and the width is remembered in this browser.
+it starts at 20rem so a browser set to a larger default font size gets a wider
+pane, and the width is remembered in this browser.
 
 Deleting a claim, an agreement, or a synthesis is not confirmed first. It is
 undone instead: the row leaves the page at once and the request is held until

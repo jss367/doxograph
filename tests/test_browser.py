@@ -5302,6 +5302,53 @@ def test_side_pane_width_is_dragged_kept_and_put_back():
 
 
 @pytest.mark.browser
+def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1280, "height": 800})
+            # A browser set to a larger default font size draws 20rem wider.
+            # Playwright cannot set that preference, so put the size on the
+            # root through the stylesheet, which the page's scripts wait for.
+            async def bigger_root(route):
+                response = await route.fetch()
+                await route.fulfill(
+                    body=await response.text() + "\nhtml { font-size: 20px; }",
+                    content_type="text/css",
+                )
+
+            await page.route("**/app.css", bigger_root)
+            with _server() as url:
+                await page.goto(url)
+                side = page.locator("#side")
+                handle = page.locator("#side-resize")
+                assert await page.evaluate("getComputedStyle(document.documentElement).fontSize") == "20px"
+                assert (await side.bounding_box())["width"] == 400
+
+                # And the reset puts it back at that width, not at 320.
+                await handle.focus()
+                await page.keyboard.press("ArrowLeft")
+                assert (await side.bounding_box())["width"] == 388
+                await page.keyboard.press("Home")
+                assert (await side.bounding_box())["width"] == 400
+
+                # On a window too narrow to hold the floor, the half-window
+                # ceiling wins: a side pane wider than the claims is worse than
+                # a cramped one.
+                await page.set_viewport_size({"width": 320, "height": 640})
+                await page.wait_for_function(
+                    "document.getElementById('side').getBoundingClientRect().width === 160"
+                )
+                assert await handle.get_attribute("aria-valuemin") == "160"
+                assert await handle.get_attribute("aria-valuemax") == "160"
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_side_pane_width_survives_a_browser_that_will_not_store_it():
     _paper("paper-a", "Paper A", "recovery")
 
