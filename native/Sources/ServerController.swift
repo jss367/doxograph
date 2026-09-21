@@ -36,7 +36,7 @@ final class ServerController {
         let health: Health
 
         /// The version, as it goes in a sentence.
-        var versionName: String { version.isEmpty ? "an unknown version" : "version \(version)" }
+        var versionName: String { ServerController.versionName(version) }
 
         /// What stopping this server would cost, or nothing when it is idle.
         /// The two counts are summed here because the sentence only has to be
@@ -54,6 +54,12 @@ final class ServerController {
     /// app's code answers `/api/health` with.
     static let appVersion = Bundle.main
         .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+
+    /// A reported version, as it goes in a sentence. A server too old to name
+    /// one is not a server whose version is fine; it is one nobody can name.
+    static func versionName(_ version: String) -> String {
+        version.isEmpty ? "an unknown version" : "version \(version)"
+    }
 
     private static let preferredPort = 8765
     private static let portDefaultsKey = "DoxographPort"
@@ -82,8 +88,10 @@ final class ServerController {
     /// True when this app started the server, and so is responsible for it.
     private(set) var ownsServer = false
 
-    /// The version the server this app spawned answered with.
-    private var startedVersion = ""
+    /// The version the server this app spawned answered with, once it has
+    /// answered. Nil until then, and empty from a server too old to say —
+    /// which is a version that does not match, not an absence of one.
+    private var startedVersion: String?
 
     /// The version of the server this app started, when it is not this app's
     /// own, and nil when it matches or nothing was started.
@@ -102,9 +110,9 @@ final class ServerController {
     /// ordinary morning, and refusing to start over it would break more than it
     /// protects.
     var spawnedVersionMismatch: String? {
-        guard ownsServer, !startedVersion.isEmpty, startedVersion != Self.appVersion
+        guard ownsServer, let reported = startedVersion, reported != Self.appVersion
         else { return nil }
-        return startedVersion
+        return reported
     }
 
     var baseURL: URL { URL(string: "http://\(host):\(port)")! }
@@ -348,13 +356,32 @@ final class ServerController {
 
     /// Run on the stale server after all, because the user said to.
     ///
-    /// `bringUp` already pointed this controller at its port, so nothing is
-    /// started and nothing is stopped: the server stays unowned, this app quits
-    /// without taking it down, and the next launch asks the same question
-    /// again. That is the intended shape — a deliberate `doxograph serve` from
-    /// another checkout is a thing to leave alone, not a thing to remember.
-    func useStale(onReady: @escaping (URL) -> Void) {
-        DispatchQueue.main.async { onReady(self.baseURL) }
+    /// Nothing is started and nothing is stopped: the server stays unowned,
+    /// this app quits without taking it down, and the next launch asks the same
+    /// question again. That is the intended shape — a deliberate `doxograph
+    /// serve` from another checkout is a thing to leave alone, not a thing to
+    /// remember.
+    ///
+    /// The port is looked at again first, all the same. The alert it was
+    /// answered from has no deadline, and a port is not a promise: the server
+    /// the question described can exit while the question stands, leaving the
+    /// window to load a refused connection, or something else entirely to
+    /// answer on the port it left. So "use it" means the server that is there
+    /// now, and when nothing is, discovery starts over rather than pointing the
+    /// window at an address on the strength of what used to be at it.
+    func useStale(_ server: Stale, onReady: @escaping (URL) -> Void,
+                  onFailure: @escaping (Failure) -> Void) {
+        queue.async {
+            if case .unreachable = self.probe(on: server.port, timeout: 2) {
+                return self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+            }
+            // Answering, or listening and silent. Either way something is on the
+            // port to run against, and a silent server is the ordinary shape of
+            // a busy one.
+            self.port = server.port
+            self.ownsServer = false
+            self.deliver(.success, onReady: onReady, onFailure: onFailure)
+        }
     }
 
     /// Stop a stale server and start one on this app's code in its place.
@@ -380,19 +407,44 @@ final class ServerController {
             // `kill` on a number that old is a signal to a stranger. A pid is
             // only safe to use in the same breath as the lookup that produced
             // it, which is why one is no longer kept in `Stale` at all.
-            guard let live = self.health(on: server.port, timeout: 2) else {
-                // Gone while the question was up. There is nothing to stop, and
-                // the walk below finds the port free and starts there.
+            switch self.probe(on: server.port, timeout: 2) {
+            case .unreachable:
+                // Gone while the question was up, and gone is the one answer
+                // that says so: the connection was refused. There is nothing to
+                // stop, and the walk below finds the port free and starts there.
                 return self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
-            }
-            guard live.version != Self.appVersion else {
-                // Replaced, while the question was up, by a server running this
-                // app's own code — the outcome the user asked for, arrived at
-                // without this app doing anything. Adopt it rather than
-                // restarting a server that is already the right one.
-                self.port = server.port
-                self.ownsServer = false
-                return self.deliver(.success, onReady: onReady, onFailure: onFailure)
+
+            case .unresponsive:
+                // Something is listening and not answering, which is what a
+                // busy server looks like from outside. It is emphatically not
+                // an empty port, and reading it as one would send the walk off
+                // to start a second Doxograph on the next port up while this one
+                // carries on holding this one. Fall through and stop it: it is
+                // what the user asked to have stopped.
+                break
+
+            case .answered(let live):
+                guard live.version != Self.appVersion else {
+                    // Replaced, while the question was up, by a server running
+                    // this app's own code — the outcome the user asked for,
+                    // arrived at without this app doing anything. Adopt it
+                    // rather than restarting a server that is already right.
+                    self.port = server.port
+                    self.ownsServer = false
+                    return self.deliver(.success, onReady: onReady, onFailure: onFailure)
+                }
+                // The counts the user answered are the ones from the walk. Work
+                // that started while the alert stood open was never in the
+                // question, so nobody has agreed to lose it — ask again, with
+                // the count that is true now. This cannot cycle: the second
+                // question carries the work, and answering Restart to that one
+                // is the agreement the first one could not give.
+                if live.jobs + live.arriving > 0,
+                   server.health.jobs + server.health.arriving == 0 {
+                    return self.deliver(.failure(.staleServer(
+                        Stale(port: server.port, version: live.version, health: live))),
+                        onReady: onReady, onFailure: onFailure)
+                }
             }
             guard let pid = Self.listener(on: server.port) else {
                 return self.deliver(.failure(.launchFailed(

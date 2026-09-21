@@ -51,9 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             warn("The server is a different version",
                  """
                  This app is version \(ServerController.appVersion) and the doxograph it \
-                 started is version \(version), so the two were not built together. Rebuild \
-                 the app with native/build.sh --install, or use Update Doxograph… in the \
-                 Doxograph menu.
+                 started is \(ServerController.versionName(version)), so the two were not \
+                 built together. Rebuild the app with native/build.sh --install, or use \
+                 Update Doxograph… in the Doxograph menu.
                  """)
         }
     }
@@ -343,7 +343,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // is an ordinary update rather than a retry of a start that never
             // worked.
             serverFailed = false
-            server.useStale(onReady: { [weak self] url in self?.serverReady(url) })
+            server.useStale(stale, onReady: { [weak self] url in self?.serverReady(url) },
+                            onFailure: { [weak self] failure in self?.report(failure) })
         default:
             NSApp.terminate(nil)
         }
