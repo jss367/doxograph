@@ -460,9 +460,11 @@ def new_paper(key: str, **fields) -> dict:
         "doi": "",
         "abstract": "",
         "source": {},
-        # The hash of the PDF on file, so the same file dropped a second time
-        # is recognised as this paper. A paper with no PDF has no hash.
-        "pdf_sha256": "",
+        # The PDF on file as `ingest.pdf_fingerprint` sees it: its size, its
+        # mtime and its hash. The hash is what recognises the same file dropped
+        # a second time; the other two are what say the hash is still the
+        # file's. A paper with no PDF has no fingerprint.
+        "pdf_file": {},
         "summary": "",
         "relevance": "",
         "status": "fetched",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import threading
 import time
@@ -739,13 +740,13 @@ def test_a_paper_stored_before_hashing_is_still_recognized(unidentifiable):
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     store.pdf_path("doe2026study").write_bytes(data)
     paper = store.load_paper("doe2026study")
-    del paper["pdf_sha256"]
+    del paper["pdf_file"]
     store.write_json(store.paper_path("doe2026study"), paper)
 
     key, created = ingest.ingest_pdf_bytes(data, "paper.pdf")
 
     assert (key, created) == ("doe2026study", False)
-    assert store.load_paper("doe2026study")["pdf_sha256"] == ingest.pdf_digest(
+    assert store.load_paper("doe2026study")["pdf_file"] == ingest.pdf_fingerprint(
         store.pdf_path("doe2026study"))
 
 
@@ -765,7 +766,7 @@ def test_a_downloaded_pdf_records_its_hash(monkeypatch):
     monkeypatch.setattr(ingest, "fetch_pdf", fake_fetch)
     key, _ = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
 
-    assert store.load_paper(key)["pdf_sha256"] == ingest.pdf_digest(store.pdf_path(key))
+    assert store.load_paper(key)["pdf_file"] == ingest.pdf_fingerprint(store.pdf_path(key))
 
 
 def test_dropping_a_downloaded_paper_again_does_not_duplicate_it(monkeypatch, unidentifiable):
@@ -841,7 +842,7 @@ def test_a_reservation_carries_its_hash_before_the_pdf_lands():
     arXiv ID does: a second drop of the file arriving in that window has to
     recognise it rather than claim a key of its own.
     """
-    key = store.reserve_key("doe2026study", pdf_sha256="a" * 64, title="A draft")
+    key = store.reserve_key("doe2026study", pdf_file={"sha256": "a" * 64}, title="A draft")
     assert not store.pdf_path(key).exists()
     assert ingest.find_by_digest("a" * 64) == key
     assert ingest.settled_digest("a" * 64) is None, "it cannot be settled with no PDF"
@@ -896,3 +897,22 @@ def test_repeated_recognized_drops_do_not_pile_up_jobs(monkeypatch):
                         files={"files": ("paper.pdf", body, "application/pdf")})
 
     assert len(server._jobs) == 40, f"jobs are piling up: {len(server._jobs)}"
+
+
+def test_a_pdf_replaced_by_hand_is_hashed_again(unidentifiable):
+    """The corpus is a plain directory; a paper can be swapped underneath us."""
+    old = b"%PDF-1.4\nold" + bytes(64)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(old)
+    assert ingest.find_by_digest(ingest.pdf_digest(store.pdf_path("doe2026study")))
+
+    new = b"%PDF-1.4\nreplaced" + bytes(128)
+    store.pdf_path("doe2026study").write_bytes(new)
+
+    # The bytes that are there now are the paper; the bytes that were are not.
+    assert ingest.find_by_digest(hashlib.sha256(new).hexdigest()) == "doe2026study"
+    assert ingest.find_by_digest(hashlib.sha256(old).hexdigest()) is None
+
+    key, created = ingest.ingest_pdf_bytes(new, "paper.pdf")
+    assert (key, created) == ("doe2026study", False)
+    assert store.paper_keys() == ["doe2026study"]

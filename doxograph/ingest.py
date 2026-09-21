@@ -502,28 +502,50 @@ def pdf_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def stored_digest(key: str) -> str:
-    """The hash of a paper's PDF, computed and written down on first ask.
+def pdf_fingerprint(path: Path) -> dict:
+    """What identifies a PDF on disk: the stat that says whether it changed,
+    and the hash that says which paper it is.
 
-    Papers stored before the hash was recorded are hashed here rather than
-    left unmatchable, so an existing corpus recognises a re-dropped file too.
-    That reading costs one pass over each PDF, once ever.
+    The same three fields `extract.upload_pdf` keeps for the same reason.
+    """
+    st = path.stat()
+    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": pdf_digest(path)}
+
+
+def stored_digest(key: str) -> str:
+    """The hash of a paper's PDF, read against the file and written down.
+
+    A recorded hash is trusted only while the file it was taken from is
+    unchanged. The corpus is a plain directory and a paper can be replaced in
+    it by hand — `search.paper_source` and `extract.upload_pdf` both guard the
+    same case — and a stale hash would file a re-drop of the replacement as a
+    second paper. Size and mtime decide; a replacement that matches the old
+    file in both is the limit of a stat, here as there.
+
+    Papers stored before any of this are hashed on first ask rather than left
+    unmatchable, which costs one pass over each PDF, once.
+
+    A paper with no PDF keeps whatever it recorded: an upload reserves its key
+    carrying the hash before it publishes, and that reservation is what a
+    second drop of the same file in that moment has to see.
     """
     with store.paper_lock(key):
         try:
             paper = store.load_paper(key)
         except store.VANISHED:
             return ""
-        recorded = paper.get("pdf_sha256") or ""
-        if recorded:
-            return recorded
+        recorded = paper.get("pdf_file") or {}
         path = store.pdf_path(key)
-        if not path.exists():
-            return ""
-        recorded = pdf_digest(path)
-        paper["pdf_sha256"] = recorded
+        try:
+            st = path.stat()
+        except OSError:
+            return recorded.get("sha256") or ""
+        if (recorded.get("size"), recorded.get("mtime_ns")) == (st.st_size, st.st_mtime_ns):
+            return recorded.get("sha256") or ""
+        fresh = pdf_fingerprint(path)
+        paper["pdf_file"] = fresh
         store.save_paper(paper)
-        return recorded
+        return fresh["sha256"]
 
 
 def find_by_digest(digest: str) -> str | None:
@@ -587,7 +609,7 @@ def publish_pdf(key: str, staging: Path) -> bool:
         # same file dropped again is recognised as this paper. Every PDF
         # reaches the corpus through here, downloads and uploads alike.
         paper = store.load_paper(key)
-        paper["pdf_sha256"] = pdf_digest(store.pdf_path(key))
+        paper["pdf_file"] = pdf_fingerprint(store.pdf_path(key))
         store.save_paper(paper)
     return True
 
@@ -814,10 +836,12 @@ def ingest_staged_pdf(staging: Path, filename: str) -> tuple[str, bool]:
                 else:
                     # The hash goes into the reservation, so a second drop of
                     # this file recognises it while this one is still being
-                    # published — the same reason the identity goes in.
+                    # published — the same reason the identity goes in. The
+                    # stat is left out: there is no file to stat yet, and
+                    # `publish_pdf` records the whole fingerprint when there is.
                     key = store.reserve_key(
                         store.citekey(meta["title"], meta["authors"], meta["year"]),
-                        pdf_sha256=digest, **meta
+                        pdf_file={"sha256": digest}, **meta
                     )
                     created, attach = True, True
 
