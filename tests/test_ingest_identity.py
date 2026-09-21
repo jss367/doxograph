@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
-from doxograph import config, ingest, store
+from doxograph import config, ingest, server, store
 
 
 # --- an advertised PDF link may be relative -------------------------------
@@ -379,3 +380,117 @@ def test_a_title_above_the_abstract_is_identity(monkeypatch, tmp_path):
     identity_probe(monkeypatch, JOURNAL_PAGE_ONE)
     meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
     assert meta["doi"] == "10.1234/journal.2026.99"
+
+
+# --- a reference already on file is recognized before any lookup ----------
+
+def refuse(*args, **kwargs):
+    raise AssertionError("a lookup went out for a paper already on file")
+
+
+@pytest.fixture
+def no_lookups(monkeypatch):
+    for name in ("fetch_arxiv", "fetch_crossref", "fetch_pdf", "resolve_page"):
+        monkeypatch.setattr(ingest, name, refuse)
+
+
+def paper_on_file(key: str, **fields) -> str:
+    """A paper with its PDF, which is what `already_stored` asks for."""
+    store.save_paper(store.new_paper(key, **fields))
+    store.pdf_path(key).write_bytes(b"%PDF-1.4\nbody")
+    return key
+
+
+def test_a_stored_arxiv_reference_is_answered_without_a_lookup(no_lookups):
+    paper_on_file("doe2026study", source={"kind": "arxiv", "id": "2602.06941v1", "url": ""})
+    assert ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941v2", "")) == ("doe2026study", False)
+
+
+def test_a_stored_doi_is_answered_without_a_lookup(no_lookups):
+    paper_on_file("doe2026study", doi="10.1038/example",
+                  source={"kind": "doi", "id": "10.1038/example", "url": ""})
+    assert ingest.ingest_ref(ingest.Ref("doi", "10.1038/example", "")) == ("doe2026study", False)
+
+
+def test_a_stored_pdf_link_is_not_downloaded_again(no_lookups):
+    url = "https://journal.example.org/a.pdf"
+    paper_on_file("doe2026study", source={"kind": "url", "id": url, "url": url, "pdf_url": url})
+    assert ingest.ingest_ref(ingest.Ref("pdf", url, "")) == ("doe2026study", False)
+
+
+def test_an_unrelated_reference_is_still_fetched(monkeypatch):
+    paper_on_file("doe2026study", source={"kind": "arxiv", "id": "2602.06941", "url": ""})
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda ident, client: {
+        "title": "Another", "authors": [], "year": 2026, "abstract": "", "venue": "",
+        "doi": "", "source": {"kind": "arxiv", "id": ident, "url": "", "pdf_url": ""},
+    })
+    key, created = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06942", ""))
+    assert created and key != "doe2026study"
+
+
+def test_a_paper_without_its_pdf_is_looked_up_again():
+    """The quick answer must not stand in front of the download retry."""
+    store.save_paper(store.new_paper(
+        "doe2026study", source={"kind": "arxiv", "id": "2602.06941", "url": ""}))
+    assert ingest.already_stored(ingest.Ref("arxiv", "2602.06941", "")) is None
+
+
+def test_a_landing_page_is_resolved_before_it_can_be_recognized(monkeypatch):
+    """A page names nothing until it is read, so the quick answer waits for that."""
+    paper_on_file("doe2026study", source={"kind": "arxiv", "id": "2602.06941", "url": ""})
+    html = '<head><link rel="canonical" href="https://arxiv.org/abs/2602.06941"></head>'
+    page = ingest.Ref("page", "https://arxiv.org/abs/2602.06941", "")
+    monkeypatch.setattr(ingest, "fetch_arxiv", refuse)
+
+    assert ingest.already_stored(page) is None, "a page cannot be recognized unresolved"
+    client = FakePageClient("https://arxiv.org/abs/2602.06941", html)
+    assert ingest.ingest_ref(page, client) == ("doe2026study", False)
+
+
+# --- and the web app says so in the response, without a job ---------------
+
+@pytest.fixture
+def web(monkeypatch):
+    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(server._pool, "submit", refuse)
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        yield client
+
+
+def test_a_reference_already_here_is_reported_without_a_job(web):
+    paper_on_file("doe2026study", source={"kind": "arxiv", "id": "2602.06941", "url": ""})
+    store.add_claim("doe2026study", {"text": "Steering recovers."})
+
+    body = web.post("/api/ingest",
+                    json={"text": "arxiv.org/abs/2602.06941", "extract": True}).json()
+
+    assert body == {"queued": 0, "unknown": [],
+                    "known": [{"ref": "arxiv.org/abs/2602.06941", "key": "doe2026study"}]}
+    assert web.get("/api/jobs").json()["jobs"] == []
+
+
+def test_a_paper_still_waiting_to_be_read_is_queued(monkeypatch):
+    """Re-pasting a reference is how an extraction that failed is retried."""
+    monkeypatch.setattr(server, "_jobs", {})
+    submitted = []
+    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
+    paper_on_file("doe2026study", source={"kind": "arxiv", "id": "2602.06941", "url": ""})
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        body = client.post("/api/ingest",
+                           json={"text": "arxiv.org/abs/2602.06941", "extract": True}).json()
+
+    assert (body["queued"], body["known"]) == (1, [])
+    assert len(submitted) == 1
+
+
+def test_a_paper_with_no_claims_is_not_queued_when_nothing_will_read_it(web):
+    """With analysis off there is nothing left for a job to do."""
+    config.set_ai_enabled(False)
+    paper_on_file("doe2026study", source={"kind": "arxiv", "id": "2602.06941", "url": ""})
+
+    body = web.post("/api/ingest",
+                    json={"text": "arxiv.org/abs/2602.06941", "extract": True}).json()
+
+    assert body["queued"] == 0
+    assert [entry["key"] for entry in body["known"]] == ["doe2026study"]

@@ -1697,6 +1697,32 @@ def test_references_that_could_not_be_read_are_named_where_they_were_pasted():
 
 
 @pytest.mark.browser
+def test_a_reference_already_in_the_corpus_is_named_straight_away():
+    """No job is made for it, so this notice is the only report there is."""
+    store.save_paper(store.new_paper(
+        "doe2026study", title="Steering and recovery", year=2026,
+        source={"kind": "arxiv", "id": "2602.06941", "url": ""}))
+    store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4\n")
+    store.add_claim("doe2026study", {"text": "Steering recovers."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.fill("#refs", "https://arxiv.org/abs/2602.06941v2")
+                await page.locator("#btn-add").click()
+                await page.locator("#toasts .toast",
+                                   has_text="Already in the corpus: doe2026study").wait_for()
+                assert await page.input_value("#refs") == ""
+                assert await page.locator("#jobs .job").count() == 0
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_the_export_notice_opens_the_file_it_just_wrote():
     _paper("doe2026study", "A study", "recovery")
 

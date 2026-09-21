@@ -48,6 +48,16 @@ def test_deduplicates_within_one_paste():
     assert len(refs) == 1
 
 
+def test_one_paper_pasted_under_two_versions_is_fetched_once():
+    refs, _ = ingest.parse_refs("2602.06941v1 https://arxiv.org/abs/2602.06941v2 2602.06941")
+    assert [r.value for r in refs] == ["2602.06941v1"]
+
+
+def test_two_papers_are_still_two():
+    refs, _ = ingest.parse_refs("2602.06941v1 2602.06942")
+    assert [r.value for r in refs] == ["2602.06941v1", "2602.06942"]
+
+
 # --- arXiv rate limiting --------------------------------------------------
 #
 # export.arxiv.org answers 406 Not Acceptable, not 429, when it is queried
