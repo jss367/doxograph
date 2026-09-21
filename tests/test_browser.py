@@ -102,8 +102,9 @@ async def _polled(page, rounds: int = 2) -> None:
     Sleeping a little past the 2.5s interval was a coin flip on a loaded
     machine: the tick the sleep was meant to cover had not landed. A round
     already running when this is called may have read the corpus before the
-    change under test was written, so the default waits out two — the second
-    is certain to have started afterwards.
+    change under test was written, so the default waits out two — and since
+    the page runs one round at a time, the second is certain to have started
+    after this read of the count.
     """
     done = await page.evaluate("polls")
     await page.wait_for_function("n => polls >= n", arg=done + rounds, timeout=30000)

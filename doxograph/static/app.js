@@ -5085,11 +5085,16 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
-// How many background polls have run to completion. The browser tests wait on
-// this rather than on the clock: a sleep a little longer than the interval is
-// a coin flip on a loaded machine, where the tick it was supposed to cover has
-// not landed yet.
+// How many background polls have run to completion, and whether one is out.
+// A round slower than the interval used to have the next one start beside it,
+// stacking reads on a machine that was already struggling; now the tick is
+// skipped instead. The browser tests wait on the count rather than on the
+// clock — a sleep a little longer than the interval is a coin flip on a loaded
+// machine, where the tick it was supposed to cover has not landed yet — and
+// one round at a time is what makes the count mean what they read it as: that
+// a round which began after they looked has since finished.
 let polls = 0;
+let polling = false;
 
 // One round of the background poll. Keeps settings current while editing; the
 // content guard preserves the editor DOM, draft text, focus, and selection.
@@ -5128,10 +5133,12 @@ async function boot() {
   // with an active nav entry and a blank main pane. Draw it once here.
   if (V.view === 'research') renderContent();
   setInterval(async () => {
-    if (document.hidden) return;
+    if (document.hidden || polling) return;
+    polling = true;
     try {
       await pollOnce();
     } catch (e) { /* the server may be restarting; try again next tick */ }
+    polling = false;
     polls += 1;
   }, 2500);
 }
