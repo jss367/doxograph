@@ -5251,3 +5251,187 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
 
     asyncio.run(scenario())
     assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."
+
+
+@pytest.mark.browser
+def test_side_pane_width_is_dragged_kept_and_put_back():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1280, "height": 800})
+            with _server() as url:
+                await page.goto(url)
+                side = page.locator("#side")
+                handle = page.locator("#side-resize")
+                assert (await side.bounding_box())["width"] == 320
+
+                async def drag_by(dx: int) -> None:
+                    box = await handle.bounding_box()
+                    await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 200)
+                    await page.mouse.down()
+                    await page.mouse.move(box["x"] + box["width"] / 2 + dx, box["y"] + 200, steps=5)
+                    await page.mouse.up()
+
+                await drag_by(140)
+                assert (await side.bounding_box())["width"] == 460
+
+                # The width belongs to the browser, not to the page: a reload
+                # comes back to the pane the reader left.
+                await page.reload()
+                await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
+                assert (await page.locator("#side").bounding_box())["width"] == 460
+
+                # Half the window is the ceiling, however far the drag goes.
+                await drag_by(900)
+                assert (await side.bounding_box())["width"] == 640
+
+                # A click on the divider leaves the keyboard on it, so the
+                # arrow keys work without going looking for it first.
+                box = await handle.bounding_box()
+                await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + 200)
+                assert await handle.evaluate("el => el === document.activeElement")
+
+                # Arrow keys move it, and Home puts it back.
+                await page.keyboard.press("ArrowLeft")
+                assert (await side.bounding_box())["width"] == 628
+                await page.keyboard.press("Home")
+                assert (await side.bounding_box())["width"] == 320
+
+                await handle.dblclick()
+                assert (await side.bounding_box())["width"] == 320
+
+                # Two quick nudges of the divider can be paired into a
+                # dblclick by the browser. That is two drags, not a reset.
+                # Playwright's mouse never synthesizes the pairing, so the
+                # event is delivered directly, after a real drag.
+                await drag_by(60)
+                assert (await side.bounding_box())["width"] == 380
+                await handle.dispatch_event("dblclick")
+                assert (await side.bounding_box())["width"] == 380
+
+                # A double-click that did not drag still resets.
+                await handle.dblclick()
+                assert (await side.bounding_box())["width"] == 320
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1280, "height": 800})
+            # A browser set to a larger default font size draws 20rem wider.
+            # Playwright cannot set that preference, so put the size on the
+            # root through the stylesheet, which the page's scripts wait for.
+            async def bigger_root(route):
+                response = await route.fetch()
+                await route.fulfill(
+                    body=await response.text() + "\nhtml { font-size: 20px; }",
+                    content_type="text/css",
+                )
+
+            await page.route("**/app.css", bigger_root)
+            with _server() as url:
+                await page.goto(url)
+                side = page.locator("#side")
+                handle = page.locator("#side-resize")
+                assert await page.evaluate("getComputedStyle(document.documentElement).fontSize") == "20px"
+                assert (await side.bounding_box())["width"] == 400
+
+                # And the reset puts it back at that width, not at 320.
+                await handle.focus()
+                await page.keyboard.press("ArrowLeft")
+                assert (await side.bounding_box())["width"] == 388
+                await page.keyboard.press("Home")
+                assert (await side.bounding_box())["width"] == 400
+
+                # On a window too narrow to hold the floor, the half-window
+                # ceiling wins: a side pane wider than the claims is worse than
+                # a cramped one.
+                await page.set_viewport_size({"width": 320, "height": 640})
+                await page.wait_for_function(
+                    "document.getElementById('side').getBoundingClientRect().width === 160"
+                )
+                assert await handle.get_attribute("aria-valuemin") == "160"
+                assert await handle.get_attribute("aria-valuemax") == "160"
+
+                # A reset on a window that narrow still means 20rem, so the
+                # 160px it can show now does not become the width it remembers.
+                await handle.focus()
+                await page.keyboard.press("Home")
+                assert (await side.bounding_box())["width"] == 160
+
+                # Nor does a key that cannot move the divider. Against the
+                # ceiling, ArrowRight does nothing at all rather than writing
+                # the ceiling over the width the window is only borrowing.
+                await page.set_viewport_size({"width": 600, "height": 800})
+                await page.wait_for_function(
+                    "document.getElementById('side').getBoundingClientRect().width === 300"
+                )
+                await handle.focus()
+                await page.keyboard.press("ArrowRight")
+                assert (await side.bounding_box())["width"] == 300
+
+                # Nor does a drag into the ceiling that leaves the divider
+                # where it found it.
+                box = await handle.bounding_box()
+                await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 200)
+                await page.mouse.down()
+                await page.mouse.move(box["x"] + box["width"] / 2 + 150, box["y"] + 200, steps=5)
+                await page.mouse.up()
+                assert (await side.bounding_box())["width"] == 300
+
+                await page.set_viewport_size({"width": 1280, "height": 800})
+                await page.wait_for_function(
+                    "document.getElementById('side').getBoundingClientRect().width === 400"
+                )
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_side_pane_width_survives_a_browser_that_will_not_store_it():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1280, "height": 800})
+            # Private windows and blocked storage throw on write. The width is
+            # then only in memory, and resizing the window must not lose it.
+            await page.add_init_script(
+                "Storage.prototype.setItem = function () { throw new Error('denied'); };"
+            )
+            with _server() as url:
+                await page.goto(url)
+                side = page.locator("#side")
+                box = await page.locator("#side-resize").bounding_box()
+                await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 200)
+                await page.mouse.down()
+                await page.mouse.move(box["x"] + box["width"] / 2 + 120, box["y"] + 200, steps=5)
+                await page.mouse.up()
+                assert (await side.bounding_box())["width"] == 440
+
+                async def resize_to(width: int, expected: int) -> None:
+                    await page.set_viewport_size({"width": width, "height": 800})
+                    await page.wait_for_function(
+                        "want => document.getElementById('side').getBoundingClientRect().width === want",
+                        arg=expected,
+                    )
+
+                await resize_to(1400, 440)
+                # Narrow enough to force the ceiling down, then wide again: the
+                # width asked for is still the width that comes back.
+                await resize_to(700, 350)
+                await resize_to(1280, 440)
+            await browser.close()
+
+    asyncio.run(scenario())

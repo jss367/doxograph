@@ -89,10 +89,22 @@ header .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap
 .settings-foot { display: flex; align-items: center; justify-content: space-between;
   border-top: 1px solid var(--line); margin-top: .75rem; padding-top: .65rem; }
 
-#layout { display: flex; align-items: flex-start; }
-#side { width: 20rem; flex: 0 0 20rem; border-right: 1px solid var(--line);
+#layout { display: flex; align-items: flex-start; --side-width: 20rem; }
+#side { width: var(--side-width); flex: 0 0 var(--side-width); border-right: 1px solid var(--line);
   height: calc(100vh - 3rem); overflow-y: auto; padding: .8rem; }
-#main { flex: 1; height: calc(100vh - 3rem); overflow-y: auto; padding: .8rem 1.2rem 6rem; }
+#main { flex: 1; min-width: 0; height: calc(100vh - 3rem); overflow-y: auto; padding: .8rem 1.2rem 6rem; }
+
+/* The divider between the two panes. It is 8px of grab area straddling the side
+   pane's border, pulled back by its own margins so widening it costs the panes
+   nothing. The line it paints only appears under the pointer or on focus. */
+#side-resize { flex: 0 0 8px; margin: 0 -4px; z-index: 5; height: calc(100vh - 3rem);
+  cursor: col-resize; touch-action: none; }
+#side-resize::before { content: ''; display: block; width: 2px; height: 100%; margin: 0 auto;
+  background: transparent; }
+#side-resize:hover::before, #side-resize:focus-visible::before,
+body.resizing-side #side-resize::before { background: var(--accent); }
+#side-resize:focus-visible { outline: none; }
+body.resizing-side { cursor: col-resize; user-select: none; }
 
 .drop { border: 2px dashed var(--line); border-radius: 6px; padding: .6rem;
   text-align: center; color: var(--muted); font-size: .85rem; margin-bottom: .6rem; }

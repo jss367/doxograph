@@ -237,6 +237,146 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// --- the width of the side pane -------------------------------------------
+//
+// How the window is divided between the lists and the claims is the reader's
+// to set: drag the divider, or give it focus and use the arrow keys. A
+// double-click puts it back where it started. Remembered in this browser like
+// the other view preferences, since it is about the screen being read on.
+
+const SIDE_WIDTH_KEY = 'doxograph-side-width';
+const SIDE_WIDTH_MIN = 180;
+// The 20rem the pane has always been, measured rather than written as 320px: a
+// browser set to a larger default font size draws the lists larger too, and the
+// width it starts at has to grow with them.
+const sideWidthDefault = () =>
+  20 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+// Half the window is as far as the divider goes. Past that the side pane has
+// stopped being a side pane and there is nothing left to read beside it. The
+// floor gives way to that ceiling on a window too narrow to hold both.
+const sideWidthMax = () => Math.round(window.innerWidth / 2);
+const sideWidthMin = () => Math.min(SIDE_WIDTH_MIN, sideWidthMax());
+const clampSideWidth = (px) => Math.min(sideWidthMax(), Math.max(sideWidthMin(), Math.round(px)));
+
+function readSideWidth() {
+  try {
+    const saved = Number(localStorage.getItem(SIDE_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? saved : sideWidthDefault();
+  } catch (error) {
+    return sideWidthDefault();
+  }
+}
+
+// The width that was asked for, which is not always the width on screen: a
+// window too narrow to hold it shows the widest pane it can. Kept here as well
+// as in storage, so a browser that refuses to write still holds the choice for
+// the rest of the session, and a window narrowed and widened again comes back
+// to it rather than to the default.
+let sideWidthWanted = readSideWidth();
+
+// A drag or a key can ask past the ceiling; what is remembered is the most this
+// window would have given it, not where the pointer went, so a drag that ran off
+// the edge does not spring the pane open on a wider screen later.
+function applySideWidth(px, persist = false) {
+  return wantSideWidth(clampSideWidth(px), persist);
+}
+
+// The reset is the exception: Home and a double-click mean 20rem, whatever this
+// window can show of it, so that is what is remembered and a wider window comes
+// back to it.
+function wantSideWidth(px, persist = false) {
+  sideWidthWanted = Math.round(px);
+  if (persist) storeSideWidth();
+  return fitSideWidth();
+}
+
+// Put the pane at the width that was asked for, or as near as this window
+// allows, without forgetting what was asked for.
+function fitSideWidth() {
+  const width = clampSideWidth(sideWidthWanted);
+  $('layout').style.setProperty('--side-width', `${width}px`);
+  const handle = $('side-resize');
+  handle.setAttribute('aria-valuenow', String(width));
+  handle.setAttribute('aria-valuemin', String(sideWidthMin()));
+  handle.setAttribute('aria-valuemax', String(sideWidthMax()));
+  return width;
+}
+
+function storeSideWidth() {
+  try { localStorage.setItem(SIDE_WIDTH_KEY, String(sideWidthWanted)); }
+  catch (error) { /* the pane keeps the width for this session */ }
+}
+
+const sideWidthNow = () => $('side').getBoundingClientRect().width;
+
+fitSideWidth();
+
+window.addEventListener('resize', fitSideWidth);
+
+{
+  const handle = $('side-resize');
+  // The width the drag started from, not the pointer's distance from the
+  // divider: the divider is 8px wide, so the two are not the same, and taking
+  // the difference keeps the pane from jumping on the first move.
+  let drag = null;
+  // Two quick nudges of the divider inside the double-click interval make the
+  // browser synthesize a dblclick out of them. Only a pair of presses that both
+  // stayed still is a reset; two small drags are two small drags.
+  let movedThisPress = false;
+  let movedLastPress = false;
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    // Cancelling the press keeps the browser from selecting text under the
+    // drag, but it also stops the divider taking focus, which would leave the
+    // arrow keys on whatever was focused before. Give it focus by hand.
+    event.preventDefault();
+    handle.focus();
+    movedLastPress = movedThisPress;
+    movedThisPress = false;
+    drag = { pointer: event.pointerId, from: event.clientX, width: sideWidthNow(), wanted: sideWidthWanted };
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-side');
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    // A couple of pixels is a hand resting on the button, not a drag.
+    if (Math.abs(event.clientX - drag.from) > 2) movedThisPress = true;
+    applySideWidth(drag.width + event.clientX - drag.from);
+  });
+  const release = (event) => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    // A drag that left the divider where it found it is not a new width — it
+    // was pushed into the floor or the ceiling, or brought back. Put back what
+    // was asked for before it, so a pane this window is only showing part of
+    // survives being pushed at.
+    if (clampSideWidth(sideWidthWanted) === clampSideWidth(drag.wanted)) sideWidthWanted = drag.wanted;
+    drag = null;
+    document.body.classList.remove('resizing-side');
+    storeSideWidth();   // write once, at the end of the drag
+  };
+  handle.addEventListener('pointerup', release);
+  handle.addEventListener('pointercancel', release);
+  handle.addEventListener('dblclick', () => {
+    if (!movedThisPress && !movedLastPress) wantSideWidth(sideWidthDefault(), true);
+  });
+  // A key that cannot move the divider — the pane is already against the floor
+  // or the ceiling — leaves the remembered width where it is. Otherwise a press
+  // that does nothing on a narrow window would quietly give up a wider pane the
+  // window will be able to show again.
+  const nudge = (px) => {
+    if (clampSideWidth(px) !== clampSideWidth(sideWidthWanted)) applySideWidth(px, true);
+  };
+  handle.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 48 : 12;
+    const at = clampSideWidth(sideWidthWanted);
+    if (event.key === 'ArrowLeft') nudge(at - step);
+    else if (event.key === 'ArrowRight') nudge(at + step);
+    else if (event.key === 'Home') wantSideWidth(sideWidthDefault(), true);
+    else return;
+    event.preventDefault();
+  });
+}
+
 // --- notices and dialogs --------------------------------------------------
 //
 // Native alert, confirm and prompt block the page, cannot be styled, and hold
