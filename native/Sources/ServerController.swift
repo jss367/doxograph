@@ -463,14 +463,27 @@ final class ServerController {
                     self.ownsServer = false
                     return self.deliver(.success, onReady: onReady, onFailure: onFailure)
                 }
-                // The counts the user answered are the ones from the walk. Work
-                // that started while the alert stood open was never in the
-                // question, so nobody has agreed to lose it — ask again, with
-                // the count that is true now. This cannot cycle: the second
-                // question carries the work, and answering Restart to that one
-                // is the agreement the first one could not give.
-                if live.jobs + live.arriving > 0,
-                   server.health.jobs + server.health.arriving == 0 {
+                // What was agreed to was the stopping of the server the
+                // question described, and two things can make what is on the
+                // port no longer that server.
+                //
+                // Its version can have changed, which is as much of an identity
+                // as this app can see: the 0.4.1 someone agreed to stop is not
+                // the 0.5.0 that took the port after it exited, and neither the
+                // agreement nor the work counted in it carries over.
+                //
+                // Or work can have started. The counts in the question came from
+                // the walk, so an upload that began while the alert stood open
+                // was never in it and nobody has agreed to lose it.
+                //
+                // Either way the question is asked again, about what is there
+                // now. Neither can cycle: the second question describes the
+                // server it is about, so answering Restart to that one is the
+                // agreement the first could not give.
+                let anotherServer = live.version != server.version
+                let unagreedWork = live.jobs + live.arriving > 0
+                    && server.health.jobs + server.health.arriving == 0
+                if anotherServer || unagreedWork {
                     return self.deliver(.failure(.staleServer(
                         Stale(port: server.port, version: live.version, health: live))),
                         onReady: onReady, onFailure: onFailure)
