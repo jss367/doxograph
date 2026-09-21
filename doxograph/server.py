@@ -917,13 +917,33 @@ def create_workspace(body: WorkspaceBody) -> dict:
     return {"workspace": workspace, "workspaces": config.list_workspaces()}
 
 
+def _settled(key: str | None, do_extract: bool) -> str | None:
+    """A paper already here that a job would have nothing to do for.
+
+    Queuing one puts a job on the strip that fetches nothing and reports what
+    was already true, a poll later, after the reader has moved on. A paper
+    waiting to be read is not settled: the job is what reads it.
+    """
+    if not key or (do_extract and store.needs_extraction(key)):
+        return None
+    return key
+
+
 @app.post("/api/ingest")
 def api_ingest(body: IngestBody) -> dict:
+    """Queue what has to be fetched, and say outright what is already here."""
     refs, unknown = ingest.parse_refs(body.text)
+    do_extract = body.extract and config.ai_enabled()
+    queued, known = 0, []
     for ref in refs:
+        settled = _settled(ingest.already_stored(ref), do_extract)
+        if settled:
+            known.append({"ref": ref.raw, "key": settled})
+            continue
         job = _new_job(ref.value)
-        _pool.submit(_run_ingest, job, ref, body.extract and config.ai_enabled())
-    return {"queued": len(refs), "unknown": unknown}
+        _pool.submit(_run_ingest, job, ref, do_extract)
+        queued += 1
+    return {"queued": queued, "known": known, "unknown": unknown}
 
 
 @app.post("/api/upload")
@@ -934,20 +954,28 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
     run at a time and every queued job held its own `bytes` until its turn came,
     so a drop of ten large PDFs cost ten PDFs of memory rather than three.
     """
-    queued = 0
+    do_extract = extract_now and config.ai_enabled()
+    queued, known = 0, []
     for upload in files:
         name = upload.filename or "upload.pdf"
         # On a worker thread: copying a large drop on the event loop would stop
         # the page polling, saving or doing anything else until it finished.
         staged = await run_in_threadpool(ingest.stage_upload, upload.file, name)
+        # The bytes name the paper, so a file already here is answered in this
+        # response rather than queued, the same as a pasted reference is.
+        settled = _settled(await run_in_threadpool(ingest.already_uploaded, staged), do_extract)
+        if settled:
+            staged.unlink(missing_ok=True)
+            known.append({"ref": name, "key": settled})
+            continue
         job = _new_job(name)
         try:
-            _pool.submit(_run_upload, job, staged, name, extract_now and config.ai_enabled())
+            _pool.submit(_run_upload, job, staged, name, do_extract)
         except BaseException:
             staged.unlink(missing_ok=True)
             raise
         queued += 1
-    return {"queued": queued}
+    return {"queued": queued, "known": known}
 
 
 @app.get("/api/papers/{key}")

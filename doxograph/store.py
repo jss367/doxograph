@@ -460,6 +460,9 @@ def new_paper(key: str, **fields) -> dict:
         "doi": "",
         "abstract": "",
         "source": {},
+        # The hash of the PDF on file, so the same file dropped a second time
+        # is recognised as this paper. A paper with no PDF has no hash.
+        "pdf_sha256": "",
         "summary": "",
         "relevance": "",
         "status": "fetched",

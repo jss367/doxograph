@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import io
 import os
+import hashlib
 import shutil
 import tempfile
 import threading
@@ -125,8 +126,12 @@ def parse_refs(text: str) -> tuple[list[Ref], list[str]]:
         ref = parse_ref(token)
         if ref is None:
             unknown.append(token)
-        elif ref.value not in seen:
-            seen.add(ref.value)
+            continue
+        # 2602.06941 and 2602.06941v2 are one paper, and pasting both used to
+        # fetch it twice. arXiv is the only form with two spellings of one id.
+        identity = source_identity(ref_source(ref)) if ref.kind == "arxiv" else (ref.kind, ref.value)
+        if identity not in seen:
+            seen.add(identity)
             refs.append(ref)
     return refs, unknown
 
@@ -488,6 +493,74 @@ def fetch_pdf(url: str, client: httpx.Client) -> Path:
         raise
 
 
+def pdf_digest(path: Path) -> str:
+    """A content hash of a PDF, read in chunks rather than into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stored_digest(key: str) -> str:
+    """The hash of a paper's PDF, computed and written down on first ask.
+
+    Papers stored before the hash was recorded are hashed here rather than
+    left unmatchable, so an existing corpus recognises a re-dropped file too.
+    That reading costs one pass over each PDF, once ever.
+    """
+    with store.paper_lock(key):
+        try:
+            paper = store.load_paper(key)
+        except store.VANISHED:
+            return ""
+        recorded = paper.get("pdf_sha256") or ""
+        if recorded:
+            return recorded
+        path = store.pdf_path(key)
+        if not path.exists():
+            return ""
+        recorded = pdf_digest(path)
+        paper["pdf_sha256"] = recorded
+        store.save_paper(paper)
+        return recorded
+
+
+def find_by_digest(digest: str) -> str | None:
+    """The paper whose PDF is this exact file, or None.
+
+    The identity of last resort. A PDF that names neither an arXiv ID nor a
+    DOI has only its filename to go on, and two unrelated files can arrive
+    under one name, so the bytes are the only thing that can say "this is the
+    paper you already have".
+    """
+    if not digest:
+        return None
+    for key in store.paper_keys():
+        if stored_digest(key) == digest:
+            return key
+    return None
+
+
+def settled_digest(digest: str) -> str | None:
+    """The paper this hash is already here as, PDF and all, or None.
+
+    A paper still missing its PDF is not an answer, for the same reason it is
+    not one in `already_stored`: the upload is what attaches it.
+    """
+    settled = find_by_digest(digest)
+    return settled if settled and store.pdf_path(settled).exists() else None
+
+
+def already_uploaded(path: Path) -> str | None:
+    """The paper this file is already here as, PDF and all, or None.
+
+    The counterpart of `already_stored` for a dropped file: it costs a read of
+    the file rather than parsing it and asking Crossref about what it finds.
+    """
+    return settled_digest(pdf_digest(path))
+
+
 def publish_pdf(key: str, staging: Path) -> bool:
     """Move a staged PDF into place, only if the paper still exists.
 
@@ -510,6 +583,12 @@ def publish_pdf(key: str, staging: Path) -> bool:
         # of a paper that is no longer there. The lock is this paper's alone,
         # and the parse is the price of the text being right.
         search.cache_text(key)
+        # Write down what landed while still under the paper's lock, so the
+        # same file dropped again is recognised as this paper. Every PDF
+        # reaches the corpus through here, downloads and uploads alike.
+        paper = store.load_paper(key)
+        paper["pdf_sha256"] = pdf_digest(store.pdf_path(key))
+        store.save_paper(paper)
     return True
 
 
@@ -549,6 +628,40 @@ def find_existing(meta: dict) -> str | None:
     return None
 
 
+def ref_source(ref: Ref) -> dict:
+    """The `source` this reference would be stored under, before any lookup.
+
+    An arXiv ID, a DOI and a direct PDF link each state an identity by
+    themselves. A landing page states nothing until `resolve_page` has turned
+    it into one of those three, so it has no source here.
+    """
+    kind = {"arxiv": "arxiv", "doi": "doi", "pdf": "url"}.get(ref.kind)
+    return {"kind": kind, "id": ref.value} if kind else {}
+
+
+def find_existing_ref(ref: Ref) -> str | None:
+    """Match a reference against the corpus with no lookup at all."""
+    source = ref_source(ref)
+    if not source:
+        return None
+    return find_existing({"source": source,
+                          "doi": ref.value if ref.kind == "doi" else ""})
+
+
+def already_stored(ref: Ref) -> str | None:
+    """The paper this reference is already here as, PDF and all, or None.
+
+    This is the quick answer to "I have this one": it costs a read of the
+    corpus rather than a call to arXiv or Crossref, and those calls are what
+    make an Add take seconds — arXiv queries are spaced three seconds apart.
+    A paper whose PDF never landed is deliberately not an answer, since
+    `ingest_ref` retries the download for exactly that case and answering
+    here would leave it unrecoverable.
+    """
+    existing = find_existing_ref(ref)
+    return existing if existing and store.pdf_path(existing).exists() else None
+
+
 def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]:
     """Add one reference. Returns (key, created)."""
     config.ensure_dirs()
@@ -557,6 +670,15 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
     try:
         if ref.kind == "page":
             ref = resolve_page(ref.value, client)
+
+        # Re-pasting a reference is the common case and the reference names the
+        # paper, so answer before querying arXiv or Crossref for metadata that
+        # is already on file. The check under `claim_lock` further down still
+        # stands: it is what two simultaneous adds of one new paper need, and
+        # what catches a paper whose PDF has yet to arrive.
+        settled = already_stored(ref)
+        if settled:
+            return settled, False
 
         if ref.kind == "arxiv":
             meta = fetch_arxiv(ref.value, client)
@@ -671,16 +793,31 @@ def ingest_staged_pdf(staging: Path, filename: str) -> tuple[str, bool]:
         with staging.open("rb") as fh:
             if fh.read(5) != b"%PDF-":
                 raise ValueError(f"{filename} is not a PDF")
+        # The same file again is the same paper, whatever it says inside, so
+        # answer before parsing it or asking Crossref about it.
+        digest = pdf_digest(staging)
+        settled = settled_digest(digest)
+        if settled:
+            return settled, False
         with _client() as client:
             meta = guess_from_pdf(staging, client, display_name=filename)
             with store.claim_lock():
-                existing = find_existing(meta)
-                if existing and (meta.get("source") or {}).get("kind") != "file":
+                # A `file` source is nothing but the name the upload arrived
+                # under, and two unrelated PDFs can share a name, so it is
+                # never an identity. The bytes are one: dropping the same
+                # unidentifiable file twice used to make a second paper.
+                named = (meta.get("source") or {}).get("kind") != "file"
+                existing = (find_existing(meta) if named else None) or find_by_digest(digest)
+                if existing:
                     key, created = existing, False
                     attach = not store.pdf_path(existing).exists()
                 else:
+                    # The hash goes into the reservation, so a second drop of
+                    # this file recognises it while this one is still being
+                    # published — the same reason the identity goes in.
                     key = store.reserve_key(
-                        store.citekey(meta["title"], meta["authors"], meta["year"]), **meta
+                        store.citekey(meta["title"], meta["authors"], meta["year"]),
+                        pdf_sha256=digest, **meta
                     )
                     created, attach = True, True
 

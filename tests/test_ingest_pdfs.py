@@ -658,7 +658,7 @@ def test_an_upload_is_staged_on_disk_not_held_in_memory(monkeypatch):
         response = client.post("/api/upload?extract_now=false",
                                files={"files": ("big.pdf", body, "application/pdf")})
 
-    assert response.json() == {"queued": 1}
+    assert response.json() == {"queued": 1, "known": []}
     staged, name = handed[0]
     assert isinstance(staged, Path), f"the worker was handed {type(staged).__name__}"
     try:
@@ -703,5 +703,174 @@ def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
         response = client.post("/api/upload?extract_now=false",
                                files={"files": ("big.pdf", b"%PDF-1.4\n" + b"x" * 100_000)})
 
-    assert response.json() == {"queued": 1}
+    assert response.json() == {"queued": 1, "known": []}
     assert where["on_the_loop"] is False, "the copy blocked the event loop"
+
+
+# --- the file itself is an identity when nothing else is ------------------
+
+@pytest.fixture
+def unidentifiable(monkeypatch):
+    """A PDF whose first page names neither an arXiv ID nor a DOI."""
+    monkeypatch.setattr(ingest, "pdf_first_page_text", lambda path, pages=2: "no identifiers")
+
+
+def test_the_same_pdf_dropped_twice_is_one_paper(unidentifiable):
+    data = b"%PDF-1.4\nbody" + bytes(64)
+    first, created_first = ingest.ingest_pdf_bytes(data, "paper.pdf")
+    second, created_second = ingest.ingest_pdf_bytes(data, "renamed.pdf")
+
+    assert (created_first, created_second) == (True, False)
+    assert second == first
+    assert store.paper_keys() == [first]
+
+
+def test_two_different_pdfs_under_one_name_stay_two_papers(unidentifiable):
+    first, _ = ingest.ingest_pdf_bytes(b"%PDF-1.4\nalpha" + bytes(64), "paper.pdf")
+    second, created = ingest.ingest_pdf_bytes(b"%PDF-1.4\nbeta" + bytes(64), "paper.pdf")
+
+    assert created and second != first
+    assert len(store.paper_keys()) == 2
+
+
+def test_a_paper_stored_before_hashing_is_still_recognized(unidentifiable):
+    """An existing corpus has no hashes on file; they are read on demand."""
+    data = b"%PDF-1.4\nbody" + bytes(64)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(data)
+    paper = store.load_paper("doe2026study")
+    del paper["pdf_sha256"]
+    store.write_json(store.paper_path("doe2026study"), paper)
+
+    key, created = ingest.ingest_pdf_bytes(data, "paper.pdf")
+
+    assert (key, created) == ("doe2026study", False)
+    assert store.load_paper("doe2026study")["pdf_sha256"] == ingest.pdf_digest(
+        store.pdf_path("doe2026study"))
+
+
+def test_a_downloaded_pdf_records_its_hash(monkeypatch):
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
+
+    def fake_fetch(url, client):
+        path = config.pdfs_dir() / ".download-t.pdf"
+        path.write_bytes(b"%PDF-1.4\ndownloaded")
+        return path
+
+    monkeypatch.setattr(ingest, "fetch_pdf", fake_fetch)
+    key, _ = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+
+    assert store.load_paper(key)["pdf_sha256"] == ingest.pdf_digest(store.pdf_path(key))
+
+
+def test_dropping_a_downloaded_paper_again_does_not_duplicate_it(monkeypatch, unidentifiable):
+    """The same bytes, whichever way they arrived the first time."""
+    body = b"%PDF-1.4\ndownloaded"
+    meta = {
+        "title": "A Study", "authors": ["Jane Doe"], "year": 2026, "abstract": "",
+        "venue": "arXiv", "doi": "",
+        "source": {"kind": "arxiv", "id": "2602.06941", "url": "", "pdf_url": "https://x/y.pdf"},
+    }
+    monkeypatch.setattr(ingest, "fetch_arxiv", lambda i, c: meta)
+
+    def fake_fetch(url, client):
+        path = config.pdfs_dir() / ".download-t.pdf"
+        path.write_bytes(body)
+        return path
+
+    monkeypatch.setattr(ingest, "fetch_pdf", fake_fetch)
+    downloaded, _ = ingest.ingest_ref(ingest.Ref("arxiv", "2602.06941", ""))
+    dropped, created = ingest.ingest_pdf_bytes(body, "some-download.pdf")
+
+    assert (dropped, created) == (downloaded, False)
+    assert store.paper_keys() == [downloaded]
+
+
+def test_a_dropped_file_already_here_is_reported_without_a_job(monkeypatch):
+    """The upload route answers a re-drop itself, as the paste route does."""
+    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(server._pool, "submit", lambda *args: pytest.fail("a job was queued"))
+    body = b"%PDF-1.4\nbody" + bytes(64)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(body)
+    store.add_claim("doe2026study", {"text": "Steering recovers."})
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/upload?extract_now=true",
+                               files={"files": ("paper.pdf", body, "application/pdf")})
+        assert response.json() == {"queued": 0,
+                                   "known": [{"ref": "paper.pdf", "key": "doe2026study"}]}
+        assert client.get("/api/jobs").json()["jobs"] == []
+    assert list(config.pdfs_dir().glob(".incoming-*")) == []
+
+
+def test_a_dropped_file_that_still_needs_reading_is_queued(monkeypatch):
+    monkeypatch.setattr(server, "_jobs", {})
+    submitted = []
+    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
+    body = b"%PDF-1.4\nbody" + bytes(64)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(body)
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/upload?extract_now=true",
+                               files={"files": ("paper.pdf", body, "application/pdf")})
+
+    assert response.json()["queued"] == 1
+    assert len(submitted) == 1
+    for staged in config.pdfs_dir().glob(".incoming-*"):
+        staged.unlink()
+
+
+def test_a_reservation_carries_its_hash_before_the_pdf_lands():
+    """The window between claiming a key and publishing the file into it.
+
+    An upload that reserved a key has no PDF yet, so hashing the corpus would
+    not find it. The hash goes into the reservation for the same reason the
+    arXiv ID does: a second drop of the file arriving in that window has to
+    recognise it rather than claim a key of its own.
+    """
+    key = store.reserve_key("doe2026study", pdf_sha256="a" * 64, title="A draft")
+    assert not store.pdf_path(key).exists()
+    assert ingest.find_by_digest("a" * 64) == key
+    assert ingest.settled_digest("a" * 64) is None, "it cannot be settled with no PDF"
+
+
+def test_concurrent_drops_of_one_file_make_one_paper(monkeypatch):
+    """The reservation carries the hash, so the second drop can see the first."""
+    barrier = threading.Barrier(2)
+
+    def fake_guess(path, client, display_name=None):
+        # Both workers reach the key decision together, which is the moment
+        # neither of them has published a PDF for the other to match against.
+        barrier.wait(timeout=5)
+        return {
+            "title": "An unidentifiable draft", "authors": [], "year": None, "abstract": "",
+            "venue": "", "doi": "",
+            "source": {"kind": "file", "id": display_name, "url": "", "pdf_url": ""},
+        }
+
+    monkeypatch.setattr(ingest, "guess_from_pdf", fake_guess)
+    data = b"%PDF-1.4\nbody" + bytes(64)
+    results, errors = [], []
+
+    def drop(name):
+        try:
+            results.append(ingest.ingest_pdf_bytes(data, name))
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=drop, args=(n,)) for n in ("a.pdf", "b.pdf")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, errors
+    assert len(store.paper_keys()) == 1, f"the same file made two papers: {results}"
+    assert {created for _, created in results} == {True, False}

@@ -4763,7 +4763,18 @@ async function addReferences() {
   // Which lines failed, not how many: a count leaves the reader to work out
   // for themselves which of what they pasted is the problem.
   showRefWarning(unknown);
+  reportKnown(result);
   await refresh();
+}
+
+// References the server recognised without fetching anything. They never
+// become jobs, so the strip never mentions them and this is the only place
+// they are reported.
+function reportKnown(result) {
+  const known = (result && result.known) || [];
+  if (!known.length) return;
+  const rest = known.length > 1 ? `, and ${known.length - 1} more` : '';
+  toast(`Already in the corpus: ${known[0].key}${rest}.`);
 }
 
 function showRefWarning(unknown) {
@@ -5062,12 +5073,13 @@ document.addEventListener('drop', async (event) => {
   if (files.length) {
     const body = new FormData();
     files.forEach((file) => body.append('files', file, file.name));
-    await api(`/api/upload?extract_now=${$('auto-extract').checked}`, { method: 'POST', body });
+    reportKnown(await api(`/api/upload?extract_now=${$('auto-extract').checked}`,
+      { method: 'POST', body }));
   } else if (text && text.trim()) {
-    await api('/api/ingest', {
+    reportKnown(await api('/api/ingest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, extract: $('auto-extract').checked }),
-    });
+    }));
   }
   await refresh();
 });

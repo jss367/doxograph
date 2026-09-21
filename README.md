@@ -113,6 +113,16 @@ for the web app. A
 paper that arrives without its PDF counts as a failure and says so; running
 `add` on it again retries the download and then reads it.
 
+A paper you already have is recognized from the reference itself, before any
+lookup goes out: re-pasting an arXiv ID, a DOI or a PDF link answers at once
+with the key it is already filed under, rather than querying arXiv or Crossref
+to reach the same conclusion. In the web app it says so in a notice instead of
+queuing a job. The exception is a paper whose PDF never arrived: that one is
+fetched again, since running `add` on it is how the download is retried. A
+dropped PDF is matched by its content as well as by what it says inside, so
+the same file dropped twice is one paper even when nothing in it names an
+arXiv ID or a DOI.
+
 A landing-page URL is identified from the page's own metadata (`citation_arxiv_id`,
 the canonical link, `citation_doi`, `citation_pdf_url`). An arXiv link in a
 bibliography is not treated as the page's identity, since that would ingest a
