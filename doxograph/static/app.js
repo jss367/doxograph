@@ -338,10 +338,18 @@ window.addEventListener('resize', fitSideWidth);
   handle.addEventListener('pointerup', release);
   handle.addEventListener('pointercancel', release);
   handle.addEventListener('dblclick', () => wantSideWidth(sideWidthDefault(), true));
+  // A key that cannot move the divider — the pane is already against the floor
+  // or the ceiling — leaves the remembered width where it is. Otherwise a press
+  // that does nothing on a narrow window would quietly give up a wider pane the
+  // window will be able to show again.
+  const nudge = (px) => {
+    if (clampSideWidth(px) !== clampSideWidth(sideWidthWanted)) applySideWidth(px, true);
+  };
   handle.addEventListener('keydown', (event) => {
     const step = event.shiftKey ? 48 : 12;
-    if (event.key === 'ArrowLeft') applySideWidth(sideWidthNow() - step, true);
-    else if (event.key === 'ArrowRight') applySideWidth(sideWidthNow() + step, true);
+    const at = clampSideWidth(sideWidthWanted);
+    if (event.key === 'ArrowLeft') nudge(at - step);
+    else if (event.key === 'ArrowRight') nudge(at + step);
     else if (event.key === 'Home') wantSideWidth(sideWidthDefault(), true);
     else return;
     event.preventDefault();

@@ -5349,6 +5349,18 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window():
                 await handle.focus()
                 await page.keyboard.press("Home")
                 assert (await side.bounding_box())["width"] == 160
+
+                # Nor does a key that cannot move the divider. Against the
+                # ceiling, ArrowRight does nothing at all rather than writing
+                # the ceiling over the width the window is only borrowing.
+                await page.set_viewport_size({"width": 600, "height": 800})
+                await page.wait_for_function(
+                    "document.getElementById('side').getBoundingClientRect().width === 300"
+                )
+                await handle.focus()
+                await page.keyboard.press("ArrowRight")
+                assert (await side.bounding_box())["width"] == 300
+
                 await page.set_viewport_size({"width": 1280, "height": 800})
                 await page.wait_for_function(
                     "document.getElementById('side').getBoundingClientRect().width === 400"
