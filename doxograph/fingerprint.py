@@ -110,6 +110,20 @@ _lock = threading.Lock()
 _as_loaded: dict[str, str] = {}
 
 
+def _record(readings: dict[str, str]) -> dict[str, str]:
+    """Remember any path not recorded yet, and answer with what is remembered.
+
+    One critical section over one set of paths, because a lazy import landing on
+    another thread between two walks would leave a path in one half and not the
+    other. `/api/code` is asked at launch, and an ingestion worker reaching for
+    pypdf at that moment is an ordinary Tuesday.
+    """
+    with _lock:
+        for path, reading in readings.items():
+            _as_loaded.setdefault(path, reading)
+        return {path: _as_loaded[path] for path in readings}
+
+
 def snapshot(modules: dict | None = None) -> None:
     """Remember every dependency file not recorded yet, as it is right now.
 
@@ -125,26 +139,20 @@ def snapshot(modules: dict | None = None) -> None:
     including a library's own, and a bug in one breaks every import in the
     process. The imports that matter here are countable, and a test counts them.
     """
-    seen = {path: _reading(path) for path in imported_files(modules)}
-    with _lock:
-        for path, reading in seen.items():
-            _as_loaded.setdefault(path, reading)
+    _record({path: _reading(path) for path in imported_files(modules)})
 
 
 def dependency_state(modules: dict | None = None) -> tuple[str, str]:
     """The dependency half, as this process loaded it and as it is on disk now.
 
-    Both sides are over the same set of files, and that set is whatever has been
-    imported by now. A file nobody has recorded is recorded here, as it is —
-    which is right when it was imported since the last snapshot and wrong when
-    it was replaced since, so the snapshots are placed where that window is
-    microseconds wide.
+    Both sides are over the same set of files — one walk, not two — and that set
+    is whatever has been imported by now. A file nobody has recorded is recorded
+    here, as it is, which is right when it was imported since the last snapshot
+    and wrong when it was replaced since. That is why the snapshots are placed
+    where the window is microseconds wide.
     """
-    snapshot(modules)
     current = {path: _reading(path) for path in imported_files(modules)}
-    with _lock:
-        as_loaded = {path: _as_loaded[path] for path in current}
-    return _digest(as_loaded), _digest(current)
+    return _digest(_record(current)), _digest(current)
 
 
 def _digest(readings: dict[str, str]) -> str:

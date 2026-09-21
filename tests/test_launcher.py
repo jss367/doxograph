@@ -202,6 +202,38 @@ def test_a_dependency_that_has_gone_is_a_change_not_a_silence(tmp_path):
     assert on_disk and as_loaded != on_disk
 
 
+def test_both_digests_come_from_one_walk(tmp_path):
+    """A lazy import landing on another thread between two walks would leave a
+    path in one half and not the other. `/api/code` is asked at launch, and an
+    ingestion worker reaching for pypdf at that moment is an ordinary Tuesday —
+    it must not answer 500, which the launcher would read as an unanswered
+    question and adopt on."""
+    arriving = tmp_path / "pypdf.py"
+    arriving.write_text("x = 1", encoding="utf-8")
+
+    class ImportsWhileRead(dict):
+        """A `sys.modules` that grows the moment it is walked, the way a real
+        one does when another thread is mid-import."""
+
+        def __init__(self):
+            super().__init__()
+            self.walks = 0
+
+        def items(self):
+            self.walks += 1
+            if self.walks > 1:
+                self["pypdf"] = _fake_module(arriving)
+            return super().items()
+
+    modules = ImportsWhileRead()
+    as_loaded, on_disk = fingerprint.dependency_state(modules)
+    assert as_loaded == on_disk
+    # One walk is the whole point. Two would have read the arriving module into
+    # `current` without it ever reaching the remembered map, and the lookup that
+    # builds the other half would raise.
+    assert modules.walks == 1
+
+
 def test_the_package_is_left_out_of_the_dependency_half():
     """Its own files are digested by contents instead. A checkout is rewritten
     by every branch switch and rebase, mostly back to bytes it already held, and

@@ -57,9 +57,11 @@ final class ServerController {
         let version: String
         let health: Health
         let reason: Reason
-        /// What the server said about its own sources, or nil from one too old
-        /// to have been asked — every release before this check existed.
-        let code: Code?
+        /// What the server said when asked which code it is running, kept whole
+        /// rather than reduced to the digests. Whether it answered at all is
+        /// part of who it is: a server that names its code and one that has
+        /// never heard of the question cannot be the same process.
+        let report: CodeReport
 
         /// The version, as it goes in a sentence.
         var versionName: String { ServerController.versionName(version) }
@@ -72,17 +74,32 @@ final class ServerController {
         /// no deadline, and a pid outlives its process only as a number the
         /// kernel will hand to someone else.
         ///
-        /// The release has to match. The digest has to match when both sides
-        /// have one, and decides nothing when either does not — the same rule
-        /// the rest of this check runs on, where a question nobody answered
-        /// refuses nothing. Insisting on a digest that one side lacks would
-        /// make every unanswered `/api/code` read as a port that changed hands,
-        /// and the alert would come back with the same question forever.
+        /// The release has to match, and then what the two said about their code
+        /// has to be compatible:
+        ///
+        /// - Both named a digest, and the digests agree.
+        /// - Both have no `/api/code` at all, which is as much as either can say.
+        /// - One named a digest and the other has no such route. That is not a
+        ///   silence, it is two different answers: a process cannot lose a
+        ///   route it was serving a moment ago, so this is a different process
+        ///   and the agreement to stop the first does not reach it.
+        /// - Anything else means at least one side's request did not come back,
+        ///   which is a question nobody answered, and an unanswered question
+        ///   contradicts nothing. Insisting otherwise would make every slow
+        ///   moment read as a port that changed hands, and the alert would come
+        ///   back with the same question forever.
         func couldBe(_ other: Stale) -> Bool {
             guard version == other.version else { return false }
-            guard let mine = code?.running, let theirs = other.code?.running
-            else { return true }
-            return mine == theirs
+            switch (report, other.report) {
+            case (.answered(let mine), .answered(let theirs)):
+                return mine.running == theirs.running
+            case (.absent, .absent):
+                return true
+            case (.absent, .answered), (.answered, .absent):
+                return false
+            default:
+                return true
+            }
         }
 
         /// What stopping this server would cost, or nothing when it is idle.
@@ -535,7 +552,7 @@ final class ServerController {
                 return self.deliver(.failure(.launchFailed(Self.unidentified(server.port))),
                                     onReady: onReady, onFailure: onFailure)
 
-            case .adoptable(_, confirmed: true):
+            case .adoptable(_, let report) where report.confirmed:
                 // Replaced, while the question was up, by a server running this
                 // app's own code — the outcome the user asked for, arrived at
                 // without this app doing anything. Adopt it rather than
@@ -544,7 +561,7 @@ final class ServerController {
                 self.ownsServer = false
                 return self.deliver(.success, onReady: onReady, onFailure: onFailure)
 
-            case .adoptable(let health, confirmed: false):
+            case .adoptable(let health, let report):
                 // Not denied is not the same as current, and here the
                 // difference matters: the user asked for a restart of a server
                 // this app had said was running other code, and a `/api/code`
@@ -553,7 +570,7 @@ final class ServerController {
                 // the restart goes ahead, guarded exactly as a confirmed
                 // mismatch is.
                 live = Stale(port: server.port, version: health.version, health: health,
-                             reason: server.reason, code: nil)
+                             reason: server.reason, report: report)
 
             case .stale(let found):
                 live = found
@@ -780,11 +797,12 @@ final class ServerController {
         /// existed.
         case otherServer
 
-        /// The digests, when there are any. A server that cannot report them
-        /// still has a version, and that is all its identity can be built from.
-        var code: Code? {
-            if case .answered(let code) = self { return code }
-            return nil
+        /// Whether this positively says the server is running the code on disk,
+        /// as opposed to merely not denying it. An empty digest is a package
+        /// the server could not read back, so it compared nothing.
+        var confirmed: Bool {
+            if case .answered(let code) = self { return !code.unknown }
+            return false
         }
     }
 
@@ -901,7 +919,7 @@ final class ServerController {
     private func verdict(_ port: Int, _ health: Health, _ report: CodeReport) -> Verdict {
         func stale(_ reason: Stale.Reason) -> Verdict {
             .stale(Stale(port: port, version: health.version, health: health,
-                         reason: reason, code: report.code))
+                         reason: reason, report: report))
         }
         if health.version != Self.appVersion { return stale(.version) }
         switch report {
@@ -909,9 +927,9 @@ final class ServerController {
             return stale(.olderThanTheCheck)
         case .answered(let code):
             // An empty digest on either side is a package the server could not
-            // read back, so `moved` is false and this is adoptable — but not
-            // confirmed, because nothing was compared.
-            return code.moved ? stale(.code) : .adoptable(health, confirmed: !code.unknown)
+            // read back, so `moved` is false and this is adoptable — but the
+            // report goes along unchanged, and it says nothing was compared.
+            return code.moved ? stale(.code) : .adoptable(health, report)
         case .unavailable, .otherServer:
             // The cases that adopt on silence. A server that answered health a
             // moment ago and then failed this request has said nothing either
@@ -920,7 +938,7 @@ final class ServerController {
             // nothing. `otherServer` cannot arrive here from `describe`, which
             // throws that pair away; it reaches this only as the last resort
             // above, where the code report was never asked for.
-            return .adoptable(health, confirmed: false)
+            return .adoptable(health, report)
         }
     }
 
@@ -930,13 +948,13 @@ final class ServerController {
     private enum Verdict {
         /// Nothing found says this server is not running this app's code.
         ///
-        /// `confirmed` is whether it said so or merely did not deny it: true
-        /// when `/api/code` answered and its digests agreed, false when the
-        /// question went unanswered. The port walk treats both alike, on
-        /// purpose — it will not refuse a server over a request that did not
-        /// come back. `replaceStale` may not, because there the user has asked
-        /// for something and reporting it done is a claim.
-        case adoptable(Health, confirmed: Bool)
+        /// The report comes along because whether the server said so or merely
+        /// did not deny it matters to one caller and not the other. The port
+        /// walk treats both alike, on purpose — it will not refuse a server
+        /// over a request that did not come back. `replaceStale` may not,
+        /// because there the user has asked for something and reporting it
+        /// done is a claim.
+        case adoptable(Health, CodeReport)
         case stale(Stale)
         case unidentified
         case gone

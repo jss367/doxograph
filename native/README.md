@@ -126,7 +126,11 @@ and then relaunching the app.
   success without one.
 
   A server that answers `/api/health` as Doxograph and then 404s on `/api/code`
-  is refused rather than adopted, even when the release matches. This app's own
+  is refused rather than adopted, even when the release matches. Having the route
+  is also part of who a server is: when the alert has been answered and the port
+  is described again, one description naming a digest and another having no such
+  route are two different processes, not one that went quiet, so the question is
+  asked again rather than the wrong process being signalled. This app's own
   code serves that route, so a Doxograph without it is provably not running this
   app's code — and it is the very case the digest would otherwise be blindest to,
   since the server too old to answer is the one orphaned before the answer
