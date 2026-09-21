@@ -372,16 +372,45 @@ final class ServerController {
     func useStale(_ server: Stale, onReady: @escaping (URL) -> Void,
                   onFailure: @escaping (Failure) -> Void) {
         queue.async {
-            if case .unreachable = self.probe(on: server.port, timeout: 2) {
+            switch self.probe(on: server.port, timeout: 2) {
+            case .unreachable:
                 return self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+            case .unresponsive:
+                return self.deliver(.failure(.launchFailed(Self.unidentified(server.port))),
+                                    onReady: onReady, onFailure: onFailure)
+            case .answered:
+                // Only an answer identifies a Doxograph. The walk holds itself
+                // to that for the same reason — adopting a port on the strength
+                // of something listening there puts a stranger's web app in this
+                // window — and the alert changes nothing about it.
+                self.port = server.port
+                self.ownsServer = false
+                self.deliver(.success, onReady: onReady, onFailure: onFailure)
             }
-            // Answering, or listening and silent. Either way something is on the
-            // port to run against, and a silent server is the ordinary shape of
-            // a busy one.
-            self.port = server.port
-            self.ownsServer = false
-            self.deliver(.success, onReady: onReady, onFailure: onFailure)
         }
+    }
+
+    /// Why a port that is occupied but silent is not acted on either way.
+    ///
+    /// The two things it could be want opposite treatment and cannot be told
+    /// apart from outside: a Doxograph too busy to answer, which the user asked
+    /// to have stopped, and something else that took the port when the stale
+    /// server exited, which they did not. Stopping it risks signalling a
+    /// stranger; running on it risks putting a stranger's page in this window;
+    /// starting alongside it risks a second Doxograph over one corpus. So
+    /// nothing happens, and the person who can see what else is on their machine
+    /// is told what was found.
+    ///
+    /// A live Doxograph is rarely this. `/api/health` is deliberately cheap —
+    /// the startup poll hits it four times a second — so a server that is merely
+    /// reading a paper still answers.
+    private static func unidentified(_ port: Int) -> String {
+        """
+        Something is listening on port \(port) and did not answer as Doxograph \
+        within two seconds, so there is no telling whether it is the server this \
+        app asked about or something that took the port after it exited. Nothing \
+        was stopped and nothing was started. Try again, or stop the server yourself.
+        """
     }
 
     /// Stop a stale server and start one on this app's code in its place.
@@ -415,13 +444,14 @@ final class ServerController {
                 return self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
 
             case .unresponsive:
-                // Something is listening and not answering, which is what a
-                // busy server looks like from outside. It is emphatically not
-                // an empty port, and reading it as one would send the walk off
+                // Not an empty port — reading it as one would send the walk off
                 // to start a second Doxograph on the next port up while this one
-                // carries on holding this one. Fall through and stop it: it is
-                // what the user asked to have stopped.
-                break
+                // carries on holding this one. But not a licence to signal it
+                // either: what the user authorised was stopping the server the
+                // alert described, and nothing here can show that this is still
+                // that server rather than whatever took the port after it left.
+                return self.deliver(.failure(.launchFailed(Self.unidentified(server.port))),
+                                    onReady: onReady, onFailure: onFailure)
 
             case .answered(let live):
                 guard live.version != Self.appVersion else {

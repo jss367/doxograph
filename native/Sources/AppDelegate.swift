@@ -301,16 +301,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// rude. Nothing the app can see tells the two apart.
     ///
     /// What it can do is refuse to decide silently, and say what the choice
-    /// costs: the old server's work in flight dies with it, so that count goes
-    /// in the question. Starting a second server beside it is not on the menu,
-    /// here or anywhere — one corpus takes one server.
+    /// costs: the server's work in flight dies with it, so that count goes in
+    /// the question. Starting a second server beside it is not on the menu, here
+    /// or anywhere — one corpus takes one server.
+    ///
+    /// The question names both versions and calls neither of them the old one.
+    /// All the check establishes is that they differ, and the deliberate case
+    /// usually differs the other way: a checkout pulled ahead of the app that
+    /// launches it. Calling the server old there would talk someone into
+    /// replacing the newer half.
     private func askAboutStaleServer(_ stale: ServerController.Stale) {
         let alert = NSAlert()
         alert.messageText = "Another version of Doxograph is already running"
         alert.informativeText = """
             The server on port \(stale.port) is \(stale.versionName), and this app is \
-            version \(ServerController.appVersion). Using it would put the older code \
-            behind this window.\(stale.workNote)
+            version \(ServerController.appVersion). Using it would put code this app was \
+            not built alongside behind this window.\(stale.workNote)
             """
         alert.addButton(withTitle: "Restart the Server")
         alert.addButton(withTitle: "Use It Anyway")
