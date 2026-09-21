@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import io
+import ssl
 import os
 import hashlib
 import shutil
@@ -644,8 +645,24 @@ def download_pdf(url: str, key: str, client: httpx.Client) -> bool:
     return publish_pdf(key, fetch_pdf(url, client))
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """A TLS context that does not announce HTTP/1.1 as the only protocol it speaks.
+
+    arXiv sits behind a CDN that answers 406 with an empty body to any
+    handshake whose ALPN list is exactly ["http/1.1"] — a shape no browser and
+    no `curl` produces, so it reads as a bot. httpcore sets that list on
+    whatever context it is handed, so the only way to stop announcing it is to
+    make the call it uses do nothing. Announcing no protocol at all is what
+    `urllib` does, and the CDN serves it.
+    """
+    context = httpx.create_ssl_context()
+    context.set_alpn_protocols = lambda protocols: None
+    return context
+
+
 def _client() -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
+    return httpx.Client(
+        timeout=TIMEOUT, verify=_ssl_context(), headers={"User-Agent": USER_AGENT})
 
 
 def source_identity(source: dict) -> tuple[str, str] | None:

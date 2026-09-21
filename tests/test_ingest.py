@@ -1,3 +1,5 @@
+import contextlib
+import ssl
 import threading
 import time
 
@@ -180,3 +182,28 @@ def test_a_real_failure_still_raises(quick_arxiv):
     with pytest.raises(httpx.HTTPStatusError):
         ingest.fetch_arxiv("2607.07916", client)
     assert len(client.asked_at) == 1
+
+
+def _client_hello(context) -> bytes:
+    """The bytes the context would put on the wire to open a handshake."""
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    handshake = context.wrap_bio(incoming, outgoing, server_hostname="export.arxiv.org")
+    with contextlib.suppress(ssl.SSLWantReadError):
+        handshake.do_handshake()
+    return outgoing.read()
+
+
+def test_the_handshake_does_not_offer_http11_alone():
+    """arXiv's CDN answers 406 to a handshake whose only ALPN entry is http/1.1.
+
+    httpcore makes that offer on every request unless HTTP/2 is enabled, and it
+    makes it on whatever context it is handed, so the control below shows what
+    the stock context does with the same call.
+    """
+    control = httpx.create_ssl_context()
+    control.set_alpn_protocols(["http/1.1"])
+    assert b"http/1.1" in _client_hello(control)
+
+    ours = ingest._ssl_context()
+    ours.set_alpn_protocols(["http/1.1"])
+    assert b"http/1.1" not in _client_hello(ours)
