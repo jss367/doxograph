@@ -319,15 +319,25 @@ window.addEventListener('resize', fitSideWidth);
   // divider: the divider is 8px wide, so the two are not the same, and taking
   // the difference keeps the pane from jumping on the first move.
   let drag = null;
+  // Two quick nudges of the divider inside the double-click interval make the
+  // browser synthesize a dblclick out of them. Only a pair of presses that both
+  // stayed still is a reset; two small drags are two small drags.
+  let movedThisPress = false;
+  let movedLastPress = false;
   handle.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
+    movedLastPress = movedThisPress;
+    movedThisPress = false;
     drag = { pointer: event.pointerId, from: event.clientX, width: sideWidthNow(), wanted: sideWidthWanted };
     handle.setPointerCapture(event.pointerId);
     document.body.classList.add('resizing-side');
   });
   handle.addEventListener('pointermove', (event) => {
-    if (drag && event.pointerId === drag.pointer) applySideWidth(drag.width + event.clientX - drag.from);
+    if (!drag || event.pointerId !== drag.pointer) return;
+    // A couple of pixels is a hand resting on the button, not a drag.
+    if (Math.abs(event.clientX - drag.from) > 2) movedThisPress = true;
+    applySideWidth(drag.width + event.clientX - drag.from);
   });
   const release = (event) => {
     if (!drag || event.pointerId !== drag.pointer) return;
@@ -342,7 +352,9 @@ window.addEventListener('resize', fitSideWidth);
   };
   handle.addEventListener('pointerup', release);
   handle.addEventListener('pointercancel', release);
-  handle.addEventListener('dblclick', () => wantSideWidth(sideWidthDefault(), true));
+  handle.addEventListener('dblclick', () => {
+    if (!movedThisPress && !movedLastPress) wantSideWidth(sideWidthDefault(), true);
+  });
   // A key that cannot move the divider — the pane is already against the floor
   // or the ceiling — leaves the remembered width where it is. Otherwise a press
   // that does nothing on a narrow window would quietly give up a wider pane the

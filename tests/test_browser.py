@@ -5296,6 +5296,19 @@ def test_side_pane_width_is_dragged_kept_and_put_back():
 
                 await handle.dblclick()
                 assert (await side.bounding_box())["width"] == 320
+
+                # Two quick nudges of the divider can be paired into a
+                # dblclick by the browser. That is two drags, not a reset.
+                # Playwright's mouse never synthesizes the pairing, so the
+                # event is delivered directly, after a real drag.
+                await drag_by(60)
+                assert (await side.bounding_box())["width"] == 380
+                await handle.dispatch_event("dblclick")
+                assert (await side.bounding_box())["width"] == 380
+
+                # A double-click that did not drag still resets.
+                await handle.dblclick()
+                assert (await side.bounding_box())["width"] == 320
             await browser.close()
 
     asyncio.run(scenario())
