@@ -53,6 +53,75 @@ def test_health_does_not_read_the_corpus(monkeypatch):
         assert client.get("/api/health").status_code == 200
 
 
+def test_code_reports_a_matching_pair_for_an_untouched_checkout():
+    """Nothing has been edited under this process, so what it loaded and what is
+    on disk are the same, and the launcher adopts it."""
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        body = client.get("/api/code").json()
+    assert body["app"] == "doxograph"
+    assert body["version"] == __version__
+    assert body["running"]
+    assert body["onDisk"] == body["running"]
+
+
+def test_code_reports_what_was_loaded_not_what_is_there_now(monkeypatch):
+    """The point of the endpoint: `running` is fixed at import and `onDisk` is
+    read fresh, so a checkout that moves under a live server shows as a pair
+    that no longer agrees."""
+    monkeypatch.setattr(server, "SOURCE_AT_START", "a" * 64)
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        body = client.get("/api/code").json()
+    assert body["running"] == "a" * 64
+    assert body["onDisk"] != body["running"]
+
+
+def test_code_answers_without_a_workspace():
+    """The launcher asks this during the port walk, before any corpus has been
+    chosen, and has to get an answer even from a registry that is broken."""
+    config.workspaces_path().write_text("{not valid json", encoding="utf-8")
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.get("/api/code").status_code == 200
+
+
+def test_fingerprint_follows_the_python_and_ignores_the_rest(tmp_path):
+    """Only `.py` files are loaded once and kept. `static/` is read per request,
+    so editing `app.js` under a running server changes nothing about it, and
+    `__pycache__` is a byproduct of the sources already counted."""
+    (tmp_path / "static").mkdir()
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "server.py").write_text("x = 1", encoding="utf-8")
+    (tmp_path / "static" / "app.js").write_text("one", encoding="utf-8")
+    (tmp_path / "__pycache__" / "server.py").write_text("compiled", encoding="utf-8")
+    before = server.source_fingerprint(tmp_path)
+
+    (tmp_path / "static" / "app.js").write_text("two", encoding="utf-8")
+    (tmp_path / "__pycache__" / "server.py").write_text("recompiled", encoding="utf-8")
+    assert server.source_fingerprint(tmp_path) == before
+
+    (tmp_path / "server.py").write_text("x = 2", encoding="utf-8")
+    assert server.source_fingerprint(tmp_path) != before
+
+
+def test_fingerprint_follows_names_as_well_as_contents(tmp_path):
+    """A file moved or deleted changes what the process would load as surely as
+    an edited one, and its contents alone would not say so."""
+    (tmp_path / "ingest.py").write_text("x = 1", encoding="utf-8")
+    before = server.source_fingerprint(tmp_path)
+
+    (tmp_path / "ingest.py").rename(tmp_path / "extract.py")
+    renamed = server.source_fingerprint(tmp_path)
+    assert renamed != before
+
+    (tmp_path / "extract.py").unlink()
+    assert server.source_fingerprint(tmp_path) not in (before, renamed)
+
+
+def test_fingerprint_is_empty_when_the_package_cannot_be_read(tmp_path):
+    """An empty digest is the launcher's signal that the question went
+    unanswered, which it treats as no reason to refuse rather than as a match."""
+    assert server.source_fingerprint(tmp_path / "gone") == ""
+
+
 def _multipart(body: bytes, boundary: str = "b0undary") -> bytes:
     """One PDF, as a browser's `FormData` would post it."""
     return (

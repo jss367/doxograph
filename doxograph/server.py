@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import functools
@@ -20,7 +21,8 @@ from pydantic import BaseModel, field_validator
 
 from . import __version__, bib, cites, config, export, extract, ingest, pairs, search, store, notebook
 
-STATIC = Path(__file__).parent / "static"
+PACKAGE = Path(__file__).resolve().parent
+STATIC = PACKAGE / "static"
 
 app = FastAPI(title="Doxograph")
 app.include_router(notebook.router)
@@ -295,7 +297,8 @@ class SelectWorkspace:
         # must be able to reach health and load the app shell even when a broken
         # registry needs to be reported in the UI.
         if scope.get("path") in {
-            "/", "/app.css", "/app.js", "/favicon.png", "/api/health", "/api/workspaces",
+            "/", "/app.css", "/app.js", "/favicon.png", "/api/health", "/api/code",
+            "/api/workspaces",
         }:
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers") or [])
@@ -767,6 +770,46 @@ def favicon() -> FileResponse:
     return FileResponse(STATIC / "favicon.png", media_type="image/png")
 
 
+def source_fingerprint(package: Path = PACKAGE) -> str:
+    """A digest of the Python this package is made of, as it is on disk now.
+
+    Only `.py` files count, and that is the point. They are read once, when the
+    process imports them, and never looked at again, so a server goes on running
+    whatever they said at that moment however far the checkout moves afterwards.
+    Everything else is read per request — `static/` is handed to `FileResponse`
+    on the way out — so editing `app.js` reaches the next reload and does not
+    leave a running server behind.
+
+    Paths go in beside contents, so a file that is deleted or renamed moves the
+    digest as much as an edited one does.
+
+    A package that cannot be read answers with an empty string, and so does one
+    with no Python in it at all — `rglob` walks a missing directory without
+    complaining, and the digest of nothing is a perfectly ordinary-looking hex
+    string that would compare equal to the next reading of nothing. Callers read
+    an empty answer as no answer rather than as no change.
+    """
+    try:
+        digest = hashlib.sha256()
+        counted = 0
+        for path in sorted(package.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            digest.update(str(path.relative_to(package)).encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+            counted += 1
+        return digest.hexdigest() if counted else ""
+    except OSError:
+        return ""
+
+
+#: The digest taken while this process was importing its own modules, which is
+#: the code it will be running until it exits.
+SOURCE_AT_START = source_fingerprint()
+
+
 ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
 
 
@@ -798,6 +841,38 @@ def health() -> dict:
         "busy": jobs + arriving,
         "jobs": jobs,
         "arriving": arriving,
+    }
+
+
+@app.get("/api/code")
+def code() -> dict:
+    """Whether this server is still running the code that is on disk.
+
+    `/api/health` reports a release number, and a release number is coarser than
+    the question the macOS launcher is really asking. `Info.plist` and
+    `doxograph/__init__.py` move together and only on a release, so a server
+    orphaned in the middle of one reports exactly what the app reports, is
+    adopted on the strength of it, and goes on serving Python from before every
+    commit since. What the launcher wants to know is narrower and more useful:
+    would restarting this server change what it runs.
+
+    `running` is the digest taken while this process was importing its modules.
+    `onDisk` is the same digest taken now. They differ exactly when the files
+    have been edited, pulled or reinstalled underneath a process that had
+    already loaded them. Either can come back empty, from a package this process
+    cannot read, and an empty side means unknown rather than unchanged — so a
+    caller should conclude nothing unless it has both.
+
+    Kept off `/api/health` on purpose. That one is polled four times a second
+    during startup and asked again on quit, and its promise is that it costs
+    nothing; this reads every source file in the package. The launcher needs it
+    once, on the one port that answered.
+    """
+    return {
+        "app": "doxograph",
+        "version": __version__,
+        "running": SOURCE_AT_START,
+        "onDisk": source_fingerprint(),
     }
 
 

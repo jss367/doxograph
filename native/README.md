@@ -65,23 +65,35 @@ and then relaunching the app.
   is adopted even once that something else has gone away and left 8765 free. The
   app starts its own only when no Doxograph answers anywhere in the range, and
   then it uses the lowest port that was free.
-- **Only a server of the same version.** A Doxograph answering with a version
-  other than the bundle's is not adopted silently: the app offers to restart it,
-  to use it anyway, or to quit. Without that check a server orphaned by a crash
-  or a force quit — which the app never stops, having never started it — is
-  adopted by every launch afterwards and upgraded by none, so the window shows
-  code releases behind the app around it for as long as the process lives. The
-  pid to signal comes from `lsof`, since a server old enough to be the problem
-  is too old to have been taught to report its own.
+- **Only a server running the code that is there now.** A Doxograph answering
+  from somewhere other than the current code is not adopted silently: the app
+  offers to restart it, to use it anyway, or to quit. Without that check a server
+  orphaned by a crash or a force quit — which the app never stops, having never
+  started it — is adopted by every launch afterwards and upgraded by none, so the
+  window shows code that can be releases behind the app around it for as long as
+  the process lives. The pid to signal comes from `lsof`, since a server old
+  enough to be the problem is too old to have been taught to report its own.
 
-  The check is the release version, so it catches an orphan that has outlived a
-  release and not one that has outlived a commit. `Info.plist` and
+  Two things are compared, and they catch orphans at two different ages. The
+  release in `/api/health` is checked against the bundle's
+  `CFBundleShortVersionString`, which catches a server that has outlived a
+  release. That alone misses one that has outlived a morning: `Info.plist` and
   `doxograph/__init__.py` move together and only on a release, so a server
-  orphaned earlier in the same release reports what the bundle reports and is
-  adopted. Closing that needs the server to report which code it is running,
-  which is not the same question as which release it belongs to — the bundle's
-  `doxograph-commit` is the commit it was *built* at, and a Python-only commit
-  moves the checkout past it without anything being stale.
+  orphaned earlier in the same release reports exactly what the bundle reports.
+
+  So `/api/code` is asked as well. It returns two digests over the package's
+  `.py` files: `running`, taken while the process was importing its modules, and
+  `onDisk`, taken now. Python reads those files once and keeps them, so the two
+  differ exactly when the source has been edited, pulled or reinstalled under a
+  server that had already loaded it — which is the question worth asking, since
+  it is the same as asking whether restarting would change anything. `static/` is
+  deliberately left out: it is served per request, so editing `app.js` reaches
+  the next reload without anything going stale. An empty digest, from a package
+  the server cannot read back, is read as no answer and refuses nothing.
+
+  What is still not covered is a server started from a *different* installation
+  than the one this app would launch. Each half reports on itself, so an
+  up-to-date server of some other checkout looks the same as this one's.
 - **A warning before quitting mid-extraction**, because reading a paper takes
   minutes and dies with the server. A server that does not answer the question
   gets the warning too, worded for not knowing: a silent server may be a busy
