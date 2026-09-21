@@ -5225,6 +5225,37 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
+// How many background polls have run to completion, and whether one is out.
+// A round slower than the interval used to have the next one start beside it,
+// stacking reads on a machine that was already struggling; now the tick is
+// skipped instead. The browser tests wait on the count rather than on the
+// clock — a sleep a little longer than the interval is a coin flip on a loaded
+// machine, where the tick it was supposed to cover has not landed yet — and
+// one round at a time is what makes the count mean what they read it as: that
+// a round which began after they looked has since finished.
+let polls = 0;
+let polling = false;
+
+// One round of the background poll. Keeps settings current while editing; the
+// content guard preserves the editor DOM, draft text, focus, and selection.
+async function pollOnce() {
+  const changed = await pull();
+  renderJobs();
+  if (!changed) {
+    if (citationsFailed && V.view === 'graph') loadCitations();
+    return;
+  }
+  corpusChanged();
+  // An asking that failed is asked again while the map is open, whether or
+  // not anything in the corpus has moved.
+  if (citationsFailed && V.view === 'graph') loadCitations();
+  renderStats();
+  renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
+  if (!editorHolds()) renderContent();
+  syncAnalysisControls();
+  ResearchTools.sync();
+}
+
 async function boot() {
   await loadWorkspaces();
   applyHash();
@@ -5242,26 +5273,13 @@ async function boot() {
   // with an active nav entry and a blank main pane. Draw it once here.
   if (V.view === 'research') renderContent();
   setInterval(async () => {
-    if (document.hidden) return;
-    // Keep settings current while editing; the content guard below preserves
-    // the editor DOM, draft text, focus, and selection.
+    if (document.hidden || polling) return;
+    polling = true;
     try {
-      const changed = await pull();
-      renderJobs();
-      if (!changed) {
-        if (citationsFailed && V.view === 'graph') loadCitations();
-        return;
-      }
-      corpusChanged();
-      // An asking that failed is asked again while the map is open, whether
-      // or not anything in the corpus has moved.
-      if (citationsFailed && V.view === 'graph') loadCitations();
-      renderStats();
-      renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
-      if (!editorHolds()) renderContent();
-      syncAnalysisControls();
-      ResearchTools.sync();
+      await pollOnce();
     } catch (e) { /* the server may be restarting; try again next tick */ }
+    polling = false;
+    polls += 1;
   }, 2500);
 }
 
