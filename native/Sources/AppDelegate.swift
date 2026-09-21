@@ -288,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// A Doxograph from another version is already on the port.
+    /// A Doxograph running other code is already on the port.
     ///
     /// The question is asked rather than settled here because both answers are
     /// right somewhere. A server orphaned by a crash or a force quit is the
@@ -296,28 +296,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// by every launch afterwards and upgraded by none, so the window quietly
     /// shows code that can be releases behind the bundle around it, for as long
     /// as the process lives. But the identical signature — a `doxograph serve`
-    /// on the port, answering with a version that is not this one — is also a
-    /// developer running another checkout on purpose, and stopping that is
-    /// rude. Nothing the app can see tells the two apart.
+    /// on the port, running something other than what this app would start — is
+    /// also a developer running another checkout on purpose, and stopping that
+    /// is rude. Nothing the app can see tells the two apart.
     ///
     /// What it can do is refuse to decide silently, and say what the choice
     /// costs: the server's work in flight dies with it, so that count goes in
     /// the question. Starting a second server beside it is not on the menu, here
     /// or anywhere — one corpus takes one server.
     ///
-    /// The question names both versions and calls neither of them the old one.
-    /// All the check establishes is that they differ, and the deliberate case
-    /// usually differs the other way: a checkout pulled ahead of the app that
-    /// launches it. Calling the server old there would talk someone into
-    /// replacing the newer half.
+    /// The version wording names both versions and calls neither of them the
+    /// old one. All that check establishes is that they differ, and the
+    /// deliberate case usually differs the other way: a checkout pulled ahead of
+    /// the app that launches it. Calling the server old there would talk someone
+    /// into replacing the newer half. The source wording can be direct, because
+    /// that check does establish a direction: the server loaded those files
+    /// before they changed.
     private func askAboutStaleServer(_ stale: ServerController.Stale) {
         let alert = NSAlert()
-        alert.messageText = "Another version of Doxograph is already running"
-        alert.informativeText = """
-            The server on port \(stale.port) is \(stale.versionName), and this app is \
-            version \(ServerController.appVersion). Using it would put code this app was \
-            not built alongside behind this window.\(stale.workNote)
-            """
+        switch stale.reason {
+        case .version:
+            alert.messageText = "Another version of Doxograph is already running"
+            alert.informativeText = """
+                The server on port \(stale.port) is \(stale.versionName), and this app is \
+                version \(ServerController.appVersion). Using it would put code this app was \
+                not built alongside behind this window.\(stale.workNote)
+                """
+        case .code:
+            alert.messageText = "Doxograph is running code that has since changed"
+            alert.informativeText = """
+                The server on port \(stale.port) is \(stale.versionName), the same as this \
+                app, but the Python it loaded at startup — its own, or a library it runs on \
+                — is not the Python on disk now. It has been up since before those files \
+                were edited, pulled or reinstalled, so using it would show you code you have \
+                already replaced.\(stale.workNote)
+                """
+        case .olderThanTheCheck:
+            alert.messageText = "Doxograph is running code from before this app was built"
+            alert.informativeText = """
+                The server on port \(stale.port) is \(stale.versionName), the same as this \
+                app, but it does not answer when asked which code it is running — and this \
+                app's own code does answer. So it started from something older than this \
+                build, whatever its release number reads.\(stale.workNote)
+                """
+        }
         alert.addButton(withTitle: "Restart the Server")
         alert.addButton(withTitle: "Use It Anyway")
         alert.addButton(withTitle: "Quit")

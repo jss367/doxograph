@@ -65,23 +65,98 @@ and then relaunching the app.
   is adopted even once that something else has gone away and left 8765 free. The
   app starts its own only when no Doxograph answers anywhere in the range, and
   then it uses the lowest port that was free.
-- **Only a server of the same version.** A Doxograph answering with a version
-  other than the bundle's is not adopted silently: the app offers to restart it,
-  to use it anyway, or to quit. Without that check a server orphaned by a crash
-  or a force quit — which the app never stops, having never started it — is
-  adopted by every launch afterwards and upgraded by none, so the window shows
-  code releases behind the app around it for as long as the process lives. The
-  pid to signal comes from `lsof`, since a server old enough to be the problem
-  is too old to have been taught to report its own.
+- **Only a server running the code that is there now.** A Doxograph answering
+  from somewhere other than the current code is not adopted silently: the app
+  offers to restart it, to use it anyway, or to quit. Without that check a server
+  orphaned by a crash or a force quit — which the app never stops, having never
+  started it — is adopted by every launch afterwards and upgraded by none, so the
+  window shows code that can be releases behind the app around it for as long as
+  the process lives. The pid to signal comes from `lsof`, since a server old
+  enough to be the problem is too old to have been taught to report its own.
 
-  The check is the release version, so it catches an orphan that has outlived a
-  release and not one that has outlived a commit. `Info.plist` and
+  Two things are compared, and they catch orphans at two different ages. The
+  release in `/api/health` is checked against the bundle's
+  `CFBundleShortVersionString`, which catches a server that has outlived a
+  release. That alone misses one that has outlived a morning: `Info.plist` and
   `doxograph/__init__.py` move together and only on a release, so a server
-  orphaned earlier in the same release reports what the bundle reports and is
-  adopted. Closing that needs the server to report which code it is running,
-  which is not the same question as which release it belongs to — the bundle's
-  `doxograph-commit` is the commit it was *built* at, and a Python-only commit
-  moves the checkout past it without anything being stale.
+  orphaned earlier in the same release reports exactly what the bundle reports.
+
+  So `/api/code` is asked as well. It returns two digests over the code the
+  server is made of: `running`, taken while the process was importing its
+  modules, and `onDisk`, taken now. Python reads those files once and keeps them,
+  so the two differ exactly when the code has been edited, pulled or reinstalled
+  under a server that had already loaded it — which is the question worth asking,
+  since it is the same as asking whether restarting would change anything.
+
+  Both halves of what it runs are counted. The package's own `.py` files go in by
+  contents, so a branch switch that restores bytes the checkout already held is
+  not reported as a change. Everything imported from outside the package —
+  FastAPI, Pydantic, HTTPX and what they pull in — goes in by size and time,
+  because contents there run to tens of megabytes; that half is what catches
+  `pip install -e .` on a changed `pyproject.toml`, which upgrades a library
+  without touching a single `doxograph` source file. That list is read fresh on
+  every request rather than fixed at import, because a process goes on
+  importing: Uvicorn arrives after `server.py` is done and pypdf only when a PDF
+  does. A reading is taken when the app module is imported, again from the app's
+  lifespan once the server is built and before it accepts anything, and again
+  beside each later import site — so the file remembered for a module is the file
+  that module was loaded from. The lifespan reading is what catches what Uvicorn
+  loads on its own way up: `uvicorn.run` builds a config and loads it, which
+  imports the event loop and HTTP protocol implementations, and those arrive
+  after `import uvicorn` has returned. The app module rather than `serve()`,
+  because `--reload` hands uvicorn a module string and the worker it spawns never
+  calls `serve()`.
+  Recording it later instead would remember an upgrade that landed in between as
+  the original, and the server would read as current forever while running code
+  nobody has on disk. `static/` is left out on purpose: it is served per request, so editing
+  `app.js` reaches the next reload without anything going stale. An empty digest,
+  from a package the server cannot read back, is read as no answer and refuses
+  nothing.
+
+  The two endpoints are two requests, and a port is not a promise between them:
+  the server that answers the first can exit before the second and leave its
+  successor to answer that one. Both report an `instance` — a token this process
+  made when it started — and a pair naming two different ones is thrown away
+  rather than combined into a description of a server that never existed. The
+  release is checked too, for a server too old to have an instance, but it is the
+  weaker of the two: two servers of one release are exactly what it cannot tell
+  apart. The pair is asked for twice, and a port changing hands twice in a row
+  settles for the health read alone — one server's answer, and the release check
+  this had before the digests existed.
+
+  The same token is what says, after the alert has been answered, that the server
+  on the port is still the one the question described.
+
+  An unanswered `/api/code` is adoptable but not *confirmed*, and the two paths
+  treat that differently. The port walk adopts either way: it is choosing where
+  to start, and refusing a server over a request that did not come back would put
+  up an alert about a slow moment. Restarting a stale server may not, because
+  there the user has asked for something and reporting it done is a claim — so an
+  unconfirmed answer goes ahead with the restart rather than quietly reporting
+  success without one.
+
+  A server that answers `/api/health` as Doxograph and then 404s on `/api/code`
+  is refused rather than adopted, even when the release matches. Having the route
+  is also part of who a server is: when the alert has been answered and the port
+  is described again, one description naming a digest and another having no such
+  route are two different processes, not one that went quiet, so the question is
+  asked again rather than the wrong process being signalled. This app's own
+  code serves that route, so a Doxograph without it is provably not running this
+  app's code — and it is the very case the digest would otherwise be blindest to,
+  since the server too old to answer is the one orphaned before the answer
+  existed. A request that fails some other way says nothing and adopts.
+
+  What is still not covered is a server started from a *different* installation
+  than the one this app would launch. Each half reports on itself, so an
+  up-to-date server of some other checkout looks the same as this one's.
+  When the alert has been answered, whether the work in flight is the *same*
+  work decides whether the agreement still holds. `/api/health` reports `taken`,
+  a count of everything the server has ever accepted — once each, since a paper
+  arrives as a request and becomes a job, and counting both phases would ask the
+  user again about a paper they had already agreed to lose. It only goes up, and
+  comparing the gauges alone would miss a second paper starting beside the first,
+  and would miss a first finishing as a second starts, which leaves the totals
+  identical over entirely different work.
 - **A warning before quitting mid-extraction**, because reading a paper takes
   minutes and dies with the server. A server that does not answer the question
   gets the warning too, worded for not knowing: a silent server may be a busy

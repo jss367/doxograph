@@ -24,7 +24,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from . import config, search, store
+from . import config, fingerprint, search, store
 
 class PaperRemoved(RuntimeError):
     """The paper was deleted while it was being ingested.
@@ -373,6 +373,12 @@ ARXIV_STAMP = re.compile(
 def pdf_first_page_text(path: Path, pages: int = 2) -> str:
     try:
         from pypdf import PdfReader
+
+        # Beside the import, so what this process loaded is what gets
+        # remembered. pypdf arrives only when a PDF does, which can be
+        # long after an upgrade that the next reading would have
+        # mistaken for the version already in memory.
+        fingerprint.snapshot()
     except ImportError:
         return ""
     try:
@@ -392,6 +398,12 @@ def pdf_metadata_doi(path: Path) -> str:
     """
     try:
         from pypdf import PdfReader
+
+        # Beside the import, so what this process loaded is what gets
+        # remembered. pypdf arrives only when a PDF does, which can be
+        # long after an upgrade that the next reading would have
+        # mistaken for the version already in memory.
+        fingerprint.snapshot()
     except ImportError:
         return ""
     try:

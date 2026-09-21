@@ -26,6 +26,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import fingerprint
+
 # A paper's text is cached per file, since a paper is checked once per claim
 # and text extraction is the slow part. Keyed on the file's identity so a
 # replaced PDF is re-read.
@@ -119,6 +121,12 @@ def _extract(path: Path) -> str:
     """Every page of the PDF, separated by `PAGE_BREAK`. Empty if unreadable."""
     try:
         from pypdf import PdfReader
+
+        # Beside the import, so what this process loaded is what gets
+        # remembered. pypdf arrives only when a PDF does, which can be
+        # long after an upgrade that the next reading would have
+        # mistaken for the version already in memory.
+        fingerprint.snapshot()
         reader = PdfReader(str(path))
         return PAGE_BREAK.join((page.extract_text() or "") for page in reader.pages)
     except Exception:

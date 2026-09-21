@@ -16,27 +16,97 @@ final class ServerController {
         case staleServer(Stale)
     }
 
-    /// A Doxograph already on the port, running a version this app did not ship
-    /// with.
+    /// A Doxograph already on the port, running code this app should not adopt.
     ///
     /// Adoption is how an orphan becomes permanent. This app stops only the
     /// child it spawned, so a server that outlived a crash, a force quit or a
     /// bundle swapped underneath it is adopted by every launch afterwards and
     /// upgraded by none — its code stays pinned at whatever it was while the
-    /// app around it moves on, silently, for as long as the process lives. The
-    /// version it reports is the only thing that tells that apart from the
-    /// `doxograph serve` someone is deliberately running in a terminal, which
-    /// is why the mismatch is a question for the user rather than a decision
-    /// taken here.
+    /// app around it moves on, silently, for as long as the process lives. What
+    /// the server says about itself is the only thing that tells that apart from
+    /// the `doxograph serve` someone is deliberately running in a terminal,
+    /// which is why the mismatch is a question for the user rather than a
+    /// decision taken here.
     struct Stale {
+        /// What the server said that makes it not this app's to run on.
+        ///
+        /// The two are the same failure at two resolutions. A release number is
+        /// coarse — `Info.plist` and `doxograph/__init__.py` move together and
+        /// only on a release, so it catches a server that outlived a release and
+        /// misses one that outlived a morning's commits. The digest is the
+        /// finer question and the one actually worth asking: is restarting this
+        /// server going to change what it runs.
+        enum Reason {
+            /// It answers with a release this app was not built alongside.
+            case version
+            /// It answers with this app's release, and the Python it loaded is
+            /// no longer the Python on disk.
+            case code
+            /// It answers with this app's release and has no `/api/code` at
+            /// all. This app's own code serves that route, so a Doxograph
+            /// without it is provably not running this app's code — and it is
+            /// the case the finer check would otherwise be blindest to, since
+            /// the server too old to answer is the one orphaned before the
+            /// answer existed.
+            case olderThanTheCheck
+        }
+
         let port: Int
         /// What the server calls itself, or empty when it is old enough not to
         /// say. Both are equally not this app's version.
         let version: String
         let health: Health
+        let reason: Reason
+        /// What the server said when asked which code it is running, kept whole
+        /// rather than reduced to the digests. Whether it answered at all is
+        /// part of who it is: a server that names its code and one that has
+        /// never heard of the question cannot be the same process.
+        let report: CodeReport
 
         /// The version, as it goes in a sentence.
         var versionName: String { ServerController.versionName(version) }
+
+        /// Whether this could be the same server another description found.
+        ///
+        /// Not an identifier the server issues — it has none — but enough to
+        /// notice that the thing on the port is no longer the thing a question
+        /// was asked about. A pid would be exact and is unusable: the alert has
+        /// no deadline, and a pid outlives its process only as a number the
+        /// kernel will hand to someone else.
+        ///
+        /// When both said which process they are, that settles it and nothing
+        /// else is consulted: it is the thing itself rather than a sign of it.
+        ///
+        /// Otherwise — one of them too old to say — the release has to match,
+        /// and then what the two said about their code has to be compatible:
+        ///
+        /// - Both named a digest, and the digests agree.
+        /// - Both have no `/api/code` at all, which is as much as either can say.
+        /// - One named a digest and the other has no such route. That is not a
+        ///   silence, it is two different answers: a process cannot lose a
+        ///   route it was serving a moment ago, so this is a different process
+        ///   and the agreement to stop the first does not reach it.
+        /// - Anything else means at least one side's request did not come back,
+        ///   which is a question nobody answered, and an unanswered question
+        ///   contradicts nothing. Insisting otherwise would make every slow
+        ///   moment read as a port that changed hands, and the alert would come
+        ///   back with the same question forever.
+        func couldBe(_ other: Stale) -> Bool {
+            if !health.instance.isEmpty && !other.health.instance.isEmpty {
+                return health.instance == other.health.instance
+            }
+            guard version == other.version else { return false }
+            switch (report, other.report) {
+            case (.answered(let mine), .answered(let theirs)):
+                return mine.running == theirs.running
+            case (.absent, .absent):
+                return true
+            case (.absent, .answered), (.answered, .absent):
+                return false
+            default:
+                return true
+            }
+        }
 
         /// What stopping this server would cost, or nothing when it is idle.
         /// The two counts are summed here because the sentence only has to be
@@ -47,6 +117,40 @@ final class ServerController {
             return "\n\nIt has \(busy) \(busy == 1 ? "paper" : "papers") in flight, "
                 + "which stopping it would lose."
         }
+    }
+
+    /// What a server said about the Python it is made of, which is a different
+    /// question from which release it belongs to.
+    ///
+    /// Both halves of what it runs are in the digest: its own sources, and the
+    /// files behind the libraries it imported. `pip install -e .` on a changed
+    /// `pyproject.toml` upgrades the second without touching the first, and a
+    /// server that has already loaded the old FastAPI goes on running it.
+    ///
+    /// `static/` is left out, because it is handed out per request — editing
+    /// `app.js` under a running server reaches the next reload and leaves
+    /// nothing stale behind.
+    struct Code {
+        /// The digest the server took while importing its own modules, which is
+        /// the code it runs until it exits.
+        let running: String
+        /// The same digest over the files on disk, taken when it was asked.
+        let onDisk: String
+        /// Which process these digests came from, or empty from one too old to
+        /// say. Held against the one `/api/health` named a moment earlier.
+        let instance: String
+
+        /// Whether the server has outlived its own source.
+        ///
+        /// An empty digest on either side is a package the server could not read
+        /// back. That is an unanswered question, not a matching answer, so it is
+        /// not a mismatch either — this check only ever refuses on something it
+        /// was actually told.
+        var moved: Bool { !unknown && running != onDisk }
+
+        /// Whether either side came back empty, which is a package the server
+        /// could not read and so a comparison that did not happen.
+        var unknown: Bool { running.isEmpty || onDisk.isEmpty }
     }
 
     /// The version this app was built as. The release commit bumps the bundle
@@ -390,6 +494,50 @@ final class ServerController {
         }
     }
 
+    /// Whether work has appeared that nobody agreed to lose.
+    ///
+    /// The counts in the question came from the walk, so anything that started
+    /// while the alert stood open was never in it. Comparing the counts is not
+    /// enough and used not to be: a question about one paper answered while a
+    /// second is being read misses it, and a first paper that finishes while a
+    /// second starts leaves the totals identical over entirely different work.
+    /// `taken` only goes up, so two readings that agree are the same work.
+    ///
+    /// The totals are still compared underneath, because a server too old to
+    /// count answers zero at both ends and would otherwise look untouched. Any
+    /// growth counts there, not only the first paper: a question about one
+    /// answered while a second is being read is a second nobody agreed to lose.
+    /// A total that has *fallen* is not asked about again — less to lose than
+    /// was agreed to is still covered by the agreement.
+    ///
+    /// What that fallback cannot see is a paper finishing as another starts,
+    /// which leaves the total where it was over different work. `taken` is the
+    /// answer to that and a server too old to report it has no answer, which is
+    /// the same place this check stood before `taken` existed.
+    private static func tookOnWork(_ live: Stale, since agreed: Stale) -> Bool {
+        if live.health.taken != agreed.health.taken { return true }
+        return live.health.jobs + live.health.arriving
+            > agreed.health.jobs + agreed.health.arriving
+    }
+
+    /// Why a Doxograph that is on the port but not the one in the question is
+    /// not acted on either.
+    ///
+    /// Reached when the app could not establish what the server is running, so
+    /// there is nothing true to put in a second question: the reason the first
+    /// alert gave was about a server that has gone. Asking again with it would
+    /// describe this one wrongly — an alert about two different releases, over a
+    /// server whose release matches — and offering to restart something the app
+    /// cannot describe is the thing this whole check exists to stop.
+    private static func unconfirmed(_ port: Int) -> String {
+        """
+        A Doxograph is listening on port \(port), but it is not the server this \
+        app asked about and it did not say which code it is running, so there is \
+        nothing to tell you about it that would be true. Nothing was stopped and \
+        nothing was started. Try again.
+        """
+    }
+
     /// Why a port that is occupied but silent is not acted on either way.
     ///
     /// The two things it could be want opposite treatment and cannot be told
@@ -436,14 +584,17 @@ final class ServerController {
             // `kill` on a number that old is a signal to a stranger. A pid is
             // only safe to use in the same breath as the lookup that produced
             // it, which is why one is no longer kept in `Stale` at all.
-            switch self.probe(on: server.port, timeout: 2) {
-            case .unreachable:
+            //
+            // Each branch below holds what is on the port now against the server
+            // the question described, and only agreement gets past the switch.
+            switch self.inspect(server.port, timeout: 2) {
+            case .gone:
                 // Gone while the question was up, and gone is the one answer
                 // that says so: the connection was refused. There is nothing to
                 // stop, and the walk below finds the port free and starts there.
                 return self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
 
-            case .unresponsive:
+            case .unidentified:
                 // Not an empty port — reading it as one would send the walk off
                 // to start a second Doxograph on the next port up while this one
                 // carries on holding this one. But not a licence to signal it
@@ -453,40 +604,56 @@ final class ServerController {
                 return self.deliver(.failure(.launchFailed(Self.unidentified(server.port))),
                                     onReady: onReady, onFailure: onFailure)
 
-            case .answered(let live):
-                guard live.version != Self.appVersion else {
-                    // Replaced, while the question was up, by a server running
-                    // this app's own code — the outcome the user asked for,
-                    // arrived at without this app doing anything. Adopt it
-                    // rather than restarting a server that is already right.
-                    self.port = server.port
-                    self.ownsServer = false
-                    return self.deliver(.success, onReady: onReady, onFailure: onFailure)
+            case .adoptable(_, let report) where report.confirmed:
+                // Replaced, while the question was up, by a server running this
+                // app's own code — the outcome the user asked for, arrived at
+                // without this app doing anything. Adopt it rather than
+                // restarting a server that is already right.
+                self.port = server.port
+                self.ownsServer = false
+                return self.deliver(.success, onReady: onReady, onFailure: onFailure)
+
+            case .adoptable(let health, let report):
+                // Not denied is not the same as current, and here the
+                // difference matters: the user asked for a restart of a server
+                // this app had said was running other code, and a `/api/code`
+                // request that did not come back is no reason to report that
+                // done without doing it.
+                //
+                // So the restart goes ahead — but only while nothing has moved.
+                // Unlike the case below there is nothing true to ask a second
+                // question with: this server said nothing about its code, and
+                // the reason the first alert gave belongs to a server that has
+                // gone.
+                let here = Stale(port: server.port, version: health.version,
+                                 health: health, reason: server.reason, report: report)
+                guard here.couldBe(server), !Self.tookOnWork(here, since: server) else {
+                    return self.deliver(.failure(.launchFailed(Self.unconfirmed(server.port))),
+                                        onReady: onReady, onFailure: onFailure)
                 }
-                // What was agreed to was the stopping of the server the
-                // question described, and two things can make what is on the
-                // port no longer that server.
+
+            case .stale(let live):
+                // What was agreed to was the stopping of the server the question
+                // described, and two things can make what is on the port no
+                // longer that server.
                 //
-                // Its version can have changed, which is as much of an identity
-                // as this app can see: the 0.4.1 someone agreed to stop is not
-                // the 0.5.0 that took the port after it exited, and neither the
-                // agreement nor the work counted in it carries over.
+                // Its identity can have changed — its release, or the digest of
+                // the code it loaded, or whether it has an `/api/code` at all,
+                // which together are as much of one as this app can see. The
+                // 0.4.1 someone agreed to stop is not the 0.5.0 that took the
+                // port after it exited, and neither the agreement nor the work
+                // counted in it carries over.
                 //
-                // Or work can have started. The counts in the question came from
-                // the walk, so an upload that began while the alert stood open
-                // was never in it and nobody has agreed to lose it.
+                // Or it can have taken on work nobody agreed to lose.
                 //
                 // Either way the question is asked again, about what is there
-                // now. Neither can cycle: the second question describes the
-                // server it is about, so answering Restart to that one is the
-                // agreement the first could not give.
-                let anotherServer = live.version != server.version
-                let unagreedWork = live.jobs + live.arriving > 0
-                    && server.health.jobs + server.health.arriving == 0
-                if anotherServer || unagreedWork {
-                    return self.deliver(.failure(.staleServer(
-                        Stale(port: server.port, version: live.version, health: live))),
-                        onReady: onReady, onFailure: onFailure)
+                // now — which is describable here, because this server answered.
+                // It cannot cycle: the second question describes the server it is
+                // about, so answering Restart to that one is the agreement the
+                // first could not give.
+                guard live.couldBe(server), !Self.tookOnWork(live, since: server) else {
+                    return self.deliver(.failure(.staleServer(live)),
+                                        onReady: onReady, onFailure: onFailure)
                 }
             }
             guard let pid = Self.listener(on: server.port) else {
@@ -562,10 +729,26 @@ final class ServerController {
         /// whose web view posts a paper dropped on the page straight to the
         /// server.
         let arriving: Int
+        /// Everything this server has ever taken on, counted and never
+        /// decremented, or zero from one too old to count.
+        ///
+        /// The gauges above cannot say whether work is the *same* work. An
+        /// alert saying "1 paper in flight" can be answered ten minutes later
+        /// by a server still reporting one paper, and it can be a different
+        /// paper, and nobody agreed to lose that one. Two readings of this that
+        /// agree are the same work; two that differ are not.
+        let taken: Int
         /// The version the server reports, or empty from one too old to report
         /// one. Only the port walk reads it, to decide whether this server is
         /// running the same code as the app that found it.
         let version: String
+        /// Which process answered, or empty from one too old to say.
+        ///
+        /// `/api/code` reports it too, which is the point: describing a port
+        /// takes two requests, and this is the one thing that says both answers
+        /// came from the same server. A release does not — two servers of one
+        /// release are exactly what nothing else here can tell apart.
+        let instance: String
     }
 
     /// How a health probe turned out. The two ways of not getting an answer are
@@ -594,10 +777,10 @@ final class ServerController {
     }
 
     /// What the server is working on, or nil when nothing on the port answered
-    /// as Doxograph. The port walk wants only that: an unresponsive stranger
-    /// and a refused connection are both "not something to adopt". Checking the
-    /// name matters, since adopting a stranger's port would show the user
-    /// someone else's web app.
+    /// as Doxograph. The wait for a server this app just spawned wants only
+    /// that: an unresponsive stranger and a silent port are both "not up yet".
+    /// Checking the name matters, since a stranger's port would otherwise count
+    /// as this app's server having started.
     private func health(on port: Int, timeout: TimeInterval) -> Health? {
         guard case .answered(let health) = probe(on: port, timeout: timeout) else { return nil }
         return health
@@ -638,7 +821,9 @@ final class ServerController {
             let busy = body["busy"] as? Int ?? 0
             outcome.value = .answered(Health(jobs: body["jobs"] as? Int ?? busy,
                                              arriving: body["arriving"] as? Int ?? 0,
-                                             version: body["version"] as? String ?? ""))
+                                             taken: body["taken"] as? Int ?? 0,
+                                             version: body["version"] as? String ?? "",
+                                             instance: body["instance"] as? String ?? ""))
         }.resume()
         // Giving up on the wait is itself a server that did not answer in time.
         guard finished.wait(timeout: .now() + timeout + 2) == .success else { return .unresponsive }
@@ -659,6 +844,202 @@ final class ServerController {
         default:
             return false
         }
+    }
+
+    /// What a server said when asked which code it is running.
+    ///
+    /// The two ways of getting no digests are kept apart because they are not
+    /// the same news. Only one of them is an unanswered question.
+    enum CodeReport {
+        /// It answered, and this is what it said.
+        case answered(Code)
+        /// It has no `/api/code`. Not a question left hanging: this app's own
+        /// code serves that route, so a server that answered `/api/health` as
+        /// Doxograph and then 404s here is provably running something this app
+        /// was not built from, whatever release it calls itself.
+        case absent
+        /// The request did not come back — a timeout, a dropped connection, a
+        /// 500, a body that would not parse. Nothing is concluded from it.
+        case unavailable
+        /// It answered, naming a release other than the one `/api/health` had
+        /// just named. A port is not a promise between two requests: the
+        /// server that answered the first can exit before the second and leave
+        /// its successor to answer that one. These digests belong to a
+        /// different server than those counts, and the pair is thrown away
+        /// rather than combined into a description of a server that never
+        /// existed.
+        case otherServer
+
+        /// Whether this positively says the server is running the code on disk,
+        /// as opposed to merely not denying it. An empty digest is a package
+        /// the server could not read back, so it compared nothing.
+        var confirmed: Bool {
+            if case .answered(let code) = self { return !code.unknown }
+            return false
+        }
+    }
+
+    /// Ask the server which code it is running, having just heard from
+    /// `/api/health` who it is.
+    ///
+    /// That answer is passed in so this one can be checked against it. Both
+    /// endpoints report the instance and the release, and a reply naming either
+    /// differently is a reply from a different server — which is the only way
+    /// this app can notice that the port changed hands between the two
+    /// requests. The instance is the one that catches a handoff between two
+    /// servers of the same release, which is exactly the handoff nothing else
+    /// here can see.
+    ///
+    /// The timeout is fixed and generous rather than inherited from the walk.
+    /// This runs at most once per launch — on the one port that answered as
+    /// Doxograph, after which the walk returns either way — so patience here
+    /// cannot add up, and unlike `/api/health` the endpoint stats every file
+    /// behind every module the server imported before it replies.
+    private func codeReport(on port: Int, from server: Health) -> CodeReport {
+        let release = server.version
+        let (status, body) = fetchJSON("/api/code", on: port, timeout: 3)
+        // A 404 carries no release to check, so it is the one answer here that
+        // a handoff could misattribute. It only ever raises a question, never
+        // takes an action, and `replaceStale` describes the port again before
+        // signalling anything — so the cost of being wrong is one alert about a
+        // server that has already gone, not a signal sent to a stranger.
+        if status == 404 { return .absent }
+        guard let body, body["app"] as? String == "doxograph",
+              let running = body["running"] as? String,
+              let onDisk = body["onDisk"] as? String
+        else { return .unavailable }
+        let instance = body["instance"] as? String ?? ""
+        // The release is the weaker of the two and still worth checking, since
+        // a server too old to name an instance can still name a release.
+        guard body["version"] as? String == release else { return .otherServer }
+        guard instance == server.instance || instance.isEmpty || server.instance.isEmpty
+        else { return .otherServer }
+        return .answered(Code(running: running, onDisk: onDisk, instance: instance))
+    }
+
+    /// A GET on a loopback endpoint: the status it came back with, and the
+    /// decoded body when that status was a 200 carrying a JSON object.
+    ///
+    /// The status is returned rather than folded into the body because a 404 is
+    /// itself an answer — it says the route is not there, which about a server
+    /// that has already identified itself is a fact about which code it runs. A
+    /// status of zero means nothing came back at all.
+    ///
+    /// The distinction `probe` draws between a refused connection and a silent
+    /// one is deliberately not drawn here. This is only ever asked of a port
+    /// that has just answered as Doxograph, and every way of the request not
+    /// completing means the same thing to the caller.
+    private func fetchJSON(_ path: String, on port: Int, timeout: TimeInterval)
+        -> (status: Int, body: [String: Any]?) {
+        guard let url = URL(string: "http://\(host):\(port)\(path)") else { return (0, nil) }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+
+        // Boxed for the same reason `probe` boxes its outcome: the wait below
+        // can give up while the request is still in flight, and then the
+        // completion's write races this thread's read.
+        let answer = Guarded<(status: Int, body: [String: Any]?)>((0, nil))
+        let finished = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { finished.signal() }
+            guard let http = response as? HTTPURLResponse else { return }
+            guard http.statusCode == 200, let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return answer.value = (http.statusCode, nil) }
+            answer.value = (http.statusCode, object)
+        }.resume()
+        guard finished.wait(timeout: .now() + timeout + 2) == .success else { return (0, nil) }
+        return answer.value
+    }
+
+    /// What is on a port, and whether this app may run on it.
+    ///
+    /// One place, because two callers have to agree. The port walk asks it of
+    /// every occupied candidate, and `replaceStale` asks it again of the one
+    /// port an alert was answered about — and if the second were any more
+    /// permissive than the first, a server the walk had just refused could be
+    /// adopted a moment later by the code that was supposed to replace it.
+    private func inspect(_ port: Int, timeout: TimeInterval) -> Verdict {
+        // Asked twice, because describing a port takes two requests and one
+        // handoff between them is a coincidence. A port that changes hands
+        // twice inside four loopback requests is past describing from outside.
+        for _ in 0..<2 {
+            if let settled = describe(port, timeout: timeout) { return settled }
+        }
+        // So settle for the health read on its own, which is one server's
+        // answer and coherent whatever happens after it: the release check this
+        // had before the digests existed, and nothing combined with anything.
+        switch probe(on: port, timeout: timeout) {
+        case .unreachable: return .gone
+        case .unresponsive: return .unidentified
+        case .answered(let health): return verdict(port, health, .unavailable)
+        }
+    }
+
+
+    /// One coherent description of what is on a port, or nil when the port
+    /// changed hands while it was being described.
+    private func describe(_ port: Int, timeout: TimeInterval) -> Verdict? {
+        switch probe(on: port, timeout: timeout) {
+        case .unreachable:
+            return .gone
+        case .unresponsive:
+            return .unidentified
+        case .answered(let health):
+            // Asked even when the version already settles it, because the
+            // digest is also the better half of `Stale.identity` — and the
+            // thing most worth being able to recognise again is exactly the
+            // server an alert is about to stand open over.
+            let report = codeReport(on: port, from: health)
+            if case .otherServer = report { return nil }
+            return verdict(port, health, report)
+        }
+    }
+
+    /// What one server's two answers add up to.
+    private func verdict(_ port: Int, _ health: Health, _ report: CodeReport) -> Verdict {
+        func stale(_ reason: Stale.Reason) -> Verdict {
+            .stale(Stale(port: port, version: health.version, health: health,
+                         reason: reason, report: report))
+        }
+        if health.version != Self.appVersion { return stale(.version) }
+        switch report {
+        case .absent:
+            return stale(.olderThanTheCheck)
+        case .answered(let code):
+            // An empty digest on either side is a package the server could not
+            // read back, so `moved` is false and this is adoptable — but the
+            // report goes along unchanged, and it says nothing was compared.
+            return code.moved ? stale(.code) : .adoptable(health, report)
+        case .unavailable, .otherServer:
+            // The cases that adopt on silence. A server that answered health a
+            // moment ago and then failed this request has said nothing either
+            // way, and refusing every server the app cannot finish a second
+            // conversation with would turn a slow moment into an alert about
+            // nothing. `otherServer` cannot arrive here from `describe`, which
+            // throws that pair away; it reaches this only as the last resort
+            // above, where the code report was never asked for.
+            return .adoptable(health, report)
+        }
+    }
+
+    /// How `inspect` came out. `gone` and `unidentified` keep the two kinds of
+    /// silence apart for the same reason `Probe` does: one says the port is
+    /// empty, the other only that nothing identified itself.
+    private enum Verdict {
+        /// Nothing found says this server is not running this app's code.
+        ///
+        /// The report comes along because whether the server said so or merely
+        /// did not deny it matters to one caller and not the other. The port
+        /// walk treats both alike, on purpose — it will not refuse a server
+        /// over a request that did not come back. `replaceStale` may not,
+        /// because there the user has asked for something and reporting it
+        /// done is a claim.
+        case adoptable(Health, CodeReport)
+        case stale(Stale)
+        case unidentified
+        case gone
     }
 
     // MARK: - Ports
@@ -720,17 +1101,20 @@ final class ServerController {
                 continue
             }
             if let free = firstFree, Date() >= deadline { return .start(free) }
-            guard let health = health(on: candidate, timeout: candidate == start ? 1.5 : 0.5)
-            else { continue }
-            // A version that does not match ends the walk exactly as a match
-            // does. The server is still the one server for this corpus, so
-            // there is nowhere else to go: carrying on would find a free port
-            // and start a second one beside it, which is the thing the walk is
-            // built to prevent. Only what happens next differs.
-            guard health.version == Self.appVersion else {
-                return .stale(Stale(port: candidate, version: health.version, health: health))
+            // Code that does not match ends the walk exactly as a match does.
+            // The server is still the one server for this corpus, so there is
+            // nowhere else to go: carrying on would find a free port and start a
+            // second one beside it, which is the thing the walk is built to
+            // prevent. Only what happens next differs.
+            switch inspect(candidate, timeout: candidate == start ? 1.5 : 0.5) {
+            case .gone, .unidentified: continue
+            case .stale(let server): return .stale(server)
+            // Confirmed or merely not denied, the walk adopts either way. It
+            // is choosing where to start, not acting on something a user
+            // asked for, and refusing a server over a request that did not
+            // come back would put up an alert about a slow moment.
+            case .adoptable: return .adopt(candidate)
             }
-            return .adopt(candidate)
         }
         guard let free = firstFree else { return .exhausted }
         return .start(free)
