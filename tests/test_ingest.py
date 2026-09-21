@@ -1,3 +1,6 @@
+import contextlib
+import ssl
+import threading
 import time
 
 import httpx
@@ -103,7 +106,7 @@ class FakeArxivClient:
 def quick_arxiv(monkeypatch):
     """Keep the real spacing logic, at a hundredth of the real interval."""
     monkeypatch.setattr(ingest, "ARXIV_INTERVAL", 0.03)
-    monkeypatch.setattr(ingest, "_arxiv_last", 0.0)
+    monkeypatch.setattr(ingest, "_arxiv_next", 0.0)
     return 0.03
 
 
@@ -122,6 +125,64 @@ def test_persistent_rate_limiting_says_so(quick_arxiv):
     assert len(client.asked_at) == ingest.ARXIV_ATTEMPTS
 
 
+def test_giving_up_still_holds_off_the_next_paper(quick_arxiv):
+    """The last refusal reaches the queue too, even though nobody retries it.
+
+    A pasted batch is ingested several papers at a time. If the refusal that
+    exhausts one paper's attempts left the shared booking at the usual three
+    seconds, the next paper would query almost immediately after a cooldown
+    that had just failed, and work through the same two-minute cycle itself.
+    """
+    client = FakeArxivClient(*[FakeArxivResponse(406)] * ingest.ARXIV_ATTEMPTS)
+    with pytest.raises(ValueError, match="rate-limiting"):
+        ingest.fetch_arxiv("2607.07916", client)
+    started = time.monotonic()
+    ingest._arxiv_turn()
+    assert time.monotonic() - started >= quick_arxiv * 16
+
+
+def test_a_refusal_waits_longer_each_time(quick_arxiv):
+    """The gap after a second refusal is wider than the gap after the first."""
+    client = FakeArxivClient(
+        FakeArxivResponse(406), FakeArxivResponse(406),
+        FakeArxivResponse(406), FakeArxivResponse(200, FEED))
+    ingest.fetch_arxiv("2607.07916", client)
+    gaps = [b - a for a, b in zip(client.asked_at, client.asked_at[1:])]
+    assert gaps[1] > gaps[0] and gaps[2] > gaps[1]
+
+
+def test_a_refusal_holds_off_the_other_threads(quick_arxiv):
+    """Backing off pauses whoever asks next, not only the refused thread."""
+    ingest._arxiv_back_off(quick_arxiv * 8)
+    started = time.monotonic()
+    ingest._arxiv_turn()
+    assert time.monotonic() - started >= quick_arxiv * 7
+
+
+def test_a_refusal_postpones_a_thread_already_waiting(quick_arxiv):
+    """A refusal reaches the threads that are already queued for a turn.
+
+    The refused thread is usually not the only one ingesting, so a neighbour
+    is typically already waiting its turn when the refusal lands. It has to
+    hear about the backoff, rather than going ahead at the usual cadence and
+    keeping the refusal alive.
+    """
+    ingest._arxiv_turn()  # book the next turn, so the waiter has to wait
+    took_its_turn = []
+
+    def take_a_turn():
+        ingest._arxiv_turn()
+        took_its_turn.append(time.monotonic())
+
+    started = time.monotonic()
+    waiter = threading.Thread(target=take_a_turn)
+    waiter.start()
+    time.sleep(quick_arxiv / 3)  # let it settle into the wait
+    ingest._arxiv_back_off(quick_arxiv * 10)
+    waiter.join(timeout=10)
+    assert took_its_turn and took_its_turn[0] - started >= quick_arxiv * 9
+
+
 def test_queries_are_spaced_out(quick_arxiv):
     """Two fetches in a row do not go out together."""
     client = FakeArxivClient(
@@ -137,3 +198,28 @@ def test_a_real_failure_still_raises(quick_arxiv):
     with pytest.raises(httpx.HTTPStatusError):
         ingest.fetch_arxiv("2607.07916", client)
     assert len(client.asked_at) == 1
+
+
+def _client_hello(context) -> bytes:
+    """The bytes the context would put on the wire to open a handshake."""
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    handshake = context.wrap_bio(incoming, outgoing, server_hostname="export.arxiv.org")
+    with contextlib.suppress(ssl.SSLWantReadError):
+        handshake.do_handshake()
+    return outgoing.read()
+
+
+def test_the_handshake_does_not_offer_http11_alone():
+    """arXiv's CDN answers 406 to a handshake whose only ALPN entry is http/1.1.
+
+    httpcore makes that offer on every request unless HTTP/2 is enabled, and it
+    makes it on whatever context it is handed, so the control below shows what
+    the stock context does with the same call.
+    """
+    control = httpx.create_ssl_context()
+    control.set_alpn_protocols(["http/1.1"])
+    assert b"http/1.1" in _client_hello(control)
+
+    ours = ingest._ssl_context()
+    ours.set_alpn_protocols(["http/1.1"])
+    assert b"http/1.1" not in _client_hello(ours)

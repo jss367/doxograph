@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import io
+import ssl
 import os
 import hashlib
 import shutil
@@ -43,10 +44,15 @@ ARXIV_API = "https://export.arxiv.org/api/query"
 # is ingested several at a time, so the queries have to be spaced out, and a
 # refusal has to be retried rather than failing the paper.
 ARXIV_INTERVAL = 3.0
-ARXIV_ATTEMPTS = 4
+# A refusal can outlast a minute even when the request rate was polite, so the
+# wait between attempts doubles: 3, 6, 12, 24, 48 seconds, giving up after
+# about two minutes rather than after twenty seconds.
+ARXIV_ATTEMPTS = 6
 ARXIV_BUSY = (406, 429, 503)
-_arxiv_gate = threading.Lock()
-_arxiv_last = 0.0
+_arxiv_gate = threading.Condition()
+# The moment the next query may go out. Threads wait on the gate rather than
+# sleeping on it, so a refusal can push the moment back while they wait.
+_arxiv_next = 0.0
 
 ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?"
 ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
@@ -145,16 +151,35 @@ ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 def _arxiv_turn() -> None:
     """Block until this thread's turn to query arXiv comes round.
 
-    Sleeping while holding the gate is the point: waiting threads queue up on
-    it and each one adds another interval, so eight references pasted at once
-    go out as eight spaced queries rather than eight at once.
+    Whoever takes a turn books the next one an interval later, so eight
+    references pasted at once go out as eight spaced queries rather than eight
+    at once. The wait gives the gate back while it lasts, which is what lets a
+    refusal reach the threads that are already queued: each one rechecks the
+    booking when it wakes, so a refusal that arrives mid-wait postpones them
+    too rather than being stuck behind them.
     """
-    global _arxiv_last
+    global _arxiv_next
     with _arxiv_gate:
-        wait = _arxiv_last + ARXIV_INTERVAL - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _arxiv_last = time.monotonic()
+        while True:
+            wait = _arxiv_next - time.monotonic()
+            if wait <= 0:
+                break
+            _arxiv_gate.wait(wait)
+        _arxiv_next = time.monotonic() + ARXIV_INTERVAL
+
+
+def _arxiv_back_off(seconds: float) -> None:
+    """Hold every thread off arXiv, not just the one that was refused.
+
+    A refusal is aimed at the whole address, so a thread that waits alone
+    leaves its neighbours querying at the usual cadence and keeping the
+    refusal alive. Pushing the shared booking back puts them all on hold, and
+    the sleep itself happens in `_arxiv_turn` where it already belongs.
+    """
+    global _arxiv_next
+    with _arxiv_gate:
+        _arxiv_next = max(_arxiv_next, time.monotonic() + seconds)
+        _arxiv_gate.notify_all()
 
 
 def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
@@ -165,11 +190,16 @@ def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
         if response.status_code not in ARXIV_BUSY:
             response.raise_for_status()
             return response
-        if attempt + 1 < ARXIV_ATTEMPTS:
-            time.sleep(ARXIV_INTERVAL * (attempt + 1))
+        # Every refusal backs the queue off, including the last one. Giving up
+        # on this paper is no reason to let the next one in the batch query
+        # three seconds later: the final refusal is the strongest sign yet
+        # that arXiv is still refusing, so the rest of the batch should wait
+        # it out rather than each starting this same retry cycle from scratch.
+        _arxiv_back_off(ARXIV_INTERVAL * 2 ** attempt)
+    waited = round(ARXIV_INTERVAL * (2 ** (ARXIV_ATTEMPTS - 1) - 1 + ARXIV_ATTEMPTS))
     raise ValueError(
-        f"arXiv refused {ARXIV_ATTEMPTS} queries in a row with "
-        f"{response.status_code}; it is rate-limiting us. Try again shortly.")
+        f"arXiv refused {ARXIV_ATTEMPTS} queries with {response.status_code} "
+        f"over {waited} seconds; it is rate-limiting us. Try again shortly.")
 
 
 def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict:
@@ -619,8 +649,24 @@ def download_pdf(url: str, key: str, client: httpx.Client) -> bool:
     return publish_pdf(key, fetch_pdf(url, client))
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """A TLS context that does not announce HTTP/1.1 as the only protocol it speaks.
+
+    arXiv sits behind a CDN that answers 406 with an empty body to any
+    handshake whose ALPN list is exactly ["http/1.1"] — a shape no browser and
+    no `curl` produces, so it reads as a bot. httpcore sets that list on
+    whatever context it is handed, so the only way to stop announcing it is to
+    make the call it uses do nothing. Announcing no protocol at all is what
+    `urllib` does, and the CDN serves it.
+    """
+    context = httpx.create_ssl_context()
+    context.set_alpn_protocols = lambda protocols: None
+    return context
+
+
 def _client() -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
+    return httpx.Client(
+        timeout=TIMEOUT, verify=_ssl_context(), headers={"User-Agent": USER_AGENT})
 
 
 def source_identity(source: dict) -> tuple[str, str] | None:
