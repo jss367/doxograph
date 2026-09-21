@@ -13,7 +13,50 @@ final class ServerController {
         case commandNotFound
         case launchFailed(String)
         case neverAnswered(String)
+        case staleServer(Stale)
     }
+
+    /// A Doxograph already on the port, running a version this app did not ship
+    /// with.
+    ///
+    /// Adoption is how an orphan becomes permanent. This app stops only the
+    /// child it spawned, so a server that outlived a crash, a force quit or a
+    /// bundle swapped underneath it is adopted by every launch afterwards and
+    /// upgraded by none — its code stays pinned at whatever it was while the
+    /// app around it moves on, silently, for as long as the process lives. The
+    /// version it reports is the only thing that tells that apart from the
+    /// `doxograph serve` someone is deliberately running in a terminal, which
+    /// is why the mismatch is a question for the user rather than a decision
+    /// taken here.
+    struct Stale {
+        let port: Int
+        /// What the server calls itself, or empty when it is old enough not to
+        /// say. Both are equally not this app's version.
+        let version: String
+        let health: Health
+        /// The process holding the port, when `lsof` could name it. Without it
+        /// there is nothing to stop on the user's behalf.
+        let pid: pid_t?
+
+        /// The version, as it goes in a sentence.
+        var versionName: String { version.isEmpty ? "an unknown version" : "version \(version)" }
+
+        /// What stopping this server would cost, or nothing when it is idle.
+        /// The two counts are summed here because the sentence only has to be
+        /// right about there being work to lose.
+        var workNote: String {
+            let busy = health.jobs + health.arriving
+            guard busy > 0 else { return "" }
+            return "\n\nIt has \(busy) \(busy == 1 ? "paper" : "papers") in flight, "
+                + "which stopping it would lose."
+        }
+    }
+
+    /// The version this app was built as. The release commit bumps the bundle
+    /// and the Python package together, so this is what a server running this
+    /// app's code answers `/api/health` with.
+    static let appVersion = Bundle.main
+        .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
 
     private static let preferredPort = 8765
     private static let portDefaultsKey = "DoxographPort"
@@ -108,6 +151,14 @@ final class ServerController {
             port = existing
             ownsServer = false
             return .success
+
+        case .stale(let server):
+            // Pointed at it but not started on it. The app is told, and comes
+            // back through `useStale` or `replaceStale` once the user has said
+            // which of those they want.
+            port = server.port
+            ownsServer = false
+            return .failure(.staleServer(server))
 
         case .start(let free):
             guard !isCancelled else { return .cancelled }
@@ -268,6 +319,93 @@ final class ServerController {
         }
     }
 
+    // MARK: - A server from another version
+
+    /// Run on the stale server after all, because the user said to.
+    ///
+    /// `bringUp` already pointed this controller at its port, so nothing is
+    /// started and nothing is stopped: the server stays unowned, this app quits
+    /// without taking it down, and the next launch asks the same question
+    /// again. That is the intended shape — a deliberate `doxograph serve` from
+    /// another checkout is a thing to leave alone, not a thing to remember.
+    func useStale(onReady: @escaping (URL) -> Void) {
+        DispatchQueue.main.async { onReady(self.baseURL) }
+    }
+
+    /// Stop a stale server and start one on this app's code in its place.
+    ///
+    /// `SIGTERM` is what `shutDown` sends its own child, but this process is
+    /// not this app's child, so there is no exit status to wait on. The port
+    /// going quiet is the only evidence available, and it has to be waited for:
+    /// the walk inside `bringUp` starts the moment this returns, and a server
+    /// still holding the port at that point is adopted again — or, worse, read
+    /// as a stranger and left in place while the app reports itself stuck.
+    ///
+    /// A server that will not let go is reported rather than killed harder. It
+    /// is not this app's process, ten seconds of `SIGTERM` unanswered means
+    /// something is wrong that `SIGKILL` would only hide, and the user is the
+    /// one who knows what else is running on their machine.
+    func replaceStale(_ server: Stale, onReady: @escaping (URL) -> Void,
+                      onFailure: @escaping (Failure) -> Void) {
+        queue.async {
+            guard let pid = server.pid else {
+                return self.deliver(.failure(.launchFailed(
+                    "Nothing on port \(server.port) could be traced back to a process to stop.")),
+                    onReady: onReady, onFailure: onFailure)
+            }
+            kill(pid, SIGTERM)
+            guard self.waitUntilPortIsFree(server.port) else {
+                return self.deliver(.failure(.launchFailed(
+                    "The server on port \(server.port) (pid \(pid)) did not stop.")),
+                    onReady: onReady, onFailure: onFailure)
+            }
+            self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+        }
+    }
+
+    /// Poll until nothing is listening on a port. Ten seconds is the same
+    /// patience `shutDown` gives a server of this app's own before it gives up.
+    private func waitUntilPortIsFree(_ port: Int) -> Bool {
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if portIsFree(port) { return true }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return false
+    }
+
+    /// The process listening on a loopback port, according to `lsof`.
+    ///
+    /// A server this app did not spawn has no `Process` to ask, and an orphan
+    /// is precisely that case — which is also why the pid cannot come from the
+    /// server itself. Teaching `/api/health` to report its own pid would help
+    /// every version except the ones already out there, and those are the only
+    /// ones this is ever asked about.
+    ///
+    /// `-t` prints bare pids and nothing else. The first is taken: a listening
+    /// socket has one owner unless it was inherited across a fork, and then the
+    /// parent is both what `lsof` prints first and what there is any point in
+    /// signalling. A missing or unhelpful `lsof` reads as "no pid", which the
+    /// caller reports rather than acting on.
+    private static func listener(on port: Int) -> pid_t? {
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-nP", "-t", "-sTCP:LISTEN", "-iTCP@127.0.0.1:\(port)"]
+        let pipe = Pipe()
+        lsof.standardOutput = pipe
+        lsof.standardError = FileHandle.nullDevice
+        do { try lsof.run() } catch { return nil }
+        // Read before waiting. A pid per line is nowhere near a pipe buffer
+        // today, but waiting on a process whose output nobody is draining is
+        // the deadlock that shape of code eventually finds.
+        let printed = pipe.fileHandleForReading.readDataToEndOfFile()
+        lsof.waitUntilExit()
+        return String(decoding: printed, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
+            .first
+    }
+
     // MARK: - Health
 
     /// What the server has in flight, split by what stopping would cost.
@@ -283,6 +421,10 @@ final class ServerController {
         /// whose web view posts a paper dropped on the page straight to the
         /// server.
         let arriving: Int
+        /// The version the server reports, or empty from one too old to report
+        /// one. Only the port walk reads it, to decide whether this server is
+        /// running the same code as the app that found it.
+        let version: String
     }
 
     /// How a health probe turned out. The two ways of not getting an answer are
@@ -354,7 +496,8 @@ final class ServerController {
             // than the app that found it.
             let busy = body["busy"] as? Int ?? 0
             outcome.value = .answered(Health(jobs: body["jobs"] as? Int ?? busy,
-                                             arriving: body["arriving"] as? Int ?? 0))
+                                             arriving: body["arriving"] as? Int ?? 0,
+                                             version: body["version"] as? String ?? ""))
         }.resume()
         // Giving up on the wait is itself a server that did not answer in time.
         guard finished.wait(timeout: .now() + timeout + 2) == .success else { return .unresponsive }
@@ -382,6 +525,7 @@ final class ServerController {
     private enum PortChoice {
         case adopt(Int)
         case start(Int)
+        case stale(Stale)
         case exhausted
     }
 
@@ -435,9 +579,18 @@ final class ServerController {
                 continue
             }
             if let free = firstFree, Date() >= deadline { return .start(free) }
-            if health(on: candidate, timeout: candidate == start ? 1.5 : 0.5) != nil {
-                return .adopt(candidate)
+            guard let health = health(on: candidate, timeout: candidate == start ? 1.5 : 0.5)
+            else { continue }
+            // A version that does not match ends the walk exactly as a match
+            // does. The server is still the one server for this corpus, so
+            // there is nowhere else to go: carrying on would find a free port
+            // and start a second one beside it, which is the thing the walk is
+            // built to prevent. Only what happens next differs.
+            guard health.version == Self.appVersion else {
+                return .stale(Stale(port: candidate, version: health.version,
+                                    health: health, pid: Self.listener(on: candidate)))
             }
+            return .adopt(candidate)
         }
         guard let free = firstFree else { return .exhausted }
         return .start(free)

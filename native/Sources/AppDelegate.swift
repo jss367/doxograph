@@ -268,6 +268,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .neverAnswered(let log):
             window.showStatus("The server started but never answered.")
             warn("The server started but never answered", log)
+        case .staleServer(let stale):
+            window.showStatus("The server on port \(stale.port) is running other code.")
+            askAboutStaleServer(stale)
+        }
+    }
+
+    /// A Doxograph from another version is already on the port.
+    ///
+    /// The question is asked rather than settled here because both answers are
+    /// right somewhere. A server orphaned by a crash or a force quit is the
+    /// case this exists for, and it should be stopped: left alone it is adopted
+    /// by every launch afterwards and upgraded by none, so the window quietly
+    /// shows code that can be releases behind the bundle around it, for as long
+    /// as the process lives. But the identical signature — a `doxograph serve`
+    /// on the port, answering with a version that is not this one — is also a
+    /// developer running another checkout on purpose, and stopping that is
+    /// rude. Nothing the app can see tells the two apart.
+    ///
+    /// What it can do is refuse to decide silently, and say what the choice
+    /// costs: the old server's work in flight dies with it, so that count goes
+    /// in the question. Starting a second server beside it is not on the menu,
+    /// here or anywhere — one corpus takes one server.
+    private func askAboutStaleServer(_ stale: ServerController.Stale) {
+        let alert = NSAlert()
+        alert.messageText = "Another version of Doxograph is already running"
+        alert.informativeText = """
+            The server on port \(stale.port) is \(stale.versionName), and this app is \
+            version \(ServerController.appVersion). Using it would put the older code \
+            behind this window.\(stale.workNote)
+            """
+        alert.addButton(withTitle: "Restart the Server")
+        alert.addButton(withTitle: "Use It Anyway")
+        alert.addButton(withTitle: "Quit")
+        // Return presses the first button, and this alert arrives while the app
+        // is taking focus at launch — in front of whatever the user was typing
+        // into something else. A stray keystroke may not be what decides to end
+        // a server mid-paper, so when there is work to lose the default moves to
+        // the answer that loses none. This is not hypothetical: it is how the
+        // first server this code was tested against died.
+        if stale.health.jobs + stale.health.arriving > 0 {
+            alert.buttons[0].keyEquivalent = ""
+            alert.buttons[1].keyEquivalent = "\r"
+        }
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            window.showStatus("Restarting the server…")
+            server.replaceStale(stale, onReady: { [weak self] url in self?.serverReady(url) },
+                                onFailure: { [weak self] failure in self?.report(failure) })
+        case .alertSecondButtonReturn:
+            // Running on it is not a failure, so an update offered later is an
+            // ordinary update rather than a retry of a start that never worked.
+            serverFailed = false
+            server.useStale(onReady: { [weak self] url in self?.serverReady(url) })
+        default:
+            NSApp.terminate(nil)
         }
     }
 
