@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import types
 
 import pytest
 from fastapi.testclient import TestClient
@@ -69,11 +70,10 @@ def test_code_reports_what_was_loaded_not_what_is_there_now(monkeypatch):
     """The point of the endpoint: `running` is fixed at import and `onDisk` is
     read fresh, so a checkout that moves under a live server shows as a pair
     that no longer agrees."""
-    monkeypatch.setattr(server, "CODE_AT_START", "a" * 64)
+    monkeypatch.setattr(server, "SOURCE_AT_START", "a" * 64)
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         body = client.get("/api/code").json()
-    assert body["running"] == "a" * 64
-    assert body["onDisk"] != body["running"]
+    assert body["running"] != body["onDisk"]
 
 
 def test_code_answers_without_a_workspace():
@@ -123,6 +123,11 @@ def test_fingerprint_is_empty_when_the_package_cannot_be_read(tmp_path):
     assert server.source_fingerprint(tmp_path / "gone") == ""
 
 
+def _fake_module(path):
+    """A `sys.modules` entry, which is all `imported_files` reads."""
+    return types.SimpleNamespace(__file__=str(path))
+
+
 def test_dependencies_are_counted_too(tmp_path):
     """`pip install -e .` on a changed pyproject.toml upgrades FastAPI or
     Pydantic without touching a doxograph source file, and the server goes on
@@ -130,10 +135,36 @@ def test_dependencies_are_counted_too(tmp_path):
     that current."""
     dependency = tmp_path / "starlette.py"
     dependency.write_text("__version__ = '0.1'", encoding="utf-8")
-    before = server.dependency_fingerprint((str(dependency),))
+    modules = {"starlette": _fake_module(dependency)}
 
-    dependency.write_text("__version__ = '0.2'   # reinstalled", encoding="utf-8")
-    assert server.dependency_fingerprint((str(dependency),)) != before
+    as_loaded, on_disk = server.dependency_state(modules)
+    assert as_loaded == on_disk
+
+    dependency.write_text("__version__ = '0.2'  # reinstalled", encoding="utf-8")
+    as_loaded, on_disk = server.dependency_state(modules)
+    assert as_loaded != on_disk
+
+
+def test_a_dependency_imported_later_is_counted_from_then(tmp_path):
+    """A process goes on importing. Uvicorn arrives after `server.py` is done
+    and pypdf only when a PDF does, so a list fixed at import would leave out
+    the HTTP server itself. A file joining the walk is remembered as it is then,
+    which is a match, and watched from there."""
+    early = tmp_path / "fastapi.py"
+    early.write_text("x = 1", encoding="utf-8")
+    late = tmp_path / "uvicorn.py"
+    late.write_text("y = 1", encoding="utf-8")
+
+    modules = {"fastapi": _fake_module(early)}
+    server.dependency_state(modules)
+
+    modules["uvicorn"] = _fake_module(late)
+    as_loaded, on_disk = server.dependency_state(modules)
+    assert as_loaded == on_disk
+
+    late.write_text("y = 2  # reinstalled after the server loaded it", encoding="utf-8")
+    as_loaded, on_disk = server.dependency_state(modules)
+    assert as_loaded != on_disk
 
 
 def test_a_dependency_that_has_gone_is_a_change_not_a_silence(tmp_path):
@@ -142,11 +173,12 @@ def test_a_dependency_that_has_gone_is_a_change_not_a_silence(tmp_path):
     answer."""
     dependency = tmp_path / "httpx.py"
     dependency.write_text("x = 1", encoding="utf-8")
-    before = server.dependency_fingerprint((str(dependency),))
+    modules = {"httpx": _fake_module(dependency)}
+    server.dependency_state(modules)
 
     dependency.unlink()
-    after = server.dependency_fingerprint((str(dependency),))
-    assert after and after != before
+    as_loaded, on_disk = server.dependency_state(modules)
+    assert on_disk and as_loaded != on_disk
 
 
 def test_the_package_is_left_out_of_the_dependency_half():

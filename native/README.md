@@ -94,10 +94,20 @@ and then relaunching the app.
   FastAPI, Pydantic, HTTPX and what they pull in — goes in by size and time,
   because contents there run to tens of megabytes; that half is what catches
   `pip install -e .` on a changed `pyproject.toml`, which upgrades a library
-  without touching a single `doxograph` source file. `static/` is left out on
-  purpose: it is served per request, so editing `app.js` reaches the next reload
-  without anything going stale. An empty digest, from a package the server cannot
-  read back, is read as no answer and refuses nothing.
+  without touching a single `doxograph` source file. That list is read fresh on
+  every request rather than fixed at import, because a process goes on
+  importing: Uvicorn arrives after `server.py` is done and pypdf only when a PDF
+  does. `static/` is left out on purpose: it is served per request, so editing
+  `app.js` reaches the next reload without anything going stale. An empty digest,
+  from a package the server cannot read back, is read as no answer and refuses
+  nothing.
+
+  A server that answers `/api/health` as Doxograph and then 404s on `/api/code`
+  is refused rather than adopted, even when the release matches. This app's own
+  code serves that route, so a Doxograph without it is provably not running this
+  app's code — and it is the very case the digest would otherwise be blindest to,
+  since the server too old to answer is the one orphaned before the answer
+  existed. A request that fails some other way says nothing and adopts.
 
   What is still not covered is a server started from a *different* installation
   than the one this app would launch. Each half reports on itself, so an

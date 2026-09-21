@@ -832,8 +832,8 @@ def imported_files(modules: dict | None = None) -> tuple[str, ...]:
     }))
 
 
-def dependency_fingerprint(paths: tuple[str, ...] | None = None) -> str:
-    """The size and time of each file behind an imported dependency.
+def _reading(path: str) -> str:
+    """The size and time of one file, or that it has gone.
 
     Contents would be the same question asked more honestly and far too slowly:
     the transitive imports of a FastAPI app run to tens of megabytes, and this
@@ -842,21 +842,56 @@ def dependency_fingerprint(paths: tuple[str, ...] | None = None) -> str:
     without changing it reads as a change — something pip does and a person does
     not.
 
-    A file that has gone counts as a change rather than as an unreadable one.
-    Its module is still loaded here; it is the disk that no longer has it.
+    A file that has gone is a change, not an unreadable one. Its module is still
+    loaded in this process; it is the disk that no longer has it.
     """
-    chosen = DEPENDENCIES_AT_START if paths is None else paths
-    if not chosen:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return "gone"
+    return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+
+_dependencies_lock = threading.Lock()
+#: What each dependency file read the first time this server saw it. Written
+#: once per path and never revised, so it goes on saying what was there when the
+#: module behind it was loaded.
+_dependencies_as_loaded: dict[str, str] = {}
+
+
+def dependency_state(modules: dict | None = None) -> tuple[str, str]:
+    """The dependency half, as this process loaded it and as it is on disk now.
+
+    Both come out of one walk, because the two sides have to be over the same
+    set of files and that set grows. A list frozen while `server.py` was still
+    importing would leave out Uvicorn, which `serve()` imports afterwards and
+    which *is* the HTTP server, and pypdf, which `ingest` reaches for only when
+    a PDF arrives.
+
+    So a file is remembered the first time this is called after its module
+    appears, with the reading it has then, and keeps that reading for good. That
+    is as close to "when the process loaded it" as anything gets here without an
+    import hook. The gap left is small and real: a dependency imported and then
+    replaced, both between two calls, is remembered by its replacement and reads
+    as unchanged. Every caller asks at launch, where the answer decides whether
+    to adopt, so the reading a late import gets is at most one launch old.
+    """
+    current = {path: _reading(path) for path in imported_files(modules)}
+    with _dependencies_lock:
+        for path, reading in current.items():
+            _dependencies_as_loaded.setdefault(path, reading)
+        as_loaded = {path: _dependencies_as_loaded[path] for path in current}
+    return _digest(as_loaded), _digest(current)
+
+
+def _digest(readings: dict[str, str]) -> str:
+    if not readings:
         return ""
     digest = hashlib.sha256()
-    for path in chosen:
+    for path in sorted(readings):
         digest.update(path.encode("utf-8"))
         digest.update(b"\0")
-        try:
-            stat = os.stat(path)
-            digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode("ascii"))
-        except OSError:
-            digest.update(b"gone")
+        digest.update(readings[path].encode("ascii"))
         digest.update(b"\0")
     return digest.hexdigest()
 
@@ -877,8 +912,9 @@ def code_fingerprint(source: str, dependencies: str) -> str:
 #: Taken while this process was importing its own modules, which is the code it
 #: will be running until it exits.
 SOURCE_AT_START = source_fingerprint()
-DEPENDENCIES_AT_START = imported_files()
-CODE_AT_START = code_fingerprint(SOURCE_AT_START, dependency_fingerprint())
+# Reads every dependency imported so far, as early as this module can, so that
+# FastAPI and its like are remembered from before anything could replace them.
+dependency_state()
 
 
 ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
@@ -937,17 +973,21 @@ def code() -> dict:
     Both halves of what this server runs go in: its own sources, and the files
     behind everything it imported from outside itself. `pip install -e .` on a
     changed `pyproject.toml` upgrades the second without touching the first.
+    The second half is read fresh each time rather than from a list fixed at
+    import, because a process goes on importing: Uvicorn arrives after this
+    module is done, and pypdf only when a PDF does.
 
     Kept off `/api/health` on purpose. That one is polled four times a second
     during startup and asked again on quit, and its promise is that it costs
     nothing; this reads every source file in the package. The launcher needs it
     once, on the one port that answered.
     """
+    as_loaded, on_disk = dependency_state()
     return {
         "app": "doxograph",
         "version": __version__,
-        "running": CODE_AT_START,
-        "onDisk": code_fingerprint(source_fingerprint(), dependency_fingerprint()),
+        "running": code_fingerprint(SOURCE_AT_START, as_loaded),
+        "onDisk": code_fingerprint(source_fingerprint(), on_disk),
     }
 
 

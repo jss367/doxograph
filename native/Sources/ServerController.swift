@@ -42,6 +42,13 @@ final class ServerController {
             /// It answers with this app's release, and the Python it loaded is
             /// no longer the Python on disk.
             case code
+            /// It answers with this app's release and has no `/api/code` at
+            /// all. This app's own code serves that route, so a Doxograph
+            /// without it is provably not running this app's code — and it is
+            /// the case the finer check would otherwise be blindest to, since
+            /// the server too old to answer is the one orphaned before the
+            /// answer existed.
+            case olderThanTheCheck
         }
 
         let port: Int
@@ -717,36 +724,62 @@ final class ServerController {
         }
     }
 
-    /// What the server says about its own sources, or nil when it did not say.
+    /// What a server said when asked which code it is running.
     ///
-    /// Nil covers a release that predates `/api/code` as well as a request that
-    /// went wrong, and both mean the same thing to every caller: the question
-    /// was not answered, so nothing is concluded from it. Only a server that
-    /// answers, and answers with both digests, can be refused on this.
+    /// The two ways of getting no digests are kept apart because they are not
+    /// the same news. Only one of them is an unanswered question.
+    enum CodeReport {
+        /// It answered, and this is what it said.
+        case answered(Code)
+        /// It has no `/api/code`. Not a question left hanging: this app's own
+        /// code serves that route, so a server that answered `/api/health` as
+        /// Doxograph and then 404s here is provably running something this app
+        /// was not built from, whatever release it calls itself.
+        case absent
+        /// The request did not come back — a timeout, a dropped connection, a
+        /// 500, a body that would not parse. Nothing is concluded from it.
+        case unavailable
+
+        /// The digests, when there are any. A server that cannot report them
+        /// still has a version, and that is all its identity can be built from.
+        var code: Code? {
+            if case .answered(let code) = self { return code }
+            return nil
+        }
+    }
+
+    /// Ask the server which code it is running.
     ///
     /// The timeout is fixed and generous rather than inherited from the walk.
     /// This runs at most once per launch — on the one port that answered as
     /// Doxograph, after which the walk returns either way — so patience here
-    /// cannot add up, and unlike `/api/health` the endpoint reads every source
-    /// file in the package before it replies.
-    private func code(on port: Int) -> Code? {
-        guard let body = fetchJSON("/api/code", on: port, timeout: 3),
-              body["app"] as? String == "doxograph",
+    /// cannot add up, and unlike `/api/health` the endpoint stats every file
+    /// behind every module the server imported before it replies.
+    private func codeReport(on port: Int) -> CodeReport {
+        let (status, body) = fetchJSON("/api/code", on: port, timeout: 3)
+        if status == 404 { return .absent }
+        guard let body, body["app"] as? String == "doxograph",
               let running = body["running"] as? String,
               let onDisk = body["onDisk"] as? String
-        else { return nil }
-        return Code(running: running, onDisk: onDisk)
+        else { return .unavailable }
+        return .answered(Code(running: running, onDisk: onDisk))
     }
 
-    /// A GET on a loopback endpoint, decoded, or nil for anything that is not a
-    /// 200 with a JSON object in it.
+    /// A GET on a loopback endpoint: the status it came back with, and the
+    /// decoded body when that status was a 200 carrying a JSON object.
+    ///
+    /// The status is returned rather than folded into the body because a 404 is
+    /// itself an answer — it says the route is not there, which about a server
+    /// that has already identified itself is a fact about which code it runs. A
+    /// status of zero means nothing came back at all.
     ///
     /// The distinction `probe` draws between a refused connection and a silent
     /// one is deliberately not drawn here. This is only ever asked of a port
-    /// that has just answered as Doxograph, and every way of not getting an
-    /// answer out of it means the same thing to the caller: ask nothing of it.
-    private func fetchJSON(_ path: String, on port: Int, timeout: TimeInterval) -> [String: Any]? {
-        guard let url = URL(string: "http://\(host):\(port)\(path)") else { return nil }
+    /// that has just answered as Doxograph, and every way of the request not
+    /// completing means the same thing to the caller.
+    private func fetchJSON(_ path: String, on port: Int, timeout: TimeInterval)
+        -> (status: Int, body: [String: Any]?) {
+        guard let url = URL(string: "http://\(host):\(port)\(path)") else { return (0, nil) }
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -754,17 +787,18 @@ final class ServerController {
         // Boxed for the same reason `probe` boxes its outcome: the wait below
         // can give up while the request is still in flight, and then the
         // completion's write races this thread's read.
-        let body = Guarded<[String: Any]?>(nil)
+        let answer = Guarded<(status: Int, body: [String: Any]?)>((0, nil))
         let finished = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: request) { data, response, _ in
             defer { finished.signal() }
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
+            guard let http = response as? HTTPURLResponse else { return }
+            guard http.statusCode == 200, let data,
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { return }
-            body.value = object
+            else { return answer.value = (http.statusCode, nil) }
+            answer.value = (http.statusCode, object)
         }.resume()
-        guard finished.wait(timeout: .now() + timeout + 2) == .success else { return nil }
-        return body.value
+        guard finished.wait(timeout: .now() + timeout + 2) == .success else { return (0, nil) }
+        return answer.value
     }
 
     /// What is on a port, and whether this app may run on it.
@@ -785,16 +819,25 @@ final class ServerController {
             // digest is also the better half of `Stale.identity` — and the
             // thing most worth being able to recognise again is exactly the
             // server an alert is about to stand open over.
-            let code = self.code(on: port)
-            if health.version != Self.appVersion {
-                return .stale(Stale(port: port, version: health.version, health: health,
-                                    reason: .version, code: code))
+            let report = self.codeReport(on: port)
+            func stale(_ reason: Stale.Reason) -> Verdict {
+                .stale(Stale(port: port, version: health.version, health: health,
+                             reason: reason, code: report.code))
             }
-            if code?.moved == true {
-                return .stale(Stale(port: port, version: health.version, health: health,
-                                    reason: .code, code: code))
+            if health.version != Self.appVersion { return stale(.version) }
+            switch report {
+            case .absent:
+                return stale(.olderThanTheCheck)
+            case .answered(let code):
+                return code.moved ? stale(.code) : .adoptable(health)
+            case .unavailable:
+                // The one case that adopts on silence. A server that answered
+                // health a moment ago and then failed this request has said
+                // nothing either way, and refusing every server the app cannot
+                // finish a second conversation with would turn a slow moment
+                // into an alert about nothing.
+                return .adoptable(health)
             }
-            return .adoptable(health)
         }
     }
 

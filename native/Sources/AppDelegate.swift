@@ -331,6 +331,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 were edited, pulled or reinstalled, so using it would show you code you have \
                 already replaced.\(stale.workNote)
                 """
+        case .olderThanTheCheck:
+            alert.messageText = "Doxograph is running code from before this app was built"
+            alert.informativeText = """
+                The server on port \(stale.port) is \(stale.versionName), the same as this \
+                app, but it does not answer when asked which code it is running — and this \
+                app's own code does answer. So it started from something older than this \
+                build, whatever its release number reads.\(stale.workNote)
+                """
         }
         alert.addButton(withTitle: "Restart the Server")
         alert.addButton(withTitle: "Use It Anyway")
