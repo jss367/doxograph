@@ -3,6 +3,8 @@
 import ast
 import asyncio
 import os
+import subprocess
+import sys
 import types
 
 import pytest
@@ -216,6 +218,24 @@ def test_an_unreadable_package_answers_nothing_at_all():
     otherwise the half that did answer would decide on its own."""
     assert fingerprint.combine("", "dependencies-answered-fine") == ""
     assert fingerprint.combine("sources", "") != ""
+
+
+def test_importing_the_app_module_is_enough_to_take_the_first_reading():
+    """Not every serving process goes through `serve()`. `--reload` hands
+    uvicorn the string "doxograph.server:app" and the worker it spawns imports
+    the module directly, so a worker that waited for `serve()` would take its
+    first reading at the first `/api/code` — by which time a dependency upgraded
+    under it would be remembered as the version it is running.
+
+    Run in a fresh interpreter, since this one imported everything long ago."""
+    done = subprocess.run(
+        [sys.executable, "-c",
+         "import doxograph.server\n"
+         "from doxograph import fingerprint\n"
+         "print(len(fingerprint._as_loaded))"],
+        capture_output=True, text=True, check=True,
+    )
+    assert int(done.stdout.strip()) > 0
 
 
 def test_every_late_import_of_a_dependency_takes_a_snapshot():

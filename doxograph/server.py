@@ -23,6 +23,15 @@ from . import (__version__, bib, cites, config, export, extract, fingerprint, in
 
 STATIC = Path(__file__).parent / "static"
 
+# Read what this process has imported, now, while importing the app module.
+# This is the hook point rather than `serve()` because not every serving
+# process goes through `serve()`: `--reload` hands uvicorn the string
+# "doxograph.server:app", and the worker it spawns imports this module
+# directly. A worker that skipped this would take its first reading at the
+# first `/api/code`, by which time a dependency upgraded under it would be
+# remembered as the version it is running.
+fingerprint.snapshot()
+
 app = FastAPI(title="Doxograph")
 app.include_router(notebook.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
@@ -1434,9 +1443,11 @@ def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> No
     import uvicorn
 
     # Read now, beside the import, and not at the next `/api/code`. Uvicorn is
-    # the HTTP server itself and the one dependency guaranteed to arrive after
-    # this module finished importing, so a reading taken later could be of a
-    # version installed after this process loaded the one it is running.
+    # the HTTP server itself and arrives after this module finished importing,
+    # so a reading taken later could be of a version installed after this
+    # process loaded the one it is running. The `--reload` worker gets Uvicorn
+    # from the module-level snapshot instead, having imported it before this
+    # module rather than after.
     fingerprint.snapshot()
 
     # The CLI refuses this first; this catches a direct caller. Port 0 means
