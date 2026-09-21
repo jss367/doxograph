@@ -326,7 +326,11 @@ window.addEventListener('resize', fitSideWidth);
   let movedLastPress = false;
   handle.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
+    // Cancelling the press keeps the browser from selecting text under the
+    // drag, but it also stops the divider taking focus, which would leave the
+    // arrow keys on whatever was focused before. Give it focus by hand.
     event.preventDefault();
+    handle.focus();
     movedLastPress = movedThisPress;
     movedThisPress = false;
     drag = { pointer: event.pointerId, from: event.clientX, width: sideWidthNow(), wanted: sideWidthWanted };

@@ -5287,8 +5287,13 @@ def test_side_pane_width_is_dragged_kept_and_put_back():
                 await drag_by(900)
                 assert (await side.bounding_box())["width"] == 640
 
-                # Arrow keys move it too, and Home puts it back.
-                await handle.focus()
+                # A click on the divider leaves the keyboard on it, so the
+                # arrow keys work without going looking for it first.
+                box = await handle.bounding_box()
+                await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + 200)
+                assert await handle.evaluate("el => el === document.activeElement")
+
+                # Arrow keys move it, and Home puts it back.
                 await page.keyboard.press("ArrowLeft")
                 assert (await side.bounding_box())["width"] == 628
                 await page.keyboard.press("Home")
