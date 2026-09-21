@@ -5073,8 +5073,7 @@ document.addEventListener('drop', async (event) => {
   if (files.length) {
     const body = new FormData();
     files.forEach((file) => body.append('files', file, file.name));
-    reportKnown(await api(`/api/upload?extract_now=${$('auto-extract').checked}`,
-      { method: 'POST', body }));
+    await api(`/api/upload?extract_now=${$('auto-extract').checked}`, { method: 'POST', body });
   } else if (text && text.trim()) {
     reportKnown(await api('/api/ingest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

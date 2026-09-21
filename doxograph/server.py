@@ -955,18 +955,22 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
     so a drop of ten large PDFs cost ten PDFs of memory rather than three.
     """
     do_extract = extract_now and config.ai_enabled()
-    queued, known = 0, []
+    queued = 0
     for upload in files:
         name = upload.filename or "upload.pdf"
         # On a worker thread: copying a large drop on the event loop would stop
         # the page polling, saving or doing anything else until it finished.
         staged = await run_in_threadpool(ingest.stage_upload, upload.file, name)
-        # The bytes name the paper, so a file already here is answered in this
-        # response rather than queued, the same as a pasted reference is.
+        # The bytes name the paper, so a file already here needs no worker: it
+        # has nothing to parse, look up or download. It is still reported as a
+        # finished job rather than in this response, because the Mac app posts
+        # here too — a PDF dropped on the Dock or opened from Finder — and the
+        # job strip in the window is the only report it has.
         settled = _settled(await run_in_threadpool(ingest.already_uploaded, staged), do_extract)
         if settled:
             staged.unlink(missing_ok=True)
-            known.append({"ref": name, "key": settled})
+            _set(_new_job(name), key=settled, label=settled,
+                 state="done", detail="already in the corpus")
             continue
         job = _new_job(name)
         try:
@@ -975,7 +979,7 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
             staged.unlink(missing_ok=True)
             raise
         queued += 1
-    return {"queued": queued, "known": known}
+    return {"queued": queued}
 
 
 @app.get("/api/papers/{key}")

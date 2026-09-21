@@ -83,7 +83,7 @@ def test_health_counts_an_upload_whose_body_is_still_arriving(monkeypatch):
             "/api/upload?extract_now=false", content=body(),
             headers={"content-type": "multipart/form-data; boundary=b0undary"})
 
-    assert response.json() == {"queued": 1, "known": []}
+    assert response.json() == {"queued": 1}
     assert seen == [1], "the arriving upload was invisible to health"
     for staged in config.pdfs_dir().glob(".incoming-*"):
         staged.unlink()

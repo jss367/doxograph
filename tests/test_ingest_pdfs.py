@@ -658,7 +658,7 @@ def test_an_upload_is_staged_on_disk_not_held_in_memory(monkeypatch):
         response = client.post("/api/upload?extract_now=false",
                                files={"files": ("big.pdf", body, "application/pdf")})
 
-    assert response.json() == {"queued": 1, "known": []}
+    assert response.json() == {"queued": 1}
     staged, name = handed[0]
     assert isinstance(staged, Path), f"the worker was handed {type(staged).__name__}"
     try:
@@ -703,7 +703,7 @@ def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
         response = client.post("/api/upload?extract_now=false",
                                files={"files": ("big.pdf", b"%PDF-1.4\n" + b"x" * 100_000)})
 
-    assert response.json() == {"queued": 1, "known": []}
+    assert response.json() == {"queued": 1}
     assert where["on_the_loop"] is False, "the copy blocked the event loop"
 
 
@@ -791,10 +791,14 @@ def test_dropping_a_downloaded_paper_again_does_not_duplicate_it(monkeypatch, un
     assert store.paper_keys() == [downloaded]
 
 
-def test_a_dropped_file_already_here_is_reported_without_a_job(monkeypatch):
-    """The upload route answers a re-drop itself, as the paste route does."""
+def test_a_dropped_file_already_here_is_reported_without_a_worker(monkeypatch):
+    """No parsing and no lookup, but still a notice.
+
+    The Mac app posts a Dock drop to this route and reads nothing back, so the
+    job strip is the only report it has: the notice has to be a job.
+    """
     monkeypatch.setattr(server, "_jobs", {})
-    monkeypatch.setattr(server._pool, "submit", lambda *args: pytest.fail("a job was queued"))
+    monkeypatch.setattr(server._pool, "submit", lambda *args: pytest.fail("a worker was given the file"))
     body = b"%PDF-1.4\nbody" + bytes(64)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     store.pdf_path("doe2026study").write_bytes(body)
@@ -803,9 +807,11 @@ def test_a_dropped_file_already_here_is_reported_without_a_job(monkeypatch):
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/upload?extract_now=true",
                                files={"files": ("paper.pdf", body, "application/pdf")})
-        assert response.json() == {"queued": 0,
-                                   "known": [{"ref": "paper.pdf", "key": "doe2026study"}]}
-        assert client.get("/api/jobs").json()["jobs"] == []
+        assert response.json() == {"queued": 0}
+        jobs = client.get("/api/jobs").json()["jobs"]
+
+    assert [(j["key"], j["state"], j["detail"]) for j in jobs] == [
+        ("doe2026study", "done", "already in the corpus")]
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
 
 
