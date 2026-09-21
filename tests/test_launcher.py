@@ -145,6 +145,7 @@ def test_dependencies_are_counted_too(tmp_path):
     that current."""
     dependency = tmp_path / "starlette.py"
     dependency.write_text("__version__ = '0.1'", encoding="utf-8")
+    os.utime(dependency, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
     modules = {"starlette": _fake_module(dependency)}
 
     as_loaded, on_disk = server.dependency_state(modules)
@@ -164,6 +165,9 @@ def test_a_dependency_imported_later_is_counted_from_then(tmp_path):
     early.write_text("x = 1", encoding="utf-8")
     late = tmp_path / "uvicorn.py"
     late.write_text("y = 1", encoding="utf-8")
+    # Written before this process, as every file a real server imports is.
+    for path in (early, late):
+        os.utime(path, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
 
     modules = {"fastapi": _fake_module(early)}
     server.dependency_state(modules)
@@ -177,12 +181,43 @@ def test_a_dependency_imported_later_is_counted_from_then(tmp_path):
     assert as_loaded != on_disk
 
 
+def test_a_dependency_replaced_before_it_was_ever_asked_about(tmp_path):
+    """The gap the first-seen map leaves on its own. A `doxograph serve` in a
+    terminal imports Uvicorn seconds after startup and may never be asked about
+    its code until an app launches days later — by which time `pip install -e .`
+    has upgraded Uvicorn, and the map would remember the replacement as the
+    original. A file written since the process started counts as replaced
+    whatever the map says."""
+    late = tmp_path / "uvicorn.py"
+    late.write_text("y = 2  # the upgrade, installed after the server started",
+                    encoding="utf-8")
+    modules = {"uvicorn": _fake_module(late)}
+
+    # First sight of this path is also the first request, long after the module
+    # behind it was imported and after the file under it was replaced.
+    as_loaded, on_disk = server.dependency_state(modules)
+    assert as_loaded != on_disk
+
+
+def test_a_dependency_older_than_the_process_is_left_alone(tmp_path):
+    """The other side of it: everything a server runs was written before it
+    started, so the check has to be quiet about the ordinary case."""
+    settled = tmp_path / "fastapi.py"
+    settled.write_text("x = 1", encoding="utf-8")
+    os.utime(settled, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
+    modules = {"fastapi": _fake_module(settled)}
+
+    as_loaded, on_disk = server.dependency_state(modules)
+    assert as_loaded == on_disk
+
+
 def test_a_dependency_that_has_gone_is_a_change_not_a_silence(tmp_path):
     """Its module is still loaded here; it is the disk that no longer has it.
     An unreadable *package* is a question nobody answered, but this is an
     answer."""
     dependency = tmp_path / "httpx.py"
     dependency.write_text("x = 1", encoding="utf-8")
+    os.utime(dependency, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
     modules = {"httpx": _fake_module(dependency)}
     server.dependency_state(modules)
 

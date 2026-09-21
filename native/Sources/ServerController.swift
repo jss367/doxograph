@@ -64,15 +64,26 @@ final class ServerController {
         /// The version, as it goes in a sentence.
         var versionName: String { ServerController.versionName(version) }
 
-        /// As much of this particular server as can be seen from outside it.
+        /// Whether this could be the same server another description found.
         ///
         /// Not an identifier the server issues — it has none — but enough to
         /// notice that the thing on the port is no longer the thing a question
         /// was asked about. A pid would be exact and is unusable: the alert has
         /// no deadline, and a pid outlives its process only as a number the
-        /// kernel will hand to someone else. The digest is the strong half; the
-        /// version is all there is from a server too old to report one.
-        var identity: String { "\(version)/\(code?.running ?? "")" }
+        /// kernel will hand to someone else.
+        ///
+        /// The release has to match. The digest has to match when both sides
+        /// have one, and decides nothing when either does not — the same rule
+        /// the rest of this check runs on, where a question nobody answered
+        /// refuses nothing. Insisting on a digest that one side lacks would
+        /// make every unanswered `/api/code` read as a port that changed hands,
+        /// and the alert would come back with the same question forever.
+        func couldBe(_ other: Stale) -> Bool {
+            guard version == other.version else { return false }
+            guard let mine = code?.running, let theirs = other.code?.running
+            else { return true }
+            return mine == theirs
+        }
 
         /// What stopping this server would cost, or nothing when it is idle.
         /// The two counts are summed here because the sentence only has to be
@@ -109,7 +120,11 @@ final class ServerController {
         /// back. That is an unanswered question, not a matching answer, so it is
         /// not a mismatch either — this check only ever refuses on something it
         /// was actually told.
-        var moved: Bool { !running.isEmpty && !onDisk.isEmpty && running != onDisk }
+        var moved: Bool { !unknown && running != onDisk }
+
+        /// Whether either side came back empty, which is a package the server
+        /// could not read and so a comparison that did not happen.
+        var unknown: Bool { running.isEmpty || onDisk.isEmpty }
     }
 
     /// The version this app was built as. The release commit bumps the bundle
@@ -499,6 +514,10 @@ final class ServerController {
             // `kill` on a number that old is a signal to a stranger. A pid is
             // only safe to use in the same breath as the lookup that produced
             // it, which is why one is no longer kept in `Stale` at all.
+            //
+            // What comes out of this is the server that is on the port now, to
+            // be held against the one the question described.
+            let live: Stale
             switch self.inspect(server.port, timeout: 2) {
             case .gone:
                 // Gone while the question was up, and gone is the one answer
@@ -516,7 +535,7 @@ final class ServerController {
                 return self.deliver(.failure(.launchFailed(Self.unidentified(server.port))),
                                     onReady: onReady, onFailure: onFailure)
 
-            case .adoptable:
+            case .adoptable(_, confirmed: true):
                 // Replaced, while the question was up, by a server running this
                 // app's own code — the outcome the user asked for, arrived at
                 // without this app doing anything. Adopt it rather than
@@ -525,32 +544,45 @@ final class ServerController {
                 self.ownsServer = false
                 return self.deliver(.success, onReady: onReady, onFailure: onFailure)
 
-            case .stale(let live):
-                // What was agreed to was the stopping of the server the
-                // question described, and two things can make what is on the
-                // port no longer that server.
-                //
-                // Its identity can have changed — its release, or the digest of
-                // the code it loaded, which is as much of one as this app can
-                // see. The 0.4.1 someone agreed to stop is not the 0.5.0 that
-                // took the port after it exited, and neither the agreement nor
-                // the work counted in it carries over.
-                //
-                // Or work can have started. The counts in the question came from
-                // the walk, so an upload that began while the alert stood open
-                // was never in it and nobody has agreed to lose it.
-                //
-                // Either way the question is asked again, about what is there
-                // now. Neither can cycle: the second question describes the
-                // server it is about, so answering Restart to that one is the
-                // agreement the first could not give.
-                let anotherServer = live.identity != server.identity
-                let unagreedWork = live.health.jobs + live.health.arriving > 0
-                    && server.health.jobs + server.health.arriving == 0
-                if anotherServer || unagreedWork {
-                    return self.deliver(.failure(.staleServer(live)),
-                                        onReady: onReady, onFailure: onFailure)
-                }
+            case .adoptable(let health, confirmed: false):
+                // Not denied is not the same as current, and here the
+                // difference matters: the user asked for a restart of a server
+                // this app had said was running other code, and a `/api/code`
+                // request that did not come back is no reason to report that
+                // done without doing it. Nothing contradicts the question, so
+                // the restart goes ahead, guarded exactly as a confirmed
+                // mismatch is.
+                live = Stale(port: server.port, version: health.version, health: health,
+                             reason: server.reason, code: nil)
+
+            case .stale(let found):
+                live = found
+            }
+
+            // What was agreed to was the stopping of the server the question
+            // described, and two things can make what is on the port no longer
+            // that server.
+            //
+            // Its identity can have changed — its release, or the digest of the
+            // code it loaded, which is as much of one as this app can see. The
+            // 0.4.1 someone agreed to stop is not the 0.5.0 that took the port
+            // after it exited, and neither the agreement nor the work counted in
+            // it carries over.
+            //
+            // Or work can have started. The counts in the question came from the
+            // walk, so an upload that began while the alert stood open was never
+            // in it and nobody has agreed to lose it.
+            //
+            // Either way the question is asked again, about what is there now.
+            // Neither can cycle: the second question describes the server it is
+            // about, so answering Restart to that one is the agreement the first
+            // could not give.
+            let anotherServer = !live.couldBe(server)
+            let unagreedWork = live.health.jobs + live.health.arriving > 0
+                && server.health.jobs + server.health.arriving == 0
+            if anotherServer || unagreedWork {
+                return self.deliver(.failure(.staleServer(live)),
+                                    onReady: onReady, onFailure: onFailure)
             }
             guard let pid = Self.listener(on: server.port) else {
                 return self.deliver(.failure(.launchFailed(
@@ -845,6 +877,7 @@ final class ServerController {
         }
     }
 
+
     /// One coherent description of what is on a port, or nil when the port
     /// changed hands while it was being described.
     private func describe(_ port: Int, timeout: TimeInterval) -> Verdict? {
@@ -875,7 +908,10 @@ final class ServerController {
         case .absent:
             return stale(.olderThanTheCheck)
         case .answered(let code):
-            return code.moved ? stale(.code) : .adoptable(health)
+            // An empty digest on either side is a package the server could not
+            // read back, so `moved` is false and this is adoptable — but not
+            // confirmed, because nothing was compared.
+            return code.moved ? stale(.code) : .adoptable(health, confirmed: !code.unknown)
         case .unavailable, .otherServer:
             // The cases that adopt on silence. A server that answered health a
             // moment ago and then failed this request has said nothing either
@@ -884,7 +920,7 @@ final class ServerController {
             // nothing. `otherServer` cannot arrive here from `describe`, which
             // throws that pair away; it reaches this only as the last resort
             // above, where the code report was never asked for.
-            return .adoptable(health)
+            return .adoptable(health, confirmed: false)
         }
     }
 
@@ -892,7 +928,15 @@ final class ServerController {
     /// silence apart for the same reason `Probe` does: one says the port is
     /// empty, the other only that nothing identified itself.
     private enum Verdict {
-        case adoptable(Health)
+        /// Nothing found says this server is not running this app's code.
+        ///
+        /// `confirmed` is whether it said so or merely did not deny it: true
+        /// when `/api/code` answered and its digests agreed, false when the
+        /// question went unanswered. The port walk treats both alike, on
+        /// purpose — it will not refuse a server over a request that did not
+        /// come back. `replaceStale` may not, because there the user has asked
+        /// for something and reporting it done is a claim.
+        case adoptable(Health, confirmed: Bool)
         case stale(Stale)
         case unidentified
         case gone
@@ -965,6 +1009,10 @@ final class ServerController {
             switch inspect(candidate, timeout: candidate == start ? 1.5 : 0.5) {
             case .gone, .unidentified: continue
             case .stale(let server): return .stale(server)
+            // Confirmed or merely not denied, the walk adopts either way. It
+            // is choosing where to start, not acting on something a user
+            // asked for, and refusing a server over a request that did not
+            // come back would put up an alert about a slow moment.
             case .adoptable: return .adopt(candidate)
             }
         }

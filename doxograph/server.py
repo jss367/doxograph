@@ -9,6 +9,7 @@ import functools
 import os
 import sys
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -868,20 +869,44 @@ def dependency_state(modules: dict | None = None) -> tuple[str, str]:
     which *is* the HTTP server, and pypdf, which `ingest` reaches for only when
     a PDF arrives.
 
-    So a file is remembered the first time this is called after its module
-    appears, with the reading it has then, and keeps that reading for good. That
-    is as close to "when the process loaded it" as anything gets here without an
-    import hook. The gap left is small and real: a dependency imported and then
-    replaced, both between two calls, is remembered by its replacement and reads
-    as unchanged. Every caller asks at launch, where the answer decides whether
-    to adopt, so the reading a late import gets is at most one launch old.
+    So a file is remembered the first time this walk sees it, with the reading
+    it has then, and keeps that reading for good.
+
+    On its own that is not enough, because "the first time this walk sees it" is
+    not "when the module was imported". A `doxograph serve` in a terminal
+    imports Uvicorn seconds after startup and may never be asked about its code
+    until an app launches days later, by which time `pip install -e .` has
+    upgraded Uvicorn and the walk would remember the replacement as the
+    original. So a file written since this process started counts as replaced
+    whatever the map says. Nothing this process loaded can have been written
+    after it began without having been swapped underneath it, and pip stamps
+    what it installs with the time it installs it.
+
+    The cost is a file merely touched since startup, which reads as replaced.
+    The map alone already says that — mtime is half of every reading — so this
+    adds no way of being wrong that was not there before.
     """
     current = {path: _reading(path) for path in imported_files(modules)}
     with _dependencies_lock:
         for path, reading in current.items():
             _dependencies_as_loaded.setdefault(path, reading)
         as_loaded = {path: _dependencies_as_loaded[path] for path in current}
+    for path, reading in current.items():
+        if _written_since_start(path):
+            current[path] = f"{reading}:written-since"
     return _digest(as_loaded), _digest(current)
+
+
+def _written_since_start(path: str, started: float | None = None) -> bool:
+    """Whether a file was last written after this process began.
+
+    A file that has gone is not this; the reading already says "gone", which
+    differs from whatever was remembered for it.
+    """
+    try:
+        return os.stat(path).st_mtime > (STARTED_AT if started is None else started)
+    except OSError:
+        return False
 
 
 def _digest(readings: dict[str, str]) -> str:
@@ -908,6 +933,10 @@ def code_fingerprint(source: str, dependencies: str) -> str:
         return ""
     return hashlib.sha256(f"{source}:{dependencies}".encode("ascii")).hexdigest()
 
+
+#: When this process began, near enough. Nothing it has loaded can have been
+#: written after this without having been swapped underneath it.
+STARTED_AT = time.time()
 
 #: Taken while this process was importing its own modules, which is the code it
 #: will be running until it exits.

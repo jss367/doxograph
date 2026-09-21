@@ -97,7 +97,10 @@ and then relaunching the app.
   without touching a single `doxograph` source file. That list is read fresh on
   every request rather than fixed at import, because a process goes on
   importing: Uvicorn arrives after `server.py` is done and pypdf only when a PDF
-  does. `static/` is left out on purpose: it is served per request, so editing
+  does. A file the walk has never seen before is remembered as it is then — and
+  counted as replaced anyway if it was written since the process started, since
+  nothing a server runs can have been written after it began without having been
+  swapped underneath it. `static/` is left out on purpose: it is served per request, so editing
   `app.js` reaches the next reload without anything going stale. An empty digest,
   from a package the server cannot read back, is read as no answer and refuses
   nothing.
@@ -109,6 +112,14 @@ and then relaunching the app.
   server that never existed. It is asked twice, and a port changing hands twice
   in a row settles for the health read alone — one server's answer, and the
   release check this had before the digests existed.
+
+  An unanswered `/api/code` is adoptable but not *confirmed*, and the two paths
+  treat that differently. The port walk adopts either way: it is choosing where
+  to start, and refusing a server over a request that did not come back would put
+  up an alert about a slow moment. Restarting a stale server may not, because
+  there the user has asked for something and reporting it done is a claim — so an
+  unconfirmed answer goes ahead with the restart rather than quietly reporting
+  success without one.
 
   A server that answers `/api/health` as Doxograph and then 404s on `/api/code`
   is refused rather than adopted, even when the release matches. This app's own

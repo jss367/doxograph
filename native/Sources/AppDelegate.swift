@@ -323,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 not built alongside behind this window.\(stale.workNote)
                 """
         case .code:
-            alert.messageText = "Doxograph is running code that has changed since"
+            alert.messageText = "Doxograph is running code that has since changed"
             alert.informativeText = """
                 The server on port \(stale.port) is \(stale.versionName), the same as this \
                 app, but the Python it loaded at startup — its own, or a library it runs on \
