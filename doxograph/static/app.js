@@ -274,10 +274,18 @@ function readSideWidth() {
 // to it rather than to the default.
 let sideWidthWanted = readSideWidth();
 
+// A drag or a key can ask past the ceiling; what is remembered is the most this
+// window would have given it, not where the pointer went, so a drag that ran off
+// the edge does not spring the pane open on a wider screen later.
 function applySideWidth(px, persist = false) {
-  // A drag or a key can ask past the ceiling; what is remembered is the most
-  // this window would have given it, not where the pointer went.
-  sideWidthWanted = clampSideWidth(px);
+  return wantSideWidth(clampSideWidth(px), persist);
+}
+
+// The reset is the exception: Home and a double-click mean 20rem, whatever this
+// window can show of it, so that is what is remembered and a wider window comes
+// back to it.
+function wantSideWidth(px, persist = false) {
+  sideWidthWanted = Math.round(px);
   if (persist) storeSideWidth();
   return fitSideWidth();
 }
@@ -329,12 +337,12 @@ window.addEventListener('resize', fitSideWidth);
   };
   handle.addEventListener('pointerup', release);
   handle.addEventListener('pointercancel', release);
-  handle.addEventListener('dblclick', () => applySideWidth(sideWidthDefault(), true));
+  handle.addEventListener('dblclick', () => wantSideWidth(sideWidthDefault(), true));
   handle.addEventListener('keydown', (event) => {
     const step = event.shiftKey ? 48 : 12;
     if (event.key === 'ArrowLeft') applySideWidth(sideWidthNow() - step, true);
     else if (event.key === 'ArrowRight') applySideWidth(sideWidthNow() + step, true);
-    else if (event.key === 'Home') applySideWidth(sideWidthDefault(), true);
+    else if (event.key === 'Home') wantSideWidth(sideWidthDefault(), true);
     else return;
     event.preventDefault();
   });

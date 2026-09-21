@@ -5343,6 +5343,16 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window():
                 )
                 assert await handle.get_attribute("aria-valuemin") == "160"
                 assert await handle.get_attribute("aria-valuemax") == "160"
+
+                # A reset on a window that narrow still means 20rem, so the
+                # 160px it can show now does not become the width it remembers.
+                await handle.focus()
+                await page.keyboard.press("Home")
+                assert (await side.bounding_box())["width"] == 160
+                await page.set_viewport_size({"width": 1280, "height": 800})
+                await page.wait_for_function(
+                    "document.getElementById('side').getBoundingClientRect().width === 400"
+                )
             await browser.close()
 
     asyncio.run(scenario())
