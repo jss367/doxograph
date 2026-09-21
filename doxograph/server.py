@@ -7,6 +7,7 @@ import ipaddress
 import json
 import functools
 import os
+import sys
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -805,9 +806,79 @@ def source_fingerprint(package: Path = PACKAGE) -> str:
         return ""
 
 
-#: The digest taken while this process was importing its own modules, which is
-#: the code it will be running until it exits.
+def imported_files(modules: dict | None = None) -> tuple[str, ...]:
+    """The files behind everything imported from outside this package.
+
+    FastAPI, Pydantic, HTTPX and what they pull in are code this server runs as
+    surely as its own is, and `pip install -e .` upgrades them without touching
+    a single `doxograph` source file — so a digest over the package alone calls
+    a server current when restarting it would load a different Starlette.
+
+    Taken once and kept, because both ends of the comparison have to be over the
+    same list: a module imported later was never part of what this process
+    started with, and a module gone from `sys.modules` is not a file that
+    stopped existing.
+    """
+    own = f"{__package__}."
+    return tuple(sorted({
+        module.__file__
+        for name, module in list((sys.modules if modules is None else modules).items())
+        if getattr(module, "__file__", None)
+        # Counted by `source_fingerprint` instead, and by contents rather than
+        # by size and time. A checkout is rewritten by every branch switch and
+        # rebase, mostly back to bytes it already held, and asking about a file
+        # nobody edited is how a check like this trains people to dismiss it.
+        and name != __package__ and not name.startswith(own)
+    }))
+
+
+def dependency_fingerprint(paths: tuple[str, ...] | None = None) -> str:
+    """The size and time of each file behind an imported dependency.
+
+    Contents would be the same question asked more honestly and far too slowly:
+    the transitive imports of a FastAPI app run to tens of megabytes, and this
+    is read on every launch. Installing rewrites files, so size and mtime catch
+    what there is to catch. The price is that touching a file in site-packages
+    without changing it reads as a change — something pip does and a person does
+    not.
+
+    A file that has gone counts as a change rather than as an unreadable one.
+    Its module is still loaded here; it is the disk that no longer has it.
+    """
+    chosen = DEPENDENCIES_AT_START if paths is None else paths
+    if not chosen:
+        return ""
+    digest = hashlib.sha256()
+    for path in chosen:
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        try:
+            stat = os.stat(path)
+            digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode("ascii"))
+        except OSError:
+            digest.update(b"gone")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def code_fingerprint(source: str, dependencies: str) -> str:
+    """The two halves as the one answer the launcher compares.
+
+    An unreadable package is reported as no answer at all, not as a package that
+    happens to match. The launcher refuses to adopt on a mismatch, so a digest
+    it cannot trace back to real files has to be unusable rather than merely
+    different — otherwise the half that did answer would decide it alone.
+    """
+    if not source:
+        return ""
+    return hashlib.sha256(f"{source}:{dependencies}".encode("ascii")).hexdigest()
+
+
+#: Taken while this process was importing its own modules, which is the code it
+#: will be running until it exits.
 SOURCE_AT_START = source_fingerprint()
+DEPENDENCIES_AT_START = imported_files()
+CODE_AT_START = code_fingerprint(SOURCE_AT_START, dependency_fingerprint())
 
 
 ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
@@ -863,6 +934,10 @@ def code() -> dict:
     cannot read, and an empty side means unknown rather than unchanged — so a
     caller should conclude nothing unless it has both.
 
+    Both halves of what this server runs go in: its own sources, and the files
+    behind everything it imported from outside itself. `pip install -e .` on a
+    changed `pyproject.toml` upgrades the second without touching the first.
+
     Kept off `/api/health` on purpose. That one is polled four times a second
     during startup and asked again on quit, and its promise is that it costs
     nothing; this reads every source file in the package. The launcher needs it
@@ -871,8 +946,8 @@ def code() -> dict:
     return {
         "app": "doxograph",
         "version": __version__,
-        "running": SOURCE_AT_START,
-        "onDisk": source_fingerprint(),
+        "running": CODE_AT_START,
+        "onDisk": code_fingerprint(source_fingerprint(), dependency_fingerprint()),
     }
 
 

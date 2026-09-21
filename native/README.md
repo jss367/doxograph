@@ -81,15 +81,23 @@ and then relaunching the app.
   `doxograph/__init__.py` move together and only on a release, so a server
   orphaned earlier in the same release reports exactly what the bundle reports.
 
-  So `/api/code` is asked as well. It returns two digests over the package's
-  `.py` files: `running`, taken while the process was importing its modules, and
-  `onDisk`, taken now. Python reads those files once and keeps them, so the two
-  differ exactly when the source has been edited, pulled or reinstalled under a
-  server that had already loaded it — which is the question worth asking, since
-  it is the same as asking whether restarting would change anything. `static/` is
-  deliberately left out: it is served per request, so editing `app.js` reaches
-  the next reload without anything going stale. An empty digest, from a package
-  the server cannot read back, is read as no answer and refuses nothing.
+  So `/api/code` is asked as well. It returns two digests over the code the
+  server is made of: `running`, taken while the process was importing its
+  modules, and `onDisk`, taken now. Python reads those files once and keeps them,
+  so the two differ exactly when the code has been edited, pulled or reinstalled
+  under a server that had already loaded it — which is the question worth asking,
+  since it is the same as asking whether restarting would change anything.
+
+  Both halves of what it runs are counted. The package's own `.py` files go in by
+  contents, so a branch switch that restores bytes the checkout already held is
+  not reported as a change. Everything imported from outside the package —
+  FastAPI, Pydantic, HTTPX and what they pull in — goes in by size and time,
+  because contents there run to tens of megabytes; that half is what catches
+  `pip install -e .` on a changed `pyproject.toml`, which upgrades a library
+  without touching a single `doxograph` source file. `static/` is left out on
+  purpose: it is served per request, so editing `app.js` reaches the next reload
+  without anything going stale. An empty digest, from a package the server cannot
+  read back, is read as no answer and refuses nothing.
 
   What is still not covered is a server started from a *different* installation
   than the one this app would launch. Each half reports on itself, so an

@@ -1,6 +1,7 @@
 """The parts of the server the macOS app leans on."""
 
 import asyncio
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -68,7 +69,7 @@ def test_code_reports_what_was_loaded_not_what_is_there_now(monkeypatch):
     """The point of the endpoint: `running` is fixed at import and `onDisk` is
     read fresh, so a checkout that moves under a live server shows as a pair
     that no longer agrees."""
-    monkeypatch.setattr(server, "SOURCE_AT_START", "a" * 64)
+    monkeypatch.setattr(server, "CODE_AT_START", "a" * 64)
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         body = client.get("/api/code").json()
     assert body["running"] == "a" * 64
@@ -120,6 +121,50 @@ def test_fingerprint_is_empty_when_the_package_cannot_be_read(tmp_path):
     """An empty digest is the launcher's signal that the question went
     unanswered, which it treats as no reason to refuse rather than as a match."""
     assert server.source_fingerprint(tmp_path / "gone") == ""
+
+
+def test_dependencies_are_counted_too(tmp_path):
+    """`pip install -e .` on a changed pyproject.toml upgrades FastAPI or
+    Pydantic without touching a doxograph source file, and the server goes on
+    running the version it imported. A digest over the package alone would call
+    that current."""
+    dependency = tmp_path / "starlette.py"
+    dependency.write_text("__version__ = '0.1'", encoding="utf-8")
+    before = server.dependency_fingerprint((str(dependency),))
+
+    dependency.write_text("__version__ = '0.2'   # reinstalled", encoding="utf-8")
+    assert server.dependency_fingerprint((str(dependency),)) != before
+
+
+def test_a_dependency_that_has_gone_is_a_change_not_a_silence(tmp_path):
+    """Its module is still loaded here; it is the disk that no longer has it.
+    An unreadable *package* is a question nobody answered, but this is an
+    answer."""
+    dependency = tmp_path / "httpx.py"
+    dependency.write_text("x = 1", encoding="utf-8")
+    before = server.dependency_fingerprint((str(dependency),))
+
+    dependency.unlink()
+    after = server.dependency_fingerprint((str(dependency),))
+    assert after and after != before
+
+
+def test_the_package_is_left_out_of_the_dependency_half():
+    """Its own files are digested by contents instead. A checkout is rewritten
+    by every branch switch and rebase, mostly back to bytes it already held, and
+    size-and-time would report each of those as a server gone stale."""
+    counted = server.imported_files()
+    assert counted, "a live server has imported something"
+    inside = str(server.PACKAGE) + os.sep
+    assert not [path for path in counted if path.startswith(inside)]
+
+
+def test_an_unreadable_package_answers_nothing_at_all():
+    """The launcher refuses to adopt on a mismatch, so a digest it cannot trace
+    back to real files has to be unusable rather than merely different —
+    otherwise the half that did answer would decide on its own."""
+    assert server.code_fingerprint("", "dependencies-answered-fine") == ""
+    assert server.code_fingerprint("sources", "") != ""
 
 
 def _multipart(body: bytes, boundary: str = "b0undary") -> bytes:

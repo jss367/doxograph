@@ -81,9 +81,14 @@ final class ServerController {
     /// What a server said about the Python it is made of, which is a different
     /// question from which release it belongs to.
     ///
-    /// Only `.py` files are in the digest, because only they are read once and
-    /// kept. `static/` is handed out per request, so editing `app.js` under a
-    /// running server reaches the next reload and leaves nothing stale behind.
+    /// Both halves of what it runs are in the digest: its own sources, and the
+    /// files behind the libraries it imported. `pip install -e .` on a changed
+    /// `pyproject.toml` upgrades the second without touching the first, and a
+    /// server that has already loaded the old FastAPI goes on running it.
+    ///
+    /// `static/` is left out, because it is handed out per request — editing
+    /// `app.js` under a running server reaches the next reload and leaves
+    /// nothing stale behind.
     struct Code {
         /// The digest the server took while importing its own modules, which is
         /// the code it runs until it exits.

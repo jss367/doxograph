@@ -326,9 +326,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.messageText = "Doxograph is running code that has changed since"
             alert.informativeText = """
                 The server on port \(stale.port) is \(stale.versionName), the same as this \
-                app, but the Python it loaded at startup is not the Python on disk now. It \
-                has been up since before those files were edited, pulled or reinstalled, so \
-                using it would show you code you have already replaced.\(stale.workNote)
+                app, but the Python it loaded at startup — its own, or a library it runs on \
+                — is not the Python on disk now. It has been up since before those files \
+                were edited, pulled or reinstalled, so using it would show you code you have \
+                already replaced.\(stale.workNote)
                 """
         }
         alert.addButton(withTitle: "Restart the Server")
