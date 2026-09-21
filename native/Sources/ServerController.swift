@@ -485,6 +485,41 @@ final class ServerController {
         }
     }
 
+    /// Whether work has appeared that nobody agreed to lose.
+    ///
+    /// The counts in the question came from the walk, so anything that started
+    /// while the alert stood open was never in it. Comparing the counts is not
+    /// enough and used not to be: a question about one paper answered while a
+    /// second is being read misses it, and a first paper that finishes while a
+    /// second starts leaves the totals identical over entirely different work.
+    /// `taken` only goes up, so two readings that agree are the same work.
+    ///
+    /// The totals are still compared underneath, because a server too old to
+    /// count answers zero at both ends and would otherwise look untouched.
+    private static func tookOnWork(_ live: Stale, since agreed: Stale) -> Bool {
+        if live.health.taken != agreed.health.taken { return true }
+        return live.health.jobs + live.health.arriving > 0
+            && agreed.health.jobs + agreed.health.arriving == 0
+    }
+
+    /// Why a Doxograph that is on the port but not the one in the question is
+    /// not acted on either.
+    ///
+    /// Reached when the app could not establish what the server is running, so
+    /// there is nothing true to put in a second question: the reason the first
+    /// alert gave was about a server that has gone. Asking again with it would
+    /// describe this one wrongly — an alert about two different releases, over a
+    /// server whose release matches — and offering to restart something the app
+    /// cannot describe is the thing this whole check exists to stop.
+    private static func unconfirmed(_ port: Int) -> String {
+        """
+        A Doxograph is listening on port \(port), but it is not the server this \
+        app asked about and it did not say which code it is running, so there is \
+        nothing to tell you about it that would be true. Nothing was stopped and \
+        nothing was started. Try again.
+        """
+    }
+
     /// Why a port that is occupied but silent is not acted on either way.
     ///
     /// The two things it could be want opposite treatment and cannot be told
@@ -532,9 +567,8 @@ final class ServerController {
             // only safe to use in the same breath as the lookup that produced
             // it, which is why one is no longer kept in `Stale` at all.
             //
-            // What comes out of this is the server that is on the port now, to
-            // be held against the one the question described.
-            let live: Stale
+            // Each branch below holds what is on the port now against the server
+            // the question described, and only agreement gets past the switch.
             switch self.inspect(server.port, timeout: 2) {
             case .gone:
                 // Gone while the question was up, and gone is the one answer
@@ -566,40 +600,43 @@ final class ServerController {
                 // difference matters: the user asked for a restart of a server
                 // this app had said was running other code, and a `/api/code`
                 // request that did not come back is no reason to report that
-                // done without doing it. Nothing contradicts the question, so
-                // the restart goes ahead, guarded exactly as a confirmed
-                // mismatch is.
-                live = Stale(port: server.port, version: health.version, health: health,
-                             reason: server.reason, report: report)
+                // done without doing it.
+                //
+                // So the restart goes ahead — but only while nothing has moved.
+                // Unlike the case below there is nothing true to ask a second
+                // question with: this server said nothing about its code, and
+                // the reason the first alert gave belongs to a server that has
+                // gone.
+                let here = Stale(port: server.port, version: health.version,
+                                 health: health, reason: server.reason, report: report)
+                guard here.couldBe(server), !Self.tookOnWork(here, since: server) else {
+                    return self.deliver(.failure(.launchFailed(Self.unconfirmed(server.port))),
+                                        onReady: onReady, onFailure: onFailure)
+                }
 
-            case .stale(let found):
-                live = found
-            }
-
-            // What was agreed to was the stopping of the server the question
-            // described, and two things can make what is on the port no longer
-            // that server.
-            //
-            // Its identity can have changed — its release, or the digest of the
-            // code it loaded, which is as much of one as this app can see. The
-            // 0.4.1 someone agreed to stop is not the 0.5.0 that took the port
-            // after it exited, and neither the agreement nor the work counted in
-            // it carries over.
-            //
-            // Or work can have started. The counts in the question came from the
-            // walk, so an upload that began while the alert stood open was never
-            // in it and nobody has agreed to lose it.
-            //
-            // Either way the question is asked again, about what is there now.
-            // Neither can cycle: the second question describes the server it is
-            // about, so answering Restart to that one is the agreement the first
-            // could not give.
-            let anotherServer = !live.couldBe(server)
-            let unagreedWork = live.health.jobs + live.health.arriving > 0
-                && server.health.jobs + server.health.arriving == 0
-            if anotherServer || unagreedWork {
-                return self.deliver(.failure(.staleServer(live)),
-                                    onReady: onReady, onFailure: onFailure)
+            case .stale(let live):
+                // What was agreed to was the stopping of the server the question
+                // described, and two things can make what is on the port no
+                // longer that server.
+                //
+                // Its identity can have changed — its release, or the digest of
+                // the code it loaded, or whether it has an `/api/code` at all,
+                // which together are as much of one as this app can see. The
+                // 0.4.1 someone agreed to stop is not the 0.5.0 that took the
+                // port after it exited, and neither the agreement nor the work
+                // counted in it carries over.
+                //
+                // Or it can have taken on work nobody agreed to lose.
+                //
+                // Either way the question is asked again, about what is there
+                // now — which is describable here, because this server answered.
+                // It cannot cycle: the second question describes the server it is
+                // about, so answering Restart to that one is the agreement the
+                // first could not give.
+                guard live.couldBe(server), !Self.tookOnWork(live, since: server) else {
+                    return self.deliver(.failure(.staleServer(live)),
+                                        onReady: onReady, onFailure: onFailure)
+                }
             }
             guard let pid = Self.listener(on: server.port) else {
                 return self.deliver(.failure(.launchFailed(
@@ -674,6 +711,15 @@ final class ServerController {
         /// whose web view posts a paper dropped on the page straight to the
         /// server.
         let arriving: Int
+        /// Everything this server has ever taken on, counted and never
+        /// decremented, or zero from one too old to count.
+        ///
+        /// The gauges above cannot say whether work is the *same* work. An
+        /// alert saying "1 paper in flight" can be answered ten minutes later
+        /// by a server still reporting one paper, and it can be a different
+        /// paper, and nobody agreed to lose that one. Two readings of this that
+        /// agree are the same work; two that differ are not.
+        let taken: Int
         /// The version the server reports, or empty from one too old to report
         /// one. Only the port walk reads it, to decide whether this server is
         /// running the same code as the app that found it.
@@ -750,6 +796,7 @@ final class ServerController {
             let busy = body["busy"] as? Int ?? 0
             outcome.value = .answered(Health(jobs: body["jobs"] as? Int ?? busy,
                                              arriving: body["arriving"] as? Int ?? 0,
+                                             taken: body["taken"] as? Int ?? 0,
                                              version: body["version"] as? String ?? ""))
         }.resume()
         // Giving up on the wait is itself a server that did not answer in time.

@@ -37,9 +37,12 @@ PACKAGE = Path(__file__).resolve().parent
 def source_fingerprint(package: Path = PACKAGE) -> str:
     """A digest of the Python this package is made of, as it is on disk now.
 
-    Only `.py` files count. They are read once, when the process imports them,
-    and never looked at again, so a server goes on running whatever they said at
-    that moment however far the checkout moves afterwards.
+    Only `.py` files outside `static/` count. They are read once, when the
+    process imports them, and never looked at again, so a server goes on running
+    whatever they said at that moment however far the checkout moves afterwards.
+    Everything under `static/` is handed to `FileResponse` per request whatever
+    its extension, so a `.py` served from there is as live as `app.js` and as
+    little evidence that a running server has gone stale.
 
     Paths go in beside contents, so a file that is deleted or renamed moves the
     digest as much as an edited one does.
@@ -54,7 +57,8 @@ def source_fingerprint(package: Path = PACKAGE) -> str:
         digest = hashlib.sha256()
         counted = 0
         for path in sorted(package.rglob("*.py")):
-            if "__pycache__" in path.parts:
+            parts = path.relative_to(package).parts
+            if "__pycache__" in parts or parts[0] == "static":
                 continue
             digest.update(str(path.relative_to(package)).encode("utf-8"))
             digest.update(b"\0")

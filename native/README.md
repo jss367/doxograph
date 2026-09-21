@@ -139,6 +139,12 @@ and then relaunching the app.
   What is still not covered is a server started from a *different* installation
   than the one this app would launch. Each half reports on itself, so an
   up-to-date server of some other checkout looks the same as this one's.
+  When the alert has been answered, whether the work in flight is the *same*
+  work decides whether the agreement still holds. `/api/health` reports `taken`,
+  a count of everything the server has ever accepted, which only goes up —
+  comparing the gauges alone would miss a second paper starting beside the first,
+  and would miss a first finishing as a second starts, which leaves the totals
+  identical over entirely different work.
 - **A warning before quitting mid-extraction**, because reading a paper takes
   minutes and dies with the server. A server that does not answer the question
   gets the warning too, worded for not knowing: a silent server may be a busy

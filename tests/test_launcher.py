@@ -79,6 +79,23 @@ def test_code_reports_what_was_loaded_not_what_is_there_now(monkeypatch):
     assert body["running"] != body["onDisk"]
 
 
+def test_health_counts_work_taken_on_as_well_as_work_in_flight():
+    """The gauges cannot say whether work is the *same* work. An alert saying
+    "1 paper in flight" can be answered ten minutes later by a server still
+    reporting one paper, over a different paper nobody agreed to lose, so the
+    launcher needs a number that only goes up."""
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        before = client.get("/api/health").json()
+        assert before["jobs"] + before["arriving"] == 0
+
+        client.post("/api/workspaces", json={"name": "Consciousness"})
+        after = client.get("/api/health").json()
+
+    # Idle at both ends, and yet plainly not the same server-moment.
+    assert after["jobs"] + after["arriving"] == 0
+    assert after["taken"] > before["taken"]
+
+
 def test_code_and_health_name_the_same_release():
     """The launcher reads the two in separate requests, and a port can change
     hands between them. Matching releases are how it notices that the digests it
@@ -232,6 +249,19 @@ def test_both_digests_come_from_one_walk(tmp_path):
     # `current` without it ever reaching the remembered map, and the lookup that
     # builds the other half would raise.
     assert modules.walks == 1
+
+
+def test_static_is_left_out_of_the_source_digest_whatever_its_extension(tmp_path):
+    """`static/` is handed to `FileResponse` per request, so a `.py` served from
+    there is as live as `app.js` — editing it reaches the next reload and is no
+    evidence that a running server has gone stale."""
+    (tmp_path / "static").mkdir()
+    (tmp_path / "server.py").write_text("x = 1", encoding="utf-8")
+    (tmp_path / "static" / "example.py").write_text("served = 1", encoding="utf-8")
+    before = fingerprint.source_fingerprint(tmp_path)
+
+    (tmp_path / "static" / "example.py").write_text("served = 2", encoding="utf-8")
+    assert fingerprint.source_fingerprint(tmp_path) == before
 
 
 def test_the_package_is_left_out_of_the_dependency_half():

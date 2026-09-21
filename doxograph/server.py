@@ -46,6 +46,11 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 _arrivals_lock = threading.Lock()
 _requests_arriving = 0
+#: Every request that has ever been counted as arriving. Only goes up, so a
+#: reading of it is an identity for "the work this server had taken on by then"
+#: in a way the gauge above can never be: two readings of `1` can be two
+#: different papers.
+_requests_arrived = 0
 
 
 class CountArrivingRequests:
@@ -69,9 +74,10 @@ class CountArrivingRequests:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope.get("method", "GET") in SAFE_METHODS:
             return await self.app(scope, receive, send)
-        global _requests_arriving
+        global _requests_arriving, _requests_arrived
         with _arrivals_lock:
             _requests_arriving += 1
+            _requests_arrived += 1
         try:
             await self.app(scope, receive, send)
         finally:
@@ -798,17 +804,27 @@ def health() -> dict:
     `jobs` dies with the server, `arriving` with the client sending it. `busy`
     is their sum. A request in `arriving` is counted twice for the sliver
     between job creation and response, which errs towards busy.
+
+    `taken` is everything this server has ever taken on, counted and never
+    decremented. The launcher needs it because the gauges cannot say whether
+    work is the *same* work: an alert saying "1 paper in flight" can be answered
+    ten minutes later by a server still reporting one paper, and it can be a
+    different paper, and nobody agreed to lose that one. Two readings of `taken`
+    that agree are the same work; two that differ are not.
     """
     with _arrivals_lock:
         arriving = _requests_arriving
+        arrived = _requests_arrived
     with _jobs_lock:
         jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
+        issued = _job_counter
     return {
         "app": "doxograph",
         "version": __version__,
         "busy": jobs + arriving,
         "jobs": jobs,
         "arriving": arriving,
+        "taken": issued + arrived,
     }
 
 
