@@ -269,7 +269,8 @@ goes into the corpus, with no terminal and no browser tab. The app runs the
 `doxograph` you installed rather than bundling its own copy, so both read one
 corpus and there is no second implementation to keep in step. It needs the Xcode
 command line tools to build, and it adopts a `doxograph serve` that is already
-running instead of starting a second one. See `native/README.md`.
+running instead of starting a second one — unless that server reports a different
+version, which it asks about rather than running on. See `native/README.md`.
 
 Launched from the Dock it inherits none of your shell environment, so put the
 API key in `~/.credentials` rather than exporting it in `.zshrc`.

@@ -42,6 +42,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ready = true
         window.load(url)
         flushPendingDrops()
+        // Said once the window is up rather than in place of it. A server this
+        // app started is fresh and this app's to stop, so the mismatch is worth
+        // knowing about but is not worth refusing to run over — which is the
+        // whole difference between this and the server the port walk declines
+        // to adopt.
+        if let version = server.spawnedVersionMismatch {
+            warn("The server is a different version",
+                 """
+                 This app is version \(ServerController.appVersion) and the doxograph it \
+                 started is \(ServerController.versionName(version)), so the two were not \
+                 built together. Rebuild the app with native/build.sh --install, or use \
+                 Update Doxograph… in the Doxograph menu.
+                 """)
+        }
     }
 
     // MARK: - Files
@@ -268,6 +282,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .neverAnswered(let log):
             window.showStatus("The server started but never answered.")
             warn("The server started but never answered", log)
+        case .staleServer(let stale):
+            window.showStatus("The server on port \(stale.port) is running other code.")
+            askAboutStaleServer(stale)
+        }
+    }
+
+    /// A Doxograph from another version is already on the port.
+    ///
+    /// The question is asked rather than settled here because both answers are
+    /// right somewhere. A server orphaned by a crash or a force quit is the
+    /// case this exists for, and it should be stopped: left alone it is adopted
+    /// by every launch afterwards and upgraded by none, so the window quietly
+    /// shows code that can be releases behind the bundle around it, for as long
+    /// as the process lives. But the identical signature — a `doxograph serve`
+    /// on the port, answering with a version that is not this one — is also a
+    /// developer running another checkout on purpose, and stopping that is
+    /// rude. Nothing the app can see tells the two apart.
+    ///
+    /// What it can do is refuse to decide silently, and say what the choice
+    /// costs: the server's work in flight dies with it, so that count goes in
+    /// the question. Starting a second server beside it is not on the menu, here
+    /// or anywhere — one corpus takes one server.
+    ///
+    /// The question names both versions and calls neither of them the old one.
+    /// All the check establishes is that they differ, and the deliberate case
+    /// usually differs the other way: a checkout pulled ahead of the app that
+    /// launches it. Calling the server old there would talk someone into
+    /// replacing the newer half.
+    private func askAboutStaleServer(_ stale: ServerController.Stale) {
+        let alert = NSAlert()
+        alert.messageText = "Another version of Doxograph is already running"
+        alert.informativeText = """
+            The server on port \(stale.port) is \(stale.versionName), and this app is \
+            version \(ServerController.appVersion). Using it would put code this app was \
+            not built alongside behind this window.\(stale.workNote)
+            """
+        alert.addButton(withTitle: "Restart the Server")
+        alert.addButton(withTitle: "Use It Anyway")
+        alert.addButton(withTitle: "Quit")
+        // Return presses the first button, and this alert arrives while the app
+        // is taking focus at launch — in front of whatever the user was typing
+        // into something else. A stray keystroke may not be what decides to end
+        // a server mid-paper, so when there is work to lose the default moves to
+        // the answer that loses none. This is not hypothetical: it is how the
+        // first server this code was tested against died.
+        if stale.health.jobs + stale.health.arriving > 0 {
+            alert.buttons[0].keyEquivalent = ""
+            alert.buttons[1].keyEquivalent = "\r"
+        }
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            window.showStatus("Restarting the server…")
+            // `report` set the failure flag on the way in, and a replacement
+            // that worked has cleared what it stood for. Leaving it set sends a
+            // later update down the branches written for a server that is not
+            // running: one of them calls `startServer()` over the live
+            // replacement, and the other skips the restart that would have put
+            // the new code behind the window.
+            server.replaceStale(stale, onReady: { [weak self] url in
+                self?.serverFailed = false
+                self?.serverReady(url)
+            }, onFailure: { [weak self] failure in self?.report(failure) })
+        case .alertSecondButtonReturn:
+            // Running on it is not a failure either, so an update offered later
+            // is an ordinary update rather than a retry of a start that never
+            // worked.
+            serverFailed = false
+            server.useStale(stale, onReady: { [weak self] url in self?.serverReady(url) },
+                            onFailure: { [weak self] failure in self?.report(failure) })
+        default:
+            NSApp.terminate(nil)
         }
     }
 

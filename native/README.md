@@ -65,6 +65,23 @@ and then relaunching the app.
   is adopted even once that something else has gone away and left 8765 free. The
   app starts its own only when no Doxograph answers anywhere in the range, and
   then it uses the lowest port that was free.
+- **Only a server of the same version.** A Doxograph answering with a version
+  other than the bundle's is not adopted silently: the app offers to restart it,
+  to use it anyway, or to quit. Without that check a server orphaned by a crash
+  or a force quit — which the app never stops, having never started it — is
+  adopted by every launch afterwards and upgraded by none, so the window shows
+  code releases behind the app around it for as long as the process lives. The
+  pid to signal comes from `lsof`, since a server old enough to be the problem
+  is too old to have been taught to report its own.
+
+  The check is the release version, so it catches an orphan that has outlived a
+  release and not one that has outlived a commit. `Info.plist` and
+  `doxograph/__init__.py` move together and only on a release, so a server
+  orphaned earlier in the same release reports what the bundle reports and is
+  adopted. Closing that needs the server to report which code it is running,
+  which is not the same question as which release it belongs to — the bundle's
+  `doxograph-commit` is the commit it was *built* at, and a Python-only commit
+  moves the checkout past it without anything being stale.
 - **A warning before quitting mid-extraction**, because reading a paper takes
   minutes and dies with the server. A server that does not answer the question
   gets the warning too, worded for not knowing: a silent server may be a busy
