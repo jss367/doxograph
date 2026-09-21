@@ -5299,3 +5299,43 @@ def test_side_pane_width_is_dragged_kept_and_put_back():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_side_pane_width_survives_a_browser_that_will_not_store_it():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1280, "height": 800})
+            # Private windows and blocked storage throw on write. The width is
+            # then only in memory, and resizing the window must not lose it.
+            await page.add_init_script(
+                "Storage.prototype.setItem = function () { throw new Error('denied'); };"
+            )
+            with _server() as url:
+                await page.goto(url)
+                side = page.locator("#side")
+                box = await page.locator("#side-resize").bounding_box()
+                await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 200)
+                await page.mouse.down()
+                await page.mouse.move(box["x"] + box["width"] / 2 + 120, box["y"] + 200, steps=5)
+                await page.mouse.up()
+                assert (await side.bounding_box())["width"] == 440
+
+                async def resize_to(width: int, expected: int) -> None:
+                    await page.set_viewport_size({"width": width, "height": 800})
+                    await page.wait_for_function(
+                        "want => document.getElementById('side').getBoundingClientRect().width === want",
+                        arg=expected,
+                    )
+
+                await resize_to(1400, 440)
+                # Narrow enough to force the ceiling down, then wide again: the
+                # width asked for is still the width that comes back.
+                await resize_to(700, 350)
+                await resize_to(1280, 440)
+            await browser.close()
+
+    asyncio.run(scenario())

@@ -261,27 +261,43 @@ function readSideWidth() {
   }
 }
 
+// The width that was asked for, which is not always the width on screen: a
+// window too narrow to hold it shows the widest pane it can. Kept here as well
+// as in storage, so a browser that refuses to write still holds the choice for
+// the rest of the session, and a window narrowed and widened again comes back
+// to it rather than to the default.
+let sideWidthWanted = readSideWidth();
+
 function applySideWidth(px, persist = false) {
-  const width = clampSideWidth(px);
+  // A drag or a key can ask past the ceiling; what is remembered is the most
+  // this window would have given it, not where the pointer went.
+  sideWidthWanted = clampSideWidth(px);
+  if (persist) storeSideWidth();
+  return fitSideWidth();
+}
+
+// Put the pane at the width that was asked for, or as near as this window
+// allows, without forgetting what was asked for.
+function fitSideWidth() {
+  const width = clampSideWidth(sideWidthWanted);
   $('layout').style.setProperty('--side-width', `${width}px`);
   const handle = $('side-resize');
   handle.setAttribute('aria-valuenow', String(width));
   handle.setAttribute('aria-valuemin', String(SIDE_WIDTH_MIN));
   handle.setAttribute('aria-valuemax', String(sideWidthMax()));
-  if (persist) {
-    try { localStorage.setItem(SIDE_WIDTH_KEY, String(width)); } catch (error) { /* preference remains for this page */ }
-  }
   return width;
+}
+
+function storeSideWidth() {
+  try { localStorage.setItem(SIDE_WIDTH_KEY, String(sideWidthWanted)); }
+  catch (error) { /* the pane keeps the width for this session */ }
 }
 
 const sideWidthNow = () => $('side').getBoundingClientRect().width;
 
-applySideWidth(readSideWidth());
+fitSideWidth();
 
-// A window too narrow for the width that was asked for gets the widest pane it
-// can hold, and what was asked for is what stays stored: widen the window
-// again and the pane comes back to it.
-window.addEventListener('resize', () => applySideWidth(readSideWidth()));
+window.addEventListener('resize', fitSideWidth);
 
 {
   const handle = $('side-resize');
@@ -303,7 +319,7 @@ window.addEventListener('resize', () => applySideWidth(readSideWidth()));
     if (!drag || event.pointerId !== drag.pointer) return;
     drag = null;
     document.body.classList.remove('resizing-side');
-    applySideWidth(sideWidthNow(), true);   // write once, at the end of the drag
+    storeSideWidth();   // write once, at the end of the drag
   };
   handle.addEventListener('pointerup', release);
   handle.addEventListener('pointercancel', release);
