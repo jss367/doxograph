@@ -177,6 +177,13 @@ Shortcuts button in the header. A paper that arrives with a dozen claims you
 have read in one go has "Mark N reviewed" in its header; the notice that
 follows offers to take it back, and takes back only what that click changed.
 
+The divider between the lists and the claims can be dragged, so a session spent
+reading papers can give the side pane more of the window and a session spent
+reading claims can give it less. Focus the divider and the left and right arrow
+keys move it too, with Shift for a bigger step and Home to put it back.
+Double-clicking it also puts it back. It goes no wider than half the window,
+and the width is remembered in this browser.
+
 Deleting a claim, an agreement, or a synthesis is not confirmed first. It is
 undone instead: the row leaves the page at once and the request is held until
 its notice fades, so Undo is the delete never being sent and the claim comes

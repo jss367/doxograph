@@ -237,6 +237,87 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// --- the width of the side pane -------------------------------------------
+//
+// How the window is divided between the lists and the claims is the reader's
+// to set: drag the divider, or give it focus and use the arrow keys. A
+// double-click puts it back where it started. Remembered in this browser like
+// the other view preferences, since it is about the screen being read on.
+
+const SIDE_WIDTH_KEY = 'doxograph-side-width';
+const SIDE_WIDTH_DEFAULT = 320;   // the 20rem the pane has always been
+const SIDE_WIDTH_MIN = 180;
+// Half the window is as far as the divider goes. Past that the side pane has
+// stopped being a side pane and there is nothing left to read beside it.
+const sideWidthMax = () => Math.max(SIDE_WIDTH_MIN, Math.round(window.innerWidth / 2));
+const clampSideWidth = (px) => Math.min(sideWidthMax(), Math.max(SIDE_WIDTH_MIN, Math.round(px)));
+
+function readSideWidth() {
+  try {
+    const saved = Number(localStorage.getItem(SIDE_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? saved : SIDE_WIDTH_DEFAULT;
+  } catch (error) {
+    return SIDE_WIDTH_DEFAULT;
+  }
+}
+
+function applySideWidth(px, persist = false) {
+  const width = clampSideWidth(px);
+  $('layout').style.setProperty('--side-width', `${width}px`);
+  const handle = $('side-resize');
+  handle.setAttribute('aria-valuenow', String(width));
+  handle.setAttribute('aria-valuemin', String(SIDE_WIDTH_MIN));
+  handle.setAttribute('aria-valuemax', String(sideWidthMax()));
+  if (persist) {
+    try { localStorage.setItem(SIDE_WIDTH_KEY, String(width)); } catch (error) { /* preference remains for this page */ }
+  }
+  return width;
+}
+
+const sideWidthNow = () => $('side').getBoundingClientRect().width;
+
+applySideWidth(readSideWidth());
+
+// A window too narrow for the width that was asked for gets the widest pane it
+// can hold, and what was asked for is what stays stored: widen the window
+// again and the pane comes back to it.
+window.addEventListener('resize', () => applySideWidth(readSideWidth()));
+
+{
+  const handle = $('side-resize');
+  // The width the drag started from, not the pointer's distance from the
+  // divider: the divider is 8px wide, so the two are not the same, and taking
+  // the difference keeps the pane from jumping on the first move.
+  let drag = null;
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    drag = { pointer: event.pointerId, from: event.clientX, width: sideWidthNow() };
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-side');
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (drag && event.pointerId === drag.pointer) applySideWidth(drag.width + event.clientX - drag.from);
+  });
+  const release = (event) => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    drag = null;
+    document.body.classList.remove('resizing-side');
+    applySideWidth(sideWidthNow(), true);   // write once, at the end of the drag
+  };
+  handle.addEventListener('pointerup', release);
+  handle.addEventListener('pointercancel', release);
+  handle.addEventListener('dblclick', () => applySideWidth(SIDE_WIDTH_DEFAULT, true));
+  handle.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 48 : 12;
+    if (event.key === 'ArrowLeft') applySideWidth(sideWidthNow() - step, true);
+    else if (event.key === 'ArrowRight') applySideWidth(sideWidthNow() + step, true);
+    else if (event.key === 'Home') applySideWidth(SIDE_WIDTH_DEFAULT, true);
+    else return;
+    event.preventDefault();
+  });
+}
+
 // --- notices and dialogs --------------------------------------------------
 //
 // Native alert, confirm and prompt block the page, cannot be styled, and hold

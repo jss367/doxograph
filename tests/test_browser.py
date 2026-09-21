@@ -5251,3 +5251,51 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
 
     asyncio.run(scenario())
     assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."
+
+
+@pytest.mark.browser
+def test_side_pane_width_is_dragged_kept_and_put_back():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page(viewport={"width": 1280, "height": 800})
+            with _server() as url:
+                await page.goto(url)
+                side = page.locator("#side")
+                handle = page.locator("#side-resize")
+                assert (await side.bounding_box())["width"] == 320
+
+                async def drag_by(dx: int) -> None:
+                    box = await handle.bounding_box()
+                    await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 200)
+                    await page.mouse.down()
+                    await page.mouse.move(box["x"] + box["width"] / 2 + dx, box["y"] + 200, steps=5)
+                    await page.mouse.up()
+
+                await drag_by(140)
+                assert (await side.bounding_box())["width"] == 460
+
+                # The width belongs to the browser, not to the page: a reload
+                # comes back to the pane the reader left.
+                await page.reload()
+                await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
+                assert (await page.locator("#side").bounding_box())["width"] == 460
+
+                # Half the window is the ceiling, however far the drag goes.
+                await drag_by(900)
+                assert (await side.bounding_box())["width"] == 640
+
+                # Arrow keys move it too, and Home puts it back.
+                await handle.focus()
+                await page.keyboard.press("ArrowLeft")
+                assert (await side.bounding_box())["width"] == 628
+                await page.keyboard.press("Home")
+                assert (await side.bounding_box())["width"] == 320
+
+                await handle.dblclick()
+                assert (await side.bounding_box())["width"] == 320
+            await browser.close()
+
+    asyncio.run(scenario())
