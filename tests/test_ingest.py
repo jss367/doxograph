@@ -125,6 +125,22 @@ def test_persistent_rate_limiting_says_so(quick_arxiv):
     assert len(client.asked_at) == ingest.ARXIV_ATTEMPTS
 
 
+def test_giving_up_still_holds_off_the_next_paper(quick_arxiv):
+    """The last refusal reaches the queue too, even though nobody retries it.
+
+    A pasted batch is ingested several papers at a time. If the refusal that
+    exhausts one paper's attempts left the shared booking at the usual three
+    seconds, the next paper would query almost immediately after a cooldown
+    that had just failed, and work through the same two-minute cycle itself.
+    """
+    client = FakeArxivClient(*[FakeArxivResponse(406)] * ingest.ARXIV_ATTEMPTS)
+    with pytest.raises(ValueError, match="rate-limiting"):
+        ingest.fetch_arxiv("2607.07916", client)
+    started = time.monotonic()
+    ingest._arxiv_turn()
+    assert time.monotonic() - started >= quick_arxiv * 16
+
+
 def test_a_refusal_waits_longer_each_time(quick_arxiv):
     """The gap after a second refusal is wider than the gap after the first."""
     client = FakeArxivClient(

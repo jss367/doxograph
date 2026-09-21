@@ -190,8 +190,12 @@ def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
         if response.status_code not in ARXIV_BUSY:
             response.raise_for_status()
             return response
-        if attempt + 1 < ARXIV_ATTEMPTS:
-            _arxiv_back_off(ARXIV_INTERVAL * 2 ** attempt)
+        # Every refusal backs the queue off, including the last one. Giving up
+        # on this paper is no reason to let the next one in the batch query
+        # three seconds later: the final refusal is the strongest sign yet
+        # that arXiv is still refusing, so the rest of the batch should wait
+        # it out rather than each starting this same retry cycle from scratch.
+        _arxiv_back_off(ARXIV_INTERVAL * 2 ** attempt)
     waited = round(ARXIV_INTERVAL * (2 ** (ARXIV_ATTEMPTS - 1) - 1 + ARXIV_ATTEMPTS))
     raise ValueError(
         f"arXiv refused {ARXIV_ATTEMPTS} queries with {response.status_code} "
