@@ -322,7 +322,7 @@ window.addEventListener('resize', fitSideWidth);
   handle.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
-    drag = { pointer: event.pointerId, from: event.clientX, width: sideWidthNow() };
+    drag = { pointer: event.pointerId, from: event.clientX, width: sideWidthNow(), wanted: sideWidthWanted };
     handle.setPointerCapture(event.pointerId);
     document.body.classList.add('resizing-side');
   });
@@ -331,6 +331,11 @@ window.addEventListener('resize', fitSideWidth);
   });
   const release = (event) => {
     if (!drag || event.pointerId !== drag.pointer) return;
+    // A drag that left the divider where it found it is not a new width — it
+    // was pushed into the floor or the ceiling, or brought back. Put back what
+    // was asked for before it, so a pane this window is only showing part of
+    // survives being pushed at.
+    if (clampSideWidth(sideWidthWanted) === clampSideWidth(drag.wanted)) sideWidthWanted = drag.wanted;
     drag = null;
     document.body.classList.remove('resizing-side');
     storeSideWidth();   // write once, at the end of the drag

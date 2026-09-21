@@ -5361,6 +5361,15 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window():
                 await page.keyboard.press("ArrowRight")
                 assert (await side.bounding_box())["width"] == 300
 
+                # Nor does a drag into the ceiling that leaves the divider
+                # where it found it.
+                box = await handle.bounding_box()
+                await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 200)
+                await page.mouse.down()
+                await page.mouse.move(box["x"] + box["width"] / 2 + 150, box["y"] + 200, steps=5)
+                await page.mouse.up()
+                assert (await side.bounding_box())["width"] == 300
+
                 await page.set_viewport_size({"width": 1280, "height": 800})
                 await page.wait_for_function(
                     "document.getElementById('side').getBoundingClientRect().width === 400"
