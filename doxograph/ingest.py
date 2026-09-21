@@ -48,8 +48,10 @@ ARXIV_INTERVAL = 3.0
 # about two minutes rather than after twenty seconds.
 ARXIV_ATTEMPTS = 6
 ARXIV_BUSY = (406, 429, 503)
-_arxiv_gate = threading.Lock()
-_arxiv_last = 0.0
+_arxiv_gate = threading.Condition()
+# The moment the next query may go out. Threads wait on the gate rather than
+# sleeping on it, so a refusal can push the moment back while they wait.
+_arxiv_next = 0.0
 
 ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?"
 ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
@@ -148,16 +150,21 @@ ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 def _arxiv_turn() -> None:
     """Block until this thread's turn to query arXiv comes round.
 
-    Sleeping while holding the gate is the point: waiting threads queue up on
-    it and each one adds another interval, so eight references pasted at once
-    go out as eight spaced queries rather than eight at once.
+    Whoever takes a turn books the next one an interval later, so eight
+    references pasted at once go out as eight spaced queries rather than eight
+    at once. The wait gives the gate back while it lasts, which is what lets a
+    refusal reach the threads that are already queued: each one rechecks the
+    booking when it wakes, so a refusal that arrives mid-wait postpones them
+    too rather than being stuck behind them.
     """
-    global _arxiv_last
+    global _arxiv_next
     with _arxiv_gate:
-        wait = _arxiv_last + ARXIV_INTERVAL - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _arxiv_last = time.monotonic()
+        while True:
+            wait = _arxiv_next - time.monotonic()
+            if wait <= 0:
+                break
+            _arxiv_gate.wait(wait)
+        _arxiv_next = time.monotonic() + ARXIV_INTERVAL
 
 
 def _arxiv_back_off(seconds: float) -> None:
@@ -165,12 +172,13 @@ def _arxiv_back_off(seconds: float) -> None:
 
     A refusal is aimed at the whole address, so a thread that waits alone
     leaves its neighbours querying at the usual cadence and keeping the
-    refusal alive. Pushing the shared clock forward puts them all on hold,
-    and the sleep itself happens in `_arxiv_turn` where it already belongs.
+    refusal alive. Pushing the shared booking back puts them all on hold, and
+    the sleep itself happens in `_arxiv_turn` where it already belongs.
     """
-    global _arxiv_last
+    global _arxiv_next
     with _arxiv_gate:
-        _arxiv_last = max(_arxiv_last, time.monotonic() + seconds - ARXIV_INTERVAL)
+        _arxiv_next = max(_arxiv_next, time.monotonic() + seconds)
+        _arxiv_gate.notify_all()
 
 
 def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
