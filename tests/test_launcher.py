@@ -96,6 +96,45 @@ def test_health_counts_work_taken_on_as_well_as_work_in_flight():
     assert after["taken"] > before["taken"]
 
 
+def test_one_paper_is_taken_on_once_not_once_per_phase():
+    """A paper arrives as a request and becomes a job, which are two moments in
+    the life of one acceptance. Counting both would move `taken` with nothing
+    new accepted, and the launcher would ask again about a paper the user had
+    already agreed to lose — the alert is answered while the body is still
+    arriving, and the job appears a moment later."""
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        before = client.get("/api/health").json()["taken"]
+        # This POST is counted on arrival and makes a job on its way through.
+        client.post("/api/workspaces", json={"name": "Consciousness"})
+        after = client.get("/api/health").json()["taken"]
+    assert after == before + 1
+
+
+def test_a_job_with_no_request_to_count_it_counts_itself():
+    """Not every job comes from a counted request: a GET is not counted as
+    arriving, and a few of them make jobs. Those would go unseen if the count
+    lived only in the middleware."""
+    before = server._work_taken
+    job = server._new_job("reading.pdf")          # no request context at all
+    try:
+        assert server._work_taken == before + 1
+    finally:
+        server._jobs.pop(job["id"], None)
+
+
+def test_a_job_inside_a_counted_request_does_not_count_again():
+    """The other half of the same rule, checked at the seam rather than through
+    the wire, so it stays pinned if the middleware moves."""
+    token = server._request_counted.set(True)
+    before = server._work_taken
+    job = server._new_job("reading.pdf")
+    try:
+        assert server._work_taken == before
+    finally:
+        server._jobs.pop(job["id"], None)
+        server._request_counted.reset(token)
+
+
 def test_code_and_health_name_the_same_release():
     """The launcher reads the two in separate requests, and a port can change
     hands between them. Matching releases are how it notices that the digests it

@@ -141,7 +141,9 @@ and then relaunching the app.
   up-to-date server of some other checkout looks the same as this one's.
   When the alert has been answered, whether the work in flight is the *same*
   work decides whether the agreement still holds. `/api/health` reports `taken`,
-  a count of everything the server has ever accepted, which only goes up —
+  a count of everything the server has ever accepted — once each, since a paper
+  arrives as a request and becomes a job, and counting both phases would ask the
+  user again about a paper they had already agreed to lose. It only goes up, and
   comparing the gauges alone would miss a second paper starting beside the first,
   and would miss a first finishing as a second starts, which leaves the totals
   identical over entirely different work.

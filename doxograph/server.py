@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import ipaddress
 import json
 import functools
@@ -46,11 +47,33 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 _arrivals_lock = threading.Lock()
 _requests_arriving = 0
-#: Every request that has ever been counted as arriving. Only goes up, so a
-#: reading of it is an identity for "the work this server had taken on by then"
-#: in a way the gauge above can never be: two readings of `1` can be two
-#: different papers.
-_requests_arrived = 0
+
+#: Everything this server has ever accepted, counted once each and never
+#: decremented. Only goes up, so a reading of it is an identity for "the work
+#: this server had taken on by then" in a way the gauges can never be: two
+#: readings of `1 in flight` can be two different papers.
+#:
+#: Once each is the whole difficulty. A paper arrives as a request and becomes
+#: a job, which are two moments in the life of one acceptance, and counting both
+#: would move this number without anything new having been accepted — so the
+#: launcher would ask again about a paper the user had already agreed to lose.
+#: A request counts itself and says so; a job counts itself only when nothing
+#: has counted it already, which is how the handful of jobs made by GETs are
+#: not missed.
+_work_taken = 0
+_work_lock = threading.Lock()
+#: Whether the request this job is being made inside has already been counted.
+#: A `ContextVar` because the counting happens in ASGI middleware and the
+#: counted-or-not has to reach a handler several frames down without being
+#: passed through every one of them, and without leaking into the next request.
+_request_counted: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "doxograph_request_counted", default=False)
+
+
+def _take_work() -> None:
+    global _work_taken
+    with _work_lock:
+        _work_taken += 1
 
 
 class CountArrivingRequests:
@@ -74,10 +97,11 @@ class CountArrivingRequests:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope.get("method", "GET") in SAFE_METHODS:
             return await self.app(scope, receive, send)
-        global _requests_arriving, _requests_arrived
+        global _requests_arriving
+        _request_counted.set(True)
+        _take_work()
         with _arrivals_lock:
             _requests_arriving += 1
-            _requests_arrived += 1
         try:
             await self.app(scope, receive, send)
         finally:
@@ -353,6 +377,11 @@ def _finish(job: dict, key: str) -> None:
 
 def _new_job(label: str) -> dict:
     global _job_counter
+    # A job made inside a request the middleware already counted is that
+    # request's work arriving in its second form, not a second acceptance.
+    # A job made by a GET has nothing to have counted it, so it counts itself.
+    if not _request_counted.get():
+        _take_work()
     with _jobs_lock:
         _job_counter += 1
         job = {"id": _job_counter, "label": label, "state": "queued",
@@ -805,26 +834,27 @@ def health() -> dict:
     is their sum. A request in `arriving` is counted twice for the sliver
     between job creation and response, which errs towards busy.
 
-    `taken` is everything this server has ever taken on, counted and never
-    decremented. The launcher needs it because the gauges cannot say whether
-    work is the *same* work: an alert saying "1 paper in flight" can be answered
-    ten minutes later by a server still reporting one paper, and it can be a
-    different paper, and nobody agreed to lose that one. Two readings of `taken`
-    that agree are the same work; two that differ are not.
+    `taken` is everything this server has ever accepted, counted once each and
+    never decremented. The launcher needs it because the gauges cannot say
+    whether work is the *same* work: an alert saying "1 paper in flight" can be
+    answered ten minutes later by a server still reporting one paper, and it can
+    be a different paper, and nobody agreed to lose that one. Two readings of
+    `taken` that agree are the same work; two that differ are not — which is why
+    a paper must not be counted once as a request and again as a job.
     """
     with _arrivals_lock:
         arriving = _requests_arriving
-        arrived = _requests_arrived
     with _jobs_lock:
         jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
-        issued = _job_counter
+    with _work_lock:
+        taken = _work_taken
     return {
         "app": "doxograph",
         "version": __version__,
         "busy": jobs + arriving,
         "jobs": jobs,
         "arriving": arriving,
-        "taken": issued + arrived,
+        "taken": taken,
     }
 
 
