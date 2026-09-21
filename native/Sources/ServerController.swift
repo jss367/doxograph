@@ -34,9 +34,6 @@ final class ServerController {
         /// say. Both are equally not this app's version.
         let version: String
         let health: Health
-        /// The process holding the port, when `lsof` could name it. Without it
-        /// there is nothing to stop on the user's behalf.
-        let pid: pid_t?
 
         /// The version, as it goes in a sentence.
         var versionName: String { version.isEmpty ? "an unknown version" : "version \(version)" }
@@ -84,6 +81,31 @@ final class ServerController {
 
     /// True when this app started the server, and so is responsible for it.
     private(set) var ownsServer = false
+
+    /// The version the server this app spawned answered with.
+    private var startedVersion = ""
+
+    /// The version of the server this app started, when it is not this app's
+    /// own, and nil when it matches or nothing was started.
+    ///
+    /// Spawning proves nothing about the version. The command comes from
+    /// `doxograph-path`, which is `DOXOGRAPH_CMD` at build time, or a command
+    /// chosen by hand, or a checkout that has been pulled past the bundle that
+    /// launched it — so the same-version guarantee the port walk gives for an
+    /// adopted server has to be checked again for one this app starts itself.
+    ///
+    /// Unlike an adopted mismatch this is said out loud and then run on, not
+    /// refused. The two cases look alike and are not: an orphan is old code
+    /// pinned for as long as its process lives, while a spawned server is
+    /// whatever the checkout holds right now, usually newer than the bundle and
+    /// replaced on the next launch. A checkout pulled ahead of its app is an
+    /// ordinary morning, and refusing to start over it would break more than it
+    /// protects.
+    var spawnedVersionMismatch: String? {
+        guard ownsServer, !startedVersion.isEmpty, startedVersion != Self.appVersion
+        else { return nil }
+        return startedVersion
+    }
 
     var baseURL: URL { URL(string: "http://\(host):\(port)")! }
 
@@ -232,7 +254,10 @@ final class ServerController {
             // exit below would otherwise be reported as a server that died on
             // its own, to an app that is closing.
             if isCancelled { return .cancelled }
-            if health(on: port, timeout: 1) != nil { return .success }
+            if let answered = health(on: port, timeout: 1) {
+                startedVersion = answered.version
+                return .success
+            }
             if let process = startedProcess, !process.isRunning {
                 return .failure(.neverAnswered(log.tail(lines: 25).isEmpty
                     ? "The server exited immediately."
@@ -348,7 +373,28 @@ final class ServerController {
     func replaceStale(_ server: Stale, onReady: @escaping (URL) -> Void,
                       onFailure: @escaping (Failure) -> Void) {
         queue.async {
-            guard let pid = server.pid else {
+            // Everything is established again here, and nothing is carried over
+            // from the walk that found it. The alert in between has no deadline:
+            // it can stand open for days while the server it describes exits on
+            // its own and the kernel gives its pid to something unrelated, and a
+            // `kill` on a number that old is a signal to a stranger. A pid is
+            // only safe to use in the same breath as the lookup that produced
+            // it, which is why one is no longer kept in `Stale` at all.
+            guard let live = self.health(on: server.port, timeout: 2) else {
+                // Gone while the question was up. There is nothing to stop, and
+                // the walk below finds the port free and starts there.
+                return self.deliver(self.bringUp(), onReady: onReady, onFailure: onFailure)
+            }
+            guard live.version != Self.appVersion else {
+                // Replaced, while the question was up, by a server running this
+                // app's own code — the outcome the user asked for, arrived at
+                // without this app doing anything. Adopt it rather than
+                // restarting a server that is already the right one.
+                self.port = server.port
+                self.ownsServer = false
+                return self.deliver(.success, onReady: onReady, onFailure: onFailure)
+            }
+            guard let pid = Self.listener(on: server.port) else {
                 return self.deliver(.failure(.launchFailed(
                     "Nothing on port \(server.port) could be traced back to a process to stop.")),
                     onReady: onReady, onFailure: onFailure)
@@ -587,8 +633,7 @@ final class ServerController {
             // and start a second one beside it, which is the thing the walk is
             // built to prevent. Only what happens next differs.
             guard health.version == Self.appVersion else {
-                return .stale(Stale(port: candidate, version: health.version,
-                                    health: health, pid: Self.listener(on: candidate)))
+                return .stale(Stale(port: candidate, version: health.version, health: health))
             }
             return .adopt(candidate)
         }

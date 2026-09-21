@@ -42,6 +42,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ready = true
         window.load(url)
         flushPendingDrops()
+        // Said once the window is up rather than in place of it. A server this
+        // app started is fresh and this app's to stop, so the mismatch is worth
+        // knowing about but is not worth refusing to run over — which is the
+        // whole difference between this and the server the port walk declines
+        // to adopt.
+        if let version = server.spawnedVersionMismatch {
+            warn("The server is a different version",
+                 """
+                 This app is version \(ServerController.appVersion) and the doxograph it \
+                 started is version \(version), so the two were not built together. Rebuild \
+                 the app with native/build.sh --install, or use Update Doxograph… in the \
+                 Doxograph menu.
+                 """)
+        }
     }
 
     // MARK: - Files
@@ -314,11 +328,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             window.showStatus("Restarting the server…")
-            server.replaceStale(stale, onReady: { [weak self] url in self?.serverReady(url) },
-                                onFailure: { [weak self] failure in self?.report(failure) })
+            // `report` set the failure flag on the way in, and a replacement
+            // that worked has cleared what it stood for. Leaving it set sends a
+            // later update down the branches written for a server that is not
+            // running: one of them calls `startServer()` over the live
+            // replacement, and the other skips the restart that would have put
+            // the new code behind the window.
+            server.replaceStale(stale, onReady: { [weak self] url in
+                self?.serverFailed = false
+                self?.serverReady(url)
+            }, onFailure: { [weak self] failure in self?.report(failure) })
         case .alertSecondButtonReturn:
-            // Running on it is not a failure, so an update offered later is an
-            // ordinary update rather than a retry of a start that never worked.
+            // Running on it is not a failure either, so an update offered later
+            // is an ordinary update rather than a retry of a start that never
+            // worked.
             serverFailed = false
             server.useStale(onReady: { [weak self] url in self?.serverReady(url) })
         default:
