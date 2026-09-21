@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import ipaddress
 import json
 import functools
 import os
-import sys
 import threading
-import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,10 +18,10 @@ from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from . import __version__, bib, cites, config, export, extract, ingest, pairs, search, store, notebook
+from . import (__version__, bib, cites, config, export, extract, fingerprint, ingest, pairs,
+               search, store, notebook)
 
-PACKAGE = Path(__file__).resolve().parent
-STATIC = PACKAGE / "static"
+STATIC = Path(__file__).parent / "static"
 
 app = FastAPI(title="Doxograph")
 app.include_router(notebook.router)
@@ -772,180 +769,6 @@ def favicon() -> FileResponse:
     return FileResponse(STATIC / "favicon.png", media_type="image/png")
 
 
-def source_fingerprint(package: Path = PACKAGE) -> str:
-    """A digest of the Python this package is made of, as it is on disk now.
-
-    Only `.py` files count, and that is the point. They are read once, when the
-    process imports them, and never looked at again, so a server goes on running
-    whatever they said at that moment however far the checkout moves afterwards.
-    Everything else is read per request — `static/` is handed to `FileResponse`
-    on the way out — so editing `app.js` reaches the next reload and does not
-    leave a running server behind.
-
-    Paths go in beside contents, so a file that is deleted or renamed moves the
-    digest as much as an edited one does.
-
-    A package that cannot be read answers with an empty string, and so does one
-    with no Python in it at all — `rglob` walks a missing directory without
-    complaining, and the digest of nothing is a perfectly ordinary-looking hex
-    string that would compare equal to the next reading of nothing. Callers read
-    an empty answer as no answer rather than as no change.
-    """
-    try:
-        digest = hashlib.sha256()
-        counted = 0
-        for path in sorted(package.rglob("*.py")):
-            if "__pycache__" in path.parts:
-                continue
-            digest.update(str(path.relative_to(package)).encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-            digest.update(b"\0")
-            counted += 1
-        return digest.hexdigest() if counted else ""
-    except OSError:
-        return ""
-
-
-def imported_files(modules: dict | None = None) -> tuple[str, ...]:
-    """The files behind everything imported from outside this package.
-
-    FastAPI, Pydantic, HTTPX and what they pull in are code this server runs as
-    surely as its own is, and `pip install -e .` upgrades them without touching
-    a single `doxograph` source file — so a digest over the package alone calls
-    a server current when restarting it would load a different Starlette.
-
-    Taken once and kept, because both ends of the comparison have to be over the
-    same list: a module imported later was never part of what this process
-    started with, and a module gone from `sys.modules` is not a file that
-    stopped existing.
-    """
-    own = f"{__package__}."
-    return tuple(sorted({
-        module.__file__
-        for name, module in list((sys.modules if modules is None else modules).items())
-        if getattr(module, "__file__", None)
-        # Counted by `source_fingerprint` instead, and by contents rather than
-        # by size and time. A checkout is rewritten by every branch switch and
-        # rebase, mostly back to bytes it already held, and asking about a file
-        # nobody edited is how a check like this trains people to dismiss it.
-        and name != __package__ and not name.startswith(own)
-    }))
-
-
-def _reading(path: str) -> str:
-    """The size and time of one file, or that it has gone.
-
-    Contents would be the same question asked more honestly and far too slowly:
-    the transitive imports of a FastAPI app run to tens of megabytes, and this
-    is read on every launch. Installing rewrites files, so size and mtime catch
-    what there is to catch. The price is that touching a file in site-packages
-    without changing it reads as a change — something pip does and a person does
-    not.
-
-    A file that has gone is a change, not an unreadable one. Its module is still
-    loaded in this process; it is the disk that no longer has it.
-    """
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return "gone"
-    return f"{stat.st_size}:{stat.st_mtime_ns}"
-
-
-_dependencies_lock = threading.Lock()
-#: What each dependency file read the first time this server saw it. Written
-#: once per path and never revised, so it goes on saying what was there when the
-#: module behind it was loaded.
-_dependencies_as_loaded: dict[str, str] = {}
-
-
-def dependency_state(modules: dict | None = None) -> tuple[str, str]:
-    """The dependency half, as this process loaded it and as it is on disk now.
-
-    Both come out of one walk, because the two sides have to be over the same
-    set of files and that set grows. A list frozen while `server.py` was still
-    importing would leave out Uvicorn, which `serve()` imports afterwards and
-    which *is* the HTTP server, and pypdf, which `ingest` reaches for only when
-    a PDF arrives.
-
-    So a file is remembered the first time this walk sees it, with the reading
-    it has then, and keeps that reading for good.
-
-    On its own that is not enough, because "the first time this walk sees it" is
-    not "when the module was imported". A `doxograph serve` in a terminal
-    imports Uvicorn seconds after startup and may never be asked about its code
-    until an app launches days later, by which time `pip install -e .` has
-    upgraded Uvicorn and the walk would remember the replacement as the
-    original. So a file written since this process started counts as replaced
-    whatever the map says. Nothing this process loaded can have been written
-    after it began without having been swapped underneath it, and pip stamps
-    what it installs with the time it installs it.
-
-    The cost is a file merely touched since startup, which reads as replaced.
-    The map alone already says that — mtime is half of every reading — so this
-    adds no way of being wrong that was not there before.
-    """
-    current = {path: _reading(path) for path in imported_files(modules)}
-    with _dependencies_lock:
-        for path, reading in current.items():
-            _dependencies_as_loaded.setdefault(path, reading)
-        as_loaded = {path: _dependencies_as_loaded[path] for path in current}
-    for path, reading in current.items():
-        if _written_since_start(path):
-            current[path] = f"{reading}:written-since"
-    return _digest(as_loaded), _digest(current)
-
-
-def _written_since_start(path: str, started: float | None = None) -> bool:
-    """Whether a file was last written after this process began.
-
-    A file that has gone is not this; the reading already says "gone", which
-    differs from whatever was remembered for it.
-    """
-    try:
-        return os.stat(path).st_mtime > (STARTED_AT if started is None else started)
-    except OSError:
-        return False
-
-
-def _digest(readings: dict[str, str]) -> str:
-    if not readings:
-        return ""
-    digest = hashlib.sha256()
-    for path in sorted(readings):
-        digest.update(path.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(readings[path].encode("ascii"))
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def code_fingerprint(source: str, dependencies: str) -> str:
-    """The two halves as the one answer the launcher compares.
-
-    An unreadable package is reported as no answer at all, not as a package that
-    happens to match. The launcher refuses to adopt on a mismatch, so a digest
-    it cannot trace back to real files has to be unusable rather than merely
-    different — otherwise the half that did answer would decide it alone.
-    """
-    if not source:
-        return ""
-    return hashlib.sha256(f"{source}:{dependencies}".encode("ascii")).hexdigest()
-
-
-#: When this process began, near enough. Nothing it has loaded can have been
-#: written after this without having been swapped underneath it.
-STARTED_AT = time.time()
-
-#: Taken while this process was importing its own modules, which is the code it
-#: will be running until it exits.
-SOURCE_AT_START = source_fingerprint()
-# Reads every dependency imported so far, as early as this module can, so that
-# FastAPI and its like are remembered from before anything could replace them.
-dependency_state()
-
-
 ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
 
 
@@ -1011,12 +834,12 @@ def code() -> dict:
     nothing; this reads every source file in the package. The launcher needs it
     once, on the one port that answered.
     """
-    as_loaded, on_disk = dependency_state()
+    running, on_disk = fingerprint.report()
     return {
         "app": "doxograph",
         "version": __version__,
-        "running": code_fingerprint(SOURCE_AT_START, as_loaded),
-        "onDisk": code_fingerprint(source_fingerprint(), on_disk),
+        "running": running,
+        "onDisk": on_disk,
     }
 
 
@@ -1609,6 +1432,12 @@ def serve_pdf(key: str, inline: bool = False) -> FileResponse:
 
 def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> None:
     import uvicorn
+
+    # Read now, beside the import, and not at the next `/api/code`. Uvicorn is
+    # the HTTP server itself and the one dependency guaranteed to arrive after
+    # this module finished importing, so a reading taken later could be of a
+    # version installed after this process loaded the one it is running.
+    fingerprint.snapshot()
 
     # The CLI refuses this first; this catches a direct caller. Port 0 means
     # "any free port", chosen after `trust_bind` has recorded the authority, so

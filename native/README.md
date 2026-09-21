@@ -97,10 +97,11 @@ and then relaunching the app.
   without touching a single `doxograph` source file. That list is read fresh on
   every request rather than fixed at import, because a process goes on
   importing: Uvicorn arrives after `server.py` is done and pypdf only when a PDF
-  does. A file the walk has never seen before is remembered as it is then — and
-  counted as replaced anyway if it was written since the process started, since
-  nothing a server runs can have been written after it began without having been
-  swapped underneath it. `static/` is left out on purpose: it is served per request, so editing
+  does. Each of those import sites takes its own reading, beside the import, so
+  the file remembered for a module is the file that module was loaded from.
+  Recording it later instead would remember an upgrade that landed in between as
+  the original, and the server would read as current forever while running code
+  nobody has on disk. `static/` is left out on purpose: it is served per request, so editing
   `app.js` reaches the next reload without anything going stale. An empty digest,
   from a package the server cannot read back, is read as no answer and refuses
   nothing.

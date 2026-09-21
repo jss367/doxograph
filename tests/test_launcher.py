@@ -1,5 +1,6 @@
 """The parts of the server the macOS app leans on."""
 
+import ast
 import asyncio
 import os
 import types
@@ -7,7 +8,7 @@ import types
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __version__, config, server, store
+from doxograph import __version__, config, fingerprint, server, store
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +71,7 @@ def test_code_reports_what_was_loaded_not_what_is_there_now(monkeypatch):
     """The point of the endpoint: `running` is fixed at import and `onDisk` is
     read fresh, so a checkout that moves under a live server shows as a pair
     that no longer agrees."""
-    monkeypatch.setattr(server, "SOURCE_AT_START", "a" * 64)
+    monkeypatch.setattr(fingerprint, "SOURCE_AT_START", "a" * 64)
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         body = client.get("/api/code").json()
     assert body["running"] != body["onDisk"]
@@ -103,34 +104,34 @@ def test_fingerprint_follows_the_python_and_ignores_the_rest(tmp_path):
     (tmp_path / "server.py").write_text("x = 1", encoding="utf-8")
     (tmp_path / "static" / "app.js").write_text("one", encoding="utf-8")
     (tmp_path / "__pycache__" / "server.py").write_text("compiled", encoding="utf-8")
-    before = server.source_fingerprint(tmp_path)
+    before = fingerprint.source_fingerprint(tmp_path)
 
     (tmp_path / "static" / "app.js").write_text("two", encoding="utf-8")
     (tmp_path / "__pycache__" / "server.py").write_text("recompiled", encoding="utf-8")
-    assert server.source_fingerprint(tmp_path) == before
+    assert fingerprint.source_fingerprint(tmp_path) == before
 
     (tmp_path / "server.py").write_text("x = 2", encoding="utf-8")
-    assert server.source_fingerprint(tmp_path) != before
+    assert fingerprint.source_fingerprint(tmp_path) != before
 
 
 def test_fingerprint_follows_names_as_well_as_contents(tmp_path):
     """A file moved or deleted changes what the process would load as surely as
     an edited one, and its contents alone would not say so."""
     (tmp_path / "ingest.py").write_text("x = 1", encoding="utf-8")
-    before = server.source_fingerprint(tmp_path)
+    before = fingerprint.source_fingerprint(tmp_path)
 
     (tmp_path / "ingest.py").rename(tmp_path / "extract.py")
-    renamed = server.source_fingerprint(tmp_path)
+    renamed = fingerprint.source_fingerprint(tmp_path)
     assert renamed != before
 
     (tmp_path / "extract.py").unlink()
-    assert server.source_fingerprint(tmp_path) not in (before, renamed)
+    assert fingerprint.source_fingerprint(tmp_path) not in (before, renamed)
 
 
 def test_fingerprint_is_empty_when_the_package_cannot_be_read(tmp_path):
     """An empty digest is the launcher's signal that the question went
     unanswered, which it treats as no reason to refuse rather than as a match."""
-    assert server.source_fingerprint(tmp_path / "gone") == ""
+    assert fingerprint.source_fingerprint(tmp_path / "gone") == ""
 
 
 def _fake_module(path):
@@ -145,69 +146,43 @@ def test_dependencies_are_counted_too(tmp_path):
     that current."""
     dependency = tmp_path / "starlette.py"
     dependency.write_text("__version__ = '0.1'", encoding="utf-8")
-    os.utime(dependency, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
     modules = {"starlette": _fake_module(dependency)}
 
-    as_loaded, on_disk = server.dependency_state(modules)
+    as_loaded, on_disk = fingerprint.dependency_state(modules)
     assert as_loaded == on_disk
 
     dependency.write_text("__version__ = '0.2'  # reinstalled", encoding="utf-8")
-    as_loaded, on_disk = server.dependency_state(modules)
+    as_loaded, on_disk = fingerprint.dependency_state(modules)
     assert as_loaded != on_disk
 
 
-def test_a_dependency_imported_later_is_counted_from_then(tmp_path):
+def test_a_dependency_is_remembered_at_its_import(tmp_path):
     """A process goes on importing. Uvicorn arrives after `server.py` is done
-    and pypdf only when a PDF does, so a list fixed at import would leave out
-    the HTTP server itself. A file joining the walk is remembered as it is then,
-    which is a match, and watched from there."""
-    early = tmp_path / "fastapi.py"
-    early.write_text("x = 1", encoding="utf-8")
+    and pypdf only when a PDF does, so each of those import sites takes its own
+    snapshot — record the file later and an upgrade that landed in between is
+    remembered as the original."""
     late = tmp_path / "uvicorn.py"
     late.write_text("y = 1", encoding="utf-8")
-    # Written before this process, as every file a real server imports is.
-    for path in (early, late):
-        os.utime(path, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
-
-    modules = {"fastapi": _fake_module(early)}
-    server.dependency_state(modules)
-
-    modules["uvicorn"] = _fake_module(late)
-    as_loaded, on_disk = server.dependency_state(modules)
-    assert as_loaded == on_disk
-
-    late.write_text("y = 2  # reinstalled after the server loaded it", encoding="utf-8")
-    as_loaded, on_disk = server.dependency_state(modules)
-    assert as_loaded != on_disk
-
-
-def test_a_dependency_replaced_before_it_was_ever_asked_about(tmp_path):
-    """The gap the first-seen map leaves on its own. A `doxograph serve` in a
-    terminal imports Uvicorn seconds after startup and may never be asked about
-    its code until an app launches days later — by which time `pip install -e .`
-    has upgraded Uvicorn, and the map would remember the replacement as the
-    original. A file written since the process started counts as replaced
-    whatever the map says."""
-    late = tmp_path / "uvicorn.py"
-    late.write_text("y = 2  # the upgrade, installed after the server started",
-                    encoding="utf-8")
     modules = {"uvicorn": _fake_module(late)}
 
-    # First sight of this path is also the first request, long after the module
-    # behind it was imported and after the file under it was replaced.
-    as_loaded, on_disk = server.dependency_state(modules)
+    fingerprint.snapshot(modules)                      # what `serve()` does
+    late.write_text("y = 2  # upgraded under the running server", encoding="utf-8")
+
+    as_loaded, on_disk = fingerprint.dependency_state(modules)
     assert as_loaded != on_disk
 
 
-def test_a_dependency_older_than_the_process_is_left_alone(tmp_path):
-    """The other side of it: everything a server runs was written before it
-    started, so the check has to be quiet about the ordinary case."""
-    settled = tmp_path / "fastapi.py"
-    settled.write_text("x = 1", encoding="utf-8")
-    os.utime(settled, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
-    modules = {"fastapi": _fake_module(settled)}
+def test_a_dependency_installed_before_its_first_import_is_current(tmp_path):
+    """The other ordering, which must stay quiet. A library upgraded while the
+    server was up and then imported for the first time is the version the
+    process is running — restarting would change nothing, and saying otherwise
+    would prompt for a restart on every launch afterwards."""
+    late = tmp_path / "pypdf.py"
+    late.write_text("y = 2  # installed while the server was already up", encoding="utf-8")
+    modules = {"pypdf": _fake_module(late)}
 
-    as_loaded, on_disk = server.dependency_state(modules)
+    fingerprint.snapshot(modules)                      # what the PDF readers do
+    as_loaded, on_disk = fingerprint.dependency_state(modules)
     assert as_loaded == on_disk
 
 
@@ -217,12 +192,11 @@ def test_a_dependency_that_has_gone_is_a_change_not_a_silence(tmp_path):
     answer."""
     dependency = tmp_path / "httpx.py"
     dependency.write_text("x = 1", encoding="utf-8")
-    os.utime(dependency, (server.STARTED_AT - 3600, server.STARTED_AT - 3600))
     modules = {"httpx": _fake_module(dependency)}
-    server.dependency_state(modules)
+    fingerprint.snapshot(modules)
 
     dependency.unlink()
-    as_loaded, on_disk = server.dependency_state(modules)
+    as_loaded, on_disk = fingerprint.dependency_state(modules)
     assert on_disk and as_loaded != on_disk
 
 
@@ -230,9 +204,9 @@ def test_the_package_is_left_out_of_the_dependency_half():
     """Its own files are digested by contents instead. A checkout is rewritten
     by every branch switch and rebase, mostly back to bytes it already held, and
     size-and-time would report each of those as a server gone stale."""
-    counted = server.imported_files()
+    counted = fingerprint.imported_files()
     assert counted, "a live server has imported something"
-    inside = str(server.PACKAGE) + os.sep
+    inside = str(fingerprint.PACKAGE) + os.sep
     assert not [path for path in counted if path.startswith(inside)]
 
 
@@ -240,8 +214,45 @@ def test_an_unreadable_package_answers_nothing_at_all():
     """The launcher refuses to adopt on a mismatch, so a digest it cannot trace
     back to real files has to be unusable rather than merely different —
     otherwise the half that did answer would decide on its own."""
-    assert server.code_fingerprint("", "dependencies-answered-fine") == ""
-    assert server.code_fingerprint("sources", "") != ""
+    assert fingerprint.combine("", "dependencies-answered-fine") == ""
+    assert fingerprint.combine("sources", "") != ""
+
+
+def test_every_late_import_of_a_dependency_takes_a_snapshot():
+    """The snapshots are placed by hand rather than by an import hook, which
+    trades a bug that could break every import in the process for one that has
+    to be noticed. This is how it gets noticed: a new `import` inside a function
+    fails here until it is either recorded or listed as not needing to be."""
+    found = {}
+    for path in sorted(fingerprint.PACKAGE.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for inner in ast.walk(node):
+                if not isinstance(inner, (ast.Import, ast.ImportFrom)):
+                    continue
+                # A relative import is one of this package's own modules, and
+                # those are digested by contents, not by this map.
+                if isinstance(inner, ast.ImportFrom) and inner.level:
+                    continue
+                found[f"{path.name}:{node.name}"] = ast.get_source_segment(
+                    path.read_text(encoding="utf-8"), inner)
+
+    snapshots = set()
+    for path in sorted(fingerprint.PACKAGE.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if "fingerprint.snapshot()" in (ast.get_source_segment(source, node) or ""):
+                snapshots.add(f"{path.name}:{node.name}")
+
+    assert set(found) == snapshots, (
+        f"late imports without a snapshot: {sorted(set(found) - snapshots)}; "
+        f"snapshots without a late import: {sorted(snapshots - set(found))}"
+    )
 
 
 def _multipart(body: bytes, boundary: str = "b0undary") -> bytes:
