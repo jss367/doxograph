@@ -971,6 +971,10 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
             staged.unlink(missing_ok=True)
             _set(_new_job(name), key=settled, label=settled,
                  state="done", detail="already in the corpus")
+            # Nothing else will: the workers prune on their way out, and this
+            # notice never reaches one. Without it a session that keeps
+            # re-dropping papers it already has grows `_jobs` for ever.
+            _prune_jobs()
             continue
         job = _new_job(name)
         try:

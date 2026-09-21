@@ -880,3 +880,19 @@ def test_concurrent_drops_of_one_file_make_one_paper(monkeypatch):
     assert not errors, errors
     assert len(store.paper_keys()) == 1, f"the same file made two papers: {results}"
     assert {created for _, created in results} == {True, False}
+
+
+def test_repeated_recognized_drops_do_not_pile_up_jobs(monkeypatch):
+    """The notice never reaches a worker, so nothing else prunes it."""
+    monkeypatch.setattr(server, "_jobs", {})
+    body = b"%PDF-1.4\nbody" + bytes(64)
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.pdf_path("doe2026study").write_bytes(body)
+    store.add_claim("doe2026study", {"text": "Steering recovers."})
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        for _ in range(45):
+            client.post("/api/upload?extract_now=false",
+                        files={"files": ("paper.pdf", body, "application/pdf")})
+
+    assert len(server._jobs) == 40, f"jobs are piling up: {len(server._jobs)}"
