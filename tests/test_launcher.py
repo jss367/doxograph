@@ -248,6 +248,30 @@ def test_a_dependency_is_remembered_at_its_import(tmp_path):
     assert as_loaded != on_disk
 
 
+def test_the_server_is_read_again_once_uvicorn_has_finished_choosing(tmp_path):
+    """`import uvicorn` is not the end of Uvicorn's importing. `uvicorn.run`
+    builds a `Config` and loads it, which imports the event loop and HTTP
+    protocol implementations it was configured with — h11 and websockets here —
+    and those arrive after the snapshot placed beside the import. The lifespan
+    runs once the server is built and before it accepts anything, so they are
+    recorded as they were loaded rather than as they are at the first
+    `/api/code`."""
+    chosen = tmp_path / "h11.py"
+    chosen.write_text("x = 1", encoding="utf-8")
+    sys.modules["h11_stand_in"] = _fake_module(chosen)
+    try:
+        assert str(chosen) not in fingerprint._as_loaded
+
+        with TestClient(server.app, base_url="http://127.0.0.1:8765"):
+            pass                                    # the lifespan runs in here
+
+        recorded = fingerprint._as_loaded[str(chosen)]
+        chosen.write_text("x = 2  # replaced under the running server", encoding="utf-8")
+        assert fingerprint._reading(str(chosen)) != recorded
+    finally:
+        sys.modules.pop("h11_stand_in", None)
+
+
 def test_a_dependency_installed_before_its_first_import_is_current(tmp_path):
     """The other ordering, which must stay quiet. A library upgraded while the
     server was up and then imported for the first time is the version the
@@ -388,9 +412,12 @@ def test_every_late_import_of_a_dependency_takes_a_snapshot():
             if "fingerprint.snapshot()" in (ast.get_source_segment(source, node) or ""):
                 snapshots.add(f"{path.name}:{node.name}")
 
-    assert set(found) == snapshots, (
-        f"late imports without a snapshot: {sorted(set(found) - snapshots)}; "
-        f"snapshots without a late import: {sorted(snapshots - set(found))}"
+    # One direction only. A snapshot with no late import beside it is not a
+    # mistake — the lifespan takes one so that what Uvicorn loaded on its own
+    # way up is recorded as it was loaded — and an extra reading only ever
+    # records more, earlier.
+    assert not set(found) - snapshots, (
+        f"late imports with no snapshot beside them: {sorted(set(found) - snapshots)}"
     )
 
 

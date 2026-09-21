@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import ipaddress
 import json
@@ -33,7 +34,24 @@ STATIC = Path(__file__).parent / "static"
 # remembered as the version it is running.
 fingerprint.snapshot()
 
-app = FastAPI(title="Doxograph")
+@contextlib.asynccontextmanager
+async def _lifespan(_: FastAPI):
+    """Read the dependencies once more, now that the server is fully loaded.
+
+    `import uvicorn` is not the end of Uvicorn's importing: `uvicorn.run` builds
+    a `Config` and loads it, which imports the event loop and HTTP protocol
+    implementations it was configured with — h11 and websockets here. Those
+    arrive after the snapshot beside the import and before this, which runs once
+    the server is built and before it accepts anything.
+
+    Every serving process gets here, including the `--reload` worker, which
+    never calls `serve()` at all.
+    """
+    fingerprint.snapshot()
+    yield
+
+
+app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
 
