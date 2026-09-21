@@ -43,7 +43,10 @@ ARXIV_API = "https://export.arxiv.org/api/query"
 # is ingested several at a time, so the queries have to be spaced out, and a
 # refusal has to be retried rather than failing the paper.
 ARXIV_INTERVAL = 3.0
-ARXIV_ATTEMPTS = 4
+# A refusal can outlast a minute even when the request rate was polite, so the
+# wait between attempts doubles: 3, 6, 12, 24, 48 seconds, giving up after
+# about two minutes rather than after twenty seconds.
+ARXIV_ATTEMPTS = 6
 ARXIV_BUSY = (406, 429, 503)
 _arxiv_gate = threading.Lock()
 _arxiv_last = 0.0
@@ -157,6 +160,19 @@ def _arxiv_turn() -> None:
         _arxiv_last = time.monotonic()
 
 
+def _arxiv_back_off(seconds: float) -> None:
+    """Hold every thread off arXiv, not just the one that was refused.
+
+    A refusal is aimed at the whole address, so a thread that waits alone
+    leaves its neighbours querying at the usual cadence and keeping the
+    refusal alive. Pushing the shared clock forward puts them all on hold,
+    and the sleep itself happens in `_arxiv_turn` where it already belongs.
+    """
+    global _arxiv_last
+    with _arxiv_gate:
+        _arxiv_last = max(_arxiv_last, time.monotonic() + seconds - ARXIV_INTERVAL)
+
+
 def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
     """Query the arXiv API, waiting out a refusal rather than raising it."""
     for attempt in range(ARXIV_ATTEMPTS):
@@ -166,10 +182,11 @@ def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
             response.raise_for_status()
             return response
         if attempt + 1 < ARXIV_ATTEMPTS:
-            time.sleep(ARXIV_INTERVAL * (attempt + 1))
+            _arxiv_back_off(ARXIV_INTERVAL * 2 ** attempt)
+    waited = round(ARXIV_INTERVAL * (2 ** (ARXIV_ATTEMPTS - 1) - 1 + ARXIV_ATTEMPTS))
     raise ValueError(
-        f"arXiv refused {ARXIV_ATTEMPTS} queries in a row with "
-        f"{response.status_code}; it is rate-limiting us. Try again shortly.")
+        f"arXiv refused {ARXIV_ATTEMPTS} queries with {response.status_code} "
+        f"over {waited} seconds; it is rate-limiting us. Try again shortly.")
 
 
 def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict:

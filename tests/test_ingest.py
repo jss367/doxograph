@@ -122,6 +122,24 @@ def test_persistent_rate_limiting_says_so(quick_arxiv):
     assert len(client.asked_at) == ingest.ARXIV_ATTEMPTS
 
 
+def test_a_refusal_waits_longer_each_time(quick_arxiv):
+    """The gap after a second refusal is wider than the gap after the first."""
+    client = FakeArxivClient(
+        FakeArxivResponse(406), FakeArxivResponse(406),
+        FakeArxivResponse(406), FakeArxivResponse(200, FEED))
+    ingest.fetch_arxiv("2607.07916", client)
+    gaps = [b - a for a, b in zip(client.asked_at, client.asked_at[1:])]
+    assert gaps[1] > gaps[0] and gaps[2] > gaps[1]
+
+
+def test_a_refusal_holds_off_the_other_threads(quick_arxiv):
+    """Backing off pauses whoever asks next, not only the refused thread."""
+    ingest._arxiv_back_off(quick_arxiv * 8)
+    started = time.monotonic()
+    ingest._arxiv_turn()
+    assert time.monotonic() - started >= quick_arxiv * 7
+
+
 def test_queries_are_spaced_out(quick_arxiv):
     """Two fetches in a row do not go out together."""
     client = FakeArxivClient(
