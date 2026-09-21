@@ -74,8 +74,11 @@ final class ServerController {
         /// no deadline, and a pid outlives its process only as a number the
         /// kernel will hand to someone else.
         ///
-        /// The release has to match, and then what the two said about their code
-        /// has to be compatible:
+        /// When both said which process they are, that settles it and nothing
+        /// else is consulted: it is the thing itself rather than a sign of it.
+        ///
+        /// Otherwise — one of them too old to say — the release has to match,
+        /// and then what the two said about their code has to be compatible:
         ///
         /// - Both named a digest, and the digests agree.
         /// - Both have no `/api/code` at all, which is as much as either can say.
@@ -89,6 +92,9 @@ final class ServerController {
         ///   moment read as a port that changed hands, and the alert would come
         ///   back with the same question forever.
         func couldBe(_ other: Stale) -> Bool {
+            if !health.instance.isEmpty && !other.health.instance.isEmpty {
+                return health.instance == other.health.instance
+            }
             guard version == other.version else { return false }
             switch (report, other.report) {
             case (.answered(let mine), .answered(let theirs)):
@@ -130,6 +136,9 @@ final class ServerController {
         let running: String
         /// The same digest over the files on disk, taken when it was asked.
         let onDisk: String
+        /// Which process these digests came from, or empty from one too old to
+        /// say. Held against the one `/api/health` named a moment earlier.
+        let instance: String
 
         /// Whether the server has outlived its own source.
         ///
@@ -495,11 +504,20 @@ final class ServerController {
     /// `taken` only goes up, so two readings that agree are the same work.
     ///
     /// The totals are still compared underneath, because a server too old to
-    /// count answers zero at both ends and would otherwise look untouched.
+    /// count answers zero at both ends and would otherwise look untouched. Any
+    /// growth counts there, not only the first paper: a question about one
+    /// answered while a second is being read is a second nobody agreed to lose.
+    /// A total that has *fallen* is not asked about again — less to lose than
+    /// was agreed to is still covered by the agreement.
+    ///
+    /// What that fallback cannot see is a paper finishing as another starts,
+    /// which leaves the total where it was over different work. `taken` is the
+    /// answer to that and a server too old to report it has no answer, which is
+    /// the same place this check stood before `taken` existed.
     private static func tookOnWork(_ live: Stale, since agreed: Stale) -> Bool {
         if live.health.taken != agreed.health.taken { return true }
-        return live.health.jobs + live.health.arriving > 0
-            && agreed.health.jobs + agreed.health.arriving == 0
+        return live.health.jobs + live.health.arriving
+            > agreed.health.jobs + agreed.health.arriving
     }
 
     /// Why a Doxograph that is on the port but not the one in the question is
@@ -724,6 +742,13 @@ final class ServerController {
         /// one. Only the port walk reads it, to decide whether this server is
         /// running the same code as the app that found it.
         let version: String
+        /// Which process answered, or empty from one too old to say.
+        ///
+        /// `/api/code` reports it too, which is the point: describing a port
+        /// takes two requests, and this is the one thing that says both answers
+        /// came from the same server. A release does not — two servers of one
+        /// release are exactly what nothing else here can tell apart.
+        let instance: String
     }
 
     /// How a health probe turned out. The two ways of not getting an answer are
@@ -797,7 +822,8 @@ final class ServerController {
             outcome.value = .answered(Health(jobs: body["jobs"] as? Int ?? busy,
                                              arriving: body["arriving"] as? Int ?? 0,
                                              taken: body["taken"] as? Int ?? 0,
-                                             version: body["version"] as? String ?? ""))
+                                             version: body["version"] as? String ?? "",
+                                             instance: body["instance"] as? String ?? ""))
         }.resume()
         // Giving up on the wait is itself a server that did not answer in time.
         guard finished.wait(timeout: .now() + timeout + 2) == .success else { return .unresponsive }
@@ -853,20 +879,24 @@ final class ServerController {
         }
     }
 
-    /// Ask the server which code it is running, having just been told by
-    /// `/api/health` which release it is.
+    /// Ask the server which code it is running, having just heard from
+    /// `/api/health` who it is.
     ///
-    /// The release is passed in so the answer can be checked against it. Both
-    /// endpoints report it, and a reply that names a different one is a reply
-    /// from a different server — which is the only way this app can notice that
-    /// the port changed hands between the two requests.
+    /// That answer is passed in so this one can be checked against it. Both
+    /// endpoints report the instance and the release, and a reply naming either
+    /// differently is a reply from a different server — which is the only way
+    /// this app can notice that the port changed hands between the two
+    /// requests. The instance is the one that catches a handoff between two
+    /// servers of the same release, which is exactly the handoff nothing else
+    /// here can see.
     ///
     /// The timeout is fixed and generous rather than inherited from the walk.
     /// This runs at most once per launch — on the one port that answered as
     /// Doxograph, after which the walk returns either way — so patience here
     /// cannot add up, and unlike `/api/health` the endpoint stats every file
     /// behind every module the server imported before it replies.
-    private func codeReport(on port: Int, naming release: String) -> CodeReport {
+    private func codeReport(on port: Int, from server: Health) -> CodeReport {
+        let release = server.version
         let (status, body) = fetchJSON("/api/code", on: port, timeout: 3)
         // A 404 carries no release to check, so it is the one answer here that
         // a handoff could misattribute. It only ever raises a question, never
@@ -878,8 +908,13 @@ final class ServerController {
               let running = body["running"] as? String,
               let onDisk = body["onDisk"] as? String
         else { return .unavailable }
+        let instance = body["instance"] as? String ?? ""
+        // The release is the weaker of the two and still worth checking, since
+        // a server too old to name an instance can still name a release.
         guard body["version"] as? String == release else { return .otherServer }
-        return .answered(Code(running: running, onDisk: onDisk))
+        guard instance == server.instance || instance.isEmpty || server.instance.isEmpty
+        else { return .otherServer }
+        return .answered(Code(running: running, onDisk: onDisk, instance: instance))
     }
 
     /// A GET on a loopback endpoint: the status it came back with, and the
@@ -956,7 +991,7 @@ final class ServerController {
             // digest is also the better half of `Stale.identity` — and the
             // thing most worth being able to recognise again is exactly the
             // server an alert is about to stand open over.
-            let report = codeReport(on: port, naming: health.version)
+            let report = codeReport(on: port, from: health)
             if case .otherServer = report { return nil }
             return verdict(port, health, report)
         }

@@ -135,14 +135,32 @@ def test_a_job_inside_a_counted_request_does_not_count_again():
         server._request_counted.reset(token)
 
 
-def test_code_and_health_name_the_same_release():
+def test_code_and_health_say_who_they_came_from():
     """The launcher reads the two in separate requests, and a port can change
-    hands between them. Matching releases are how it notices that the digests it
-    just read belong to a different server than the counts, so both endpoints
-    have to report the release for that check to mean anything."""
+    hands between them. The instance is how it notices that the digests it just
+    read came from a different process than the work counts — a release cannot
+    say that, since two servers of one release are exactly what it cannot tell
+    apart."""
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
-        assert client.get("/api/code").json()["version"] == \
-            client.get("/api/health").json()["version"]
+        health = client.get("/api/health").json()
+        code = client.get("/api/code").json()
+    assert health["instance"] == code["instance"] == fingerprint.INSTANCE
+    assert health["instance"]
+    assert health["version"] == code["version"]
+
+
+def test_the_instance_is_this_process_and_not_the_next_one():
+    """Two servers of the same release must not look like one server, which is
+    the whole reason this is not the release. Run in fresh interpreters, since
+    that is what two servers are."""
+    def instance_of():
+        return subprocess.run(
+            [sys.executable, "-c",
+             "from doxograph import fingerprint; print(fingerprint.INSTANCE)"],
+            capture_output=True, text=True, check=True).stdout.strip()
+
+    first, second = instance_of(), instance_of()
+    assert first and second and first != second
 
 
 def test_code_answers_without_a_workspace():

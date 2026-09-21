@@ -834,6 +834,11 @@ def health() -> dict:
     is their sum. A request in `arriving` is counted twice for the sliver
     between job creation and response, which errs towards busy.
 
+    `instance` says which process is answering. The launcher reads this and
+    `/api/code` in separate requests and a port can change hands between them,
+    so without it one server's work counts could be paired with another's code
+    digest and the two would describe a server that never existed.
+
     `taken` is everything this server has ever accepted, counted once each and
     never decremented. The launcher needs it because the gauges cannot say
     whether work is the *same* work: an alert saying "1 paper in flight" can be
@@ -851,6 +856,7 @@ def health() -> dict:
     return {
         "app": "doxograph",
         "version": __version__,
+        "instance": fingerprint.INSTANCE,
         "busy": jobs + arriving,
         "jobs": jobs,
         "arriving": arriving,
@@ -869,6 +875,9 @@ def code() -> dict:
     adopted on the strength of it, and goes on serving Python from before every
     commit since. What the launcher wants to know is narrower and more useful:
     would restarting this server change what it runs.
+
+    `instance` is here for the same reason it is on `/api/health`: it is the one
+    thing that says this answer and that one came from the same process.
 
     `running` is the digest taken while this process was importing its modules.
     `onDisk` is the same digest taken now. They differ exactly when the files
@@ -893,6 +902,7 @@ def code() -> dict:
     return {
         "app": "doxograph",
         "version": __version__,
+        "instance": fingerprint.INSTANCE,
         "running": running,
         "onDisk": on_disk,
     }

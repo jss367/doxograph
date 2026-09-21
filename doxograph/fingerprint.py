@@ -29,9 +29,22 @@ import hashlib
 import os
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent
+
+#: Who this process is, for as long as it lives. Reported by `/api/health` and
+#: `/api/code` alike, which is the only reason it exists: the launcher reads the
+#: two in separate requests, and a port can change hands between them. Matching
+#: releases and matching digests are both heuristics for "this is the same
+#: server"; this is the thing itself, and two same-release processes can be told
+#: apart by it where nothing else could tell them apart at all.
+#:
+#: Not the pid. A pid is reused, and a server old enough to be the problem is
+#: too old to report one anyway; this only has to be unique among the Doxographs
+#: that could be on one machine at one time.
+INSTANCE = uuid.uuid4().hex
 
 
 def source_fingerprint(package: Path = PACKAGE) -> str:

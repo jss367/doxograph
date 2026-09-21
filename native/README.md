@@ -111,11 +111,17 @@ and then relaunching the app.
 
   The two endpoints are two requests, and a port is not a promise between them:
   the server that answers the first can exit before the second and leave its
-  successor to answer that one. Both report the release, and a pair that names
-  two different ones is thrown away rather than combined into a description of a
-  server that never existed. It is asked twice, and a port changing hands twice
-  in a row settles for the health read alone — one server's answer, and the
-  release check this had before the digests existed.
+  successor to answer that one. Both report an `instance` — a token this process
+  made when it started — and a pair naming two different ones is thrown away
+  rather than combined into a description of a server that never existed. The
+  release is checked too, for a server too old to have an instance, but it is the
+  weaker of the two: two servers of one release are exactly what it cannot tell
+  apart. The pair is asked for twice, and a port changing hands twice in a row
+  settles for the health read alone — one server's answer, and the release check
+  this had before the digests existed.
+
+  The same token is what says, after the alert has been answered, that the server
+  on the port is still the one the question described.
 
   An unanswered `/api/code` is adoptable but not *confirmed*, and the two paths
   treat that differently. The port walk adopts either way: it is choosing where
