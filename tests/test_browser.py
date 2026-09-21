@@ -44,7 +44,10 @@ def _server():
     )
     url = f"http://127.0.0.1:{port}"
     try:
-        deadline = time.monotonic() + 10
+        # Generous: a loaded machine starting its hundredth uvicorn of the run
+        # takes several seconds to import and bind, and a start that is merely
+        # slow must not read as a start that failed.
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
                 if httpx.get(f"{url}/api/state", timeout=0.5).status_code == 200:
@@ -72,6 +75,38 @@ async def _answer(page, button: str, text: str | None = None) -> None:
         await page.locator("#ask-input").fill(text)
     await dialog.get_by_role("button", name=button, exact=True).click()
     await dialog.wait_for(state="hidden")
+
+
+async def _cursor(page, selector: str) -> dict | None:
+    """Read a field's text, focus and caret in one turn of the page.
+
+    Playwright resolves a locator and evaluates against it in two round trips,
+    so a redraw landing between them hands back the textarea that was just
+    replaced: detached, and therefore not the focused element however well the
+    app put the cursor back. Reading all three at once cannot straddle a redraw.
+    """
+    return await page.evaluate(
+        """(selector) => {
+            const el = document.querySelector(selector);
+            if (!el) return null;
+            return { value: el.value, focused: el === document.activeElement,
+                     start: el.selectionStart };
+        }""",
+        selector,
+    )
+
+
+async def _polled(page, rounds: int = 2) -> None:
+    """Wait for the page's background poll to finish `rounds` more rounds.
+
+    Sleeping a little past the 2.5s interval was a coin flip on a loaded
+    machine: the tick the sleep was meant to cover had not landed. A round
+    already running when this is called may have read the corpus before the
+    change under test was written, so the default waits out two — the second
+    is certain to have started afterwards.
+    """
+    done = await page.evaluate("polls")
+    await page.wait_for_function("n => polls >= n", arg=done + rounds, timeout=30000)
 
 
 def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
@@ -928,7 +963,8 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
                 store.save_context("Written from the shell meanwhile.")
-                await page.wait_for_timeout(3000)   # a poll picks it up
+                await page.wait_for_function(   # a poll picks it up
+                    "S.context === 'Written from the shell meanwhile.'")
                 assert "unsaved edits" not in (await nav.text_content())
                 await nav.click()
                 form = page.locator("#research-form")
@@ -937,7 +973,8 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 # A change made elsewhere while the form is open, untouched,
                 # does not turn the form into a draft either.
                 store.save_context("Changed again while the form was open.")
-                await page.wait_for_timeout(3000)   # a poll replaces S under the open form
+                await page.wait_for_function(   # a poll replaces S under the open form
+                    "S.context === 'Changed again while the form was open.'")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
                 assert "unsaved edits" not in (await nav.text_content())
@@ -952,10 +989,10 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 assert await rows.count() == 2
                 assert await rows.nth(1).locator('[name="ledger-id"]').input_value() == "L2"
                 await rows.nth(1).locator('[name="ledger-text"]').fill("Steering is reversible.")
-                # A poll while the form is open must not redraw it: wait past
-                # one tick and check the typed text is still there. Nor must a
+                # A poll while the form is open must not redraw it: wait out a
+                # tick and check the typed text is still there. Nor must a
                 # click on the sidebar item that is already active.
-                await page.wait_for_timeout(3000)
+                await _polled(page)
                 await nav.click()
                 assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
                 # Nor must leaving for a paper and coming back: the draft is
@@ -1085,7 +1122,8 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
                 # The context changes elsewhere while the form is open; only
                 # the ledger is edited here, so only the ledger is written.
                 store.save_context("Changed from the shell while the form was open.")
-                await page.wait_for_timeout(3000)
+                await page.wait_for_function(
+                    "S.context === 'Changed from the shell while the form was open.'")
                 await form.locator('[name="ledger-text"]').fill("Recovery is path-dependent, at every scale.")
                 await form.get_by_role("button", name="Save").click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
@@ -1996,7 +2034,11 @@ def test_a_link_naming_a_workspace_writes_there_before_the_registry_loads():
                 assert await page.evaluate("window.doxographWorkspaceId") == other["id"]
                 release.set()
                 await loading
-                assert await page.locator("#workspace").input_value() == other["id"]
+                # `goto` comes back on load, which is before `boot` has the
+                # registry and can fill the picker in.
+                from playwright.async_api import expect
+
+                await expect(page.locator("#workspace")).to_have_value(other["id"])
             await browser.close()
 
     asyncio.run(scenario())
@@ -2783,7 +2825,8 @@ def test_a_url_naming_a_topic_that_is_gone_falls_back_to_the_corpus():
                 await page.locator('#tags [data-tag="recovery"].active').wait_for()
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 store.rename_tag("recovery", "recovery-rate")
-                await page.wait_for_timeout(3000)   # a poll picks the rename up
+                # A poll picks the rename up.
+                await page.locator('#tags [data-tag="recovery-rate"]').wait_for()
                 await page.go_back()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
                 assert "tag=recovery&" not in page.url and not page.url.endswith("tag=recovery")
@@ -3356,7 +3399,9 @@ def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
                     "button", name="edit").click()
                 await page.locator('textarea[name="text"]').fill("Half-typed correction")
                 store.update_claim(key, first["id"], {"quote": "Recovery under steering"})
-                await page.wait_for_timeout(3000)      # a poll or two
+                await page.wait_for_function(   # a poll picks the new wording up
+                    "id => S.claims.some((c) => c.id === id && c.quote === 'Recovery under steering')",
+                    arg=first["id"])
 
                 await page.get_by_role("button", name="Use the paper's wording").click()
                 await page.locator(".warn", has_text="changed while the passage was open").wait_for()
@@ -3603,7 +3648,10 @@ def test_a_corpus_change_during_a_citation_scan_is_asked_again():
                 assert _httpx.post(f"{url}/api/upload?extract_now=false",
                                    files={"files": ("citing.pdf", dropped, "application/pdf")},
                                    timeout=30).status_code == 200
-                await page.wait_for_timeout(3000)      # a poll or two, all suppressed
+                # Polls see the import and one more runs after it, all of them
+                # suppressed: the scan already open is the only one asked for.
+                await page.wait_for_function("S.papers.length === 2", timeout=30000)
+                await _polled(page, 1)
                 assert len(asked) == 1
                 release.set()
 
@@ -5076,8 +5124,8 @@ def test_the_background_poll_leaves_a_note_being_written_alone():
                 _paper("paper-b", "Paper B", "recovery")
                 await page.locator('#papers [data-paper="paper-b"]').wait_for(timeout=10000)
 
-                assert await field.input_value() == "Half a sentence"
-                assert await field.evaluate("el => el === document.activeElement")
+                assert await _cursor(page, 'textarea[data-note="paper-a"]') == {
+                    "value": "Half a sentence", "focused": True, "start": 15}
             await browser.close()
 
     asyncio.run(scenario())
@@ -5113,11 +5161,15 @@ def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
                 await field.evaluate("el => el.setSelectionRange(4, 4)")
 
                 held.set()
-                await page.locator(".pdfhits").wait_for(timeout=10000)
+                # `.pdfhits` is on screen from the moment the search starts, so
+                # waiting for it waited for nothing: the redraw the answer
+                # brings raced the reads below. Wait for the answer itself,
+                # which is set in the same turn as the redraw it causes.
+                await page.wait_for_function(
+                    "V.textSearch && !V.textSearch.loading", timeout=10000)
 
-                assert await field.input_value() == "Half a sentence"
-                assert await field.evaluate("el => el === document.activeElement")
-                assert await field.evaluate("el => el.selectionStart") == 4
+                assert await _cursor(page, 'textarea[data-note="paper-a"]') == {
+                    "value": "Half a sentence", "focused": True, "start": 4}
             await browser.close()
 
     asyncio.run(scenario())
@@ -5163,8 +5215,10 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
                                    has_text="Wait for the note being saved").wait_for()
 
                 release.set()
-                # A's answer lands: B's editor is still open on B's text.
-                await page.wait_for_timeout(1500)
+                # A's answer lands, and a poll redraws after it: B's editor is
+                # still open on B's text.
+                await page.wait_for_function("!V.noteSaving", timeout=10000)
+                await _polled(page, 1)
                 assert await field_b.input_value() == "B's note, still being written."
             await browser.close()
 
@@ -5243,10 +5297,12 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
                 await context.evaluate("el => el.setSelectionRange(7, 7)")
 
                 release.set()
-                await page.wait_for_timeout(1500)
-                assert await context.input_value() == "What I am studying, typed while the claim saved."
-                assert await context.evaluate("el => el === document.activeElement")
-                assert await context.evaluate("el => el.selectionStart") == 7
+                # The save is done once the claim is no longer held: `markSaving`
+                # is cleared in a `finally`, after every redraw the answer makes.
+                await page.wait_for_function("savingClaims.size === 0", timeout=10000)
+                assert await _cursor(page, "#research-context") == {
+                    "value": "What I am studying, typed while the claim saved.",
+                    "focused": True, "start": 7}
             await browser.close()
 
     asyncio.run(scenario())

@@ -5085,6 +5085,32 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
+// How many background polls have run to completion. The browser tests wait on
+// this rather than on the clock: a sleep a little longer than the interval is
+// a coin flip on a loaded machine, where the tick it was supposed to cover has
+// not landed yet.
+let polls = 0;
+
+// One round of the background poll. Keeps settings current while editing; the
+// content guard preserves the editor DOM, draft text, focus, and selection.
+async function pollOnce() {
+  const changed = await pull();
+  renderJobs();
+  if (!changed) {
+    if (citationsFailed && V.view === 'graph') loadCitations();
+    return;
+  }
+  corpusChanged();
+  // An asking that failed is asked again while the map is open, whether or
+  // not anything in the corpus has moved.
+  if (citationsFailed && V.view === 'graph') loadCitations();
+  renderStats();
+  renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
+  if (!editorHolds()) renderContent();
+  syncAnalysisControls();
+  ResearchTools.sync();
+}
+
 async function boot() {
   await loadWorkspaces();
   applyHash();
@@ -5103,25 +5129,10 @@ async function boot() {
   if (V.view === 'research') renderContent();
   setInterval(async () => {
     if (document.hidden) return;
-    // Keep settings current while editing; the content guard below preserves
-    // the editor DOM, draft text, focus, and selection.
     try {
-      const changed = await pull();
-      renderJobs();
-      if (!changed) {
-        if (citationsFailed && V.view === 'graph') loadCitations();
-        return;
-      }
-      corpusChanged();
-      // An asking that failed is asked again while the map is open, whether
-      // or not anything in the corpus has moved.
-      if (citationsFailed && V.view === 'graph') loadCitations();
-      renderStats();
-      renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
-      if (!editorHolds()) renderContent();
-      syncAnalysisControls();
-      ResearchTools.sync();
+      await pollOnce();
     } catch (e) { /* the server may be restarting; try again next tick */ }
+    polls += 1;
   }, 2500);
 }
 
