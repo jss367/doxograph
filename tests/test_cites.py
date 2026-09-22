@@ -671,6 +671,11 @@ def test_an_arxiv_id_is_cited_by_the_doi_arxiv_gives_it():
                           "https://doi.org/10.9999/abc/10.48550/arXiv.1706.03762, 2026.")
     assert not cites._whole(inside, inside.squashed.find(arxiv), len(arxiv),
                             True, "1706.03762")
+    # Nor glued to what goes before it, which makes it part of that.
+    for glued in ("foo10.48550/arXiv.1706.03762", "110.48550/arXiv.1706.03762"):
+        entry = quotes.build("Nobody. A work. " + glued + ", 2026.")
+        assert not cites._whole(entry, entry.squashed.find(arxiv), len(arxiv),
+                                True, "1706.03762"), glued
     # Wherever the page split either DOI: at the slash of arXiv's own, it is
     # still arXiv's; after the `10.` of another's, it is still that one.
     for text, cited in (("doi:10.48550/\n  arXiv.1706.03762, 2017.", True),

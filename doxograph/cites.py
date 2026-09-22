@@ -610,9 +610,11 @@ _DOI_HEAD = re.compile(rf"10\.{_JOIN_WRAP}\d{{4,9}}/")
 # The DOI arXiv registers for each of its papers, which is the arXiv id with
 # this in front: `10.48550/arXiv.1706.03762` names the paper `1706.03762`
 # does, and is not some other DOI with the id at the end of its suffix. Split
-# at any of its joins too, `10.48550/\n  arXiv.` included.
+# at any of its joins too, `10.48550/\n  arXiv.` included. Not where it is
+# the tail of something longer: in `foo10.48550/arXiv.` the `10.` belongs to
+# whatever `foo` is, as the id's own digits would.
 _ARXIV_DOI = re.compile(
-    rf"10\.{_JOIN_WRAP}48550/{_JOIN_WRAP}arxiv\.{_JOIN_WRAP}$", re.I)
+    rf"(?<![0-9A-Za-z])10\.{_JOIN_WRAP}48550/{_JOIN_WRAP}arxiv\.{_JOIN_WRAP}$", re.I)
 
 
 
