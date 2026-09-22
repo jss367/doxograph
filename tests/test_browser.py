@@ -5704,3 +5704,40 @@ def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back(
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_review_whose_read_back_fails_still_counts_and_r_moves_on():
+    """The PATCH landed; only the refresh after it was refused. Reporting that
+    as a failed review would leave `r` on a claim the server has reviewed."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        refusing = asyncio.Event()
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_read(route):
+                if refusing.is_set():
+                    await route.fulfill(status=500, json={"detail": "Busy"})
+                    return
+                await route.continue_()
+
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                refusing.set()
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
+                assert await page.locator("#toasts .toast.warn").count() == 0
+                assert not await page.evaluate(f"isSaving({one!r})")
+                refusing.clear()
+                # The poll brings the review in once the reads are answered.
+                await page.wait_for_function(
+                    f"S.claims.find((c) => c.id === {one!r}).reviewed === true")
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: True, two: False}

@@ -3925,7 +3925,13 @@ async function patchClaim(paper, claim, patch) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  await refresh();
+  // The write has landed by here. A failure only to read it back must not reach
+  // the callers, who would report a save that happened as refused — and the `r`
+  // key would stay on a claim the server has marked reviewed. The poll reads
+  // the corpus again within a few seconds.
+  try {
+    await refresh();
+  } catch (error) { /* the next poll brings it */ }
 }
 
 function readForm(form) {
