@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from . import store
 
 # Characters that change how a .bib file parses. `%` starts a comment, so an
@@ -13,7 +15,7 @@ from . import store
 # contain a backslash or braces are not re-escaped.
 ESCAPES = {
     "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
-    "~": r"\textasciitilde{}",
+    "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
     "\\": r"\textbackslash{}",
     "{": r"\{", "}": r"\}",
 }
@@ -23,15 +25,57 @@ def escape(value: str) -> str:
     return "".join(ESCAPES.get(char, char) for char in value or "")
 
 
-def author_field(authors: list[str]) -> str:
-    return " and ".join(escape(a) for a in authors) or "Unknown"
+def verbatim(value: str) -> str:
+    """A url or doi, which biblatex and url.sty print character for character.
+
+    A text escape there is printed too, so `\\_` reached the page as a backslash
+    and an underscore, and the link stopped resolving. Inside a braced field
+    only braces matter to BibTeX and biber, and they have to balance. `\\}`
+    would print its backslash here, so they are percent-encoded instead, which a
+    resolver reads as the same character.
+    """
+    return (value or "").replace("{", "%7B").replace("}", "%7D")
+
+
+# BibTeX splits an author list on a bare "and" in any case, and reads the words
+# of each name as first, von and last parts. An institutional author arrives as
+# one string (ingest keeps Crossref's `name` whole, and nothing after it records
+# that it was one), so "Research and Development Team" became three people and
+# "ATLAS Collaboration" was cited as "Collaboration, A.". A name is braced,
+# which BibTeX takes as a single last name printed as written, when it could not
+# be a person's: it has a joining word no personal name has, or a word that
+# names a body of people. A person is left unbraced so styles can still
+# abbreviate and sort by surname. Von particles are lowercase too, which is why
+# the joining words are listed rather than every lowercase word counted.
+JOINING_WORDS = {"and", "of", "for", "the", "on", "in", "at"}
+BODY_WORDS = {
+    "collaboration", "consortium", "team", "group", "committee", "council",
+    "association", "society", "institute", "university", "laboratory",
+    "foundation", "organization", "organisation", "network", "project",
+    "initiative", "alliance", "commission", "agency", "corporation", "inc",
+    "ltd", "llc", "investigators", "contributors",
+}
+
+
+def is_institution(name: str) -> bool:
+    words = {word.lower() for word in re.findall(r"[^\W\d_]+", name)}
+    return bool(words & (JOINING_WORDS | BODY_WORDS))
+
+
+def author_field(authors: list[str] | None) -> str:
+    # A blank entry is an author Crossref gave neither parts nor a name, and
+    # joining it wrote `{ and }`, which BibTeX reads as two nameless people.
+    names = [a.strip() for a in authors or [] if a and a.strip()]
+    return " and ".join(
+        f"{{{escape(a)}}}" if is_institution(a) else escape(a) for a in names
+    ) or "Unknown"
 
 
 def entry(paper: dict) -> str:
     source = paper.get("source") or {}
     fields = [
         ("title", escape(paper.get("title", ""))),
-        ("author", author_field(paper.get("authors", []))),
+        ("author", author_field(paper.get("authors"))),
     ]
     if paper.get("year"):
         fields.append(("year", str(paper["year"])))
@@ -46,13 +90,13 @@ def entry(paper: dict) -> str:
         if paper.get("venue"):
             fields.append(("journal", escape(paper["venue"])))
     if paper.get("doi"):
-        fields.append(("doi", escape(paper["doi"])))
+        fields.append(("doi", verbatim(paper["doi"])))
     if source.get("url"):
-        fields.append(("url", escape(source["url"])))
+        fields.append(("url", verbatim(source["url"])))
 
-    # Every value is escaped and wrapped the same way. Deciding by whether the
-    # value happened to start with a brace was fragile once braces could be
-    # escaped content rather than a wrapper.
+    # Every value is wrapped the same way. Deciding by whether the value
+    # happened to start with a brace was fragile once braces could be escaped
+    # content rather than a wrapper.
     body = ",\n".join(f"  {name} = {{{value}}}" for name, value in fields if value)
     return f"@{kind}{{{paper['key']},\n{body}\n}}"
 

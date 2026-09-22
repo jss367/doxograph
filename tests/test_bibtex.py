@@ -11,31 +11,71 @@ from doxograph import bib, ingest, store
 
 # --- BibTeX escaping ------------------------------------------------------
 
-def test_percent_in_a_url_is_escaped():
+def test_a_url_is_written_verbatim():
+    """biblatex and url.sty print a url as written, so an escape reaches the
+    page as a backslash and the link no longer resolves."""
     store.save_paper(store.new_paper(
         "doe2026study", title="A Study", authors=["Jane Doe"], year=2026,
-        source={"kind": "url", "id": "u", "url": "https://ex.org/a%20b?q=1&r=2"},
+        source={"kind": "url", "id": "u", "url": "https://ex.org/~jane/a_b%20c?q=1&r=2#s"},
     ))
     text = bib.render()
-    assert r"url = {https://ex.org/a\%20b?q=1\&r=2}" in text
+    assert "url = {https://ex.org/~jane/a_b%20c?q=1&r=2#s}" in text
     # every field line must still close its brace
     for line in text.splitlines():
         if " = {" in line:
             assert line.rstrip(",").endswith("}"), line
 
 
-def test_percent_in_a_doi_is_escaped():
+def test_a_doi_is_written_verbatim():
     store.save_paper(store.new_paper("doe2026study", title="A Study", authors=["Jane Doe"],
-                                     year=2026, venue="Nature", doi="10.1000/a%2Fb"))
-    assert r"doi = {10.1000/a\%2Fb}" in bib.render()
+                                     year=2026, venue="Nature", doi="10.1000/a%2Fb_c"))
+    assert "doi = {10.1000/a%2Fb_c}" in bib.render()
 
 
-def test_tilde_in_a_url_is_escaped():
+def test_a_brace_in_a_url_is_percent_encoded():
     store.save_paper(store.new_paper(
-        "doe2026study", title="A Study", authors=["Jane Doe"], year=2026,
-        source={"kind": "url", "id": "u", "url": "https://ex.org/~jane/p.pdf"},
+        "doe2026study", title="A Study", authors=["Jane Doe"], year=2026, doi="10.1000/}x",
+        source={"kind": "url", "id": "u", "url": "https://ex.org/a}b{c"},
     ))
-    assert r"\textasciitilde{}jane" in bib.render()
+    text = bib.render()
+    assert "url = {https://ex.org/a%7Db%7Bc}" in text
+    assert "doi = {10.1000/%7Dx}" in text
+
+
+def test_a_caret_is_escaped():
+    store.save_paper(store.new_paper("doe2026study", title="O(n^2) scaling",
+                                     authors=["Jane Doe"], year=2026))
+    assert r"title = {O(n\textasciicircum{}2) scaling}" in bib.render()
+
+
+# --- Authors --------------------------------------------------------------
+
+@pytest.mark.parametrize("authors,expected", [
+    (["Research and Development Team"], "{Research and Development Team}"),
+    (["ATLAS Collaboration"], "{ATLAS Collaboration}"),
+    (["Society for Neuroscience", "Jane Doe"], "{Society for Neuroscience} and Jane Doe"),
+    (["AT&T Laboratory"], r"{AT\&T Laboratory}"),
+    (["Ludwig van Beethoven", "Jean de la Fontaine"],
+     "Ludwig van Beethoven and Jean de la Fontaine"),
+])
+def test_an_institutional_author_is_one_literal_name(authors, expected):
+    """Ingest keeps a Crossref institutional author as one string, and BibTeX
+    split it on "and" or cited its last word as a surname."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study",
+                                     authors=authors, year=2026))
+    assert f"author = {{{expected}}}" in bib.render()
+
+
+@pytest.mark.parametrize("authors,expected", [
+    (["", ""], "Unknown"),
+    ([" ", "\t"], "Unknown"),
+    (None, "Unknown"),
+    (["", "Jane Doe", "  "], "Jane Doe"),
+])
+def test_blank_authors_are_left_out(authors, expected):
+    store.save_paper(store.new_paper("doe2026study", title="A Study",
+                                     authors=authors, year=2026))
+    assert f"author = {{{expected}}}" in bib.render()
 
 
 @pytest.mark.parametrize("title,expected", [
