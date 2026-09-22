@@ -54,8 +54,12 @@ _arxiv_gate = threading.Condition()
 # sleeping on it, so a refusal can push the moment back while they wait.
 _arxiv_next = 0.0
 
-ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?"
-ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
+# Each ends where its digits end. A prefix says where an id starts but not
+# where it stops, so `arXiv:2301.123456` would otherwise read as the paper
+# `2301.12345` with a stray digit after it, and ingest that paper instead of
+# saying the reference was not understood.
+ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?(?!\d)"
+ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?(?!\d)"
 # Legacy Wiley DOIs are SICI codes, which carry a `<page::id>` segment in the
 # middle. Angle brackets are otherwise what a DOI is wrapped in, or the tag
 # after it in markup, so one is taken only as that segment: opening on a

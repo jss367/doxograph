@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from doxograph import __main__, ingest, quotes, search, server, store
@@ -121,6 +122,27 @@ def test_a_passage_starts_and_ends_between_words():
     assert [p["text"] for p in passage["parts"] if p["mark"]] == ["linear"]
     words = passage["text"].split()
     assert words[0] == "and" and words[-1] == "on"
+
+
+@pytest.mark.parametrize("before,back", [
+    ("A non-\nlinear", 0),      # the cut lands after the line break
+    ("A non-\nlinear", 1),      # on the line break
+    ("A non-\nlinear", 2),      # on the hyphen
+    ("A non-\n    linear", 0),  # after the next line's indent
+    ("A non\u00adlinear", 0),   # after a soft hyphen
+    ("A non\u00adlinear", 1),   # on it
+])
+def test_a_word_the_page_broke_is_one_word_to_a_passage_s_ends(before, back):
+    """`non-\\nlinear` and `non\\u00adlinear` are the one word `nonlinear`, as
+    the folding reads them. A passage opening on their `linear` reads as a word
+    the paper never wrote, and a search for `linear` marks it."""
+    filler = " " + "and so on " * 13 + " " * (3 - back)
+    assert len(before + filler) - search.PASSAGE_SPAN == before.index("linear") - back
+    after = " " + "and so on " * 13 + "transformation."
+    a_paper_of("cut", before + filler + "linear" + after)
+    passage = search.search_papers("linear")[0]["passages"][0]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["linear"]
+    assert passage["text"].split()[0] == "and"
 
 
 def test_a_papers_length_is_weighed_against_the_whole_corpus():
