@@ -183,6 +183,26 @@ def _create(api: anthropic.Anthropic, **kwargs):
         return api.messages.create(**kwargs)
 
 
+def _answer(response, task: str, subject: str) -> dict:
+    """The JSON a call answered with, or an error saying why there is none.
+
+    A refusal is not the only reply that comes back without one. Thinking
+    counts toward `max_tokens`, so a long paper can use up the budget before
+    the answer is finished, and what text there is then fails to parse with
+    an error that says nothing about why.
+    """
+    if response.stop_reason == "refusal":
+        detail = getattr(response.stop_details, "explanation", "") or ""
+        raise RuntimeError(f"{task} refused for {subject}: {detail}")
+    if response.stop_reason in ("max_tokens", "model_context_window_exceeded"):
+        raise RuntimeError(
+            f"{task} for {subject} was cut off at the token limit before the answer was complete")
+    text = next((b.text for b in response.content if b.type == "text"), None)
+    if text is None:
+        raise RuntimeError(f"{task} for {subject} came back with no answer")
+    return json.loads(text)
+
+
 def run_concurrently(items: list, work, workers: int | None = None):
     """Run `work(item)` for every item, a few at a time, yielding
     `(item, result, error)` as each finishes.
@@ -424,10 +444,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
             if not file_id or file_id not in str(e):
                 raise
             response = read(_pdf_block(key, force_upload=True))
-        if response.stop_reason == "refusal":
-            detail = getattr(response.stop_details, "explanation", "") or ""
-            raise RuntimeError(f"extraction refused for {key}: {detail}")
-        payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+        payload = _answer(response, "extraction", key)
         return merge_extraction(key, payload, response, keep_reviewed=keep_reviewed,
                                 prompt_tags=prompt_tags, claims_before=claims_before)
 
@@ -586,7 +603,7 @@ def retag_paper(key: str) -> dict:
             ),
         }],
     )
-    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    payload = _answer(response, "retag", key)
     by_id = {a["id"]: a for a in payload.get("assignments", [])}
 
     # Reload before saving: the model call takes long enough that a claim may
@@ -761,10 +778,7 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
             ),
         }],
     )
-    if response.stop_reason == "refusal":
-        detail = getattr(response.stop_details, "explanation", "") or ""
-        raise RuntimeError(f"tension pass refused for {topic}: {detail}")
-    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    payload = _answer(response, "tension pass", topic)
     found = payload.get("tensions", [])
     result = store.record_tensions(topic, found, shown, signature=signature)
     result["returned"] = len(found)
@@ -898,10 +912,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
             ),
         }],
     )
-    if response.stop_reason == "refusal":
-        detail = getattr(response.stop_details, "explanation", "") or ""
-        raise RuntimeError(f"synthesis refused for {topic}: {detail}")
-    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    payload = _answer(response, "synthesis", topic)
     record = store.record_synthesis(topic, payload.get("text", ""), shown, tensions,
                                     before=before, basis=basis)
     return {"written": record is not None, "skipped": False,
@@ -994,10 +1005,7 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
             ),
         }],
     )
-    if response.stop_reason == "refusal":
-        detail = getattr(response.stop_details, "explanation", "") or ""
-        raise RuntimeError(f"agreement pass refused for {topic}: {detail}")
-    payload = json.loads(next(b.text for b in response.content if b.type == "text"))
+    payload = _answer(response, "agreement pass", topic)
     found = payload.get("agreements", [])
     result = store.record_agreements(topic, found, shown, signature=signature)
     result["returned"] = len(found)

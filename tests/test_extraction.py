@@ -6,6 +6,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from doxograph import config, extract, store
 
 
@@ -343,3 +345,95 @@ def test_a_backfilled_quote_verdict_does_not_count_as_a_correction():
                            "evidence": "", "quote": "", "locator": "", "ledger_links": []}]}
     merged = extract.merge_extraction("doe2026study", payload, claims_before=before)
     assert [c["text"] for c in merged["claims"]] == ["New claim."]
+
+
+# --- a reply with no answer in it says why ----------------------------------
+
+class Block:
+    def __init__(self, type_: str, text: str = ""):
+        self.type = type_
+        self.text = text
+
+
+class Reply:
+    def __init__(self, stop_reason: str, *blocks: Block):
+        self.stop_reason = stop_reason
+        self.stop_details = type("D", (), {"explanation": "not this one"})()
+        self.content = list(blocks)
+        self.usage = None
+
+
+def answering(reply: Reply):
+    class Client:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            return reply
+
+    return lambda: Client()
+
+
+def test_an_extraction_cut_off_at_the_token_limit_says_so(monkeypatch):
+    """Thinking counts toward `max_tokens`, so a long paper can run out before
+    the answer is finished. Half a JSON document used to surface as a parse
+    error that said nothing about why, and the paper's claims must survive."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.add_claim("doe2026study", {"text": "Already here.", "tags": []})
+    cut_off = Reply("max_tokens", Block("thinking"), Block("text", '{"summary": "The pap'))
+    monkeypatch.setattr(extract, "client", answering(cut_off))
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+
+    with pytest.raises(RuntimeError, match="extraction for doe2026study was cut off at the token limit"):
+        extract.extract_paper("doe2026study")
+    assert [c["text"] for c in store.load_paper("doe2026study")["claims"]] == ["Already here."]
+
+
+def test_an_extraction_that_spent_it_all_thinking_says_so(monkeypatch):
+    """With the budget used up before any text, there is no text block at all,
+    which used to escape as a bare StopIteration."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    monkeypatch.setattr(extract, "client", answering(Reply("max_tokens", Block("thinking"))))
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+
+    with pytest.raises(RuntimeError, match="cut off at the token limit"):
+        extract.extract_paper("doe2026study")
+
+
+def test_a_reply_with_no_text_says_so_whatever_the_reason(monkeypatch):
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    monkeypatch.setattr(extract, "client", answering(Reply("end_turn", Block("thinking"))))
+    monkeypatch.setattr(extract, "_pdf_block", lambda key: {"type": "text", "text": "pdf"})
+
+    with pytest.raises(RuntimeError, match="extraction for doe2026study came back with no answer"):
+        extract.extract_paper("doe2026study")
+
+
+def test_a_refused_retag_is_reported_like_a_refused_extraction(monkeypatch):
+    """Retag used to read a refusal's text as though it were the answer."""
+    store.add_tag("alpha")
+    store.save_paper(store.new_paper("doe2026study", title="A Study"))
+    store.add_claim("doe2026study", {"text": "A claim.", "tags": ["alpha"]})
+    monkeypatch.setattr(extract, "client",
+                        answering(Reply("refusal", Block("text", "I can't help with that."))))
+
+    with pytest.raises(RuntimeError, match="retag refused for doe2026study: not this one"):
+        extract.retag_paper("doe2026study")
+    assert store.load_paper("doe2026study")["claims"][0]["tags"] == ["alpha"]
+
+
+@pytest.mark.parametrize("run,task", [
+    (extract.find_tensions, "tension pass"),
+    (extract.find_agreements, "agreement pass"),
+    (extract.synthesize_topic, "synthesis"),
+])
+def test_a_pass_cut_off_at_the_token_limit_says_so(monkeypatch, run, task):
+    store.add_tag("alpha")
+    for key in ("doe2026study", "li2025other"):
+        store.save_paper(store.new_paper(key, title=key))
+        store.add_claim(key, {"text": f"A claim from {key}.", "tags": ["alpha"]})
+    monkeypatch.setattr(extract, "client",
+                        answering(Reply("max_tokens", Block("text", '{"tensions": [{"cla'))))
+
+    with pytest.raises(RuntimeError, match=f"{task} for alpha was cut off at the token limit"):
+        run("alpha")

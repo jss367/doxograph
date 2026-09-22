@@ -56,11 +56,18 @@ _arxiv_next = 0.0
 
 ARXIV_NEW = r"\d{4}\.\d{4,5}(?:v\d+)?"
 ARXIV_OLD = r"[a-z][a-z-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?"
-DOI_RE = r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+"
+# Legacy Wiley DOIs are SICI codes, which carry a `<page::id>` segment in the
+# middle. Angle brackets are otherwise what a DOI is wrapped in, or the tag
+# after it in markup, so one is taken only as that segment: opening on a
+# digit, with no slash inside, which no closing tag or `<i>` can pass for.
+DOI_RE = r"10\.\d{4,9}/(?:[-._;()/:A-Za-z0-9]|<\d[-._;():A-Za-z0-9]*>)+"
 # arXiv serves a paper at /abs, /pdf and, for recent submissions, /html. The
 # HTML render carries no citation metadata or canonical link, so it can only be
 # recognised from its URL.
 ARXIV_URL_RE = rf"arxiv\.org/(?:abs|pdf|html)/({ARXIV_NEW}|{ARXIV_OLD})"
+# The DOI arXiv mints for every paper. DataCite registers it, not Crossref, so
+# it is read as the arXiv ID it spells out rather than looked up as a DOI.
+ARXIV_DOI_RE = rf"10\.48550/arxiv\.({ARXIV_NEW}|{ARXIV_OLD})"
 
 def normalize_doi(doi: str) -> str:
     """Trim citation punctuation off a DOI picked up from surrounding prose.
@@ -68,7 +75,9 @@ def normalize_doi(doi: str) -> str:
     DOI_RE has to allow `.`, `;`, `(` and `)` because DOIs genuinely contain
     them, so a DOI pasted from a sentence carries the sentence's punctuation
     into the Crossref request. A trailing `)` is dropped only when unbalanced,
-    which leaves keys like 10.1002/(SICI)1097-0258(19980815)17:15 intact.
+    which leaves keys like
+    10.1002/(SICI)1097-0258(19980815/30)17:15/16<1661::AID-SIM968>3.0.CO;2-2
+    intact.
     """
     doi = doi.strip().strip("<>")
     closers = ".,;:\'\"\u2019\u201d"
@@ -85,7 +94,11 @@ def normalize_doi(doi: str) -> str:
 _ARXIV_PATTERNS = [
     re.compile(ARXIV_URL_RE, re.I),
     re.compile(rf"arxiv[:\s]+({ARXIV_NEW}|{ARXIV_OLD})", re.I),
-    re.compile(rf"^({ARXIV_NEW}|{ARXIV_OLD})$"),
+    re.compile(ARXIV_DOI_RE, re.I),
+    # A bare ID has nothing ahead of it to say what it is, so it has to be the
+    # whole token, give or take the brackets and sentence punctuation a
+    # citation wraps it in. The prefixed forms above find it through those.
+    re.compile(rf"^[(\[{{\"']*({ARXIV_NEW}|{ARXIV_OLD})[)\]}}\"'.,;:!?]*$"),
 ]
 
 
@@ -238,6 +251,11 @@ def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict:
 
 
 def fetch_crossref(doi: str, client: httpx.Client) -> dict:
+    # Crossref answers 404 for an arXiv DOI. One can still arrive here from a
+    # landing page's metadata or a PDF's, and arXiv has the record.
+    arxiv = re.fullmatch(ARXIV_DOI_RE, doi, re.I)
+    if arxiv:
+        return fetch_arxiv(arxiv.group(1), client)
     response = client.get(f"https://api.crossref.org/works/{doi}")
     response.raise_for_status()
     work = response.json()["message"]
@@ -423,17 +441,26 @@ def pdf_metadata_doi(path: Path) -> str:
     return ""
 
 
-def front_matter(text: str) -> str:
+ABSTRACT_WORD = re.compile(r"\babstract\b", re.I)
+
+
+def front_matter(text: str, title: str = "") -> str:
     """The top of the first page, where the title is printed.
 
     Bounded by the abstract when there is one, and by a character count
     otherwise. A first page can carry a bibliography, and a paper cited there
     or in the abstract is named alongside its DOI, so a page-wide search would
     accept that pair as the upload's identity.
+
+    `title` is the one being looked for. A title can hold the word itself —
+    "Abstract Meaning Representation for Sembanking" — and cutting there would
+    leave nothing above the cut to find it in, so the times the title says
+    "abstract" are passed over and the heading is taken to be the next one.
     """
     head = text[:1500]
-    abstract = re.search(r"\babstract\b", head, re.I)
-    return head[:abstract.start()] if abstract else head[:600]
+    abstracts = list(ABSTRACT_WORD.finditer(head))
+    skip = len(ABSTRACT_WORD.findall(title))
+    return head[:abstracts[skip].start()] if len(abstracts) > skip else head[:600]
 
 
 def title_is_in_the_front_matter(title: str, text: str) -> bool:
@@ -448,7 +475,7 @@ def title_is_in_the_front_matter(title: str, text: str) -> bool:
     def squash(value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", value.lower())
 
-    needle, haystack = squash(title), squash(front_matter(text))
+    needle, haystack = squash(title), squash(front_matter(text, title))
     if len(needle) < 12:            # too short to be evidence either way
         return False
     return needle[:60] in haystack
@@ -479,7 +506,7 @@ def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = 
     if embedded:
         try:
             return fetch_crossref(embedded, client)
-        except (httpx.HTTPError, KeyError, ValueError):
+        except (httpx.HTTPError, KeyError, ValueError, ET.ParseError):
             pass
     # A DOI printed on the page is only accepted if the record it resolves to
     # is titled like this page. Front matter and citations both print DOIs in
@@ -488,7 +515,7 @@ def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = 
     for match in re.finditer(DOI_RE, text):
         try:
             meta = fetch_crossref(normalize_doi(match.group(0)), client)
-        except (httpx.HTTPError, KeyError, ValueError):
+        except (httpx.HTTPError, KeyError, ValueError, ET.ParseError):
             continue
         if title_is_in_the_front_matter(meta.get("title", ""), text):
             return meta
@@ -837,6 +864,9 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             client.close()
 
 
+STAGING_SLUG_BYTES = 100
+
+
 def stage_upload(source: BinaryIO, filename: str) -> Path:
     """Copy an incoming file to its own staging path, in chunks.
 
@@ -845,8 +875,12 @@ def stage_upload(source: BinaryIO, filename: str) -> Path:
     unlink the other's staging file mid-read.
     """
     config.ensure_dirs()
+    # A file name is capped at 255 bytes, and the name a file was dropped under
+    # can be longer than that once the prefix and random part are added. The
+    # slug is ASCII, so cutting its characters cuts its bytes.
+    slug = store.slugify(filename)[:STAGING_SLUG_BYTES].rstrip("-")
     handle, staged = tempfile.mkstemp(
-        dir=config.pdfs_dir(), prefix=f".incoming-{store.slugify(filename) or 'upload'}-", suffix=".pdf"
+        dir=config.pdfs_dir(), prefix=f".incoming-{slug or 'upload'}-", suffix=".pdf"
     )
     staging = Path(staged)
     try:

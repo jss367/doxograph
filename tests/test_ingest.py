@@ -61,6 +61,56 @@ def test_two_papers_are_still_two():
     assert [r.value for r in refs] == ["2602.06941v1", "2602.06942"]
 
 
+@pytest.mark.parametrize("token,expected", [
+    ("2301.12345.", "2301.12345"),
+    ("2301.12345,", "2301.12345"),
+    ("(2301.12345)", "2301.12345"),
+    ("(2301.12345).", "2301.12345"),
+    ("[2301.12345v2];", "2301.12345v2"),
+    ('"2301.12345"', "2301.12345"),
+    ("hep-th/9901001.", "hep-th/9901001"),
+])
+def test_a_bare_arxiv_id_in_citation_punctuation_is_still_recognized(token, expected):
+    """`arXiv:2301.12345.` always was; the bare ID has to be too."""
+    refs, unknown = ingest.parse_refs(token)
+    assert unknown == []
+    assert [(r.kind, r.value) for r in refs] == [("arxiv", expected)]
+
+
+def test_a_bare_arxiv_id_still_has_to_be_the_whole_token():
+    refs, unknown = ingest.parse_refs("2301.12345.pdf x2301.12345")
+    assert refs == []
+    assert unknown == ["2301.12345.pdf", "x2301.12345"]
+
+
+@pytest.mark.parametrize("token,expected", [
+    ("10.48550/arXiv.2301.12345", "2301.12345"),
+    ("doi:10.48550/arXiv.2301.12345", "2301.12345"),
+    ("https://doi.org/10.48550/arXiv.2301.12345", "2301.12345"),
+    ("https://doi.org/10.48550/ARXIV.2301.12345.", "2301.12345"),
+    ("10.48550/arxiv.hep-th/9901001", "hep-th/9901001"),
+])
+def test_an_arxiv_doi_is_read_as_the_arxiv_id_it_names(token, expected):
+    """DataCite registers these, so Crossref answers 404 for every one."""
+    refs, unknown = ingest.parse_refs(token)
+    assert unknown == []
+    assert [(r.kind, r.value) for r in refs] == [("arxiv", expected)]
+
+
+def test_an_arxiv_doi_and_its_id_are_one_paper():
+    refs, _ = ingest.parse_refs("https://doi.org/10.48550/arXiv.2301.12345 2301.12345v1")
+    assert [r.value for r in refs] == ["2301.12345"]
+
+
+def test_an_arxiv_doi_that_reaches_crossref_is_asked_of_arxiv(quick_arxiv):
+    """A landing page or a PDF's metadata can name the paper by this DOI too."""
+    client = FakeArxivClient(FakeArxivResponse(200, FEED))
+    meta = ingest.fetch_crossref("10.48550/arXiv.2607.07916", client)
+    assert meta["title"] == "Persona Cartography"
+    assert meta["source"]["kind"] == "arxiv"
+    assert meta["source"]["id"] == "2607.07916"
+
+
 # --- arXiv rate limiting --------------------------------------------------
 #
 # export.arxiv.org answers 406 Not Acceptable, not 429, when it is queried

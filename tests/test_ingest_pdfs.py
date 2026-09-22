@@ -681,6 +681,23 @@ def test_a_rejected_upload_leaves_no_staging_file(monkeypatch):
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
 
 
+@pytest.mark.parametrize("filename", [
+    "a" * 300 + ".pdf",
+    "Übersicht über " * 40 + ".pdf",
+], ids=["ascii", "accented"])
+def test_a_long_upload_name_still_stages(filename):
+    """A file name is capped at 255 bytes, and the staging name adds a prefix
+    and a random part to the one the file arrived under."""
+    staged = ingest.stage_upload(io.BytesIO(b"%PDF-1.4\n"), filename)
+    try:
+        assert len(staged.name.encode()) <= 255
+        assert staged.name.startswith(".incoming-")
+        assert staged.suffix == ".pdf"
+        assert staged.read_bytes() == b"%PDF-1.4\n"
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
     """A large drop must not stop the page from polling or saving."""
     import asyncio
