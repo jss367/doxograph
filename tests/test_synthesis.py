@@ -252,6 +252,20 @@ def test_renaming_a_tag_moves_the_synthesis_and_deleting_the_tag_drops_it():
     assert store.load_syntheses() == {}
 
 
+def test_renaming_a_tag_to_a_name_that_slugs_to_nothing_is_refused():
+    """"日本語" slugs to "", and a rename to "" dropped the synthesis and took
+    the topic off every claim while the API answered 200."""
+    build_corpus()
+    store.record_synthesis("recovery-rate", "text", shown("recovery-rate"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.patch("/api/tags/recovery-rate", json={"name": "日本語"})
+    assert response.status_code == 422
+    assert "letter or digit" in response.json()["detail"]
+    assert list(store.load_syntheses()) == ["recovery-rate"]
+    assert len(shown("recovery-rate")) == 3
+    assert "recovery-rate" in store.tag_names()
+
+
 def test_renaming_onto_a_topic_that_has_a_synthesis_keeps_the_existing_one():
     _, _, c = build_corpus()
     store.add_tag("scaling", "")

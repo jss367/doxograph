@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from doxograph import bib, export, server, store
+from doxograph import bib, config, export, server, store
 
 
 def build_corpus():
@@ -70,3 +70,16 @@ def test_the_exported_file_is_served_back():
     assert response.headers["content-type"].startswith("text/html")
     assert "inline" in response.headers["content-disposition"]
     assert "Llama-3 70B recovers" in response.text
+
+
+def test_the_export_api_writes_only_where_the_workspace_keeps_its_export(tmp_path):
+    """A `path` in the request once named any file on disk to create and
+    overwrite. The page never sent one, and the CLI keeps `--out`."""
+    build_corpus()
+    elsewhere = tmp_path / "nested" / "elsewhere.html"
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/export", json={"title": "Doxograph", "path": str(elsewhere)})
+    assert response.status_code == 200
+    assert response.json()["path"] == str(config.export_path())
+    assert config.export_path().exists()
+    assert not elsewhere.parent.exists()
