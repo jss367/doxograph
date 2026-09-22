@@ -47,9 +47,9 @@ _COVERAGE = 0.9
 # Below this, the best alignment is noise — long quotes share enough letters
 # with any paragraph to land somewhere — and there is no passage worth showing.
 _NEARBY = 0.5
-# How many places one anchor may be tried at. A run this long seldom recurs
-# in one paper, so the cap is a guard against a degenerate input, not a
-# working limit.
+# How many places one alignment may try the quote at, over all its anchors,
+# which take turns at it. A run this long seldom recurs in one paper, so the
+# cap is a guard against a degenerate input, not a working limit.
 _MAX_SITES = 200
 
 # Pages are kept in one string with the conventional separator between them,
@@ -275,19 +275,24 @@ def _align(quote: str, haystack: str, size: int) -> tuple[float, int, int]:
     n = len(quote)
     best = (0.0, -1, -1)
     tried: set[int] = set()
-    for k in range(0, n - size + 1, size):
-        anchor = quote[k:k + size]
-        at = haystack.find(anchor)
-        # Counted for this anchor alone: one that recurs all through the paper
-        # would otherwise spend the cap for the anchors after it, and those
-        # are the ones that find a quote whose start the paper repeats.
-        sites = 0
-        while at >= 0 and sites < _MAX_SITES:
-            sites += 1
+    # Every anchor's next occurrence, taken in turns: each anchor is tried at
+    # its first site before any is tried at its second. One that recurs all
+    # through the paper would otherwise spend the cap before the anchors after
+    # it are tried, and those are the ones that find a quote whose start the
+    # paper repeats. The cap is still on the whole alignment, so the work stays
+    # bounded however long the quote and however repetitive the paper.
+    pending = [(k, quote[k:k + size]) for k in range(0, n - size + 1, size)]
+    pending = [(k, anchor, haystack.find(anchor)) for k, anchor in pending]
+    pending = [site for site in pending if site[2] >= 0]
+    while pending:
+        following = []
+        for k, anchor, at in pending:
             # Where the quote would start if this anchor sits where it does in
             # the quote, with a margin either side for an inserted word.
             begin = max(0, at - k - _ANCHOR)
             if begin not in tried:
+                if len(tried) >= _MAX_SITES:
+                    return best
                 tried.add(begin)
                 window = haystack[begin:begin + n + 2 * _ANCHOR]
                 matcher = difflib.SequenceMatcher(None, quote, window, autojunk=False)
@@ -299,6 +304,9 @@ def _align(quote: str, haystack: str, size: int) -> tuple[float, int, int]:
                 if best[0] >= 1.0:
                     return best
             at = haystack.find(anchor, at + 1)
+            if at >= 0:
+                following.append((k, anchor, at))
+        pending = following
     return best
 
 
