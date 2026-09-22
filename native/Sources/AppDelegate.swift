@@ -138,9 +138,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func update(with command: String?) {
-        guard let command else {
+        // Not finding the command is a reason this update cannot run, not a
+        // server that failed to start. Handing it to `report` treated it as the
+        // second: it covered a working page, marked the server failed, and
+        // offered Quit — and a command chosen there went to `startServer()`,
+        // whose port walk adopted this app's own child and left it unowned, so
+        // no later update restarted it. Whatever is running stays as it is.
+        guard let command = command ?? commandForUpdate() else {
             updating = false
-            return report(.commandNotFound)
+            if ready { window.hideStatus() }
+            return
         }
         guard let repository = Updater.repository(near: command)
             ?? Updater.rememberedRepository()
@@ -379,19 +386,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func chooseCommand() {
+        guard let command = pickCommand() else { return NSApp.terminate(nil) }
+        Locate.remember(command)
+        startServer()
+    }
+
+    /// Ask for the command an update should use, when none can be found. There
+    /// is no Quit here: the app may be showing a server that is fine, and
+    /// declining to update is not a reason to close it.
+    private func commandForUpdate() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Can’t find the doxograph command"
+        alert.informativeText = """
+            Updating needs the doxograph you installed with pip, to find the \
+            checkout it came from. Point the app at the command inside your \
+            virtual environment, usually .venv/bin/doxograph.
+            """
+        alert.addButton(withTitle: "Choose…")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn, let command = pickCommand() else { return nil }
+        Locate.remember(command)
+        return command
+    }
+
+    /// An open panel for the doxograph command, asked again until what is
+    /// picked will run. Nil is the panel cancelled.
+    private func pickCommand() -> String? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.message = "Choose the doxograph command."
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
         panel.showsHiddenFiles = true
-        guard panel.runModal() == .OK, let url = panel.url else { return NSApp.terminate(nil) }
-        guard Locate.isRunnable(url.path) else {
+        while panel.runModal() == .OK, let url = panel.url {
+            if Locate.isRunnable(url.path) { return url.path }
             warn("That file is not runnable", "\(url.path) is not an executable command.")
-            return chooseCommand()
         }
-        Locate.remember(url.path)
-        startServer()
+        return nil
     }
 
     private func warn(_ message: String, _ detail: String) {

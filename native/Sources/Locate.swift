@@ -53,29 +53,58 @@ enum Locate {
         ]
     }
 
+    /// What the user's login shell says `doxograph` is.
+    ///
+    /// The profile the shell runs first can print anything — a banner, a
+    /// fortune, an `echo` left in from debugging — and a login zsh runs
+    /// `.zlogout` after the command, so neither the first line nor the last
+    /// is reliably the answer. The answer is fenced between two markers
+    /// instead, and only what is between them is read.
+    ///
+    /// Waiting is for the closing marker, not for the shell to exit or the
+    /// pipe to close. A profile that starts something in the background hands
+    /// it the pipe, and the pipe then stays open for as long as that process
+    /// lives: waiting for the end of the output waited forever. Five seconds
+    /// is the limit either way, after which the shell is stopped and the
+    /// lookup gives up. That blocks the caller, so this is only ever called off
+    /// the main thread.
     private static func loginShellLookup() -> String? {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let start = "doxograph-command-start", end = "doxograph-command-end"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-lc", "command -v doxograph"]
+        process.arguments = ["-lc", "echo \(start); command -v doxograph; echo \(end)"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return nil }
+        let reader = pipe.fileHandleForReading
 
-        // A login shell runs the user's whole profile, which can hang on
-        // anything. Give it a few seconds and then stop waiting.
-        let finished = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            process.waitUntilExit()
-            finished.signal()
+        let output = Guarded(Data())
+        let answered = DispatchSemaphore(value: 0)
+        reader.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            output.value.append(chunk)
+            // An empty read is the pipe closing, which settles it too.
+            if chunk.isEmpty || String(decoding: output.value, as: UTF8.self).contains("\n\(end)\n") {
+                handle.readabilityHandler = nil
+                answered.signal()
+            }
         }
-        if finished.wait(timeout: .now() + 5) == .timedOut {
-            process.terminate()
+        guard (try? process.run()) != nil else {
+            reader.readabilityHandler = nil
             return nil
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let path = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.isEmpty ? nil : path.components(separatedBy: "\n").first
+        let timedOut = answered.wait(timeout: .now() + 5) == .timedOut
+        reader.readabilityHandler = nil
+        if process.isRunning { process.terminate() }
+        guard !timedOut else { return nil }
+
+        let lines = String(decoding: output.value, as: UTF8.self).components(separatedBy: "\n")
+        guard let opening = lines.lastIndex(of: start),
+              let closing = lines[opening...].firstIndex(of: end) else { return nil }
+        let path = lines[(opening + 1)..<closing]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return path.count == 1 ? path[0] : nil
     }
 }

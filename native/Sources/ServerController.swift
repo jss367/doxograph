@@ -690,28 +690,51 @@ final class ServerController {
     /// every version except the ones already out there, and those are the only
     /// ones this is ever asked about.
     ///
-    /// `-t` prints bare pids and nothing else. The first is taken: a listening
-    /// socket has one owner unless it was inherited across a fork, and then the
-    /// parent is both what `lsof` prints first and what there is any point in
-    /// signalling. A missing or unhelpful `lsof` reads as "no pid", which the
-    /// caller reports rather than acting on.
+    /// The server that answered on 127.0.0.1 may be listening there or on a
+    /// wildcard, since `doxograph serve --host 0.0.0.0` answers loopback too,
+    /// and `lsof -iTCP@127.0.0.1` lists only the first. So every listener on
+    /// the port is listed, with its address, and the one loopback connections
+    /// actually reach is taken: 127.0.0.1 itself, which the kernel prefers over
+    /// a wildcard beside it, then the IPv4 wildcard, then the IPv6 one. A
+    /// listener on some other address never answered this app and is not a
+    /// candidate.
+    ///
+    /// The first process for an address is taken: a listening socket has one
+    /// owner unless it was inherited across a fork, and then the parent is both
+    /// what `lsof` prints first and what there is any point in signalling. A
+    /// missing or unhelpful `lsof` reads as "no pid", which the caller reports
+    /// rather than acting on.
     private static func listener(on port: Int) -> pid_t? {
         let lsof = Process()
         lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        lsof.arguments = ["-nP", "-t", "-sTCP:LISTEN", "-iTCP@127.0.0.1:\(port)"]
+        lsof.arguments = ["-nP", "-F", "ptn", "-sTCP:LISTEN", "-iTCP:\(port)"]
         let pipe = Pipe()
         lsof.standardOutput = pipe
         lsof.standardError = FileHandle.nullDevice
         do { try lsof.run() } catch { return nil }
-        // Read before waiting. A pid per line is nowhere near a pipe buffer
+        // Read before waiting. A few lines a listener is nowhere near a pipe buffer
         // today, but waiting on a process whose output nobody is draining is
         // the deadlock that shape of code eventually finds.
         let printed = pipe.fileHandleForReading.readDataToEndOfFile()
         lsof.waitUntilExit()
-        return String(decoding: printed, as: UTF8.self)
-            .split(whereSeparator: \.isNewline)
-            .compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
-            .first
+        // `-F` prints a field a line, each led by its letter: `p` opens a
+        // process, and `t` and `n` follow for each socket it holds.
+        var owner: pid_t?
+        var family = ""
+        var found: [String: pid_t] = [:]
+        for line in String(decoding: printed, as: UTF8.self).split(whereSeparator: \.isNewline) {
+            let value = String(line.dropFirst())
+            switch line.first {
+            case "p": owner = pid_t(value)
+            case "t": family = value
+            case "n":
+                guard let owner else { continue }
+                let key = value == "*:\(port)" ? "\(family) *" : value
+                if found[key] == nil { found[key] = owner }
+            default: continue
+            }
+        }
+        return found["127.0.0.1:\(port)"] ?? found["IPv4 *"] ?? found["IPv6 *"]
     }
 
     // MARK: - Health
@@ -1071,9 +1094,9 @@ final class ServerController {
     /// up no Doxograph at all.
     ///
     /// Walking the whole range is close to free, because only an occupied port
-    /// costs anything. A free one is settled by the bind in `portIsFree`, which
-    /// is a syscall, so the usual case — nothing else listening anywhere near
-    /// 8765 — is twenty-one binds and no network at all. Probes are paid for
+    /// costs anything. A free one is settled by the binds in `portIsFree`, which
+    /// are syscalls, so the usual case — nothing else listening anywhere near
+    /// 8765 — is eighty-four binds and no network at all. Probes are paid for
     /// only where something is actually listening, and they use a short timeout
     /// off the preferred port, where a stranger is the likely occupant and a
     /// local Doxograph answers `/api/health` without touching the corpus.
@@ -1123,25 +1146,71 @@ final class ServerController {
     /// Whether nothing is listening on a port. A number that is not a port is
     /// not free — the caller has nowhere to put it, and answering the question
     /// at all is better than trapping on the conversion the way this used to.
+    ///
+    /// One bind to 127.0.0.1 is not enough to say so. With `SO_REUSEADDR` set,
+    /// macOS lets that bind succeed beside a listener on 0.0.0.0 or [::], so a
+    /// `doxograph serve --host 0.0.0.0` on the port read as free: the walk
+    /// skipped it and started a second server over the same corpus, and the
+    /// wait for that one could be answered by the first. So the port is bound
+    /// four ways — each loopback and each wildcard, IPv4 and IPv6 — and any of
+    /// them finding the address in use means something already has it.
+    ///
+    /// `SO_REUSEADDR` stays, because without it a port is also refused while a
+    /// closed connection on it sits in TIME_WAIT, which on macOS is thirty
+    /// seconds. A server this app has just stopped leaves exactly that behind,
+    /// and `waitUntilPortIsFree` would wait out its ten seconds and report a
+    /// server that did stop as one that did not. The only other thing the
+    /// option relaxes is the overlap between a wildcard and a specific address,
+    /// which is the hole above, and binding both is what closes it.
+    ///
+    /// The IPv6 binds count only a refusal for being in use. A Mac with IPv6
+    /// turned off fails them for other reasons, and that says nothing about the
+    /// port.
     private func portIsFree(_ port: Int) -> Bool {
         guard let number = UInt16(exactly: port) else { return false }
-        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { return false }
-        defer { close(descriptor) }
-        var reuse: Int32 = 1
-        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var loopback = sockaddr_in()
+        loopback.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        loopback.sin_family = sa_family_t(AF_INET)
+        loopback.sin_port = number.bigEndian
+        loopback.sin_addr.s_addr = inet_addr("127.0.0.1")
+        guard Self.bindError(loopback, family: AF_INET) == 0 else { return false }
 
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = number.bigEndian
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var anywhere = loopback
+        anywhere.sin_addr.s_addr = INADDR_ANY
+        var loopback6 = sockaddr_in6()
+        loopback6.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        loopback6.sin6_family = sa_family_t(AF_INET6)
+        loopback6.sin6_port = number.bigEndian
+        loopback6.sin6_addr = in6addr_loopback
+        var anywhere6 = loopback6
+        anywhere6.sin6_addr = in6addr_any
+        return ![
+            Self.bindError(anywhere, family: AF_INET),
+            Self.bindError(loopback6, family: AF_INET6),
+            Self.bindError(anywhere6, family: AF_INET6),
+        ].contains(EADDRINUSE)
+    }
+
+    /// Why binding a fresh socket to an address failed, or 0 if it did not.
+    /// IPv6 sockets are kept to IPv6, so each bind asks about one family and
+    /// the IPv4 ones are left to say what they find.
+    private static func bindError<Address>(_ address: Address, family: Int32) -> Int32 {
+        let descriptor = socket(family, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return errno }
+        defer { close(descriptor) }
+        var on: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+        if family == AF_INET6 {
+            setsockopt(descriptor, IPPROTO_IPV6, IPV6_V6ONLY, &on, socklen_t(MemoryLayout<Int32>.size))
+        }
+
+        var address = address
         let bound = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                bind(descriptor, $0, socklen_t(MemoryLayout<Address>.size))
             }
         }
-        return bound == 0
+        return bound == 0 ? 0 : errno
     }
 }
 

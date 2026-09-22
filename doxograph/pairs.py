@@ -67,7 +67,7 @@ _IRREGULAR = {
     "nuclei": "nucleus", "radii": "radius", "stimuli": "stimulus",
     "syllabi": "syllabus", "genera": "genus", "censuses": "census",
     "apparatuses": "apparatus", "consensuses": "consensus", "bonuses": "bonus",
-    "lenses": "lens", "surpluses": "surplus", "gases": "gas",
+    "lenses": "lens", "surpluses": "surplus", "gases": "gas", "crises": "crisis",
 }
 
 
@@ -80,11 +80,13 @@ def stem(word: str) -> str:
     A plural first, then a verb ending, so `scaled` and `scales` meet.
     """
     word = _IRREGULAR.get(word, word)
-    if len(word) > 5 and word.endswith(("yses", "eses", "oses", "ises", "stases")):
-        # analyses/analysis, hypotheses/hypothesis, metastases/metastasis.
-        # Narrow on purpose: phases is a plural of phase, and turning it into
-        # phasis would part the two, so `ases` is only read after an s.
-        word = word[:-3] + "sis"
+    if len(word) > 4 and word.endswith("sis") and word not in _SINGULAR_S:
+        # analysis/analyses, diagnosis/diagnoses, oasis/oases. The
+        # singular is read as its plural rather than the other way about: no
+        # ending tells `diagnoses` from `purposes` or `analyses` from `raises`,
+        # and turning every one into a -sis parts purposes from purpose. Read
+        # this way both go on through the plural rule to the same word.
+        word = word[:-2] + "es"
     if len(word) > 4 and word.endswith("ies"):
         word = word[:-3] + "y"
     elif len(word) > 4 and word.endswith(("ches", "shes", "sses", "xes", "zes")):

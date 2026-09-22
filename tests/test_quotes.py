@@ -44,6 +44,30 @@ def test_errors_at_an_anchor_seam_do_not_hide_a_match():
     assert quotes.coverage("abcdefghijklmnopqrstuvwx", "abcdefghijkZYnopqrstuvwx") >= quotes._COVERAGE
 
 
+def test_an_anchor_the_paper_repeats_leaves_the_others_their_own_sites():
+    # The quote's first half-anchor occurs more often than an alignment may be
+    # tried, all of it before the quote itself. The anchors after it still take
+    # their turns, and they are the ones that find it.
+    repeated = "abcdef0123456789" * (quotes._MAX_SITES + 50)
+    found = quotes.best_match("abcdefghijklmnopqrstuvwx", repeated + "abcdefghijkZYnopqrstuvwx")
+    assert found[0] >= quotes._COVERAGE
+    assert found[1] >= len(repeated)
+
+
+def test_an_alignment_is_capped_however_many_anchors_recur(monkeypatch):
+    # Ten anchors, each printed all through the paper and never together: the
+    # sites are shared out between them, not granted to each, so a long quote
+    # in a repetitive paper costs no more than a short one.
+    anchors = [f"{chr(97 + i)}" * 6 + f"{i:06d}" for i in range(10)]
+    hay = "".join(anchor + "z" * 40 for _ in range(quotes._MAX_SITES) for anchor in anchors)
+    runs = []
+    real = quotes.difflib.SequenceMatcher
+    monkeypatch.setattr(quotes.difflib, "SequenceMatcher",
+                        lambda *a, **kw: runs.append(1) or real(*a, **kw))
+    quotes._align("".join(anchors), hay, quotes._ANCHOR)
+    assert len(runs) == quotes._MAX_SITES
+
+
 def test_a_verbatim_quote_is_found_despite_line_breaks_and_hyphenation(tmp_path):
     pdf = tmp_path / "p.pdf"
     pdf.write_bytes(minimal_pdf("steering is a path-dependent out- come across"))

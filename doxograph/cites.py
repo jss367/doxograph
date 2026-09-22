@@ -604,8 +604,21 @@ _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]")
 # `ingest.DOI_RE` opens one only on a digit: `<1661::` and `>3.0.CO` go on
 # with the identifier, and a `</a>` after one does not.
 _IDENTIFIER_RUN = re.compile(r"(?:[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]|[<>](?=\d))*")
-# Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
-_DOI_HEAD = re.compile(r"10\.\d{4,9}/")
+# A wrap where an identifier can be split: after the punctuation joining one
+# part to the next, which is the only place the scan back over an identifier
+# reads through one.
+_JOIN_WRAP = r"(?:[ \t]*[\n\r\f\u00ad][ \t]*)?"
+# Where a DOI starts. `ingest.DOI_RE` again, without its suffix, and split
+# wherever the page could have split it: `10.\n  9999/` is still a DOI.
+_DOI_HEAD = re.compile(rf"10\.{_JOIN_WRAP}\d{{4,9}}/")
+# The DOI arXiv registers for each of its papers, which is the arXiv id with
+# this in front: `10.48550/arXiv.1706.03762` names the paper `1706.03762`
+# does, and is not some other DOI with the id at the end of its suffix. Split
+# at any of its joins too, `10.48550/\n  arXiv.` included. Not where it is
+# the tail of something longer: in `foo10.48550/arXiv.` the `10.` belongs to
+# whatever `foo` is, as the id's own digits would.
+_ARXIV_DOI = re.compile(
+    rf"(?<![0-9A-Za-z])10\.{_JOIN_WRAP}48550/{_JOIN_WRAP}arxiv\.{_JOIN_WRAP}$", re.I)
 
 
 
@@ -795,7 +808,14 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
             run = run[:wrap.start()]
             continue
         break
-    return not _DOI_HEAD.search(lead[len(run):])
+    head = lead[len(run):]
+    # Except the one DOI that is the arXiv id's own. Only right in front of
+    # the id, and only that far: `10.9999/abc/10.48550/arXiv.1706.03762` is
+    # still the DOI it starts with.
+    own = _ARXIV_DOI.search(head) if versioned else None
+    if own:
+        head = head[:own.start()]
+    return not _DOI_HEAD.search(head)
 
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
