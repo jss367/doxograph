@@ -446,6 +446,32 @@ def test_a_cited_title_that_says_abstract_is_still_not_identity(monkeypatch, tmp
     assert meta["doi"] == "", f"filed under the paper it cites: {meta['title']}"
 
 
+CITES_AMR_WITHOUT_A_HEADING = f"""
+{JOURNAL_TITLE}
+A short note. We build on {AMR_TITLE} (doi:10.1234/amr.2013.1) and show that
+the annotations do not survive distribution shift.
+"""
+
+
+def test_a_cited_title_that_says_abstract_on_a_page_with_no_heading_is_not_identity(
+        monkeypatch, tmp_path):
+    """With no heading after it, nothing says the printing is the page's own
+    title rather than a citation of it, so the cut stays at the word."""
+    calls = identity_probe(monkeypatch, CITES_AMR_WITHOUT_A_HEADING)
+    meta = ingest.guess_from_pdf(tmp_path / "note.pdf", None, "note.pdf")
+
+    assert calls["doi"] == ["10.1234/amr.2013.1"], "the DOI was never checked"
+    assert meta["doi"] == "", f"filed under the paper it cites: {meta['title']}"
+
+
+def test_only_the_titles_own_printing_of_the_word_is_passed_over():
+    """A later "abstract" in a citation is not skipped for the title's sake."""
+    text = f"{JOURNAL_TITLE}\nAbstract\nWe cite {AMR_TITLE}.\n"
+    assert ingest.front_matter(text, AMR_TITLE) == f"{JOURNAL_TITLE}\n"
+    own = f"{AMR_TITLE}\nAbstract\nWe describe a sembank.\n"
+    assert ingest.front_matter(own, AMR_TITLE) == f"{AMR_TITLE}\n"
+
+
 # --- a reference already on file is recognized before any lookup ----------
 
 def refuse(*args, **kwargs):

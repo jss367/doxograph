@@ -454,13 +454,36 @@ def front_matter(text: str, title: str = "") -> str:
 
     `title` is the one being looked for. A title can hold the word itself —
     "Abstract Meaning Representation for Sembanking" — and cutting there would
-    leave nothing above the cut to find it in, so the times the title says
-    "abstract" are passed over and the heading is taken to be the next one.
+    leave nothing above the cut to find it in, so the word is passed over
+    where it falls inside a printing of that title, and the heading is taken
+    to be the next one.
+
+    Only when there is a next one. The title can be printed as a citation of
+    it, and with no heading after that printing nothing says it is the page's
+    own, so the cut stays where the word first falls.
     """
     head = text[:1500]
-    abstracts = list(ABSTRACT_WORD.finditer(head))
-    skip = len(ABSTRACT_WORD.findall(title))
-    return head[:abstracts[skip].start()] if len(abstracts) > skip else head[:600]
+    abstracts = [match.start() for match in ABSTRACT_WORD.finditer(head)]
+    if not abstracts:
+        return head[:600]
+    printings = _printings(title, head)
+    headings = [at for at in abstracts
+                if not any(begin <= at < end for begin, end in printings)]
+    return head[:(headings or abstracts)[0]]
+
+
+def _squash_title(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _printings(title: str, text: str) -> list[tuple[int, int]]:
+    """Where `title` is printed in `text`, read as `_squash_title` reads it:
+    on its letters and digits, whatever an extraction put between them."""
+    letters = _squash_title(title)
+    if not letters:
+        return []
+    pattern = "[^A-Za-z0-9]*".join(map(re.escape, letters))
+    return [match.span() for match in re.finditer(pattern, text, re.I)]
 
 
 def title_is_in_the_front_matter(title: str, text: str) -> bool:
@@ -472,10 +495,8 @@ def title_is_in_the_front_matter(title: str, text: str) -> bool:
     there, a cited paper's is not. Compared on letters and digits alone,
     because extraction inserts line breaks and turns ligatures into anything.
     """
-    def squash(value: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "", value.lower())
-
-    needle, haystack = squash(title), squash(front_matter(text, title))
+    needle = _squash_title(title)
+    haystack = _squash_title(front_matter(text, title))
     if len(needle) < 12:            # too short to be evidence either way
         return False
     return needle[:60] in haystack
