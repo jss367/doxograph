@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -59,6 +61,9 @@ def test_a_cited_arxiv_link_does_not_hijack_the_page():
     assert (ref.kind, ref.value) == ("pdf", "https://journal.example.org/local.pdf")
 
 
+SICI = "10.1002/(SICI)1097-0258(19980815/30)17:15/16<1661::AID-SIM968>3.0.CO;2-2"
+
+
 @pytest.mark.parametrize("token,expected", [
     ("10.1038/s41586-021-03819-2.", "10.1038/s41586-021-03819-2"),
     ("10.1038/s41586-021-03819-2,", "10.1038/s41586-021-03819-2"),
@@ -68,11 +73,33 @@ def test_a_cited_arxiv_link_does_not_hijack_the_page():
     ("https://doi.org/10.1038/example;", "10.1038/example"),
     # parentheses that belong to the identifier survive
     ("10.1002/(SICI)1097-0258(19980815)17:15", "10.1002/(SICI)1097-0258(19980815)17:15"),
+    # and so do the angle brackets of a SICI code, while wrapping ones go
+    (f"{SICI}.", SICI),
+    (f"doi:{SICI}", SICI),
+    (f"https://doi.org/{SICI}", SICI),
+    (f"<{SICI}>", SICI),
+    ("<10.1038/example>", "10.1038/example"),
+    ("<https://doi.org/10.1038/example>.", "10.1038/example"),
 ])
 def test_citation_punctuation_is_stripped_from_dois(token, expected):
     refs, unknown = ingest.parse_refs(token)
     assert unknown == []
     assert [(r.kind, r.value) for r in refs] == [("doi", expected)]
+
+
+def test_markup_after_a_doi_is_not_read_as_part_of_it():
+    """Only a SICI segment opens an angle bracket inside a DOI. A closing tag
+    or an inline one after the DOI stays out of it."""
+    html = ('<head><title>A paper</title>'
+            '<span class="doi">10.1038/example</span><i>10.1145/3442188.3445922</i><br></head>')
+    client = FakePageClient("https://journal.example.org/a", html)
+    ref = ingest.resolve_page("https://journal.example.org/a", client)
+    assert (ref.kind, ref.value) == ("doi", "10.1038/example")
+
+
+def test_a_sici_doi_in_a_files_metadata_is_read_whole():
+    xmp = f"<rdf:li>doi:{SICI}</rdf:li>"
+    assert re.search(ingest.DOI_RE, xmp).group(0) == SICI
 
 
 def test_normalize_doi_leaves_a_clean_doi_alone():
@@ -229,6 +256,7 @@ def test_crossrefs_own_pdf_wins_over_the_carried_one(monkeypatch):
 
 
 JOURNAL_TITLE = "Cortical dynamics under distribution shift"
+AMR_TITLE = "Abstract Meaning Representation for Sembanking"
 
 
 JOURNAL_PAGE_ONE = f"""
@@ -252,6 +280,7 @@ CROSSREF_TITLES = {
     "10.1234/journal.2026.99": JOURNAL_TITLE,
     "10.5555/cited.2019.7": "Something else entirely, cited in passing",
     "10.9999/cited.2020.1": "A paper in the bibliography",
+    "10.1234/amr.2013.1": AMR_TITLE,
 }
 
 
@@ -380,6 +409,93 @@ def test_a_title_above_the_abstract_is_identity(monkeypatch, tmp_path):
     identity_probe(monkeypatch, JOURNAL_PAGE_ONE)
     meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
     assert meta["doi"] == "10.1234/journal.2026.99"
+
+
+AMR_PAGE_ONE = f"""
+{AMR_TITLE}
+Proceedings of the Made-Up Workshop, 2013.  https://doi.org/10.1234/amr.2013.1
+
+Abstract
+We describe a sembank of simple, whole-sentence semantic structures.
+"""
+
+
+def test_a_title_that_says_abstract_is_still_identity(monkeypatch, tmp_path):
+    """The word in the title is not the heading, and cutting there left
+    nothing above the cut for the title to be found in."""
+    identity_probe(monkeypatch, AMR_PAGE_ONE)
+    meta = ingest.guess_from_pdf(tmp_path / "upload.pdf", None, "upload.pdf")
+    assert meta["doi"] == "10.1234/amr.2013.1"
+    assert meta["title"] == AMR_TITLE
+
+
+CITES_AMR_PAGE = f"""
+{JOURNAL_TITLE}
+
+Abstract. We build on {AMR_TITLE} (doi:10.1234/amr.2013.1) and show that the
+annotations do not survive distribution shift.
+"""
+
+
+def test_a_cited_title_that_says_abstract_is_still_not_identity(monkeypatch, tmp_path):
+    """Passing over the title's own "abstract" does not open the abstract up."""
+    calls = identity_probe(monkeypatch, CITES_AMR_PAGE)
+    meta = ingest.guess_from_pdf(tmp_path / "working-paper.pdf", None, "working-paper.pdf")
+
+    assert calls["doi"] == ["10.1234/amr.2013.1"], "the DOI was never checked"
+    assert meta["doi"] == "", f"filed under the paper it cites: {meta['title']}"
+
+
+CITES_AMR_WITHOUT_A_HEADING = f"""
+{JOURNAL_TITLE}
+A short note. We build on {AMR_TITLE} (doi:10.1234/amr.2013.1) and show that
+the annotations do not survive distribution shift.
+"""
+
+
+def test_a_cited_title_that_says_abstract_on_a_page_with_no_heading_is_not_identity(
+        monkeypatch, tmp_path):
+    """With no heading after it, nothing says the printing is the page's own
+    title rather than a citation of it, so the cut stays at the word."""
+    calls = identity_probe(monkeypatch, CITES_AMR_WITHOUT_A_HEADING)
+    meta = ingest.guess_from_pdf(tmp_path / "note.pdf", None, "note.pdf")
+
+    assert calls["doi"] == ["10.1234/amr.2013.1"], "the DOI was never checked"
+    assert meta["doi"] == "", f"filed under the paper it cites: {meta['title']}"
+
+
+def test_only_the_titles_own_printing_of_the_word_is_passed_over():
+    """A later "abstract" in a citation is not skipped for the title's sake."""
+    text = f"{JOURNAL_TITLE}\nAbstract\nWe cite {AMR_TITLE}.\n"
+    assert ingest.front_matter(text, AMR_TITLE) == f"{JOURNAL_TITLE}\n"
+    own = f"{AMR_TITLE}\nAbstract\nWe describe a sembank.\n"
+    assert ingest.front_matter(own, AMR_TITLE) == f"{AMR_TITLE}\n"
+
+
+CITES_AMR_THEN_SAYS_ABSTRACT = f"""
+{JOURNAL_TITLE}
+A short note. We build on {AMR_TITLE} (doi:10.1234/amr.2013.1) and show that
+the annotations abstract away from the text they were drawn from.
+"""
+
+
+def test_a_later_abstract_in_prose_does_not_pass_a_cited_title_over(
+        monkeypatch, tmp_path):
+    """Only a heading after the printing says it is the page's own title;
+    the word in a sentence does not."""
+    calls = identity_probe(monkeypatch, CITES_AMR_THEN_SAYS_ABSTRACT)
+    meta = ingest.guess_from_pdf(tmp_path / "note.pdf", None, "note.pdf")
+
+    assert calls["doi"] == ["10.1234/amr.2013.1"], "the DOI was never checked"
+    assert meta["doi"] == "", f"filed under the paper it cites: {meta['title']}"
+
+
+def test_the_heading_after_the_title_can_be_set_several_ways():
+    for heading in ("Abstract\n", "ABSTRACT\n", "Abstract. We", "Abstract—We",
+                    "Abstract: We", "Abstract We", "  Abstract We"):
+        own = f"{AMR_TITLE}\n{heading} describe a sembank.\n"
+        cut = ingest.front_matter(own, AMR_TITLE)
+        assert cut.rstrip(" ") == f"{AMR_TITLE}\n", heading
 
 
 # --- a reference already on file is recognized before any lookup ----------

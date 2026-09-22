@@ -586,10 +586,11 @@ _ARXIV_TAIL = re.compile(r"(?:v\d+)?(?:\.pdf)?(?![0-9A-Za-z])", re.I)
 # between two printings of an identifier that means nothing.
 _DASHES = "-\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
 # What an identifier is written with, which `ingest.DOI_RE` writes out as
-# `[-._;()/:A-Za-z0-9]`, with those dashes: the punctuation here joins one part
-# of an identifier to the next, and so says the identifier has not ended where
-# a fingerprint of it has.
-_JOINS = "./_:;()" + _DASHES
+# `[-._;()/:A-Za-z0-9]`, with those dashes, and the angle brackets of the
+# `<page::id>` segment a SICI code carries: the punctuation here joins one
+# part of an identifier to the next, and so says the identifier has not ended
+# where a fingerprint of it has.
+_JOINS = "./_:;()<>" + _DASHES
 # Where an identifier was split to fit the page: a line or page break, or the
 # soft hyphen an extraction leaves where a word may be broken, with whatever
 # the next line is indented by.
@@ -599,7 +600,10 @@ _WRAP_END = re.compile(r"[ \t]*[\n\r\f\u00ad][ \t]*$")
 # any of its shapes, and the two apostrophes.
 _WORD_JOINS = _DASHES + "'\u2019"
 _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]")
-_IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]*")
+# A SICI segment's brackets count only with a digit after them, as
+# `ingest.DOI_RE` opens one only on a digit: `<1661::` and `>3.0.CO` go on
+# with the identifier, and a `</a>` after one does not.
+_IDENTIFIER_RUN = re.compile(r"(?:[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]|[<>](?=\d))*")
 # A wrap where an identifier can be split: after the punctuation joining one
 # part to the next, which is the only place the scan back over an identifier
 # reads through one.

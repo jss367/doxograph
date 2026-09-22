@@ -815,6 +815,40 @@ def test_a_doi_that_ends_in_a_bracket_is_cited_by_its_own_printing():
     assert [e["to"] for e in cites.edges() if e["from"] == "citing"] == ["bracketed"]
 
 
+SICI = "10.1002/(SICI)1097-0258(19980815/30)17:15/16<1661::AID-SIM968>3.0.CO;2-2"
+
+
+def test_a_sici_doi_is_cited_by_its_printing():
+    """A SICI code carries a `<page::id>` segment, and `ingest.DOI_RE` stores
+    the DOI with it. The brackets are part of the identifier, wrapping ones or
+    not."""
+    _paper("sici", "A paper with a long enough title",
+           ["A paper with a long enough title", "Text."], doi=SICI)
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        f"References\n[1] Nobody. A work. https://doi.org/{SICI}, 1998.",
+    ])
+    _paper("wrapped", "Another citing paper", [
+        "Another citing paper",
+        f"References\n[1] Nobody. A work. <doi:{SICI}>.",
+    ])
+    edges = cites.edges()
+    assert [e["to"] for e in edges if e["from"] == "citing"] == ["sici"]
+    assert [e["to"] for e in edges if e["from"] == "wrapped"] == ["sici"]
+
+
+def test_a_doi_a_sici_code_goes_on_from_is_not_cited():
+    """What comes before the segment is not the DOI: the identifier goes on
+    through the bracket. A tag after a DOI does not go on with it."""
+    head = SICI.split("<")[0]
+    entry = quotes.build(f"Nobody. A work. https://doi.org/{SICI}, 1998.")
+    mark = quotes.squash(head)
+    assert not cites._whole(entry, entry.squashed.find(mark), len(mark), printed=head)
+    tagged = quotes.build("Nobody. A work. 10.1234/foo</a>, 2026.")
+    mark = quotes.squash("10.1234/foo")
+    assert cites._whole(tagged, tagged.squashed.find(mark), len(mark), printed="10.1234/foo")
+
+
 def test_a_dash_an_extraction_wrote_another_way_is_the_same_identifier():
     """A PDF can write a hyphen as an en dash, and it is the same DOI. Read
     against the entry rather than through one, since the test PDFs are
