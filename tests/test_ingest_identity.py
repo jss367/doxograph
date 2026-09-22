@@ -472,6 +472,32 @@ def test_only_the_titles_own_printing_of_the_word_is_passed_over():
     assert ingest.front_matter(own, AMR_TITLE) == f"{AMR_TITLE}\n"
 
 
+CITES_AMR_THEN_SAYS_ABSTRACT = f"""
+{JOURNAL_TITLE}
+A short note. We build on {AMR_TITLE} (doi:10.1234/amr.2013.1) and show that
+the annotations abstract away from the text they were drawn from.
+"""
+
+
+def test_a_later_abstract_in_prose_does_not_pass_a_cited_title_over(
+        monkeypatch, tmp_path):
+    """Only a heading after the printing says it is the page's own title;
+    the word in a sentence does not."""
+    calls = identity_probe(monkeypatch, CITES_AMR_THEN_SAYS_ABSTRACT)
+    meta = ingest.guess_from_pdf(tmp_path / "note.pdf", None, "note.pdf")
+
+    assert calls["doi"] == ["10.1234/amr.2013.1"], "the DOI was never checked"
+    assert meta["doi"] == "", f"filed under the paper it cites: {meta['title']}"
+
+
+def test_the_heading_after_the_title_can_be_set_several_ways():
+    for heading in ("Abstract\n", "ABSTRACT\n", "Abstract. We", "Abstract—We",
+                    "Abstract: We", "Abstract We", "  Abstract We"):
+        own = f"{AMR_TITLE}\n{heading} describe a sembank.\n"
+        cut = ingest.front_matter(own, AMR_TITLE)
+        assert cut.rstrip(" ") == f"{AMR_TITLE}\n", heading
+
+
 # --- a reference already on file is recognized before any lookup ----------
 
 def refuse(*args, **kwargs):

@@ -442,6 +442,9 @@ def pdf_metadata_doi(path: Path) -> str:
 
 
 ABSTRACT_WORD = re.compile(r"\babstract\b", re.I)
+# The word set as a heading: capitalized, and first on its line. A sentence
+# says "abstract" in lower case, and a line of prose seldom opens on it.
+ABSTRACT_HEADING = re.compile(r"^[ \t]*(Abstract|ABSTRACT)\b", re.M)
 
 
 def front_matter(text: str, title: str = "") -> str:
@@ -458,18 +461,22 @@ def front_matter(text: str, title: str = "") -> str:
     where it falls inside a printing of that title, and the heading is taken
     to be the next one.
 
-    Only when there is a next one. The title can be printed as a citation of
-    it, and with no heading after that printing nothing says it is the page's
-    own, so the cut stays where the word first falls.
+    Only when the next one is set as a heading. The title can be printed as
+    a citation of it, and with nothing after that printing but prose, which
+    can say "abstract" too, nothing says it is the page's own, so the cut
+    stays where the word first falls.
     """
     head = text[:1500]
     abstracts = [match.start() for match in ABSTRACT_WORD.finditer(head)]
     if not abstracts:
         return head[:600]
     printings = _printings(title, head)
-    headings = [at for at in abstracts
-                if not any(begin <= at < end for begin, end in printings)]
-    return head[:(headings or abstracts)[0]]
+    rest = [at for at in abstracts
+            if not any(begin <= at < end for begin, end in printings)]
+    headings = {match.start(1) for match in ABSTRACT_HEADING.finditer(head)}
+    if rest and rest[0] in headings:
+        return head[:rest[0]]
+    return head[:abstracts[0]]
 
 
 def _squash_title(value: str) -> str:
