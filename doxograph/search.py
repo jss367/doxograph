@@ -453,9 +453,32 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     return passages
 
 
+# What a word the page broke has between its halves: the characters
+# `quotes.LINE_HYPHEN` is made of, soft hyphen included.
+_BREAK_CHARS = "-\u2010\u00ad \t\n" + quotes.PAGE_BREAK
+
+
 def _inside(raw: str, at: int) -> bool:
-    """Whether `at` falls between two characters of one word."""
-    return bool(_IN_WORD_CHAR.match(raw[at - 1]) and _IN_WORD_CHAR.match(raw[at]))
+    """Whether `at` falls between two characters of one word.
+
+    One word as the folding reads it, so a word the page broke is still one:
+    `non-\\nlinear` across its hyphen and line break, `non\\u00adlinear` across
+    its soft hyphen. A cut anywhere in the break is inside the word, or the
+    passage opens on a `linear` the paper never wrote.
+    """
+    left = at
+    while left > 0 and raw[left - 1] in _BREAK_CHARS:
+        left -= 1
+    right = at
+    while right < len(raw) and raw[right] in _BREAK_CHARS:
+        right += 1
+    if not (left > 0 and right < len(raw)
+            and _IN_WORD_CHAR.match(raw[left - 1]) and _IN_WORD_CHAR.match(raw[right])):
+        return False
+    if left == right or not raw[left:right].strip("\u00ad"):
+        return True
+    joined = quotes.LINE_HYPHEN.match(raw, left)
+    return bool(joined) and joined.end() == right
 
 
 def _parts(shown: str, patterns: list[re.Pattern]) -> list[dict]:

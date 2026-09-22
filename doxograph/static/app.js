@@ -1169,6 +1169,15 @@ async function refreshAllShowingError() {
   }
 }
 
+// The same for an action that redraws through `render`.
+async function refreshShowingError() {
+  try {
+    await refresh();
+  } catch (error) {
+    render();
+  }
+}
+
 function currentWorkspace() {
   return workspaces.find((workspace) => workspace.id === currentWorkspaceId) || null;
 }
@@ -1906,7 +1915,7 @@ async function saveNote(key) {
     // In the `finally`, as the synthesis save is: a failure leaves the editor
     // frozen otherwise, with nothing left to hand it back.
     V.noteSaving = null;
-    await refreshAll();
+    await refreshAllShowingError();
   }
 }
 
@@ -2279,7 +2288,7 @@ async function findAgreements() {
   } catch (error) {
     V.error = `Could not start the pass: ${error.message}`;
   }
-  await refresh();
+  await refreshShowingError();
 }
 
 // A claim as it appears inside a tension: the same card, minus the review and
@@ -2672,7 +2681,7 @@ async function synthesize(topics, force = false) {
   } catch (error) {
     V.error = `Could not start the synthesis: ${error.message}`;
   }
-  await refresh();
+  await refreshShowingError();
   if (V.error) renderContent();
 }
 
@@ -4348,7 +4357,7 @@ $('content').addEventListener('click', async (event) => {
       } catch (error) {
         V.error = `Could not update the tension: ${error.message}`;
       }
-      await refreshAll();
+      await refreshAllShowingError();
       return;
     }
     if (act === 'agreement-focus') {
@@ -4383,7 +4392,7 @@ $('content').addEventListener('click', async (event) => {
       } catch (error) {
         V.error = `Could not update the agreement: ${error.message}`;
       }
-      await refreshAll();
+      await refreshAllShowingError();
       return;
     }
     if (act === 'agreement-delete') {
@@ -4471,7 +4480,7 @@ $('content').addEventListener('click', async (event) => {
         // redraw it did not run would leave the editor frozen with nothing
         // left to unfreeze it.
         V.synthSaving = null;
-        await refreshAll();
+        await refreshAllShowingError();
       }
       return;
     }
@@ -4535,7 +4544,7 @@ $('content').addEventListener('click', async (event) => {
       } catch (error) {
         V.error = `Could not check the quotes: ${error.message}`;
       }
-      await refreshAll();
+      await refreshAllShowingError();
       return;
     }
     if (act === 'retag-one') {
@@ -4728,7 +4737,7 @@ async function findTensions() {
   } catch (error) {
     V.error = `Could not start the pass: ${error.message}`;
   }
-  await refresh();
+  await refreshShowingError();
 }
 
 $('btn-tensions').addEventListener('click', async () => {

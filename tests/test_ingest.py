@@ -97,6 +97,25 @@ def test_an_arxiv_doi_is_read_as_the_arxiv_id_it_names(token, expected):
     assert [(r.kind, r.value) for r in refs] == [("arxiv", expected)]
 
 
+@pytest.mark.parametrize("token,kind", [
+    ("arXiv:2301.123456", None),
+    ("arxiv.org/abs/2301.123456", None),
+    ("arXiv:hep-th/99010012", None),
+    # What is left is a link or a DOI like any other, and fetching it says it
+    # is not there rather than bringing back somebody else's paper.
+    ("https://arxiv.org/abs/2301.123456", "page"),
+    ("https://arxiv.org/pdf/2301.123456v2", "page"),
+    ("10.48550/arXiv.2301.123456", "doi"),
+    ("https://doi.org/10.48550/arXiv.2301.123456", "doi"),
+])
+def test_an_arxiv_id_with_a_digit_too_many_is_not_read_short(token, kind):
+    """`2301.123456` is not the paper `2301.12345` with a digit after it, and
+    reading it that way would ingest a paper nobody asked for."""
+    refs, unknown = ingest.parse_refs(token)
+    assert [r.kind for r in refs] == ([kind] if kind else [])
+    assert unknown == ([] if kind else [token])
+
+
 def test_an_arxiv_doi_and_its_id_are_one_paper():
     refs, _ = ingest.parse_refs("https://doi.org/10.48550/arXiv.2301.12345 2301.12345v1")
     assert [r.value for r in refs] == ["2301.12345"]

@@ -5781,6 +5781,105 @@ def test_an_action_refused_while_the_reads_are_refused_too_still_says_so():
     asyncio.run(scenario())
 
 
+# What each action writes to, what it is refused with, and how it is reached.
+_REFUSED_ACTIONS = {
+    "tension": ("**/api/tensions/*", "Could not update the tension: Disk full"),
+    "agreement": ("**/api/agreements/*", "Could not update the agreement: Disk full"),
+    "verify": ("**/api/papers/paper-a/verify", "Could not check the quotes: Disk full"),
+    "find-tensions": ("**/api/tensions", "Could not start the pass: Disk full"),
+    "find-agreements": ("**/api/agreements", "Could not start the pass: Disk full"),
+    "synthesize": ("**/api/syntheses", "Could not start the synthesis: Disk full"),
+    "save-synth": ("**/api/syntheses/recovery", "Could not save the synthesis: Disk full"),
+    "save-note": ("**/api/papers/paper-a", "Could not save the note: Disk full"),
+}
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("action", list(_REFUSED_ACTIONS))
+def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(action):
+    """As for the answer to a proposed topic above: the tension and agreement
+    buttons, the quote check, the passes and the two editors' saves all put
+    their refusal in the warning line and then refresh, and a refresh that
+    throws never draws it. The editors' saves also leave the editor frozen."""
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+    _paper("paper-c", "Paper C", "recovery")
+    shown = {r["id"]: r for r in store.claim_rows()}
+    store.record_tensions("recovery", [
+        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "tension", "note": "n"},
+    ], shown)
+    store.record_agreements("recovery", [{"claims": ["paper-a-c1", "paper-b-c1", "paper-c-c1"],
+                                          "note": "All three report it."}], shown)
+    store.record_synthesis("recovery", "Recovery as written.", shown)
+    if action == "verify":
+        store.pdf_path("paper-a").write_bytes(b"%PDF-1.4\n")
+    written, message = _REFUSED_ACTIONS[action]
+
+    async def scenario():
+        refusing = asyncio.Event()
+        rejections = []
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            page.on("pageerror", lambda error: rejections.append(str(error)))
+
+            async def refuse_write(route, request):
+                if request.method == "GET":
+                    await route.continue_()
+                    return
+                refusing.set()
+                await route.fulfill(status=500, json={"detail": "Disk full"})
+
+            async def refuse_read(route):
+                if refusing.is_set():
+                    await route.fulfill(status=503, json={"detail": "Restarting"})
+                    return
+                await route.continue_()
+
+            await page.route(written, refuse_write)
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                field = None
+                if action == "tension":
+                    await page.locator('#tensions-nav [data-view="tensions"]').click()
+                    await page.locator(".tcard").get_by_role("button", name="Confirm").click()
+                elif action == "agreement":
+                    await page.locator('#agreements-nav [data-view="agreements"]').click()
+                    await page.locator('.tcard[data-agreement="a1"]').get_by_role(
+                        "button", name="Confirm").click()
+                elif action == "verify":
+                    await page.locator('#papers [data-paper="paper-a"]').click()
+                    await page.locator('[data-act="verify"]').click()
+                elif action == "find-tensions":
+                    await page.locator("#btn-tensions").click()
+                elif action == "find-agreements":
+                    await page.locator("#btn-agreements").click()
+                elif action == "synthesize":
+                    await page.locator('.synth[data-topic="recovery"] [data-act="synthesize"]').click()
+                elif action == "save-synth":
+                    await page.locator('.synth[data-topic="recovery"] [data-act="edit-synth"]').click()
+                    field = page.locator('textarea[data-synth="recovery"]')
+                    await field.fill("Recovery corrected.")
+                    await page.locator('[data-act="save-synth"]').click()
+                elif action == "save-note":
+                    await page.locator('#papers [data-paper="paper-a"]').click()
+                    await page.locator('[data-act="edit-note"]').click()
+                    field = page.locator('textarea[data-note="paper-a"]')
+                    await field.fill("Worth reading for the method.")
+                    await page.locator('[data-act="save-note"]').click()
+                await page.locator("#content .warn", has_text=message).wait_for(timeout=10000)
+                if field is not None:
+                    # Handed back, with what was typed, for the save to be retried.
+                    assert await field.is_enabled()
+                    assert await field.input_value() in ("Recovery corrected.",
+                                                         "Worth reading for the method.")
+                assert rejections == []
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.browser
 def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
     """The PATCH landed and the editor was finished with; only the refresh was
