@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from doxograph import bib, ingest, store
@@ -79,9 +77,9 @@ def test_blank_authors_are_left_out(authors, expected):
 
 
 @pytest.mark.parametrize("title,expected", [
-    ("study}", r"study\}"),
-    ("a{b}c", r"a\{b\}c"),
-    ("100% {done}", r"100\% \{done\}"),
+    ("study}", r"study\textbraceright{}"),
+    ("a{b}c", r"a\textbraceleft{}b\textbraceright{}c"),
+    ("100% {done}", r"100\% \textbraceleft{}done\textbraceright{}"),
 ])
 def test_braces_in_a_title_are_escaped(title, expected):
     store.save_paper(store.new_paper("doe2026study", title=title,
@@ -96,13 +94,13 @@ def test_a_backslash_in_metadata_is_escaped():
     assert r"title = {C:\textbackslash{}path}" in bib.render()
 
 
-def delimiter_braces(text: str) -> str:
-    """Drop escaped literals so only structural braces remain countable."""
-    return re.sub(r"\\[{}]", "", text)
-
-
 def test_every_bibtex_entry_has_balanced_braces():
-    """A literal brace used to unbalance the field and swallow the rest."""
+    """A literal brace used to unbalance the field and swallow the rest.
+
+    Every brace is counted, escaped or not. BibTeX and biber both count a brace
+    whether or not a backslash comes before it, so `\\{` unbalanced the field
+    just as a bare one did, and a count that skipped it passed that output.
+    """
     for n, title in enumerate(["study}", "{a}", "plain", "a{b", "100% }x{"]):
         store.save_paper(store.new_paper(f"doe2026s{n}", title=title,
                                          authors=[f"A B{n}"], year=2026, venue="Journal"))
@@ -110,14 +108,12 @@ def test_every_bibtex_entry_has_balanced_braces():
     for entry_text in text.split("\n\n"):
         if not entry_text.strip():
             continue
-        structural = delimiter_braces(entry_text)
-        assert structural.count("{") == structural.count("}"), entry_text
+        assert entry_text.count("{") == entry_text.count("}"), entry_text
         # every field line closes what it opens
         for line in entry_text.splitlines():
             if " = {" in line:
                 assert line.rstrip(",").endswith("}"), line
-                inner = delimiter_braces(line)
-                assert inner.count("{") == inner.count("}"), line
+                assert line.count("{") == line.count("}"), line
 
 
 def test_a_metadata_free_upload_named_with_a_brace_round_trips(monkeypatch):
@@ -125,6 +121,5 @@ def test_a_metadata_free_upload_named_with_a_brace_round_trips(monkeypatch):
     monkeypatch.setattr(ingest, "pdf_first_page_text", lambda path, pages=2: "no identifiers")
     ingest.ingest_pdf_bytes(b"%PDF-1.4\n" + bytes(32), "study}.pdf")
     text = bib.render()
-    assert r"\}" in text
-    structural = delimiter_braces(text)
-    assert structural.count("{") == structural.count("}"), text
+    assert r"\textbraceright{}" in text
+    assert text.count("{") == text.count("}"), text

@@ -9,7 +9,10 @@ from . import store
 # Characters that change how a .bib file parses. `%` starts a comment, so an
 # unescaped one truncates the rest of the line including its closing brace, and
 # percent-encoded URLs hit that constantly. A literal brace is worse: it
-# unbalances the field and can swallow everything up to the next one.
+# unbalances the field and can swallow everything up to the next one. `\{` does
+# not help, because BibTeX and biber count a brace whether or not a backslash
+# comes before it, so a brace is written as a command with no brace of its own
+# left over.
 #
 # Each character of the input is looked at once, so replacements that themselves
 # contain a backslash or braces are not re-escaped.
@@ -17,7 +20,7 @@ ESCAPES = {
     "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
     "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
     "\\": r"\textbackslash{}",
-    "{": r"\{", "}": r"\}",
+    "{": r"\textbraceleft{}", "}": r"\textbraceright{}",
 }
 
 
