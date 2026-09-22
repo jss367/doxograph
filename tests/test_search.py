@@ -109,6 +109,20 @@ def test_a_passage_does_not_run_across_a_page_break():
     assert "residual stream" not in first["text"]
 
 
+def test_a_passage_starts_and_ends_between_words():
+    """A passage reaching PASSAGE_SPAN back from its term can land inside a
+    word: the `linear` of `nonlinear`, which a search for `linear` marks."""
+    before = "A nonlinear"
+    filler = " " + "and so on " * 13 + "an "     # to put the span inside `nonlinear`
+    assert len(before + filler) - search.PASSAGE_SPAN == before.index("linear")
+    after = " " + "and so on " * 13 + "transformation."
+    a_paper_of("cut", before + filler + "linear" + after)
+    passage = search.search_papers("linear")[0]["passages"][0]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["linear"]
+    words = passage["text"].split()
+    assert words[0] == "and" and words[-1] == "on"
+
+
 def test_a_papers_length_is_weighed_against_the_whole_corpus():
     """BM25 discounts a paper for being longer than the corpus average. Taking
     that average over the papers that matched would make a paper's score depend
@@ -240,6 +254,15 @@ def test_a_term_in_a_script_without_spaces_is_found_inside_a_run():
     # A Latin term still has to start a word.
     a_paper_of("latin", "Steering works.")
     assert search.search_papers("eering") == []
+
+
+def test_hangul_is_found_inside_a_run_once_folded_into_its_jamo():
+    """Folding takes a Hangul syllable apart into jamo, and the term has to be
+    read as the script it is in after that as well as before."""
+    a_paper_of("korean", "언어모델은 좋다.")
+    assert [hit["key"] for hit in search.search_papers("모델")] == ["korean"]
+    passage = search.search_papers("모델")[0]["passages"][0]
+    assert [p["text"] for p in passage["parts"] if p["mark"]] == ["모델"]
 
 
 def test_the_folded_text_is_kept_to_a_size_not_a_count(monkeypatch):
