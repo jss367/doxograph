@@ -5492,3 +5492,330 @@ def test_side_pane_width_survives_a_browser_that_will_not_store_it():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
+    """Ungrouped, and under a paper, the cards are drawn with no topic. The
+    buttons carry that back, so it must come back as the same empty group."""
+    from pdfs import minimal_pdf
+
+    key = "doe2026recovery"
+    store.save_paper(store.new_paper(key, title="Recovery under steering", year=2026))
+    store.pdf_path(key).write_bytes(minimal_pdf([
+        "Recovery under steering is a path-dependent outcome across all scales."]))
+    store.add_claim(key, {"text": "Llama-3 70B recovers the original task in 46% of rollouts.",
+                          "reviewed": True, "tags": ["recovery-rate"],
+                          "quote": "Recovery under steering"})
+    _paper("li2025steer", "Steering does not wash out", "recovery-rate")
+    store.update_claim("li2025steer", "li2025steer-c1",
+                       {"text": "Steered Llama-3 70B recovers the original task about half the time."})
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                card = page.locator(f'.claim[data-claim="{key}-c1"]')
+                await card.first.wait_for()
+
+                # Under a paper.
+                await page.locator(f'#papers [data-paper="{key}"]').click()
+                await card.get_by_role("button", name="in the paper").click()
+                await card.locator(".qctx .qpassage").wait_for()
+                await card.get_by_role("button", name="alike", exact=True).click()
+                await card.locator(".alike .alikerow").wait_for()
+
+                # Across the corpus with grouping off.
+                await page.locator('#papers [data-paper=""]').click()
+                await page.locator("#group-by-tag").uncheck()
+                await card.get_by_role("button", name="hide the paper").click()
+                await card.locator(".qctx").wait_for(state="detached")
+                await card.get_by_role("button", name="in the paper").click()
+                await card.locator(".qctx .qpassage").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_shortcut_key_held_with_a_modifier_is_left_to_the_browser():
+    """Cmd+R is a reload and Cmd+E is the browser's too. Taken as r and e
+    they would review a claim, or open its editor, on the way out."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                # Dispatched rather than pressed, so the browser does not act
+                # on them either: what is under test is only what the page does.
+                for key in ("r", "e", "j", "n"):
+                    for modifier in ("ctrlKey", "metaKey", "altKey"):
+                        await page.evaluate(
+                            """([key, modifier]) => document.body.dispatchEvent(new KeyboardEvent(
+                                'keydown', { key, [modifier]: true, bubbles: true }))""",
+                            [key, modifier],
+                        )
+                await page.wait_for_timeout(300)
+                assert await page.evaluate("V.selectedId") == one
+                assert await page.evaluate("V.editing") is None
+
+                # Without one, the keys are the page's as before.
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: True, two: False}
+
+
+@pytest.mark.browser
+def test_clicking_the_words_select_claim_ticks_the_box_on_a_card_not_yet_picked():
+    """A click on the label's text reached the card too, whose redraw put a
+    fresh box on screen before the label could tick the old one."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                label = page.locator(f'.claim[data-claim="{two}"] .claim-selection label')
+                box = await label.bounding_box()
+                # On the words, well clear of the box itself.
+                await label.click(position={"x": box["width"] - 4, "y": box["height"] / 2})
+                await page.wait_for_function(
+                    "document.getElementById('selection-count').textContent.startsWith('1 claims')")
+                assert await page.locator(f'.claim[data-claim="{two}"] [data-select-claim]').is_checked()
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_review_that_fails_says_so_and_r_stays_on_the_claim():
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_patch(route, request):
+                if request.method == "PATCH":
+                    await route.fulfill(status=500, json={"detail": "Disk full"})
+                    return
+                await route.continue_()
+
+            await page.route(f"**/api/papers/doe2026study/claims/{one}", refuse_patch)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                await page.keyboard.press("r")
+                await page.locator("#toasts .toast.warn",
+                                   has_text="Could not mark the claim reviewed: Disk full").wait_for()
+                assert await page.evaluate("V.selectedId") == one
+                assert not await page.evaluate("isSaving(V.selectedId)")
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: False, two: False}
+
+
+@pytest.mark.browser
+def test_a_topic_that_could_not_be_added_says_so_and_keeps_its_name():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse(route):
+                await route.fulfill(status=500, json={"detail": "Disk full"})
+
+            await page.route("**/api/tags", refuse)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#new-tag").fill("interpretability")
+                await page.locator("#btn-tag").click()
+                await page.locator("#toasts .toast.warn",
+                                   has_text="Could not add the topic: Disk full").wait_for()
+                assert await page.locator("#new-tag").input_value() == "interpretability"
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back():
+    """The poll's read was taken before the write and the refresh's after it,
+    but the poll's answer is the one that arrives last."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        armed = False
+        held = asyncio.Event()
+        release = asyncio.Event()
+
+        async def hold_one(route):
+            nonlocal armed
+            if not armed:
+                await route.continue_()
+                return
+            # Read now, answered later: the corpus as it was before the write.
+            # A 304 would leave `S` alone whenever it landed, so the round held
+            # is the first to bring a corpus that changed.
+            response = await route.fetch()
+            if response.status == 304:
+                await route.fulfill(response=response)
+                return
+            armed = False
+            held.set()
+            await release.wait()
+            await route.fulfill(response=response)
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.route("**/api/state", hold_one)
+                await page.goto(url)
+                await page.locator('#tags [data-tag="recovery"]').wait_for()
+                armed = True
+                httpx.post(f"{url}/api/tags", json={"name": "alignment", "description": ""})
+                await asyncio.wait_for(held.wait(), timeout=10)
+
+                polls = await page.evaluate("polls")
+                await page.locator("#new-tag").fill("interpretability")
+                await page.locator("#btn-tag").click()
+                await page.wait_for_function("S.tags.some((t) => t.name === 'interpretability')")
+
+                release.set()
+                await page.wait_for_function("n => polls > n", arg=polls, timeout=10000)
+                assert await page.evaluate("S.tags.some((t) => t.name === 'interpretability')")
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_review_whose_read_back_fails_still_counts_and_r_moves_on():
+    """The PATCH landed; only the refresh after it was refused. Reporting that
+    as a failed review would leave `r` on a claim the server has reviewed."""
+    one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        refusing = asyncio.Event()
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_read(route):
+                if refusing.is_set():
+                    await route.fulfill(status=500, json={"detail": "Busy"})
+                    return
+                await route.continue_()
+
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                refusing.set()
+                await page.keyboard.press("r")
+                await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
+                assert await page.locator("#toasts .toast.warn").count() == 0
+                assert not await page.evaluate(f"isSaving({one!r})")
+                refusing.clear()
+                # The poll brings the review in once the reads are answered.
+                await page.wait_for_function(
+                    f"S.claims.find((c) => c.id === {one!r}).reviewed === true")
+            await browser.close()
+
+    asyncio.run(scenario())
+    assert _reviewed("doe2026study") == {one: True, two: False}
+
+
+@pytest.mark.browser
+def test_an_action_refused_while_the_reads_are_refused_too_still_says_so():
+    """The warning is drawn by the redraw after the refresh. With the server
+    refusing the read as well, the refresh threw before it could draw."""
+    _paper_with_proposal("doe2026study", "A study", "recovery", "2026-09-02T12:00:00+00:00")
+
+    async def scenario():
+        refusing = asyncio.Event()
+        rejections = []
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            page.on("pageerror", lambda error: rejections.append(str(error)))
+
+            async def refuse_write(route):
+                refusing.set()
+                await route.fulfill(status=500, json={"detail": "Disk full"})
+
+            async def refuse_read(route):
+                if refusing.is_set():
+                    await route.fulfill(status=503, json={"detail": "Restarting"})
+                    return
+                await route.continue_()
+
+            await page.route("**/api/papers/doe2026study/proposed-tags", refuse_write)
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator('[data-act="accept-tag"]').click()
+                await page.locator("#content .warn",
+                                   has_text="Could not accept the proposed topic: Disk full").wait_for()
+                assert rejections == []
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
+    """The PATCH landed and the editor was finished with; only the refresh was
+    refused. The form must still go, or text typed into it is lost to the
+    next redraw with nothing tracking it."""
+    one, _ = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        refusing = asyncio.Event()
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_read(route):
+                if refusing.is_set():
+                    await route.fulfill(status=500, json={"detail": "Busy"})
+                    return
+                await route.continue_()
+
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
+                form = page.locator(f'form[data-form="{one}"]')
+                await form.locator('textarea[name="text"]').fill("One, edited.")
+                refusing.set()
+                await form.get_by_role("button", name="Save").click()
+                await page.wait_for_function(f"!isSaving({one!r})")
+                assert await form.count() == 0
+                assert await page.locator("#toasts .toast.warn").count() == 0
+                refusing.clear()
+                await page.get_by_text("One, edited.").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    texts = {c["id"]: c["text"] for c in store.load_paper("doe2026study")["claims"]}
+    assert texts[one] == "One, edited."

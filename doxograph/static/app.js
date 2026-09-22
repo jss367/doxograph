@@ -1088,12 +1088,23 @@ async function fetchJobs() {
   return result.jobs || [];
 }
 
+// Which pull was asked last, and which is the latest whose answer is in `S`.
+// A poll and a refresh after a write can be out together, and the poll's
+// answer arriving second would put back the corpus from before the write and
+// the ETag that goes with it, so the next poll is told nothing has changed.
+let pullsAsked = 0;
+let pullApplied = 0;
+
 // Pulls the corpus and the jobs, keeping `S.jobs` across a state answer that
 // did not change. Returns whether the corpus changed.
 async function pull() {
   const requestedWorkspace = currentWorkspaceId;
+  const asked = ++pullsAsked;
   const [next, jobs] = await Promise.all([fetchState(), fetchJobs()]);
   if (requestedWorkspace !== currentWorkspaceId) return false;
+  // Overtaken by a pull asked after this one: what that brought is newer.
+  if (asked < pullApplied) return false;
+  pullApplied = asked;
   if (next) {
     S = { ...next.state, jobs };
     stateEtag = next.etag;
@@ -1144,6 +1155,18 @@ async function refreshAll() {
   if (requestedWorkspace !== currentWorkspaceId) return;
   if (changed) corpusChanged();
   renderAll();
+}
+
+// The redraw after an action whose refusal is in `V.error`. A server that
+// refused the action may refuse the read after it as well, and a refresh that
+// throws leaves before its redraw: the warning would never be drawn and the
+// click would end in an unhandled rejection. The poll brings the corpus.
+async function refreshAllShowingError() {
+  try {
+    await refreshAll();
+  } catch (error) {
+    renderAll();
+  }
 }
 
 function currentWorkspace() {
@@ -2765,7 +2788,9 @@ function drawContent() {
         + untagged.map((row) => card(row, 'untagged')).join('') + '</div>';
     }
   } else {
-    html += rows.map(card).join('');
+    // Not `rows.map(card)`: the index `map` passes would land in `group`, and
+    // the buttons that carry it back as a string would never match it again.
+    html += rows.map((row) => card(row)).join('');
   }
   $('content').innerHTML = html + textSearchBlock();
   applySavingState();
@@ -3689,6 +3714,10 @@ async function toggleReviewed(row) {
   markSaving(row.id, true);
   try {
     await patchClaim(row.paper, row.id, { reviewed });
+  } catch (error) {
+    toast(`Could not ${reviewed ? 'mark the claim reviewed' : 'take the review back'}: ${error.message}`,
+          { tone: 'warn' });
+    return false;
   } finally {
     markSaving(row.id, false);
   }
@@ -3908,7 +3937,17 @@ async function patchClaim(paper, claim, patch) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  await refresh();
+  // The write has landed by here. A failure only to read it back must not reach
+  // the callers, who would report a save that happened as refused — and the `r`
+  // key would stay on a claim the server has marked reviewed. The poll reads
+  // the corpus again within a few seconds. The redraw the refresh would have
+  // made still happens: a saved claim's form is only taken off the screen by
+  // it, and left there it would take typing that nothing keeps.
+  try {
+    await refresh();
+  } catch (error) {
+    render();
+  }
 }
 
 function readForm(form) {
@@ -4477,10 +4516,15 @@ $('content').addEventListener('click', async (event) => {
       // check above is too old to have seen it. Asked again, against the guard
       // as it stands now.
       if (refuseWhileRemoving(paper, 'the claims it reads out')) return;
-      await api(`/api/papers/${encodeURIComponent(paper)}/extract`, {
-        method: 'POST', headers: workspace,
-      });
-      await refresh();
+      V.error = null;
+      try {
+        await api(`/api/papers/${encodeURIComponent(paper)}/extract`, {
+          method: 'POST', headers: workspace,
+        });
+      } catch (error) {
+        V.error = `Could not re-read the paper: ${error.message}`;
+      }
+      await refreshAllShowingError();
       return;
     }
     if (act === 'verify') {
@@ -4501,11 +4545,16 @@ $('content').addEventListener('click', async (event) => {
       // Asked again on the far side of the flush, as the re-read does: a
       // removal answered while it ran took the paper after the check above.
       if (refuseWhileRemoving(paper, 'the topics it writes on the claims')) return;
-      await api('/api/retag', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
-        body: JSON.stringify({ keys: [paper] }),
-      });
-      await refresh();
+      V.error = null;
+      try {
+        await api('/api/retag', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace },
+          body: JSON.stringify({ keys: [paper] }),
+        });
+      } catch (error) {
+        V.error = `Could not retag the claims: ${error.message}`;
+      }
+      await refreshAllShowingError();
       return;
     }
     if (act === 'resume-new') {
@@ -4558,12 +4607,17 @@ $('content').addEventListener('click', async (event) => {
       // be left declared with nothing under it.
       if (refuseWhileRemoving(paper, 'the answer to its proposed topics')) return;
       const field = act === 'accept-tag' ? 'accept' : 'discard';
-      await api(`/api/papers/${encodeURIComponent(paper)}/proposed-tags`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: [button.dataset.tag] }),
-      });
+      V.error = null;
+      try {
+        await api(`/api/papers/${encodeURIComponent(paper)}/proposed-tags`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [field]: [button.dataset.tag] }),
+        });
+      } catch (error) {
+        V.error = `Could not ${field} the proposed topic: ${error.message}`;
+      }
       delete paperCache()[paper];
-      await refreshAll();
+      await refreshAllShowingError();
       return;
     }
   }
@@ -4941,10 +4995,16 @@ $('refs').addEventListener('keydown', (event) => {
 $('btn-tag').addEventListener('click', async () => {
   const name = $('new-tag').value.trim();
   if (!name) return;
-  await api('/api/tags', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, description: '' }),
-  });
+  try {
+    await api('/api/tags', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: '' }),
+    });
+  } catch (error) {
+    // The name stays in the box, as a refused reference list does.
+    toast(`Could not add the topic: ${error.message}`, { tone: 'warn' });
+    return;
+  }
   $('new-tag').value = '';
   await refresh();
 });
@@ -4958,9 +5018,14 @@ $('btn-retag').addEventListener('click', async () => {
   if (!go) return;
   const workspace = await settleDeletes();
   if (!workspace) return;   // the delete failed; the pass would read the claim
-  await api('/api/retag', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
-  });
+  try {
+    await api('/api/retag', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
+    });
+  } catch (error) {
+    toast(`Could not retag the papers: ${error.message}`, { tone: 'warn' });
+    return;
+  }
   await refresh();
 });
 
@@ -5139,6 +5204,10 @@ document.addEventListener('keydown', async (event) => {
     }
     return;
   }
+  // A held Command, Control or Option is the browser's or the system's: Cmd+R
+  // is a reload, not a review, and taking it here would flip a claim's flag on
+  // the way out of the page.
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
   // The shortcuts nobody can see are the ones nobody uses, so the list is a
   // keystroke away from anywhere.
   if (event.key === '?') { event.preventDefault(); openHelp(); return; }
@@ -5210,15 +5279,19 @@ document.addEventListener('drop', async (event) => {
   const files = [...(event.dataTransfer.files || [])].filter((f) => f.type === 'application/pdf'
     || f.name.toLowerCase().endsWith('.pdf'));
   const text = event.dataTransfer.getData('text/plain');
-  if (files.length) {
-    const body = new FormData();
-    files.forEach((file) => body.append('files', file, file.name));
-    await api(`/api/upload?extract_now=${$('auto-extract').checked}`, { method: 'POST', body });
-  } else if (text && text.trim()) {
-    reportKnown(await api('/api/ingest', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, extract: $('auto-extract').checked }),
-    }));
+  try {
+    if (files.length) {
+      const body = new FormData();
+      files.forEach((file) => body.append('files', file, file.name));
+      await api(`/api/upload?extract_now=${$('auto-extract').checked}`, { method: 'POST', body });
+    } else if (text && text.trim()) {
+      reportKnown(await api('/api/ingest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, extract: $('auto-extract').checked }),
+      }));
+    }
+  } catch (error) {
+    toast(`Could not add what was dropped: ${error.message}`, { tone: 'warn' });
   }
   await refresh();
 });
