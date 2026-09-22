@@ -600,12 +600,19 @@ _WRAP_END = re.compile(r"[ \t]*[\n\r\f\u00ad][ \t]*$")
 _WORD_JOINS = _DASHES + "'\u2019"
 _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]")
 _IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]*")
-# Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
-_DOI_HEAD = re.compile(r"10\.\d{4,9}/")
+# A wrap where an identifier can be split: after the punctuation joining one
+# part to the next, which is the only place the scan back over an identifier
+# reads through one.
+_JOIN_WRAP = r"(?:[ \t]*[\n\r\f\u00ad][ \t]*)?"
+# Where a DOI starts. `ingest.DOI_RE` again, without its suffix, and split
+# wherever the page could have split it: `10.\n  9999/` is still a DOI.
+_DOI_HEAD = re.compile(rf"10\.{_JOIN_WRAP}\d{{4,9}}/")
 # The DOI arXiv registers for each of its papers, which is the arXiv id with
 # this in front: `10.48550/arXiv.1706.03762` names the paper `1706.03762`
-# does, and is not some other DOI with the id at the end of its suffix.
-_ARXIV_DOI = re.compile(r"10\.48550/arxiv\.(?:[ \t]*[\n\r\f\u00ad][ \t]*)?$", re.I)
+# does, and is not some other DOI with the id at the end of its suffix. Split
+# at any of its joins too, `10.48550/\n  arXiv.` included.
+_ARXIV_DOI = re.compile(
+    rf"10\.{_JOIN_WRAP}48550/{_JOIN_WRAP}arxiv\.{_JOIN_WRAP}$", re.I)
 
 
 
