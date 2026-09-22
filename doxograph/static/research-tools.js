@@ -433,7 +433,8 @@ const ResearchTools = (() => {
     }
   });
   document.addEventListener('click', event => {
-    if (event.target.closest('[data-select-claim], [data-select-paper]')) { event.stopPropagation(); return; }
+    // The label too: its text reaching the card would redraw the box away before it ticks.
+    if (event.target.closest('[data-select-claim], [data-select-paper], .claim-selection label')) { event.stopPropagation(); return; }
     const target = event.target.closest('[data-tool]');
     if (!target) return;
     event.preventDefault(); event.stopPropagation();
