@@ -278,7 +278,12 @@ def _align(quote: str, haystack: str, size: int) -> tuple[float, int, int]:
     for k in range(0, n - size + 1, size):
         anchor = quote[k:k + size]
         at = haystack.find(anchor)
-        while at >= 0 and len(tried) < _MAX_SITES:
+        # Counted for this anchor alone: one that recurs all through the paper
+        # would otherwise spend the cap for the anchors after it, and those
+        # are the ones that find a quote whose start the paper repeats.
+        sites = 0
+        while at >= 0 and sites < _MAX_SITES:
+            sites += 1
             # Where the quote would start if this anchor sits where it does in
             # the quote, with a margin either side for an inserted word.
             begin = max(0, at - k - _ANCHOR)

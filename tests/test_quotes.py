@@ -44,6 +44,16 @@ def test_errors_at_an_anchor_seam_do_not_hide_a_match():
     assert quotes.coverage("abcdefghijklmnopqrstuvwx", "abcdefghijkZYnopqrstuvwx") >= quotes._COVERAGE
 
 
+def test_an_anchor_the_paper_repeats_leaves_the_others_their_own_sites():
+    # The quote's first half-anchor occurs more often than one anchor may be
+    # tried, all of it before the quote itself. The anchors after it are still
+    # tried, and they are the ones that find it.
+    repeated = "abcdef0123456789" * (quotes._MAX_SITES + 50)
+    found = quotes.best_match("abcdefghijklmnopqrstuvwx", repeated + "abcdefghijkZYnopqrstuvwx")
+    assert found[0] >= quotes._COVERAGE
+    assert found[1] >= len(repeated)
+
+
 def test_a_verbatim_quote_is_found_despite_line_breaks_and_hyphenation(tmp_path):
     pdf = tmp_path / "p.pdf"
     pdf.write_bytes(minimal_pdf("steering is a path-dependent out- come across"))

@@ -96,6 +96,11 @@ def test_a_verb_and_its_past_tense_meet():
                         ("diagnosis", "diagnoses"),
                         # And the plurals the -sis rule must not swallow.
                         ("phase", "phases"), ("dose", "doses"),
+                        ("purpose", "purposes"), ("propose", "proposes"),
+                        ("raise", "raises"), ("comprise", "comprises"),
+                        ("exercise", "exercises"), ("promise", "promises"),
+                        ("surprise", "surprises"), ("choose", "chooses"),
+                        ("close", "closes"),
                         # And the short stems the length guards used to part.
                         ("died", "dies"), ("used", "uses"), ("used", "use"),
                         # Singulars that end in s, and the plurals they own.

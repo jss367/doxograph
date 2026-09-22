@@ -646,6 +646,33 @@ def test_an_arxiv_id_is_cited_with_or_without_its_version():
     assert cites._whole(entry, entry.squashed.find(mark), len(mark), True, "1706.03762")
 
 
+def test_an_arxiv_id_is_cited_by_the_doi_arxiv_gives_it():
+    """`10.48550/arXiv.1706.03762` is the arXiv id's own DOI, not some other
+    DOI with the id at the end of its suffix."""
+    _paper("attention", "A paper with a very long title indeed",
+           ["A paper with a very long title indeed", "Text."],
+           source={"kind": "arxiv", "id": "1706.03762"})
+    _paper("citing", "The citing paper", [
+        "The citing paper",
+        "References\n[1] Somebody. A work. doi:10.48550/arXiv.1706.03762, 2017.",
+    ])
+    _paper("citing2", "Another citing paper", [
+        "Another citing paper",
+        "References\n[1] Somebody. A work. https://doi.org/10.48550/arXiv.1706.03762, 2017.",
+    ])
+
+    edges = cites.edges()
+    for citing in ("citing", "citing2"):
+        assert [e["to"] for e in edges if e["from"] == citing] == ["attention"], citing
+    # But only that DOI, and only right in front of the id: one DOI's suffix
+    # ending in another's is still the first DOI.
+    arxiv = quotes.squash("1706.03762")
+    inside = quotes.build("Nobody. A work. "
+                          "https://doi.org/10.9999/abc/10.48550/arXiv.1706.03762, 2026.")
+    assert not cites._whole(inside, inside.squashed.find(arxiv), len(arxiv),
+                            True, "1706.03762")
+
+
 def test_a_title_that_is_the_start_of_a_longer_one_is_not_a_citation():
     """The longer work need not be in the corpus for the entry to be citing
     it: a title that the entry goes on writing is a title of its own."""

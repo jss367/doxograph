@@ -602,6 +602,10 @@ _IDENTIFIER_CHAR = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]")
 _IDENTIFIER_RUN = re.compile(r"[-._;()/:A-Za-z0-9\u2010-\u2015\u2212]*")
 # Where a DOI starts. `ingest.DOI_RE` again, without its suffix.
 _DOI_HEAD = re.compile(r"10\.\d{4,9}/")
+# The DOI arXiv registers for each of its papers, which is the arXiv id with
+# this in front: `10.48550/arXiv.1706.03762` names the paper `1706.03762`
+# does, and is not some other DOI with the id at the end of its suffix.
+_ARXIV_DOI = re.compile(r"10\.48550/arxiv\.(?:[ \t]*[\n\r\f\u00ad][ \t]*)?$", re.I)
 
 
 
@@ -791,7 +795,14 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
             run = run[:wrap.start()]
             continue
         break
-    return not _DOI_HEAD.search(lead[len(run):])
+    head = lead[len(run):]
+    # Except the one DOI that is the arXiv id's own. Only right in front of
+    # the id, and only that far: `10.9999/abc/10.48550/arXiv.1706.03762` is
+    # still the DOI it starts with.
+    own = _ARXIV_DOI.search(head) if versioned else None
+    if own:
+        head = head[:own.start()]
+    return not _DOI_HEAD.search(head)
 
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
