@@ -3940,10 +3940,14 @@ async function patchClaim(paper, claim, patch) {
   // The write has landed by here. A failure only to read it back must not reach
   // the callers, who would report a save that happened as refused — and the `r`
   // key would stay on a claim the server has marked reviewed. The poll reads
-  // the corpus again within a few seconds.
+  // the corpus again within a few seconds. The redraw the refresh would have
+  // made still happens: a saved claim's form is only taken off the screen by
+  // it, and left there it would take typing that nothing keeps.
   try {
     await refresh();
-  } catch (error) { /* the next poll brings it */ }
+  } catch (error) {
+    render();
+  }
 }
 
 function readForm(form) {

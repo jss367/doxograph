@@ -5779,3 +5779,43 @@ def test_an_action_refused_while_the_reads_are_refused_too_still_says_so():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
+    """The PATCH landed and the editor was finished with; only the refresh was
+    refused. The form must still go, or text typed into it is lost to the
+    next redraw with nothing tracking it."""
+    one, _ = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
+
+    async def scenario():
+        refusing = asyncio.Event()
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+
+            async def refuse_read(route):
+                if refusing.is_set():
+                    await route.fulfill(status=500, json={"detail": "Busy"})
+                    return
+                await route.continue_()
+
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
+                await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
+                form = page.locator(f'form[data-form="{one}"]')
+                await form.locator('textarea[name="text"]').fill("One, edited.")
+                refusing.set()
+                await form.get_by_role("button", name="Save").click()
+                await page.wait_for_function(f"!isSaving({one!r})")
+                assert await form.count() == 0
+                assert await page.locator("#toasts .toast.warn").count() == 0
+                refusing.clear()
+                await page.get_by_text("One, edited.").wait_for()
+            await browser.close()
+
+    asyncio.run(scenario())
+    texts = {c["id"]: c["text"] for c in store.load_paper("doe2026study")["claims"]}
+    assert texts[one] == "One, edited."
