@@ -93,7 +93,7 @@ def test_a_verb_and_its_past_tense_meet():
                         ("controlled", "controls"), ("mapped", "maps"),
                         ("planned", "plans"), ("added", "adds"),
                         ("analysis", "analyses"), ("hypothesis", "hypotheses"),
-                        ("diagnosis", "diagnoses"),
+                        ("diagnosis", "diagnoses"), ("oasis", "oases"),
                         # And the plurals the -sis rule must not swallow.
                         ("phase", "phases"), ("dose", "doses"),
                         ("purpose", "purposes"), ("propose", "proposes"),

@@ -80,8 +80,8 @@ def stem(word: str) -> str:
     A plural first, then a verb ending, so `scaled` and `scales` meet.
     """
     word = _IRREGULAR.get(word, word)
-    if len(word) > 5 and word.endswith("sis") and word not in _SINGULAR_S:
-        # analysis/analyses, hypothesis/hypotheses, diagnosis/diagnoses. The
+    if len(word) > 4 and word.endswith("sis") and word not in _SINGULAR_S:
+        # analysis/analyses, diagnosis/diagnoses, oasis/oases. The
         # singular is read as its plural rather than the other way about: no
         # ending tells `diagnoses` from `purposes` or `analyses` from `raises`,
         # and turning every one into a -sis parts purposes from purpose. Read
