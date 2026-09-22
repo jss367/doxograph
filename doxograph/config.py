@@ -167,15 +167,13 @@ def _read_workspace_records() -> list[dict]:
     return loaded
 
 
+def _default_workspace() -> dict:
+    return {"id": DEFAULT_WORKSPACE_ID, "name": DEFAULT_WORKSPACE_NAME, "created": None}
+
+
 def list_workspaces() -> list[dict]:
     """List the built-in default workspace followed by user-created ones."""
-    records = [
-        {
-            "id": DEFAULT_WORKSPACE_ID,
-            "name": DEFAULT_WORKSPACE_NAME,
-            "created": None,
-        }
-    ]
+    records = [_default_workspace()]
     seen = {DEFAULT_WORKSPACE_ID}
     for item in _read_workspace_records():
         if not isinstance(item, dict):
@@ -195,6 +193,10 @@ def list_workspaces() -> list[dict]:
 
 def get_workspace(value: str | None = None) -> dict | None:
     wanted = value or workspace_id()
+    # The default is built in, not registered, so a broken registry must not
+    # cost it: the corpus it names is still there to read.
+    if wanted == DEFAULT_WORKSPACE_ID:
+        return _default_workspace()
     return next((item for item in list_workspaces() if item["id"] == wanted), None)
 
 

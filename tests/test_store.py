@@ -69,6 +69,19 @@ def test_rename_tag_rewrites_claims_and_merges():
     assert "alpha" not in store.tag_names()
 
 
+@pytest.mark.parametrize("name", ["日本語", "!!", ""])
+def test_rename_tag_refuses_a_name_with_nothing_left_once_slugged(name):
+    """Renaming to "" took the topic off every claim: a delete, not a rename."""
+    store.add_tag("alpha", "first")
+    store.save_paper(store.new_paper("doe2026study"))
+    store.add_claim("doe2026study", {"text": "X.", "tags": ["alpha"]})
+
+    with pytest.raises(ValueError, match="letter or digit"):
+        store.rename_tag("alpha", name)
+    assert store.load_paper("doe2026study")["claims"][0]["tags"] == ["alpha"]
+    assert store.tag_names() == ["alpha"]
+
+
 def test_delete_tag_strips_it_from_claims():
     store.add_tag("alpha")
     store.save_paper(store.new_paper("doe2026study"))

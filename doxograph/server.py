@@ -334,6 +334,13 @@ class RejectCrossSiteRequests:
         return await response(scope, receive, send)
 
 
+def _broken_registry(exc: ValueError) -> str:
+    """Say what is wrong with the registry and what to do about it, since only
+    a person can: the file is never rewritten over what it holds."""
+    return (f"{exc}. Fix or move aside {config.workspaces_path()} to reach any "
+            "workspace but the default.")
+
+
 class SelectWorkspace:
     """Bind each request to one corpus without changing any process-global path.
 
@@ -362,7 +369,14 @@ class SelectWorkspace:
         if not selected:
             query = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace"))
             selected = (query.get("workspace") or [config.DEFAULT_WORKSPACE_ID])[0]
-        if config.get_workspace(selected) is None:
+        try:
+            known = config.get_workspace(selected)
+        except ValueError as exc:
+            # Only a named workspace reaches the registry; the default is
+            # built in and is found without it.
+            response = JSONResponse({"detail": _broken_registry(exc)}, status_code=500)
+            return await response(scope, receive, send)
+        if known is None:
             response = JSONResponse({"detail": f"no workspace {selected}"}, status_code=404)
             return await response(scope, receive, send)
         with config.use_workspace(selected):
@@ -752,10 +766,15 @@ class PaperPatch(BaseModel):
     A year of `"2020"` was once accepted as a string and broke the export,
     which sorts papers by year. Only the fields the caller sent are applied:
     `None` is a value to write (clearing a year), an absent field is left alone.
+
+    Title, authors and notes take no null. Every reader of them expects text
+    or a list — the export, BibTeX, the notebook, `doxograph list` — and a
+    null written to disk broke each of those. An empty string or list clears
+    them instead. The defaults are never written, since only sent fields are.
     """
 
-    title: str | None = None
-    authors: list[str] | None = None
+    title: str = ""
+    authors: list[str] = []
     year: int | None = None
     venue: str | None = None
     doi: str | None = None
@@ -763,7 +782,7 @@ class PaperPatch(BaseModel):
     relevance: str | None = None
     # The reader's own note on the paper. Why the ingest has no PDF is
     # `error`, which is the machine's to write and not offered here.
-    notes: str | None = None
+    notes: str = ""
     labels: list[str] | None = None
 
     @field_validator("labels")
@@ -789,7 +808,9 @@ class ContextBody(BaseModel):
 
 
 class ExportBody(BaseModel):
-    path: str | None = None
+    # No `path`: the page never sent one, and a request naming any file on disk
+    # to create and overwrite is more than the page needs. The CLI still takes
+    # `--out`; over HTTP the file goes where the workspace keeps its export.
     title: str = "Doxograph"
 
 
@@ -1030,7 +1051,10 @@ def dismiss_job(job_id: int) -> Response:
 
 @app.get("/api/workspaces")
 def workspaces() -> dict:
-    return {"workspaces": config.list_workspaces()}
+    try:
+        return {"workspaces": config.list_workspaces()}
+    except ValueError as exc:
+        raise HTTPException(500, _broken_registry(exc))
 
 
 @app.post("/api/workspaces", status_code=201)
@@ -1322,7 +1346,10 @@ def create_tag(body: TagBody) -> dict:
 
 @app.patch("/api/tags/{name}")
 def patch_tag(name: str, body: RenameBody) -> dict:
-    store.rename_tag(name, body.name)
+    try:
+        store.rename_tag(name, body.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     return {"tags": store.load_tags()}
 
 
@@ -1473,7 +1500,7 @@ def put_context(body: ContextBody) -> dict:
 
 @app.post("/api/export")
 def api_export(body: ExportBody) -> dict:
-    path = export.write(Path(body.path).expanduser() if body.path else None, title=body.title)
+    path = export.write(title=body.title)
     return {"path": str(path)}
 
 

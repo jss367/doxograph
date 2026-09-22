@@ -766,8 +766,15 @@ def add_tag(name: str, description: str = "") -> list[dict]:
 
 
 def rename_tag(old: str, new: str) -> None:
-    """Rename across the vocabulary and every claim. Merges if `new` exists."""
+    """Rename across the vocabulary and every claim. Merges if `new` exists.
+
+    A name with nothing left once slugged ("!!", "日本語") is refused: renaming
+    to "" would take the topic off every claim and drop its synthesis, which
+    is a delete, and the caller asked for a rename.
+    """
     new = slugify(new)
+    if not new:
+        raise ValueError("a topic name needs at least one letter or digit")
     with vocab_lock():
         current = load_tags()
         tags = [t for t in current if t["name"] != old]

@@ -167,3 +167,16 @@ def test_malformed_registry_does_not_block_health_or_app_shell():
     response = client.post("/api/workspaces", json={"name": "Consciousness"})
     assert response.status_code == 422
     assert "workspace registry is not valid JSON" in response.json()["detail"]
+    # The default corpus is built in, not registered, so it is still readable.
+    assert client.get("/api/state").status_code == 200
+    assert client.get("/api/state", headers={"X-Doxograph-Workspace": "default"}).status_code == 200
+    assert client.get("/research-tools.js").status_code == 200
+    assert client.get("/research-tools.css").status_code == 200
+    assert client.get("/vendor/pdf.min.mjs").status_code == 200
+    # Anything that has to read the registry says what is wrong with it.
+    for response in (client.get("/api/workspaces"),
+                     client.get("/api/state", headers={"X-Doxograph-Workspace": "animal"})):
+        assert response.status_code == 500
+        detail = response.json()["detail"]
+        assert "workspace registry is not valid JSON" in detail
+        assert str(config.workspaces_path()) in detail

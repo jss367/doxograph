@@ -325,6 +325,33 @@ def test_a_paper_patch_can_clear_a_year():
     assert store.load_paper("doe2026study")["year"] is None
 
 
+def test_a_paper_patch_refuses_a_null_where_every_reader_expects_a_value():
+    """A null title or author list was written to disk and broke the export,
+    BibTeX and `doxograph list`, each of which reads it as text or a list."""
+    store.save_paper(store.new_paper("doe2026study", title="A Study",
+                                     authors=["Jane Doe"], notes="a note"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        for field in ("title", "authors", "notes"):
+            assert client.patch("/api/papers/doe2026study", json={field: None}).status_code == 422
+        assert client.get("/api/bibtex").status_code == 200
+
+    paper = store.load_paper("doe2026study")
+    assert (paper["title"], paper["authors"], paper["notes"]) == ("A Study", ["Jane Doe"], "a note")
+    assert store.summarize(paper)["title"][:70] == "A Study"
+    export.render()
+
+
+def test_a_paper_patch_can_still_clear_a_title_with_an_empty_value():
+    store.save_paper(store.new_paper("doe2026study", title="A Study", authors=["Jane Doe"]))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.patch("/api/papers/doe2026study",
+                            json={"title": "", "authors": [], "venue": None}).status_code == 200
+        assert client.get("/api/bibtex").status_code == 200
+    paper = store.load_paper("doe2026study")
+    assert (paper["title"], paper["authors"], paper["venue"]) == ("", [], None)
+    export.render()
+
+
 def test_a_paper_patch_ignores_a_field_that_is_not_the_users_to_set():
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
