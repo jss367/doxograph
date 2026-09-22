@@ -5741,3 +5741,41 @@ def test_a_review_whose_read_back_fails_still_counts_and_r_moves_on():
 
     asyncio.run(scenario())
     assert _reviewed("doe2026study") == {one: True, two: False}
+
+
+@pytest.mark.browser
+def test_an_action_refused_while_the_reads_are_refused_too_still_says_so():
+    """The warning is drawn by the redraw after the refresh. With the server
+    refusing the read as well, the refresh threw before it could draw."""
+    _paper_with_proposal("doe2026study", "A study", "recovery", "2026-09-02T12:00:00+00:00")
+
+    async def scenario():
+        refusing = asyncio.Event()
+        rejections = []
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            page.on("pageerror", lambda error: rejections.append(str(error)))
+
+            async def refuse_write(route):
+                refusing.set()
+                await route.fulfill(status=500, json={"detail": "Disk full"})
+
+            async def refuse_read(route):
+                if refusing.is_set():
+                    await route.fulfill(status=503, json={"detail": "Restarting"})
+                    return
+                await route.continue_()
+
+            await page.route("**/api/papers/doe2026study/proposed-tags", refuse_write)
+            await page.route("**/api/state", refuse_read)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator('[data-act="accept-tag"]').click()
+                await page.locator("#content .warn",
+                                   has_text="Could not accept the proposed topic: Disk full").wait_for()
+                assert rejections == []
+            await browser.close()
+
+    asyncio.run(scenario())

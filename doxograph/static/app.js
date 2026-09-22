@@ -1157,6 +1157,18 @@ async function refreshAll() {
   renderAll();
 }
 
+// The redraw after an action whose refusal is in `V.error`. A server that
+// refused the action may refuse the read after it as well, and a refresh that
+// throws leaves before its redraw: the warning would never be drawn and the
+// click would end in an unhandled rejection. The poll brings the corpus.
+async function refreshAllShowingError() {
+  try {
+    await refreshAll();
+  } catch (error) {
+    renderAll();
+  }
+}
+
 function currentWorkspace() {
   return workspaces.find((workspace) => workspace.id === currentWorkspaceId) || null;
 }
@@ -4508,7 +4520,7 @@ $('content').addEventListener('click', async (event) => {
       } catch (error) {
         V.error = `Could not re-read the paper: ${error.message}`;
       }
-      await refreshAll();
+      await refreshAllShowingError();
       return;
     }
     if (act === 'verify') {
@@ -4538,7 +4550,7 @@ $('content').addEventListener('click', async (event) => {
       } catch (error) {
         V.error = `Could not retag the claims: ${error.message}`;
       }
-      await refreshAll();
+      await refreshAllShowingError();
       return;
     }
     if (act === 'resume-new') {
@@ -4601,7 +4613,7 @@ $('content').addEventListener('click', async (event) => {
         V.error = `Could not ${field} the proposed topic: ${error.message}`;
       }
       delete paperCache()[paper];
-      await refreshAll();
+      await refreshAllShowingError();
       return;
     }
   }
