@@ -49,8 +49,11 @@ def verbatim(value: str) -> str:
 # be a person's: it has a joining word no personal name has, or a word that
 # names a body of people. A person is left unbraced so styles can still
 # abbreviate and sort by surname. Von particles are lowercase too, which is why
-# the joining words are listed rather than every lowercase word counted.
-JOINING_WORDS = {"and", "of", "for", "the", "on", "in", "at"}
+# the joining words are listed rather than every lowercase word counted. Only
+# words no one is named are listed: In, On, At and The are all given or family
+# names (Sung-Jin In, Anh The Nguyen), and bracing one of those people printed
+# the whole name as a surname.
+JOINING_WORDS = {"and", "of", "for"}
 BODY_WORDS = {
     "collaboration", "consortium", "team", "group", "committee", "council",
     "association", "society", "institute", "university", "laboratory",

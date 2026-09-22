@@ -55,6 +55,8 @@ def test_a_caret_is_escaped():
     (["AT&T Laboratory"], r"{AT\&T Laboratory}"),
     (["Ludwig van Beethoven", "Jean de la Fontaine"],
      "Ludwig van Beethoven and Jean de la Fontaine"),
+    (["Sung-Jin In", "Anh The Nguyen", "Kyung On", "Mehmet At"],
+     "Sung-Jin In and Anh The Nguyen and Kyung On and Mehmet At"),
 ])
 def test_an_institutional_author_is_one_literal_name(authors, expected):
     """Ingest keeps a Crossref institutional author as one string, and BibTeX
