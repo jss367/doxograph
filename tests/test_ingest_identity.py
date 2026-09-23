@@ -196,6 +196,28 @@ def test_a_field_name_inside_a_value_is_not_a_field():
     assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
 
 
+def test_a_commented_out_field_is_not_read():
+    """A stale identifier kept behind `%` must not win over the live one."""
+    field = ("% doi = {10.1234/old},\n  doi = {10.1145/3442188.3445922},"
+             " note = {https://example.org/a%20b}, % eprint = {2510.09023}\n")
+    client = FakePageClient("https://role-confusion.github.io/", PROJECT_PAGE % field)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
+
+
+@pytest.mark.parametrize("bibtex", [
+    'title = "Schr{\\"o}dinger Methods for Quantum Control"',
+    'title = {Schr\\"{o}dinger Methods for Quantum Control}',
+])
+def test_an_accented_title_matches_the_page(bibtex):
+    html = ("<head><title>Schr&ouml;dinger Methods for Quantum Control</title></head>"
+            f"<body><pre>@article{{s2026, {bibtex},"
+            " url = {https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://quantum.example.org/", html)
+    ref = ingest.resolve_page("https://quantum.example.org/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
 BIBTEX = ("<pre>@article{ye2026, title={%s},"
           " url={https://arxiv.org/abs/2603.12277}}</pre>")
 

@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 import html as html_module
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -335,6 +336,22 @@ def _closing_brace(text: str, i: int, limit: int) -> int | None:
     return None
 
 
+def _closing_quote(text: str, i: int, limit: int) -> int:
+    """Where a quoted value opened before `i` ends, or `limit` if it never does.
+
+    A quote inside braces belongs to the value, as in the accent of
+    `Schr{\\"o}dinger`, so only one outside every brace closes it.
+    """
+    depth = 0
+    while i < limit:
+        char = text[i]
+        if char == '"' and not depth:
+            return i
+        depth += {"{": 1, "}": -1}.get(char, 0)
+        i += 1
+    return limit
+
+
 def _bibtex_entries(text: str) -> list[dict[str, str]]:
     """The fields of each BibTeX entry in `text`, lowercased by name.
 
@@ -362,13 +379,21 @@ def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:
     """
     fields = {}
     while field := _BIBTEX_FIELD.search(text, i, end):
+        # A `%` between fields comments out the rest of its line, and a field
+        # commented out that way is often a stale identifier kept for the
+        # record. Only the gap before a field is looked in, never a value, so a
+        # `%20` in a URL is left alone.
+        comment = text.rfind("%", i, field.start())
+        if comment >= 0 and "\n" not in text[comment:field.start()]:
+            newline = text.find("\n", field.start(), end)
+            i = end if newline < 0 else newline
+            continue
         i = field.end()
         if text.startswith("{", i, end):
             close = _closing_brace(text, i + 1, end) or end + 1
             value, i = text[i + 1:close - 1], close
         elif text.startswith('"', i, end):
-            close = text.find('"', i + 1, end)
-            close = end if close < 0 else close
+            close = _closing_quote(text, i + 1, end)
             value, i = text[i + 1:close], close + 1
         else:
             bare = _BIBTEX_BARE.match(text, i, end)
@@ -378,8 +403,15 @@ def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:
 
 
 def _title_words(title: str) -> str:
-    """A title as its words alone, padded so containment is word-aligned."""
-    title = re.sub(r"\\[a-zA-Z]+", " ", title)
+    """A title as its words alone, padded so containment is word-aligned.
+
+    An accent is dropped however it is written, so the BibTeX `Schr{\\"o}dinger`
+    and the page's `Schrödinger` both read as `schrodinger`.
+    """
+    title = re.sub(r"""\\(?:["'^`~=.]|[a-zA-Z](?=\{))""", "", title)
+    title = re.sub(r"[{}]", "", re.sub(r"\\[a-zA-Z]+", " ", title))
+    title = "".join(c for c in unicodedata.normalize("NFKD", title)
+                    if not unicodedata.combining(c))
     return " " + " ".join(re.findall(r"[a-z0-9]+", title.lower())) + " "
 
 
