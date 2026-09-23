@@ -431,17 +431,24 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     nothing a machine reads. The title match is what makes it the page's own:
     a BibTeX entry for any other paper carries that paper's title instead.
     """
+    page = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    # A heading names the page only when it is the one heading there is. A
+    # publications list gives every paper its own, and each of those would
+    # otherwise match that paper's BibTeX and pass the list off as the paper.
+    # The document title is read from the head for the same reason, since an
+    # inline SVG in the body may carry a <title> of its own.
+    h1s = re.findall(r"<h1\b[^>]*>(.*?)</h1>", page, re.I | re.S)
+    headings = re.findall(r"<title\b[^>]*>(.*?)</title>", _head(page), re.I | re.S) + (
+        h1s if len(h1s) == 1 else [])
     # Each metadata title is a candidate of its own, since a generic
     # citation_title must not hide an og:title that names the paper. A heading
     # may carry inline markup and entities, as in `<em>Role</em> &amp; Intent`,
     # which would otherwise leave `em` and `amp` among its words.
     titles = [t for t in (
         *(_meta_content(html, name) for name in ("citation_title", "og:title", "twitter:title")),
-        *(html_module.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))
-          for m in re.finditer(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>", html, re.I | re.S)),
+        *(html_module.unescape(re.sub(r"<[^>]+>", " ", h)) for h in headings),
     ) if t]
-    text = re.sub(r"<!--.*?-->", "", html, flags=re.S)
-    text = html_module.unescape(re.sub(r"<[^>]+>", "", text))
+    text = html_module.unescape(re.sub(r"<[^>]+>", "", page))
     for entry in _bibtex_entries(text):
         if not any(_same_title(entry.get("title", ""), t) for t in titles):
             continue

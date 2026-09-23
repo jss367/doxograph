@@ -180,6 +180,19 @@ def test_bibtex_for_another_paper_does_not_hijack_the_page():
         ingest.resolve_page("https://lab.example.org/", client)
 
 
+def test_a_publications_list_is_not_passed_off_as_one_of_its_papers():
+    """Each paper under its own heading, each with its BibTeX, is still a list."""
+    papers = [("Prompt Injection as Role Confusion", "2603.12277"),
+              ("A Study of Something Else Entirely", "2510.09023")]
+    html = "<head><title>Our lab: publications</title></head><body>" + "".join(
+        f"<h1>{title}</h1><pre>@article{{p{n}, title={{{title}}},"
+        f" url={{https://arxiv.org/abs/{arxiv}}}}}</pre>"
+        for n, (title, arxiv) in enumerate(papers)) + "</body>"
+    client = FakePageClient("https://lab.example.org/publications", html)
+    with pytest.raises(ValueError, match="paste the arXiv ID"):
+        ingest.resolve_page("https://lab.example.org/publications", client)
+
+
 def test_a_cited_arxiv_paper_does_not_outrank_the_entrys_own_doi():
     """An abstract may mention another paper; only where the entry is published counts."""
     field = ("abstract = {We build on arXiv:2510.09023 and \\url{https://arxiv.org/abs/2510.09023}},"
