@@ -317,13 +317,83 @@ def _head(html: str) -> str:
     return match.group(0) if match else html[:20_000]
 
 
+def _bibtex_entries(text: str) -> list[dict[str, str]]:
+    """The fields of each BibTeX entry in `text`, lowercased by name."""
+    entries = []
+    for start in re.finditer(r"@\w+\s*\{", text):
+        depth, end = 1, start.end()
+        while end < len(text) and depth:
+            depth += {"{": 1, "}": -1}.get(text[end], 0)
+            end += 1
+        body, fields = text[start.end():end - 1], {}
+        for field in re.finditer(r"(\w+)\s*=\s*", body):
+            rest = body[field.end():]
+            if rest.startswith("{"):
+                depth, i = 1, 1
+                while i < len(rest) and depth:
+                    depth += {"{": 1, "}": -1}.get(rest[i], 0)
+                    i += 1
+                value = rest[1:i - 1]
+            elif rest.startswith('"'):
+                value = rest[1:].split('"', 1)[0]
+            else:
+                value = re.match(r"[^,}]*", rest).group(0)
+            fields.setdefault(field.group(1).lower(), value.strip())
+        entries.append(fields)
+    return entries
+
+
+def _title_words(title: str) -> str:
+    """A title as its words alone, padded so containment is word-aligned."""
+    title = re.sub(r"\\[a-zA-Z]+", " ", title)
+    return " " + " ".join(re.findall(r"[a-z0-9]+", title.lower())) + " "
+
+
+def _same_title(a: str, b: str) -> bool:
+    a, b = _title_words(a), _title_words(b)
+    shorter, longer = sorted((a, b), key=len)
+    return len(shorter.split()) >= 3 and shorter in longer
+
+
+def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
+    """The page's citation of itself, from a BibTeX block titled like the page.
+
+    A project page names its paper in a BibTeX block under "Citation" and in
+    nothing a machine reads. The title match is what makes it the page's own:
+    a BibTeX entry for any other paper carries that paper's title instead.
+    """
+    titles = [t for t in (
+        _meta_content(html, "citation_title", "og:title", "twitter:title"),
+        *(m.group(1) for m in re.finditer(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>",
+                                          html, re.I | re.S)),
+    ) if t]
+    text = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    text = html_module.unescape(re.sub(r"<[^>]+>", "", text))
+    for entry in _bibtex_entries(text):
+        if not any(_same_title(entry.get("title", ""), t) for t in titles):
+            continue
+        eprint = re.sub(r"^arxiv:", "", entry.get("eprint", ""), flags=re.I)
+        if re.fullmatch(rf"{ARXIV_NEW}|{ARXIV_OLD}", eprint):
+            return Ref("arxiv", eprint, page_url)
+        others = " ".join(v for k, v in entry.items() if k != "title")
+        for pattern in _ARXIV_PATTERNS[:3]:
+            match = pattern.search(others)
+            if match:
+                return Ref("arxiv", match.group(1), page_url)
+        match = re.search(DOI_RE, entry.get("doi", ""))
+        if match:
+            return Ref("doi", normalize_doi(match.group(0)), page_url, pdf_url=pdf_url)
+    return None
+
+
 def resolve_page(url: str, client: httpx.Client) -> Ref:
     """Identify a landing page from its own metadata.
 
     Deliberately does not search the whole document for an arXiv link: a journal
     page cites other papers in its bibliography and related-articles list, and
     picking one of those would silently ingest and extract the wrong paper.
-    Identity comes from citation metadata, the canonical URL, or the head.
+    Identity comes from citation metadata, the canonical URL, a BibTeX block
+    titled like the page, or the head.
     """
     response = client.get(url, follow_redirects=True)
     response.raise_for_status()
@@ -361,6 +431,10 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
         match = re.search(DOI_RE, doi)
         if match:
             return Ref("doi", normalize_doi(match.group(0)), url, pdf_url=advertised)
+
+    own = _own_bibtex(html, url, advertised)
+    if own:
+        return own
 
     if advertised:
         return Ref("pdf", advertised, url)

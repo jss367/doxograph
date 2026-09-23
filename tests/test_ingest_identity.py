@@ -146,6 +146,39 @@ def test_citation_doi_is_preferred_over_the_pdf_link():
     assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
 
 
+PROJECT_PAGE = """<head><title>Prompt Injection as Role Confusion</title></head><body>
+<h1>Prompt Injection as Role Confusion</h1>
+<p>Human red-teamers <a href="https://arxiv.org/abs/2510.09023">win</a>.</p>
+<pre><code>@inproceedings{ye2026,
+  title = {Prompt Injection as {Role} Confusion},
+  author = {Ye, Charles and Cui, Jasmine},
+  year = {2026},
+  %s
+}</code></pre></body>"""
+
+
+@pytest.mark.parametrize("field,expected", [
+    ("url = {https://arxiv.org/abs/2603.12277}", ("arxiv", "2603.12277")),
+    ("eprint = {2603.12277}, archivePrefix = {arXiv}", ("arxiv", "2603.12277")),
+    ('journal = "arXiv preprint arXiv:2603.12277"', ("arxiv", "2603.12277")),
+    ("doi = {10.1145/3442188.3445922}", ("doi", "10.1145/3442188.3445922")),
+])
+def test_a_project_page_is_identified_by_its_own_bibtex(field, expected):
+    """A project page carries no citation metadata, only a BibTeX block."""
+    client = FakePageClient("https://role-confusion.github.io/", PROJECT_PAGE % field)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == expected
+
+
+def test_bibtex_for_another_paper_does_not_hijack_the_page():
+    html = ('<head><title>Our lab</title></head><body><h1>Publications</h1>'
+            '<pre>@article{doe2025, title={A Study of Something Else},'
+            ' url={https://arxiv.org/abs/2510.09023}}</pre></body>')
+    client = FakePageClient("https://lab.example.org/", html)
+    with pytest.raises(ValueError, match="paste the arXiv ID"):
+        ingest.resolve_page("https://lab.example.org/", client)
+
+
 def test_an_unidentifiable_page_says_what_to_do_instead():
     html = '<head><title>Some page</title></head><body>no identifiers here</body>'
     client = FakePageClient("https://example.org/page", html)
