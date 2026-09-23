@@ -462,6 +462,9 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     for entry in _bibtex_entries(text):
         if not any(_same_title(entry.get("title", ""), t) for t in titles):
             continue
+        # An exporter escapes the characters TeX treats specially, so a DOI's
+        # underscore arrives as `\_` and would otherwise end the DOI before it.
+        entry = {k: re.sub(r"\\([_&%#$])", r"\1", v) for k, v in entry.items()}
         eprint = re.sub(r"^arxiv:", "", entry.get("eprint", ""), flags=re.I)
         if re.fullmatch(rf"{ARXIV_NEW}|{ARXIV_OLD}", eprint):
             return Ref("arxiv", eprint, page_url)

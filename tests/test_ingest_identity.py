@@ -165,6 +165,8 @@ PROJECT_PAGE = """<head><title>Prompt Injection as Role Confusion</title></head>
     ("doi = {10.1145/3442188.3445922}", ("doi", "10.1145/3442188.3445922")),
     ("url = {https://doi.org/10.1145/3442188.3445922}", ("doi", "10.1145/3442188.3445922")),
     ("howpublished = {doi:10.1145/3442188.3445922}", ("doi", "10.1145/3442188.3445922")),
+    ("doi = {10.1234/foo\\_bar}", ("doi", "10.1234/foo_bar")),
+    ("url = {https://doi.org/10.1234/foo\\_bar}", ("doi", "10.1234/foo_bar")),
 ])
 def test_a_project_page_is_identified_by_its_own_bibtex(field, expected):
     """A project page carries no citation metadata, only a BibTeX block."""
