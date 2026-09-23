@@ -418,10 +418,17 @@ def _title_words(title: str) -> str:
     return " " + " ".join(re.findall(r"[a-z0-9]+", title.lower())) + " "
 
 
-def _same_title(a: str, b: str) -> bool:
-    a, b = _title_words(a), _title_words(b)
-    shorter, longer = sorted((a, b), key=len)
-    return len(shorter.split()) >= 3 and shorter in longer
+def _same_title(cited: str, page: str) -> bool:
+    """Whether a page titled `page` is the paper a BibTeX entry titles `cited`.
+
+    Only the page's title may be the longer, since it often adds the site's
+    name around the paper's, as in `Paper Title | Project Page`. A citation
+    longer than the page's title is some other paper that merely begins the
+    same way, as `Natural Language Processing with Transformers` is to a page
+    titled `Natural Language Processing`.
+    """
+    cited, page = _title_words(cited), _title_words(page)
+    return len(cited.split()) >= 3 and cited in page
 
 
 _BIBTEX_WHERE = ("url", "journal", "note", "howpublished", "doi")

@@ -195,6 +195,25 @@ def test_a_publications_list_is_not_passed_off_as_one_of_its_papers():
         ingest.resolve_page("https://lab.example.org/publications", client)
 
 
+def test_a_generic_page_title_does_not_claim_a_longer_citation():
+    """A citation that only begins with the page's title is another paper."""
+    html = ("<head><title>Natural Language Processing</title></head><body>"
+            "<pre>@book{t2022, title={Natural Language Processing with Transformers},"
+            " url={https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://nlp.example.org/", html)
+    with pytest.raises(ValueError, match="paste the arXiv ID"):
+        ingest.resolve_page("https://nlp.example.org/", client)
+
+
+def test_a_page_title_may_add_the_sites_name_to_the_papers():
+    html = ("<head><title>Prompt Injection as Role Confusion | Project Page</title></head>"
+            "<body><pre>@article{ye2026, title={Prompt Injection as Role Confusion},"
+            " url={https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://role-confusion.github.io/", html)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
 def test_a_cited_arxiv_paper_does_not_outrank_the_entrys_own_doi():
     """An abstract may mention another paper; only where the entry is published counts."""
     field = ("abstract = {We build on arXiv:2510.09023 and \\url{https://arxiv.org/abs/2510.09023}},"
