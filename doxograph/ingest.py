@@ -406,8 +406,11 @@ def _title_words(title: str) -> str:
     """A title as its words alone, padded so containment is word-aligned.
 
     An accent is dropped however it is written, so the BibTeX `Schr{\\"o}dinger`
-    and the page's `Schrödinger` both read as `schrodinger`.
+    and the page's `Schrödinger` both read as `schrodinger`. Every other macro
+    is dropped too, except the few that print a word of their own, like the
+    `LaTeX` of `{\\LaTeX}`.
     """
+    title = re.sub(r"\\((?:La|Bib)?TeX)\b", r" \1 ", title)
     title = re.sub(r"""\\(?:["'^`~=.]|[a-zA-Z](?=\{))""", "", title)
     title = re.sub(r"[{}]", "", re.sub(r"\\[a-zA-Z]+", " ", title))
     title = "".join(c for c in unicodedata.normalize("NFKD", title)
@@ -463,9 +466,13 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
             match = pattern.search(where)
             if match:
                 return Ref("arxiv", match.group(1), page_url)
-        match = re.search(DOI_RE, entry.get("doi", ""))
+        # A DOI may also be given only as the entry's link. There it has to be
+        # written as one, since a url or howpublished can link anywhere.
+        match = re.search(rf"({DOI_RE})", entry.get("doi", "")) or re.search(
+            rf"(?:doi\.org/|\bdoi:\s*)({DOI_RE})",
+            " ".join(entry.get(k, "") for k in ("url", "howpublished")), re.I)
         if match:
-            return Ref("doi", normalize_doi(match.group(0)), page_url, pdf_url=pdf_url)
+            return Ref("doi", normalize_doi(match.group(1)), page_url, pdf_url=pdf_url)
     return None
 
 

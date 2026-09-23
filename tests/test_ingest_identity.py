@@ -163,6 +163,8 @@ PROJECT_PAGE = """<head><title>Prompt Injection as Role Confusion</title></head>
     ("eprint = {2603.12277}, archivePrefix = {arXiv}", ("arxiv", "2603.12277")),
     ('journal = "arXiv preprint arXiv:2603.12277"', ("arxiv", "2603.12277")),
     ("doi = {10.1145/3442188.3445922}", ("doi", "10.1145/3442188.3445922")),
+    ("url = {https://doi.org/10.1145/3442188.3445922}", ("doi", "10.1145/3442188.3445922")),
+    ("howpublished = {doi:10.1145/3442188.3445922}", ("doi", "10.1145/3442188.3445922")),
 ])
 def test_a_project_page_is_identified_by_its_own_bibtex(field, expected):
     """A project page carries no citation metadata, only a BibTeX block."""
@@ -228,6 +230,23 @@ def test_an_accented_title_matches_the_page(bibtex):
             " url = {https://arxiv.org/abs/2603.12277}}</pre></body>")
     client = FakePageClient("https://quantum.example.org/", html)
     ref = ingest.resolve_page("https://quantum.example.org/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
+def test_a_link_that_only_contains_a_doi_is_not_one():
+    """Only a link written as a DOI names one; a URL can have any path."""
+    field = "url = {https://example.org/10.1145/3442188.3445922}"
+    client = FakePageClient("https://role-confusion.github.io/", PROJECT_PAGE % field)
+    with pytest.raises(ValueError, match="paste the arXiv ID"):
+        ingest.resolve_page("https://role-confusion.github.io/", client)
+
+
+def test_a_word_printed_by_a_tex_macro_is_part_of_the_title():
+    html = ("<head><title>A LaTeX Workflow for Science</title></head><body>"
+            "<pre>@article{w2026, title={A {\\LaTeX} Workflow for Science},"
+            " url={https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://latex.example.org/", html)
+    ref = ingest.resolve_page("https://latex.example.org/", client)
     assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
 
 
