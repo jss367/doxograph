@@ -317,30 +317,64 @@ def _head(html: str) -> str:
     return match.group(0) if match else html[:20_000]
 
 
+_BIBTEX_START = re.compile(r"@\w+\s*\{")
+# The boundary keeps a long run of letters from being retried at every one of
+# its positions in search of an `=` that never comes.
+_BIBTEX_FIELD = re.compile(r"\b(\w+)\s*=\s*")
+_BIBTEX_BARE = re.compile(r"[^,}]*")
+
+
+def _closing_brace(text: str, i: int, limit: int) -> int | None:
+    """Just past the brace that closes one opened before `i`, if before `limit`."""
+    depth = 1
+    while i < limit:
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        i += 1
+        if not depth:
+            return i
+    return None
+
+
 def _bibtex_entries(text: str) -> list[dict[str, str]]:
-    """The fields of each BibTeX entry in `text`, lowercased by name."""
+    """The fields of each BibTeX entry in `text`, lowercased by name.
+
+    An entry is looked for only up to where the next one starts. The page is
+    untrusted, and an `@name{` that never closes would otherwise send every
+    entry after it scanning to the end of the page, so a page full of them
+    would take quadratic time. Bounded like this, each character is read once.
+    """
+    starts = list(_BIBTEX_START.finditer(text))
     entries = []
-    for start in re.finditer(r"@\w+\s*\{", text):
-        depth, end = 1, start.end()
-        while end < len(text) and depth:
-            depth += {"{": 1, "}": -1}.get(text[end], 0)
-            end += 1
-        body, fields = text[start.end():end - 1], {}
-        for field in re.finditer(r"(\w+)\s*=\s*", body):
-            rest = body[field.end():]
-            if rest.startswith("{"):
-                depth, i = 1, 1
-                while i < len(rest) and depth:
-                    depth += {"{": 1, "}": -1}.get(rest[i], 0)
-                    i += 1
-                value = rest[1:i - 1]
-            elif rest.startswith('"'):
-                value = rest[1:].split('"', 1)[0]
-            else:
-                value = re.match(r"[^,}]*", rest).group(0)
-            fields.setdefault(field.group(1).lower(), value.strip())
-        entries.append(fields)
+    for n, start in enumerate(starts):
+        limit = starts[n + 1].start() if n + 1 < len(starts) else len(text)
+        end = _closing_brace(text, start.end(), limit)
+        if end is not None:
+            entries.append(_bibtex_fields(text, start.end(), end - 1))
     return entries
+
+
+def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:
+    """The fields between `i` and `end`, each read past its whole value.
+
+    Reading on from where a value ends, rather than from every `name =` in the
+    entry, is what keeps `url={https://example.org/?eprint=2510.09023}` from
+    also reading as an eprint field naming some other paper.
+    """
+    fields = {}
+    while field := _BIBTEX_FIELD.search(text, i, end):
+        i = field.end()
+        if text.startswith("{", i, end):
+            close = _closing_brace(text, i + 1, end) or end + 1
+            value, i = text[i + 1:close - 1], close
+        elif text.startswith('"', i, end):
+            close = text.find('"', i + 1, end)
+            close = end if close < 0 else close
+            value, i = text[i + 1:close], close + 1
+        else:
+            bare = _BIBTEX_BARE.match(text, i, end)
+            value, i = bare.group(0), bare.end()
+        fields.setdefault(field.group(1).lower(), value.strip())
+    return fields
 
 
 def _title_words(title: str) -> str:
@@ -355,6 +389,9 @@ def _same_title(a: str, b: str) -> bool:
     return len(shorter.split()) >= 3 and shorter in longer
 
 
+_BIBTEX_WHERE = ("url", "journal", "note", "howpublished", "doi")
+
+
 def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     """The page's citation of itself, from a BibTeX block titled like the page.
 
@@ -362,10 +399,14 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     nothing a machine reads. The title match is what makes it the page's own:
     a BibTeX entry for any other paper carries that paper's title instead.
     """
+    # Each metadata title is a candidate of its own, since a generic
+    # citation_title must not hide an og:title that names the paper. A heading
+    # may carry inline markup and entities, as in `<em>Role</em> &amp; Intent`,
+    # which would otherwise leave `em` and `amp` among its words.
     titles = [t for t in (
-        _meta_content(html, "citation_title", "og:title", "twitter:title"),
-        *(m.group(1) for m in re.finditer(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>",
-                                          html, re.I | re.S)),
+        *(_meta_content(html, name) for name in ("citation_title", "og:title", "twitter:title")),
+        *(html_module.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))
+          for m in re.finditer(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>", html, re.I | re.S)),
     ) if t]
     text = re.sub(r"<!--.*?-->", "", html, flags=re.S)
     text = html_module.unescape(re.sub(r"<[^>]+>", "", text))
@@ -375,9 +416,12 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
         eprint = re.sub(r"^arxiv:", "", entry.get("eprint", ""), flags=re.I)
         if re.fullmatch(rf"{ARXIV_NEW}|{ARXIV_OLD}", eprint):
             return Ref("arxiv", eprint, page_url)
-        others = " ".join(v for k, v in entry.items() if k != "title")
+        # Only the fields that say where the entry itself is published. An
+        # abstract or keywords field may well mention another arXiv paper, and
+        # that must not win over the entry's own DOI.
+        where = " ".join(entry.get(k, "") for k in _BIBTEX_WHERE)
         for pattern in _ARXIV_PATTERNS[:3]:
-            match = pattern.search(others)
+            match = pattern.search(where)
             if match:
                 return Ref("arxiv", match.group(1), page_url)
         match = re.search(DOI_RE, entry.get("doi", ""))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -177,6 +178,53 @@ def test_bibtex_for_another_paper_does_not_hijack_the_page():
     client = FakePageClient("https://lab.example.org/", html)
     with pytest.raises(ValueError, match="paste the arXiv ID"):
         ingest.resolve_page("https://lab.example.org/", client)
+
+
+def test_a_cited_arxiv_paper_does_not_outrank_the_entrys_own_doi():
+    """An abstract may mention another paper; only where the entry is published counts."""
+    field = ("abstract = {We build on arXiv:2510.09023 and \\url{https://arxiv.org/abs/2510.09023}},"
+             " keywords = {arXiv:2510.09023}, doi = {10.1145/3442188.3445922}")
+    client = FakePageClient("https://role-confusion.github.io/", PROJECT_PAGE % field)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
+
+
+def test_a_field_name_inside_a_value_is_not_a_field():
+    field = "url = {https://example.org/?eprint=2510.09023}, doi = {10.1145/3442188.3445922}"
+    client = FakePageClient("https://role-confusion.github.io/", PROJECT_PAGE % field)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
+
+
+BIBTEX = ("<pre>@article{ye2026, title={%s},"
+          " url={https://arxiv.org/abs/2603.12277}}</pre>")
+
+
+@pytest.mark.parametrize("head,title", [
+    ("<title>Safety &amp; Alignment Methods</title>", "Safety \\& Alignment Methods"),
+    ("<title>Home</title></head><body><h1>Prompt <em>Injection</em> as<br>Role Confusion</h1>",
+     "Prompt Injection as Role Confusion"),
+    ('<meta name="citation_title" content="Project page">'
+     '<meta property="og:title" content="Prompt Injection as Role Confusion">',
+     "Prompt Injection as Role Confusion"),
+])
+def test_the_page_title_is_read_as_text_wherever_it_is(head, title):
+    html = f"<head>{head}</head><body>{BIBTEX % title}</body>"
+    client = FakePageClient("https://role-confusion.github.io/", html)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
+def test_unterminated_bibtex_entries_are_read_in_one_pass():
+    """A page full of `@name{` that never close must not take quadratic time."""
+    html = ("<head><title>Prompt Injection as Role Confusion</title></head><body>"
+            + "@a{" * 130_000
+            + BIBTEX % "Prompt Injection as Role Confusion" + "</body>")
+    client = FakePageClient("https://role-confusion.github.io/", html)
+    started = time.monotonic()
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+    assert time.monotonic() - started < 5
 
 
 def test_an_unidentifiable_page_says_what_to_do_instead():
