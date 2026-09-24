@@ -296,20 +296,37 @@ def fetch_crossref(doi: str, client: httpx.Client) -> dict:
     }
 
 
+_META_TAG = re.compile(r"<meta\b[^<>]*>", re.I)
+# The lookbehind starts a name only where one begins, so a long run of name
+# characters with no `=` after it is tried once rather than at each position.
+_TAG_ATTRIBUTE = re.compile(r"""(?<![\w:-])([\w:-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+)""")
+
+
 def _meta_content(html: str, *names: str) -> str | None:
-    """Read a <meta name=...> value, tolerating attribute order."""
+    """The content of the first <meta> named any of `names`, tried in order.
+
+    Each tag's attributes are read on their own, so neither their order nor
+    another attribute between them matters, as with the `data-rh` that React
+    Helmet adds to every tag it writes.
+    """
+    tags = []
+    for tag in _META_TAG.findall(html):
+        attributes = {}
+        for key, value in _TAG_ATTRIBUTE.findall(tag):
+            if value[:1] in "\"'":
+                value = value[1:-1]
+            attributes.setdefault(key.lower(), value)
+        tags.append(attributes)
     for name in names:
-        for pattern in (
-            rf'name=["\']{name}["\']\s+content=["\']([^"\']+)',
-            rf'content=["\']([^"\']+)["\']\s+name=["\']{name}["\']',
-            rf'property=["\']{name}["\']\s+content=["\']([^"\']+)',
-            rf'content=["\']([^"\']+)["\']\s+property=["\']{name}["\']',
-        ):
-            match = re.search(pattern, html, re.I)
-            if match:
-                # Attribute values are HTML-escaped, so a query separator arrives
-                # as &amp; and would otherwise be requested literally.
-                return html_module.unescape(match.group(1)).strip()
+        for attributes in tags:
+            if name.lower() not in (attributes.get("name", "").lower(),
+                                    attributes.get("property", "").lower()):
+                continue
+            # Attribute values are HTML-escaped, so a query separator arrives
+            # as &amp; and would otherwise be requested literally.
+            content = html_module.unescape(attributes.get("content", "")).strip()
+            if content:
+                return content
     return None
 
 
@@ -341,7 +358,7 @@ def _elements(tag: str, html: str) -> list[str]:
 
 
 _BIBTEX_START = re.compile(r"@(\w+)\s*\{")
-_LINE_COMMENT = re.compile(r"[ \t]*%")
+_LINE_INDENT = re.compile(r"[ \t]*")
 # The boundary keeps a long run of letters from being retried at every one of
 # its positions in search of an `=` that never comes.
 _BIBTEX_FIELD = re.compile(r"\b(\w+)\s*=\s*")
@@ -400,14 +417,20 @@ def _live_starts(text: str):
     with `%` or inside an `@comment{...}` block. Only a `%` that
     opens the line counts: a page's tags are gone by now, so a minified page is
     one long line, and a `95%` in its abstract or a `width:100%` in its styles
-    would otherwise comment out the live entry. The line start is carried from
-    one entry to the next, so a long line is not searched back once per entry.
+    would otherwise comment out the live entry. Whether a line is commented
+    out is decided once, when its first entry is reached, and carried to the
+    rest of its entries, so neither a long line nor a long indent is read
+    again for each one.
     """
-    line = seen = hidden = 0
+    seen = hidden = 0
+    commented = False
     for start in _BIBTEX_START.finditer(text):
-        line = text.rfind("\n", seen, start.start()) + 1 or line
+        line = text.rfind("\n", seen, start.start()) + 1
+        if line or not seen:
+            # The indent stops at this entry's `@` at the latest.
+            commented = text.startswith("%", _LINE_INDENT.match(text, line).end())
         seen = start.start()
-        if seen < hidden or _LINE_COMMENT.match(text, line, seen):
+        if seen < hidden or commented:
             continue
         # Every entry inside an `@comment` block's braces is skipped with it.
         # One that never closes hides the rest of the page, which also keeps
