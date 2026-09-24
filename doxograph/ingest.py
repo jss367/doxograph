@@ -504,9 +504,11 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     # Each metadata title is a candidate of its own, since a generic
     # citation_title must not hide an og:title that names the paper. A heading
     # may carry inline markup and entities, as in `<em>Role</em> &amp; Intent`,
-    # which would otherwise leave `em` and `amp` among its words.
+    # which would otherwise leave `em` and `amp` among its words. The metadata
+    # is read from the page without its comments too, since a stale title left
+    # in a comment names no paper the page shows.
     titles = [t for t in (
-        *(_meta_content(html, name) for name in ("citation_title", "og:title", "twitter:title")),
+        *(_meta_content(page, name) for name in ("citation_title", "og:title", "twitter:title")),
         *(html_module.unescape(re.sub(r"<[^<>]*>", " ", h)) for h in headings),
     ) if t]
     # A tag ends at the next `<` as well as at `>`, so an unclosed `<` stops

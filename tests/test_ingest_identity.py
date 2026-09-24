@@ -209,6 +209,17 @@ def test_a_generic_page_title_does_not_claim_a_longer_citation():
         ingest.resolve_page("https://nlp.example.org/", client)
 
 
+def test_a_commented_out_title_does_not_claim_a_citation():
+    """A stale og:title left in a comment is not the page's title."""
+    html = ('<head><title>Our lab</title>'
+            '<!-- <meta property="og:title" content="A Study of Something Else"> -->'
+            '</head><body><pre>@article{doe2025, title={A Study of Something Else},'
+            ' url={https://arxiv.org/abs/2510.09023}}</pre></body>')
+    client = FakePageClient("https://lab.example.org/", html)
+    with pytest.raises(ValueError, match="paste the arXiv ID"):
+        ingest.resolve_page("https://lab.example.org/", client)
+
+
 def test_a_page_title_may_add_the_sites_name_to_the_papers():
     html = ("<head><title>Prompt Injection as Role Confusion | Project Page</title></head>"
             "<body><pre>@article{ye2026, title={Prompt Injection as Role Confusion},"
