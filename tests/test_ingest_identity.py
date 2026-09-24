@@ -372,6 +372,8 @@ BIBTEX = ("<pre>@article{ye2026, title={%s},"
     ('<title>Home</title>'
      '<meta content="Prompt Injection as Role Confusion" data-rh="true" property="og:title">',
      "Prompt Injection as Role Confusion"),
+    ('<title>Home</title><meta property="og:title" content="When A > B Works">',
+     "When A > B Works"),
 ])
 def test_the_page_title_is_read_as_text_wherever_it_is(head, title):
     html = f"<head>{head}</head><body>{BIBTEX % title}</body>"
@@ -386,12 +388,14 @@ def test_the_page_title_is_read_as_text_wherever_it_is(head, title):
     "<!--" * 50_000,
     "<h1>" * 50_000,
     "<h1 " * 90_000,
+    '<meta "' * 50_000,
+    '<meta content="' * 50_000,
     "<" * 200_000,
     "<head" * 50_000,
     "<head>" + "<title>" * 50_000 + "</head>",
     "\n" + " " * 200_000 + "@a{}" * 50_000,
-], ids=["entry", "comment-block", "html-comment", "h1", "h1-attrs", "tag", "head", "title",
-        "indented-line"])
+], ids=["entry", "comment-block", "html-comment", "h1", "h1-attrs", "meta-quote",
+        "meta-value", "tag", "head", "title", "indented-line"])
 def test_unterminated_markup_is_read_in_one_pass(junk):
     """A page full of openers that never close must not take quadratic time."""
     html = ("<h1>Prompt Injection as Role Confusion</h1>"

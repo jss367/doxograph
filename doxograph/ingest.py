@@ -296,7 +296,10 @@ def fetch_crossref(doi: str, client: httpx.Client) -> dict:
     }
 
 
-_META_TAG = re.compile(r"<meta\b[^<>]*>", re.I)
+# A quoted value is taken whole, since a raw `>` is valid inside one. Outside
+# the quotes a tag holds no `<`, so a tag that never closes stops at the first
+# `<` past its quotes rather than running on to the end of the page.
+_META_TAG = re.compile(r"""<meta\b(?:[^<>"']|"[^"]*"|'[^']*')*>""", re.I)
 # The lookbehind starts a name only where one begins, so a long run of name
 # characters with no `=` after it is tried once rather than at each position.
 _TAG_ATTRIBUTE = re.compile(r"""(?<![\w:-])([\w:-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+)""")
