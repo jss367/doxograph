@@ -303,6 +303,7 @@ def _meta_content(html: str, *names: str) -> str | None:
             rf'name=["\']{name}["\']\s+content=["\']([^"\']+)',
             rf'content=["\']([^"\']+)["\']\s+name=["\']{name}["\']',
             rf'property=["\']{name}["\']\s+content=["\']([^"\']+)',
+            rf'content=["\']([^"\']+)["\']\s+property=["\']{name}["\']',
         ):
             match = re.search(pattern, html, re.I)
             if match:

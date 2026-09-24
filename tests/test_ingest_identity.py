@@ -328,6 +328,9 @@ BIBTEX = ("<pre>@article{ye2026, title={%s},"
     ('<meta name="citation_title" content="Project page">'
      '<meta property="og:title" content="Prompt Injection as Role Confusion">',
      "Prompt Injection as Role Confusion"),
+    ('<title>Home</title>'
+     '<meta content="Prompt Injection as Role Confusion" property="og:title">',
+     "Prompt Injection as Role Confusion"),
 ])
 def test_the_page_title_is_read_as_text_wherever_it_is(head, title):
     html = f"<head>{head}</head><body>{BIBTEX % title}</body>"
