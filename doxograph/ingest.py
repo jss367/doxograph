@@ -466,17 +466,39 @@ def _title_words(title: str) -> str:
     return " " + " ".join(re.findall(r"[a-z0-9]+", title.lower())) + " "
 
 
+# What sets a site's name or a venue apart from the paper's title in a page's
+# title. A hyphen counts only between spaces, so `Self-Supervised` stays whole.
+_TITLE_AFFIX = re.compile(r"[|·•:()\[\]]|\s[-–—]\s")
+
+
 def _same_title(cited: str, page: str) -> bool:
     """Whether a page titled `page` is the paper a BibTeX entry titles `cited`.
 
-    Only the page's title may be the longer, since it often adds the site's
-    name around the paper's, as in `Paper Title | Project Page`. A citation
-    longer than the page's title is some other paper that merely begins the
-    same way, as `Natural Language Processing with Transformers` is to a page
-    titled `Natural Language Processing`.
+    The page's title may add the site's name or the venue around the paper's,
+    as in `Paper Title | Project Page` or `Paper Title (ICML 2026)`, but only
+    set apart by one of those marks. Words run into the paper's title make it
+    some other page's, as `Reproducing Paper Title` is a page about the paper
+    rather than the paper. The paper's title may hold such a mark itself, as
+    in `Nerfies: Deformable Neural Radiance Fields`, so any run of pieces in a
+    row may be the one that matches. A citation longer than the page's title
+    is some other paper that merely begins the same way, as `Natural Language
+    Processing with Transformers` is to a page titled `Natural Language
+    Processing`.
     """
-    cited, page = _title_words(cited), _title_words(page)
-    return len(cited.split()) >= 3 and cited in page
+    cited_words = _title_words(cited).split()
+    if len(cited_words) < 3:
+        return False
+    pieces = [_title_words(p).split() for p in _TITLE_AFFIX.split(page)]
+    for start in range(len(pieces)):
+        run: list[str] = []
+        # A run can only grow, so it stops once it is as long as the citation.
+        for piece in pieces[start:]:
+            run += piece
+            if len(run) >= len(cited_words):
+                break
+        if run == cited_words:
+            return True
+    return False
 
 
 _BIBTEX_WHERE = ("url", "journal", "note", "howpublished", "doi")

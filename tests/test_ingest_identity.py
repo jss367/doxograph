@@ -229,6 +229,33 @@ def test_a_page_title_may_add_the_sites_name_to_the_papers():
     assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
 
 
+@pytest.mark.parametrize("page_title,cited", [
+    ("Prompt Injection as Role Confusion (ICML 2026)", "Prompt Injection as Role Confusion"),
+    ("Prompt Injection as Role Confusion - Some Lab", "Prompt Injection as Role Confusion"),
+    ("Some Lab: Prompt Injection as Role Confusion", "Prompt Injection as Role Confusion"),
+    ("Nerfies: Deformable Neural Radiance Fields | Project Page",
+     "Nerfies: Deformable Neural Radiance Fields"),
+    ("Nerfies: Deformable Neural Radiance Fields", "Nerfies: Deformable Neural Radiance Fields"),
+])
+def test_a_page_title_may_set_the_papers_apart_from_the_sites(page_title, cited):
+    html = (f"<head><title>{page_title}</title></head>"
+            f"<body><pre>@article{{p2026, title={{{cited}}},"
+            " url={https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://project.example.org/", html)
+    ref = ingest.resolve_page("https://project.example.org/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
+def test_a_page_about_a_paper_does_not_claim_its_citation():
+    """Words run into the paper's title make the page about the paper, not the paper."""
+    html = ("<head><title>Reproducing Prompt Injection as Role Confusion</title></head>"
+            "<body><pre>@article{ye2026, title={Prompt Injection as Role Confusion},"
+            " url={https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://repro.example.org/", html)
+    with pytest.raises(ValueError, match="paste the arXiv ID"):
+        ingest.resolve_page("https://repro.example.org/", client)
+
+
 def test_a_cited_arxiv_paper_does_not_outrank_the_entrys_own_doi():
     """An abstract may mention another paper; only where the entry is published counts."""
     field = ("abstract = {We build on arXiv:2510.09023 and \\url{https://arxiv.org/abs/2510.09023}},"
