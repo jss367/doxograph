@@ -471,8 +471,13 @@ def _title_words(title: str) -> str:
 _TITLE_AFFIX = re.compile(r"[|·•:()\[\]]|\s[-–—]\s")
 
 
-def _same_title(cited: str, page: str) -> bool:
-    """Whether a page titled `page` is the paper a BibTeX entry titles `cited`.
+# How many of a page title's pieces are read. A real title sets apart a few,
+# and the runs of pieces grow with the square of their count.
+_TITLE_PIECES = 32
+
+
+def _title_variants(page: str, longest: int) -> set[str]:
+    """Each way a page titled `page` may give a paper's title, as its words.
 
     The page's title may add the site's name or the venue around the paper's,
     as in `Paper Title | Project Page` or `Paper Title (ICML 2026)`, but only
@@ -483,22 +488,22 @@ def _same_title(cited: str, page: str) -> bool:
     row may be the one that matches. A citation longer than the page's title
     is some other paper that merely begins the same way, as `Natural Language
     Processing with Transformers` is to a page titled `Natural Language
-    Processing`.
+    Processing`. A title of fewer than three words names no paper for sure,
+    and a run longer than `longest` words is longer than any citation.
     """
-    cited_words = _title_words(cited).split()
-    if len(cited_words) < 3:
-        return False
-    pieces = [_title_words(p).split() for p in _TITLE_AFFIX.split(page)]
+    pieces = [words for words in (
+        _title_words(p).split() for p in _TITLE_AFFIX.split(page)) if words]
+    pieces = pieces[:_TITLE_PIECES]
+    variants = set()
     for start in range(len(pieces)):
         run: list[str] = []
-        # A run can only grow, so it stops once it is as long as the citation.
         for piece in pieces[start:]:
             run += piece
-            if len(run) >= len(cited_words):
+            if len(run) >= 3:
+                variants.add(" ".join(run))
+            if len(run) >= longest:
                 break
-        if run == cited_words:
-            return True
-    return False
+    return variants
 
 
 _BIBTEX_WHERE = ("url", "journal", "note", "howpublished", "doi")
@@ -538,8 +543,14 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     # in the page's text is written `&lt;`, and entities are decoded only after
     # the tags are gone, so one in a DOI survives, as in a SICI DOI.
     text = html_module.unescape(re.sub(r"<[^<>]*>", "", page))
-    for entry in _bibtex_entries(text):
-        if not any(_same_title(entry.get("title", ""), t) for t in titles):
+    entries = _bibtex_entries(text)
+    cited = [" ".join(_title_words(e.get("title", "")).split()) for e in entries]
+    # Every way the page may give its paper's title is gathered once, so each
+    # entry is one lookup however many titles and entries the page holds.
+    longest = max((c.count(" ") + 1 for c in cited if c), default=0)
+    accepted = set().union(*(_title_variants(t, longest) for t in titles))
+    for entry, title in zip(entries, cited):
+        if title not in accepted:
             continue
         # An exporter escapes the characters TeX treats specially, so a DOI's
         # underscore arrives as `\_` and would otherwise end the DOI before it.

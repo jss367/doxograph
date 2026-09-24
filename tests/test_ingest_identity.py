@@ -398,6 +398,23 @@ def test_unterminated_markup_is_read_in_one_pass(junk):
     assert time.monotonic() - started < 5
 
 
+@pytest.mark.parametrize("titles,entries", [
+    ("".join(f"<title>Some Other Page {i}</title>" for i in range(1000)),
+     "".join(f"@misc{{e{i}, title={{Unrelated Paper Number {i}}}}}\n" for i in range(1000))),
+    ("<title>" + " | ".join(f"Alpha Beta {j}" for j in range(15_000)) + "</title>",
+     "@misc{long, title={" + " ".join(f"w{j}" for j in range(3000)) + "}}\n"),
+], ids=["many-titles-and-entries", "many-separators"])
+def test_bibtex_titles_are_matched_in_one_pass(titles, entries):
+    """Many page titles against many citations must not take quadratic time."""
+    html = (f"<head>{titles}</head><body><h1>Prompt Injection as Role Confusion</h1>"
+            + entries + BIBTEX % "Prompt Injection as Role Confusion" + "</body>")
+    client = FakePageClient("https://role-confusion.github.io/", html)
+    started = time.monotonic()
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+    assert time.monotonic() - started < 5
+
+
 def test_an_unidentifiable_page_says_what_to_do_instead():
     html = '<head><title>Some page</title></head><body>no identifiers here</body>'
     client = FakePageClient("https://example.org/page", html)
