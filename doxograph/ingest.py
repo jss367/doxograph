@@ -312,13 +312,34 @@ def _meta_content(html: str, *names: str) -> str | None:
     return None
 
 
+_HEAD_OPEN = re.compile(r"<head\b", re.I)
+_HEAD_CLOSE = re.compile(r"</head>", re.I)
+
+
 def _head(html: str) -> str:
-    """The document head, where identity metadata lives."""
-    match = re.search(r"<head\b.*?</head>", html, re.I | re.S)
-    return match.group(0) if match else html[:20_000]
+    """The document head, where identity metadata lives.
+
+    It is found as its opening tag and then the first close after that. A lazy
+    match would rescan the rest of an untrusted page from every `<head` that
+    never closes, so a page full of them would take quadratic time.
+    """
+    start = _HEAD_OPEN.search(html)
+    end = start and _HEAD_CLOSE.search(html, start.start())
+    return html[start.start():end.end()] if end else html[:20_000]
 
 
-_BIBTEX_START = re.compile(r"@\w+\s*\{")
+def _elements(tag: str, html: str) -> list[str]:
+    """The contents of each <tag> element in `html` that is closed.
+
+    An element is read only up to where the next one opens, for the same
+    reason: a lazy match would rescan the rest of the page from every opener
+    that never closes.
+    """
+    return re.findall(rf"<{tag}\b[^<>]*>((?:(?!<{tag}\b|</{tag}>).)*)</{tag}>",
+                      html, re.I | re.S)
+
+
+_BIBTEX_START = re.compile(r"@(\w+)\s*\{")
 _LINE_COMMENT = re.compile(r"[ \t]*%")
 # The boundary keeps a long run of letters from being retried at every one of
 # its positions in search of an `=` that never comes.
@@ -372,20 +393,28 @@ def _bibtex_entries(text: str) -> list[dict[str, str]]:
 
 
 def _live_starts(text: str):
-    """Each `@name{` in `text` that is not on a line commented out with `%`.
+    """Each `@name{` in `text` that is not commented out.
 
-    A page may keep a stale entry that way, identifier and all. Only a `%` that
+    A page may keep a stale entry, identifier and all, on a line commented out
+    with `%` or inside an `@comment{...}` block. Only a `%` that
     opens the line counts: a page's tags are gone by now, so a minified page is
     one long line, and a `95%` in its abstract or a `width:100%` in its styles
     would otherwise comment out the live entry. The line start is carried from
     one entry to the next, so a long line is not searched back once per entry.
     """
-    line = seen = 0
+    line = seen = hidden = 0
     for start in _BIBTEX_START.finditer(text):
         line = text.rfind("\n", seen, start.start()) + 1 or line
         seen = start.start()
-        if not _LINE_COMMENT.match(text, line, seen):
-            yield start
+        if seen < hidden or _LINE_COMMENT.match(text, line, seen):
+            continue
+        # Every entry inside an `@comment` block's braces is skipped with it.
+        # One that never closes hides the rest of the page, which also keeps
+        # a page full of them from each scanning to the end.
+        if start.group(1).lower() == "comment":
+            hidden = _closing_brace(text, start.end(), len(text)) or len(text)
+            continue
+        yield start
 
 
 def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:
@@ -459,14 +488,17 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     nothing a machine reads. The title match is what makes it the page's own:
     a BibTeX entry for any other paper carries that paper's title instead.
     """
-    page = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    # A comment that never closes runs to the end of the page, as it does for a
+    # browser, and matching it that way keeps each unclosed `<!--` from
+    # rescanning the rest of the page.
+    page = re.sub(r"<!--.*?(?:-->|\Z)", "", html, flags=re.S)
     # A heading names the page only when it is the one heading there is. A
     # publications list gives every paper its own, and each of those would
     # otherwise match that paper's BibTeX and pass the list off as the paper.
     # The document title is read from the head for the same reason, since an
     # inline SVG in the body may carry a <title> of its own.
-    h1s = re.findall(r"<h1\b[^>]*>(.*?)</h1>", page, re.I | re.S)
-    headings = re.findall(r"<title\b[^>]*>(.*?)</title>", _head(page), re.I | re.S) + (
+    h1s = _elements("h1", page)
+    headings = _elements("title", _head(page)) + (
         h1s if len(h1s) == 1 else [])
     # Each metadata title is a candidate of its own, since a generic
     # citation_title must not hide an og:title that names the paper. A heading
@@ -474,9 +506,13 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     # which would otherwise leave `em` and `amp` among its words.
     titles = [t for t in (
         *(_meta_content(html, name) for name in ("citation_title", "og:title", "twitter:title")),
-        *(html_module.unescape(re.sub(r"<[^>]+>", " ", h)) for h in headings),
+        *(html_module.unescape(re.sub(r"<[^<>]*>", " ", h)) for h in headings),
     ) if t]
-    text = html_module.unescape(re.sub(r"<[^>]+>", "", page))
+    # A tag ends at the next `<` as well as at `>`, so an unclosed `<` stops
+    # there instead of reaching for a `>` at the end of the page. A literal `<`
+    # in the page's text is written `&lt;`, and entities are decoded only after
+    # the tags are gone, so one in a DOI survives, as in a SICI DOI.
+    text = html_module.unescape(re.sub(r"<[^<>]*>", "", page))
     for entry in _bibtex_entries(text):
         if not any(_same_title(entry.get("title", ""), t) for t in titles):
             continue

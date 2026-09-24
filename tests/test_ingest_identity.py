@@ -254,6 +254,28 @@ def test_a_commented_out_entry_is_not_read():
     assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
 
 
+def test_an_entry_inside_a_comment_block_is_not_read():
+    """A stale entry kept inside `@comment{...}` must not win over the live one."""
+    html = ("<head><title>Prompt Injection as Role Confusion</title></head><body><pre>"
+            "@comment{ @article{old, title={Prompt Injection as Role Confusion},"
+            " doi={10.1234/wrong}} }\n"
+            "@article{ye2026, title={Prompt Injection as Role Confusion},"
+            " url={https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://role-confusion.github.io/", html)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
+def test_a_sici_doi_keeps_its_angle_brackets():
+    """A literal `<` in a page is written `&lt;`, so it is text, not a tag."""
+    field = ("doi = {10.1002/(SICI)1097-0258(19980815/30)17:15/16"
+             "&lt;1661::AID-SIM968&gt;3.0.CO;2-2}")
+    client = FakePageClient("https://role-confusion.github.io/", PROJECT_PAGE % field)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == (
+        "doi", "10.1002/(SICI)1097-0258(19980815/30)17:15/16<1661::AID-SIM968>3.0.CO;2-2")
+
+
 def test_a_percent_earlier_on_a_minified_line_does_not_hide_the_entry():
     html = ("<head><title>Prompt Injection as Role Confusion</title></head>"
             "<body><p>Beats the baseline by 95%.</p>"
@@ -312,11 +334,20 @@ def test_the_page_title_is_read_as_text_wherever_it_is(head, title):
     assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
 
 
-def test_unterminated_bibtex_entries_are_read_in_one_pass():
-    """A page full of `@name{` that never close must not take quadratic time."""
-    html = ("<head><title>Prompt Injection as Role Confusion</title></head><body>"
-            + "@a{" * 130_000
-            + BIBTEX % "Prompt Injection as Role Confusion" + "</body>")
+@pytest.mark.parametrize("junk", [
+    "@a{" * 130_000,
+    "@comment{" * 50_000,
+    "<!--" * 50_000,
+    "<h1>" * 50_000,
+    "<h1 " * 90_000,
+    "<" * 200_000,
+    "<head" * 50_000,
+    "<head>" + "<title>" * 50_000 + "</head>",
+], ids=["entry", "comment-block", "html-comment", "h1", "h1-attrs", "tag", "head", "title"])
+def test_unterminated_markup_is_read_in_one_pass(junk):
+    """A page full of openers that never close must not take quadratic time."""
+    html = ("<h1>Prompt Injection as Role Confusion</h1>"
+            + BIBTEX % "Prompt Injection as Role Confusion" + junk)
     client = FakePageClient("https://role-confusion.github.io/", html)
     started = time.monotonic()
     ref = ingest.resolve_page("https://role-confusion.github.io/", client)
