@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 import html as html_module
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -295,26 +296,311 @@ def fetch_crossref(doi: str, client: httpx.Client) -> dict:
     }
 
 
+# A quoted value is taken whole, since a raw `>` is valid inside one. Outside
+# the quotes a tag holds no `<`, so a tag that never closes stops at the first
+# `<` past its quotes rather than running on to the end of the page.
+_META_TAG = re.compile(r"""<meta\b(?:[^<>"']|"[^"]*"|'[^']*')*>""", re.I)
+# The lookbehind starts a name only where one begins, so a long run of name
+# characters with no `=` after it is tried once rather than at each position.
+_TAG_ATTRIBUTE = re.compile(r"""(?<![\w:-])([\w:-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+)""")
+
+
 def _meta_content(html: str, *names: str) -> str | None:
-    """Read a <meta name=...> value, tolerating attribute order."""
+    """The content of the first <meta> named any of `names`, tried in order.
+
+    Each tag's attributes are read on their own, so neither their order nor
+    another attribute between them matters, as with the `data-rh` that React
+    Helmet adds to every tag it writes.
+    """
+    tags = []
+    for tag in _META_TAG.findall(html):
+        attributes = {}
+        for key, value in _TAG_ATTRIBUTE.findall(tag):
+            if value[:1] in "\"'":
+                value = value[1:-1]
+            attributes.setdefault(key.lower(), value)
+        tags.append(attributes)
     for name in names:
-        for pattern in (
-            rf'name=["\']{name}["\']\s+content=["\']([^"\']+)',
-            rf'content=["\']([^"\']+)["\']\s+name=["\']{name}["\']',
-            rf'property=["\']{name}["\']\s+content=["\']([^"\']+)',
-        ):
-            match = re.search(pattern, html, re.I)
-            if match:
-                # Attribute values are HTML-escaped, so a query separator arrives
-                # as &amp; and would otherwise be requested literally.
-                return html_module.unescape(match.group(1)).strip()
+        for attributes in tags:
+            if name.lower() not in (attributes.get("name", "").lower(),
+                                    attributes.get("property", "").lower()):
+                continue
+            # Attribute values are HTML-escaped, so a query separator arrives
+            # as &amp; and would otherwise be requested literally.
+            content = html_module.unescape(attributes.get("content", "")).strip()
+            if content:
+                return content
     return None
 
 
+_HEAD_OPEN = re.compile(r"<head\b", re.I)
+_HEAD_CLOSE = re.compile(r"</head>", re.I)
+
+
 def _head(html: str) -> str:
-    """The document head, where identity metadata lives."""
-    match = re.search(r"<head\b.*?</head>", html, re.I | re.S)
-    return match.group(0) if match else html[:20_000]
+    """The document head, where identity metadata lives.
+
+    It is found as its opening tag and then the first close after that. A lazy
+    match would rescan the rest of an untrusted page from every `<head` that
+    never closes, so a page full of them would take quadratic time.
+    """
+    start = _HEAD_OPEN.search(html)
+    end = start and _HEAD_CLOSE.search(html, start.start())
+    return html[start.start():end.end()] if end else html[:20_000]
+
+
+def _elements(tag: str, html: str) -> list[str]:
+    """The contents of each <tag> element in `html` that is closed.
+
+    An element is read only up to where the next one opens, for the same
+    reason: a lazy match would rescan the rest of the page from every opener
+    that never closes.
+    """
+    return re.findall(rf"<{tag}\b[^<>]*>((?:(?!<{tag}\b|</{tag}>).)*)</{tag}>",
+                      html, re.I | re.S)
+
+
+_BIBTEX_START = re.compile(r"@(\w+)\s*\{")
+_LINE_INDENT = re.compile(r"[ \t]*")
+# The boundary keeps a long run of letters from being retried at every one of
+# its positions in search of an `=` that never comes.
+_BIBTEX_FIELD = re.compile(r"\b(\w+)\s*=\s*")
+_BIBTEX_BARE = re.compile(r"[^,}]*")
+
+
+def _closing_brace(text: str, i: int, limit: int) -> int | None:
+    """Just past the brace that closes one opened before `i`, if before `limit`."""
+    depth = 1
+    while i < limit:
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        i += 1
+        if not depth:
+            return i
+    return None
+
+
+def _closing_quote(text: str, i: int, limit: int) -> int:
+    """Where a quoted value opened before `i` ends, or `limit` if it never does.
+
+    A quote inside braces belongs to the value, as in the accent of
+    `Schr{\\"o}dinger`, so only one outside every brace closes it.
+    """
+    depth = 0
+    while i < limit:
+        char = text[i]
+        if char == '"' and not depth:
+            return i
+        depth += {"{": 1, "}": -1}.get(char, 0)
+        i += 1
+    return limit
+
+
+def _bibtex_entries(text: str) -> list[dict[str, str]]:
+    """The fields of each BibTeX entry in `text`, lowercased by name.
+
+    An entry is looked for only up to where the next one starts. The page is
+    untrusted, and an `@name{` that never closes would otherwise send every
+    entry after it scanning to the end of the page, so a page full of them
+    would take quadratic time. Bounded like this, each character is read once.
+    """
+    starts = list(_live_starts(text))
+    entries = []
+    for n, start in enumerate(starts):
+        limit = starts[n + 1].start() if n + 1 < len(starts) else len(text)
+        end = _closing_brace(text, start.end(), limit)
+        if end is not None:
+            entries.append(_bibtex_fields(text, start.end(), end - 1))
+    return entries
+
+
+def _live_starts(text: str):
+    """Each `@name{` in `text` that is not commented out.
+
+    A page may keep a stale entry, identifier and all, on a line commented out
+    with `%` or inside an `@comment{...}` block. Only a `%` that
+    opens the line counts: a page's tags are gone by now, so a minified page is
+    one long line, and a `95%` in its abstract or a `width:100%` in its styles
+    would otherwise comment out the live entry. Whether a line is commented
+    out is decided once, when its first entry is reached, and carried to the
+    rest of its entries, so neither a long line nor a long indent is read
+    again for each one.
+    """
+    seen = hidden = 0
+    commented = False
+    for start in _BIBTEX_START.finditer(text):
+        line = text.rfind("\n", seen, start.start()) + 1
+        if line or not seen:
+            # The indent stops at this entry's `@` at the latest.
+            commented = text.startswith("%", _LINE_INDENT.match(text, line).end())
+        seen = start.start()
+        if seen < hidden or commented:
+            continue
+        # Every entry inside an `@comment` block's braces is skipped with it.
+        # One that never closes hides the rest of the page, which also keeps
+        # a page full of them from each scanning to the end.
+        if start.group(1).lower() == "comment":
+            hidden = _closing_brace(text, start.end(), len(text)) or len(text)
+            continue
+        yield start
+
+
+def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:
+    """The fields between `i` and `end`, each read past its whole value.
+
+    Reading on from where a value ends, rather than from every `name =` in the
+    entry, is what keeps `url={https://example.org/?eprint=2510.09023}` from
+    also reading as an eprint field naming some other paper.
+    """
+    fields = {}
+    while field := _BIBTEX_FIELD.search(text, i, end):
+        # A `%` between fields comments out the rest of its line, and a field
+        # commented out that way is often a stale identifier kept for the
+        # record. Only the gap before a field is looked in, never a value, so a
+        # `%20` in a URL is left alone.
+        comment = text.rfind("%", i, field.start())
+        if comment >= 0 and "\n" not in text[comment:field.start()]:
+            newline = text.find("\n", field.start(), end)
+            i = end if newline < 0 else newline
+            continue
+        i = field.end()
+        if text.startswith("{", i, end):
+            close = _closing_brace(text, i + 1, end) or end + 1
+            value, i = text[i + 1:close - 1], close
+        elif text.startswith('"', i, end):
+            close = _closing_quote(text, i + 1, end)
+            value, i = text[i + 1:close], close + 1
+        else:
+            bare = _BIBTEX_BARE.match(text, i, end)
+            value, i = bare.group(0), bare.end()
+        fields.setdefault(field.group(1).lower(), value.strip())
+    return fields
+
+
+def _title_words(title: str) -> str:
+    """A title as its words alone, padded so containment is word-aligned.
+
+    An accent is dropped however it is written, so the BibTeX `Schr{\\"o}dinger`
+    and the page's `Schrödinger` both read as `schrodinger`. Every other macro
+    is dropped too, except the few that print a word of their own, like the
+    `LaTeX` of `{\\LaTeX}`.
+    """
+    title = re.sub(r"\\((?:La|Bib)?TeX)\b", r" \1 ", title)
+    title = re.sub(r"""\\(?:["'^`~=.]|[a-zA-Z](?=\{))""", "", title)
+    title = re.sub(r"[{}]", "", re.sub(r"\\[a-zA-Z]+", " ", title))
+    title = "".join(c for c in unicodedata.normalize("NFKD", title)
+                    if not unicodedata.combining(c))
+    return " " + " ".join(re.findall(r"[a-z0-9]+", title.lower())) + " "
+
+
+# What sets a site's name or a venue apart from the paper's title in a page's
+# title. A hyphen counts only between spaces, so `Self-Supervised` stays whole.
+_TITLE_AFFIX = re.compile(r"[|·•:()\[\]]|\s[-–—]\s")
+
+
+# How many of a page title's pieces are read. A real title sets apart a few,
+# and the runs of pieces grow with the square of their count.
+_TITLE_PIECES = 32
+
+
+def _title_variants(page: str, longest: int) -> set[str]:
+    """Each way a page titled `page` may give a paper's title, as its words.
+
+    The page's title may add the site's name or the venue around the paper's,
+    as in `Paper Title | Project Page` or `Paper Title (ICML 2026)`, but only
+    set apart by one of those marks. Words run into the paper's title make it
+    some other page's, as `Reproducing Paper Title` is a page about the paper
+    rather than the paper. The paper's title may hold such a mark itself, as
+    in `Nerfies: Deformable Neural Radiance Fields`, so any run of pieces in a
+    row may be the one that matches. A citation longer than the page's title
+    is some other paper that merely begins the same way, as `Natural Language
+    Processing with Transformers` is to a page titled `Natural Language
+    Processing`. A title of fewer than three words names no paper for sure,
+    and a run longer than `longest` words is longer than any citation.
+    """
+    pieces = [words for words in (
+        _title_words(p).split() for p in _TITLE_AFFIX.split(page)) if words]
+    pieces = pieces[:_TITLE_PIECES]
+    variants = set()
+    for start in range(len(pieces)):
+        run: list[str] = []
+        for piece in pieces[start:]:
+            run += piece
+            if len(run) >= 3:
+                variants.add(" ".join(run))
+            if len(run) >= longest:
+                break
+    return variants
+
+
+_BIBTEX_WHERE = ("url", "journal", "note", "howpublished", "doi")
+
+
+def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
+    """The page's citation of itself, from a BibTeX block titled like the page.
+
+    A project page names its paper in a BibTeX block under "Citation" and in
+    nothing a machine reads. The title match is what makes it the page's own:
+    a BibTeX entry for any other paper carries that paper's title instead.
+    """
+    # A comment that never closes runs to the end of the page, as it does for a
+    # browser, and matching it that way keeps each unclosed `<!--` from
+    # rescanning the rest of the page.
+    page = re.sub(r"<!--.*?(?:-->|\Z)", "", html, flags=re.S)
+    # A heading names the page only when it is the one heading there is. A
+    # publications list gives every paper its own, and each of those would
+    # otherwise match that paper's BibTeX and pass the list off as the paper.
+    # The document title is read from the head for the same reason, since an
+    # inline SVG in the body may carry a <title> of its own.
+    h1s = _elements("h1", page)
+    headings = _elements("title", _head(page)) + (
+        h1s if len(h1s) == 1 else [])
+    # Each metadata title is a candidate of its own, since a generic
+    # citation_title must not hide an og:title that names the paper. A heading
+    # may carry inline markup and entities, as in `<em>Role</em> &amp; Intent`,
+    # which would otherwise leave `em` and `amp` among its words. The metadata
+    # is read from the page without its comments too, since a stale title left
+    # in a comment names no paper the page shows.
+    titles = [t for t in (
+        *(_meta_content(page, name) for name in ("citation_title", "og:title", "twitter:title")),
+        *(html_module.unescape(re.sub(r"<[^<>]*>", " ", h)) for h in headings),
+    ) if t]
+    # A tag ends at the next `<` as well as at `>`, so an unclosed `<` stops
+    # there instead of reaching for a `>` at the end of the page. A literal `<`
+    # in the page's text is written `&lt;`, and entities are decoded only after
+    # the tags are gone, so one in a DOI survives, as in a SICI DOI.
+    text = html_module.unescape(re.sub(r"<[^<>]*>", "", page))
+    entries = _bibtex_entries(text)
+    cited = [" ".join(_title_words(e.get("title", "")).split()) for e in entries]
+    # Every way the page may give its paper's title is gathered once, so each
+    # entry is one lookup however many titles and entries the page holds.
+    longest = max((c.count(" ") + 1 for c in cited if c), default=0)
+    accepted = set().union(*(_title_variants(t, longest) for t in titles))
+    for entry, title in zip(entries, cited):
+        if title not in accepted:
+            continue
+        # An exporter escapes the characters TeX treats specially, so a DOI's
+        # underscore arrives as `\_` and would otherwise end the DOI before it.
+        entry = {k: re.sub(r"\\([_&%#$])", r"\1", v) for k, v in entry.items()}
+        eprint = re.sub(r"^arxiv:", "", entry.get("eprint", ""), flags=re.I)
+        if re.fullmatch(rf"{ARXIV_NEW}|{ARXIV_OLD}", eprint):
+            return Ref("arxiv", eprint, page_url)
+        # Only the fields that say where the entry itself is published. An
+        # abstract or keywords field may well mention another arXiv paper, and
+        # that must not win over the entry's own DOI.
+        where = " ".join(entry.get(k, "") for k in _BIBTEX_WHERE)
+        for pattern in _ARXIV_PATTERNS[:3]:
+            match = pattern.search(where)
+            if match:
+                return Ref("arxiv", match.group(1), page_url)
+        # A DOI may also be given only as the entry's link or in its note.
+        # There it has to be written as one, since a url, howpublished or
+        # note can point anywhere.
+        match = re.search(rf"({DOI_RE})", entry.get("doi", "")) or re.search(
+            rf"(?:doi\.org/|\bdoi:\s*)({DOI_RE})",
+            " ".join(entry.get(k, "") for k in ("url", "howpublished", "note")), re.I)
+        if match:
+            return Ref("doi", normalize_doi(match.group(1)), page_url, pdf_url=pdf_url)
+    return None
 
 
 def resolve_page(url: str, client: httpx.Client) -> Ref:
@@ -323,7 +609,8 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
     Deliberately does not search the whole document for an arXiv link: a journal
     page cites other papers in its bibliography and related-articles list, and
     picking one of those would silently ingest and extract the wrong paper.
-    Identity comes from citation metadata, the canonical URL, or the head.
+    Identity comes from citation metadata, the canonical URL, a BibTeX block
+    titled like the page, or the head.
     """
     response = client.get(url, follow_redirects=True)
     response.raise_for_status()
@@ -361,6 +648,10 @@ def resolve_page(url: str, client: httpx.Client) -> Ref:
         match = re.search(DOI_RE, doi)
         if match:
             return Ref("doi", normalize_doi(match.group(0)), url, pdf_url=advertised)
+
+    own = _own_bibtex(html, url, advertised)
+    if own:
+        return own
 
     if advertised:
         return Ref("pdf", advertised, url)
