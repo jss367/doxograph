@@ -319,6 +319,7 @@ def _head(html: str) -> str:
 
 
 _BIBTEX_START = re.compile(r"@\w+\s*\{")
+_LINE_COMMENT = re.compile(r"[ \t]*%")
 # The boundary keeps a long run of letters from being retried at every one of
 # its positions in search of an `=` that never comes.
 _BIBTEX_FIELD = re.compile(r"\b(\w+)\s*=\s*")
@@ -360,7 +361,7 @@ def _bibtex_entries(text: str) -> list[dict[str, str]]:
     entry after it scanning to the end of the page, so a page full of them
     would take quadratic time. Bounded like this, each character is read once.
     """
-    starts = list(_BIBTEX_START.finditer(text))
+    starts = list(_live_starts(text))
     entries = []
     for n, start in enumerate(starts):
         limit = starts[n + 1].start() if n + 1 < len(starts) else len(text)
@@ -368,6 +369,23 @@ def _bibtex_entries(text: str) -> list[dict[str, str]]:
         if end is not None:
             entries.append(_bibtex_fields(text, start.end(), end - 1))
     return entries
+
+
+def _live_starts(text: str):
+    """Each `@name{` in `text` that is not on a line commented out with `%`.
+
+    A page may keep a stale entry that way, identifier and all. Only a `%` that
+    opens the line counts: a page's tags are gone by now, so a minified page is
+    one long line, and a `95%` in its abstract or a `width:100%` in its styles
+    would otherwise comment out the live entry. The line start is carried from
+    one entry to the next, so a long line is not searched back once per entry.
+    """
+    line = seen = 0
+    for start in _BIBTEX_START.finditer(text):
+        line = text.rfind("\n", seen, start.start()) + 1 or line
+        seen = start.start()
+        if not _LINE_COMMENT.match(text, line, seen):
+            yield start
 
 
 def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:

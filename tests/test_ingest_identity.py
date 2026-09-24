@@ -241,6 +241,28 @@ def test_a_commented_out_field_is_not_read():
     assert (ref.kind, ref.value) == ("doi", "10.1145/3442188.3445922")
 
 
+def test_a_commented_out_entry_is_not_read():
+    """A stale entry kept behind `%` must not win over the live one after it."""
+    html = ("<head><title>Prompt Injection as Role Confusion</title></head>"
+            "<body><p>Beats the baseline by 95%.</p><pre>\n"
+            "% @article{old, title={Prompt Injection as Role Confusion},"
+            " doi={10.1234/wrong}}\n"
+            "@article{ye2026, title={Prompt Injection as Role Confusion},"
+            " url={https://arxiv.org/abs/2603.12277}}</pre></body>")
+    client = FakePageClient("https://role-confusion.github.io/", html)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
+def test_a_percent_earlier_on_a_minified_line_does_not_hide_the_entry():
+    html = ("<head><title>Prompt Injection as Role Confusion</title></head>"
+            "<body><p>Beats the baseline by 95%.</p>"
+            + BIBTEX % "Prompt Injection as Role Confusion" + "</body>")
+    client = FakePageClient("https://role-confusion.github.io/", html)
+    ref = ingest.resolve_page("https://role-confusion.github.io/", client)
+    assert (ref.kind, ref.value) == ("arxiv", "2603.12277")
+
+
 @pytest.mark.parametrize("bibtex", [
     'title = "Schr{\\"o}dinger Methods for Quantum Control"',
     'title = {Schr\\"{o}dinger Methods for Quantum Control}',
