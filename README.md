@@ -62,10 +62,11 @@ says so. None of this calls the API.
 
 ## Install
 
-Requires Python 3.13 or newer.
+Requires Python 3.13 or newer. Use a supported interpreter for `python3` below;
+if needed, substitute its versioned command, such as `python3.14`.
 
 ```
-python3.13 -m venv .venv && .venv/bin/pip install -e .
+python3 -m venv .venv && .venv/bin/pip install -e .
 ```
 
 Doxograph needs an Anthropic API key. It reads `ANTHROPIC_API_KEY`, then falls

@@ -6,10 +6,11 @@ always served, without a terminal or a browser tab in front of it.
 
 ## Build
 
-Requires Python 3.13 or newer.
+Requires Python 3.13 or newer. Use a supported interpreter for `python3` below;
+if needed, substitute its versioned command, such as `python3.14`.
 
 ```
-python3.13 -m venv .venv && .venv/bin/pip install -e .   # if you have not already
+python3 -m venv .venv && .venv/bin/pip install -e .   # if you have not already
 native/build.sh --install                            # ~/Applications/Doxograph.app
 ```
 
