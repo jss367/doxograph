@@ -13,6 +13,7 @@ import functools
 import hashlib
 import itertools
 import json
+import logging
 import os
 import re
 import string
@@ -27,6 +28,8 @@ from typing import Any
 import yaml
 
 from . import config, quotes
+
+logger = logging.getLogger(__name__)
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for",
@@ -175,6 +178,7 @@ def claim_lock():
 @contextlib.contextmanager
 def vocab_lock():
     with _vocab, _reentrant_file_lock("vocab", config.locks_dir() / "vocabulary.lock"):
+        _recover_tag_change()
         yield
 
 
@@ -340,6 +344,15 @@ def text_path(key: str) -> Path:
     return config.text_dir() / f"{key}.txt"
 
 
+def _sync_directory(path: Path) -> None:
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 def write_atomic(path: Path, text: str) -> None:
     """Replace a file's contents in one step.
 
@@ -353,7 +366,10 @@ def write_atomic(path: Path, text: str) -> None:
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as fh:
             fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(staged, path)
+        _sync_directory(path.parent)
     except BaseException:
         Path(staged).unlink(missing_ok=True)
         raise
@@ -368,18 +384,34 @@ def write_json(path: Path, payload: Any) -> None:
     write_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n")
 
 
-# What a scan over `paper_keys()` tolerates. The keys are a snapshot of the
-# directory, so a paper can be deleted between the listing and the read: the
-# file is gone (`KeyError`), half-written or unreadable (`OSError`), or replaced
-# under us (`JSONDecodeError`). None of that should fail a listing or an export.
-VANISHED = (KeyError, OSError, json.JSONDecodeError)
+class PaperReadError(ValueError):
+    """A paper exists but cannot safely be read or overwritten."""
+
+
+# Scans can continue past damaged files, but must report them. A file removed
+# between listing and reading is different: that is an ordinary concurrent delete.
+VANISHED = (KeyError, OSError, json.JSONDecodeError, PaperReadError)
 
 
 def load_paper(key: str) -> dict:
     path = paper_path(key)
-    if not path.exists():
-        raise KeyError(key)
-    return _migrate(json.loads(path.read_text(encoding="utf-8")))
+    try:
+        paper = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(paper, dict) or paper.get("key") != key:
+            raise ValueError("expected a paper object whose key matches its filename")
+        claims = paper.get("claims", [])
+        if not isinstance(claims, list) or any(
+            not isinstance(c, dict) or not isinstance(c.get("id"), str)
+            or not isinstance(c.get("tags", []), list)
+            or any(not isinstance(tag, str) for tag in c.get("tags", []))
+            for c in claims
+        ):
+            raise ValueError("expected a list of claims with string identifiers and topic lists")
+        return _migrate(paper)
+    except FileNotFoundError:
+        raise KeyError(key) from None
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise PaperReadError(f"Cannot read {path}: {exc}") from exc
 
 
 #: The only thing the ingest ever wrote into the old `notes`. Matching on it
@@ -425,13 +457,41 @@ def paper_keys() -> list[str]:
     return sorted(p.stem for p in config.papers_dir().glob("*.json"))
 
 
-def all_papers() -> list[dict]:
+_reported_paper_issues: dict[Path, dict[str, str]] = {}
+_paper_issues_lock = threading.Lock()
+
+
+def _report_paper_issues(issues: list[dict]) -> None:
+    """Log transitions, while callers continue retrying every unreadable file."""
+    directory = config.papers_dir().absolute()
+    current = {issue["path"]: issue["detail"] for issue in issues}
+    with _paper_issues_lock:
+        previous = _reported_paper_issues.get(directory, {})
+        for path, detail in current.items():
+            if previous.get(path) != detail:
+                logger.warning("Paper omitted from the library: %s (%s)", path, detail)
+        if current:
+            _reported_paper_issues[directory] = current
+        else:
+            # A later recurrence is a new problem, including after deletion
+            # and re-import. Healthy workspaces need no retained log state.
+            _reported_paper_issues.pop(directory, None)
+
+
+def all_papers(*, issues: list[dict] | None = None) -> list[dict]:
     papers = []
+    unreadable = []
     for key in paper_keys():
         try:
             papers.append(load_paper(key))
-        except VANISHED:
+        except (KeyError, FileNotFoundError):
             continue
+        except (OSError, PaperReadError) as exc:
+            issue = {"paper": key, "path": str(paper_path(key)), "detail": str(exc)}
+            unreadable.append(issue)
+    if issues is not None:
+        issues.extend(unreadable)
+    _report_paper_issues(unreadable)
     papers.sort(key=lambda p: (p.get("added") or ""), reverse=True)
     return papers
 
@@ -636,40 +696,64 @@ CLAIM_FIELDS = {
 }
 
 
-@_locked
+class TopicConflictError(ValueError):
+    """A manual edit still names a topic that was renamed or deleted."""
+
+
+@contextlib.contextmanager
+def _claim_edit_lock(key: str, patch: dict):
+    # Topic edits share the vocabulary lock with renames, before taking the
+    # paper lock. Notes and review decisions can still land during recovery.
+    with vocab_lock() if "tags" in patch else contextlib.nullcontext():
+        if "tags" in patch:
+            try:
+                retired = _retired_topics()
+            except (OSError, ValueError) as exc:
+                raise StorageRecoveryError(f"Cannot validate the selected topics: {exc}") from exc
+            stale = set(patch["tags"]) & retired
+            if stale:
+                raise TopicConflictError(
+                    f"Topics were renamed or deleted: {', '.join(sorted(stale))}. "
+                    "Update the topic list in your draft and save again."
+                )
+        with paper_lock(key):
+            yield
+
+
 def update_claim(key: str, claim_id: str, patch: dict) -> dict:
-    paper = load_paper(key)
-    for claim in paper.get("claims", []):
-        if claim.get("id") == claim_id:
-            for field, value in patch.items():
-                if field in CLAIM_FIELDS:
-                    claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
-            if "quote" in patch:
-                check_quote(key, claim)
-            claim["updated"] = now()
-            refresh_status(paper)
-            save_paper(paper)
-            return claim
-    raise KeyError(claim_id)
+    with _claim_edit_lock(key, patch):
+        paper = load_paper(key)
+        for claim in paper.get("claims", []):
+            if claim.get("id") == claim_id:
+                for field, value in patch.items():
+                    if field in CLAIM_FIELDS:
+                        claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
+                if "quote" in patch:
+                    check_quote(key, claim)
+                claim["updated"] = now()
+                refresh_status(paper)
+                save_paper(paper)
+                return claim
+        raise KeyError(claim_id)
 
 
-@_locked
 def add_claim(key: str, patch: dict) -> dict:
-    paper = load_paper(key)
-    fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS}
-    if "ledger_links" in fields:
-        fields["ledger_links"] = clean_ledger_links(fields["ledger_links"])
-    claim = new_claim(paper, **fields)
-    # A hand-written claim needs no review, but a blank one is not a claim yet.
-    # An explicit `reviewed` in the patch still wins.
-    if "reviewed" not in patch:
-        claim["reviewed"] = bool(claim["text"].strip())
-    if claim.get("quote"):
-        check_quote(key, claim)
-    paper.setdefault("claims", []).append(claim)
-    refresh_status(paper)
-    save_paper(paper)
-    return claim
+    with _claim_edit_lock(key, patch):
+        paper = load_paper(key)
+        fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS}
+        if "ledger_links" in fields:
+            fields["ledger_links"] = clean_ledger_links(fields["ledger_links"])
+        claim = new_claim(paper, **fields)
+        # A hand-written claim needs no review, but a blank one is not a claim yet.
+        # An explicit `reviewed` in the patch still wins.
+        if "reviewed" not in patch:
+            claim["reviewed"] = bool(claim["text"].strip())
+        if claim.get("quote"):
+            check_quote(key, claim)
+        paper.setdefault("claims", []).append(claim)
+        refresh_status(paper)
+        save_paper(paper)
+        return claim
 
 
 @_locked
@@ -742,12 +826,30 @@ def load_tags() -> list[dict]:
     return [t for t in tags if isinstance(t, dict) and t.get("name")]
 
 
-def save_tags(tags: list[dict]) -> None:
+def _retired_topics() -> set[str]:
+    path = config.tags_path()
+    if not path.exists():
+        return set()
+    retired = _read_yaml(path).get("retired_topics", [])
+    if not isinstance(retired, list) or any(not isinstance(name, str) for name in retired):
+        raise ValueError(f"{path}: retired_topics must be a list of topic names")
+    return set(retired)
+
+
+def save_tags(tags: list[dict], *, retire: str | None = None) -> None:
     """Caller must hold `vocab_lock`; every public mutator below does."""
     ordered = sorted(tags, key=lambda t: t["name"])
+    retired = _retired_topics()
+    if retire is not None:
+        retired.add(retire)
+    # Explicitly recreating a vocabulary entry makes its name usable again.
+    retired.difference_update(t["name"] for t in ordered)
+    payload = {"tags": ordered}
+    if retired:
+        payload["retired_topics"] = sorted(retired)
     write_atomic(
         config.tags_path(),
-        yaml.safe_dump({"tags": ordered}, sort_keys=False, allow_unicode=True, width=100),
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True, width=100),
     )
 
 
@@ -763,6 +865,80 @@ def add_tag(name: str, description: str = "") -> list[dict]:
             tags.append({"name": name, "description": description})
             save_tags(tags)
         return tags
+
+
+class StorageRecoveryError(RuntimeError):
+    """An interrupted topic change still needs to finish."""
+
+
+def tag_change_path() -> Path:
+    return config.data_dir() / "pending-topic-change.json"
+
+
+def _recover_tag_change() -> None:
+    """Finish a durable intent under the vocabulary lock, including on restart.
+
+    Reapply the topic transformation to current records, never replay old paper
+    snapshots: notes and review decisions written since the failure must survive.
+    Each step is idempotent. Keep the intent until every replacement is durable.
+    """
+    path = tag_change_path()
+    try:
+        try:
+            change = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        if (not isinstance(change, dict) or not {"version", "old", "new", "tags"} <= change.keys()
+                or change.get("version") != 1
+                or not isinstance(change.get("old"), str)
+                or not (change.get("new") is None or isinstance(change.get("new"), str))
+                or not isinstance(change.get("tags"), list)
+                or any(not isinstance(t, dict) or not isinstance(t.get("name"), str)
+                       for t in change["tags"])):
+            raise ValueError("invalid pending topic change")
+        _retag_all(change["old"], change["new"])
+        # Publish the vocabulary last. Until then, the durable intent explains
+        # any partially moved claims and prevents a competing vocabulary edit.
+        save_tags(change["tags"], retire=change["old"])
+        path.unlink()
+        _sync_directory(path.parent)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise StorageRecoveryError(
+            f"A topic change is unfinished: {exc}. Doxograph will retry automatically. "
+            f"Keep {path} until recovery finishes."
+        ) from exc
+
+
+def recover_storage() -> None:
+    """Called before serving library state and before CLI operations."""
+    # Ordinary reads do not need write access to a lock file. Only take the
+    # lock when there is recovery work; its holder rechecks the intent.
+    try:
+        if tag_change_path().exists():
+            with vocab_lock():
+                pass
+    except OSError as exc:
+        raise StorageRecoveryError(
+            f"Cannot resume the unfinished topic change: {exc}. "
+            f"Keep {tag_change_path()}; Doxograph will retry automatically."
+        ) from exc
+
+
+def _change_tag(old: str, new: str | None, tags: list[dict]) -> None:
+    """Start a recoverable topic change; caller holds the vocabulary lock."""
+    # Refuse known damage before starting a multi-file operation. A paper
+    # deleted during the scan is fine; an unreadable one must not be skipped.
+    for key in paper_keys():
+        try:
+            load_paper(key)
+        except KeyError:
+            continue
+    _read_tensions()
+    _read_agreements()
+    _read_syntheses()
+    _retired_topics()
+    write_json(tag_change_path(), {"version": 1, "old": old, "new": new, "tags": tags})
+    _recover_tag_change()
 
 
 def rename_tag(old: str, new: str) -> None:
@@ -781,8 +957,7 @@ def rename_tag(old: str, new: str) -> None:
         if new not in {t["name"] for t in tags}:
             description = next((t.get("description", "") for t in current if t["name"] == old), "")
             tags.append({"name": new, "description": description})
-        save_tags(tags)
-        _retag_all(old, new)
+        _change_tag(old, new, tags)
 
 
 def _move_pass(data: dict, old: str, new: str | None) -> bool:
@@ -825,7 +1000,7 @@ def _retag_all(old: str, new: str | None) -> None:
         with paper_lock(key):
             try:
                 paper = load_paper(key)
-            except VANISHED:
+            except KeyError:
                 continue
             touched = False
             for claim in paper.get("claims", []):
@@ -880,8 +1055,7 @@ def _retag_all(old: str, new: str | None) -> None:
 
 def delete_tag(name: str) -> None:
     with vocab_lock():
-        save_tags([t for t in load_tags() if t["name"] != name])
-        _retag_all(name, None)
+        _change_tag(name, None, [t for t in load_tags() if t["name"] != name])
 
 
 # --- your own claims, and what the research is about ----------------------
@@ -933,11 +1107,11 @@ def corpus_signature() -> str:
                 for entry in entries:
                     if entry.name.endswith(suffix) and not entry.name.startswith("."):
                         st = entry.stat()
-                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino))
+                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode))
         except FileNotFoundError:
             pass
     for path in (config.tags_path(), config.ledger_path(), tensions_path(), syntheses_path(),
-                 agreements_path(), context_path(), config.data_dir() / "notebook.json"):
+                 agreements_path(), context_path(), config.data_dir() / "notebook.json", tag_change_path()):
         try:
             st = path.stat()
             parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino))

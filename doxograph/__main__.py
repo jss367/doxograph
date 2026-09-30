@@ -474,6 +474,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config.ensure_dirs()
+    # The server must still start when recovery needs attention, so its library
+    # can display the problem. Other commands must not work on a partial rename.
+    if args.func != cmd_serve:
+        try:
+            store.recover_storage()
+        except store.StorageRecoveryError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     return args.func(args)
 
 
