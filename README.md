@@ -341,6 +341,9 @@ refresh, command-line operation, or vocabulary edit resumes the change. Recovery
 preserves newer notes and review decisions. While recovery is blocked, the
 library reports the problem and further vocabulary changes are refused. Keep
 the pending file until recovery completes; it is removed automatically.
+An open claim editor that still names a renamed or deleted topic keeps its draft
+and asks you to update the topic list before saving. Removed names are remembered
+in `tags.yaml`; explicitly adding a name to the vocabulary makes it usable again.
 
 A removed paper's key is retired rather than reused, so a key names one paper for
 all time. Re-adding a paper you deleted therefore gets a suffixed key. That is

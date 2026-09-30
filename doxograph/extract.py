@@ -452,7 +452,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
 def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,
                      prompt_tags: set[str] | None = None,
                      claims_before: dict[str, str] | None = None) -> dict:
-    with store.paper_lock(key):
+    with store.vocab_lock(), store.paper_lock(key):
         return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags, claims_before)
 
 

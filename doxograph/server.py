@@ -67,6 +67,11 @@ async def paper_read_error(request: Request, exc: store.PaperReadError):
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 
+@app.exception_handler(store.TopicConflictError)
+async def topic_conflict_error(request: Request, exc: store.TopicConflictError):
+    return JSONResponse({"detail": str(exc)}, status_code=409)
+
+
 _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
 _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()

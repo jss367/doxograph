@@ -696,40 +696,64 @@ CLAIM_FIELDS = {
 }
 
 
-@_locked
+class TopicConflictError(ValueError):
+    """A manual edit still names a topic that was renamed or deleted."""
+
+
+@contextlib.contextmanager
+def _claim_edit_lock(key: str, patch: dict):
+    # Topic edits share the vocabulary lock with renames, before taking the
+    # paper lock. Notes and review decisions can still land during recovery.
+    with vocab_lock() if "tags" in patch else contextlib.nullcontext():
+        if "tags" in patch:
+            try:
+                retired = _retired_topics()
+            except (OSError, ValueError) as exc:
+                raise StorageRecoveryError(f"Cannot validate the selected topics: {exc}") from exc
+            stale = set(patch["tags"]) & retired
+            if stale:
+                raise TopicConflictError(
+                    f"Topics were renamed or deleted: {', '.join(sorted(stale))}. "
+                    "Update the topic list in your draft and save again."
+                )
+        with paper_lock(key):
+            yield
+
+
 def update_claim(key: str, claim_id: str, patch: dict) -> dict:
-    paper = load_paper(key)
-    for claim in paper.get("claims", []):
-        if claim.get("id") == claim_id:
-            for field, value in patch.items():
-                if field in CLAIM_FIELDS:
-                    claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
-            if "quote" in patch:
-                check_quote(key, claim)
-            claim["updated"] = now()
-            refresh_status(paper)
-            save_paper(paper)
-            return claim
-    raise KeyError(claim_id)
+    with _claim_edit_lock(key, patch):
+        paper = load_paper(key)
+        for claim in paper.get("claims", []):
+            if claim.get("id") == claim_id:
+                for field, value in patch.items():
+                    if field in CLAIM_FIELDS:
+                        claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
+                if "quote" in patch:
+                    check_quote(key, claim)
+                claim["updated"] = now()
+                refresh_status(paper)
+                save_paper(paper)
+                return claim
+        raise KeyError(claim_id)
 
 
-@_locked
 def add_claim(key: str, patch: dict) -> dict:
-    paper = load_paper(key)
-    fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS}
-    if "ledger_links" in fields:
-        fields["ledger_links"] = clean_ledger_links(fields["ledger_links"])
-    claim = new_claim(paper, **fields)
-    # A hand-written claim needs no review, but a blank one is not a claim yet.
-    # An explicit `reviewed` in the patch still wins.
-    if "reviewed" not in patch:
-        claim["reviewed"] = bool(claim["text"].strip())
-    if claim.get("quote"):
-        check_quote(key, claim)
-    paper.setdefault("claims", []).append(claim)
-    refresh_status(paper)
-    save_paper(paper)
-    return claim
+    with _claim_edit_lock(key, patch):
+        paper = load_paper(key)
+        fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS}
+        if "ledger_links" in fields:
+            fields["ledger_links"] = clean_ledger_links(fields["ledger_links"])
+        claim = new_claim(paper, **fields)
+        # A hand-written claim needs no review, but a blank one is not a claim yet.
+        # An explicit `reviewed` in the patch still wins.
+        if "reviewed" not in patch:
+            claim["reviewed"] = bool(claim["text"].strip())
+        if claim.get("quote"):
+            check_quote(key, claim)
+        paper.setdefault("claims", []).append(claim)
+        refresh_status(paper)
+        save_paper(paper)
+        return claim
 
 
 @_locked
@@ -802,12 +826,30 @@ def load_tags() -> list[dict]:
     return [t for t in tags if isinstance(t, dict) and t.get("name")]
 
 
-def save_tags(tags: list[dict]) -> None:
+def _retired_topics() -> set[str]:
+    path = config.tags_path()
+    if not path.exists():
+        return set()
+    retired = _read_yaml(path).get("retired_topics", [])
+    if not isinstance(retired, list) or any(not isinstance(name, str) for name in retired):
+        raise ValueError(f"{path}: retired_topics must be a list of topic names")
+    return set(retired)
+
+
+def save_tags(tags: list[dict], *, retire: str | None = None) -> None:
     """Caller must hold `vocab_lock`; every public mutator below does."""
     ordered = sorted(tags, key=lambda t: t["name"])
+    retired = _retired_topics()
+    if retire is not None:
+        retired.add(retire)
+    # Explicitly recreating a vocabulary entry makes its name usable again.
+    retired.difference_update(t["name"] for t in ordered)
+    payload = {"tags": ordered}
+    if retired:
+        payload["retired_topics"] = sorted(retired)
     write_atomic(
         config.tags_path(),
-        yaml.safe_dump({"tags": ordered}, sort_keys=False, allow_unicode=True, width=100),
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True, width=100),
     )
 
 
@@ -857,7 +899,7 @@ def _recover_tag_change() -> None:
         _retag_all(change["old"], change["new"])
         # Publish the vocabulary last. Until then, the durable intent explains
         # any partially moved claims and prevents a competing vocabulary edit.
-        save_tags(change["tags"])
+        save_tags(change["tags"], retire=change["old"])
         path.unlink()
         _sync_directory(path.parent)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -894,6 +936,7 @@ def _change_tag(old: str, new: str | None, tags: list[dict]) -> None:
     _read_tensions()
     _read_agreements()
     _read_syntheses()
+    _retired_topics()
     write_json(tag_change_path(), {"version": 1, "old": old, "new": new, "tags": tags})
     _recover_tag_change()
 

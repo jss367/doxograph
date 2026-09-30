@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,7 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, config, server, store
+from doxograph import __main__, config, extract, server, store
 
 
 def corpus():
@@ -344,3 +345,108 @@ def test_log_deduplication_is_scoped_to_the_workspace(caplog):
         store.all_papers()
     store.all_papers()
     assert len([r for r in caplog.records if r.name == store.__name__]) == 2
+
+
+@pytest.mark.parametrize("operation", ["rename", "delete"])
+def test_stale_claim_topics_conflict_without_saving_any_fields(operation):
+    ids = corpus()
+    if operation == "rename":
+        store.rename_tag("old", "new")
+    else:
+        store.delete_tag("old")
+    with client() as c:
+        for url, method in ((f"/api/papers/first/claims/{ids[0]}", c.patch),
+                            ("/api/papers/first/claims", c.post)):
+            response = method(url, json={"text": "Unsaved draft", "tags": ["old"]})
+            assert response.status_code == 409
+            assert "Update the topic list" in response.json()["detail"]
+    assert store.load_paper("first")["claims"][0]["text"] == "first"
+    assert len(store.load_paper("first")["claims"]) == 1
+    # A deliberate vocabulary edit can reuse the name; an old form cannot.
+    store.add_tag("old")
+    assert store.update_claim("first", ids[0], {"tags": ["old"]})["tags"] == ["old"]
+
+
+def test_claim_save_waits_for_rename_then_rejects_the_retired_topic(monkeypatch):
+    ids = corpus()
+    parked, release, attempted = threading.Event(), threading.Event(), threading.Event()
+    original = store._save_tensions
+
+    def pause_after_papers(data):
+        parked.set()
+        assert release.wait(timeout=10)
+        original(data)
+
+    def save_stale_draft():
+        attempted.set()
+        return store.update_claim("first", ids[0], {"tags": ["old"], "text": "Draft"})
+
+    monkeypatch.setattr(store, "_save_tensions", pause_after_papers)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rename = pool.submit(store.rename_tag, "old", "new")
+        try:
+            assert parked.wait(timeout=5)
+            save = pool.submit(save_stale_draft)
+            assert attempted.wait(timeout=5)
+            # Unrelated writing remains possible while the vocabulary is held.
+            store.update_claim("first", ids[0], {"note": "New note"})
+        finally:
+            release.set()
+        rename.result(timeout=10)
+        with pytest.raises(store.TopicConflictError):
+            save.result(timeout=10)
+    claim = store.load_paper("first")["claims"][0]
+    assert claim["tags"] == ["new"]
+    assert claim["text"] == "first"
+    assert claim["note"] == "New note"
+    assert not store.tag_change_path().exists()
+
+
+def test_a_fresh_process_rejects_topics_retired_before_it_started():
+    corpus()
+    store.rename_tag("old", "new")
+    script = """
+from doxograph import store
+try:
+    store.update_claim('first', 'first-c1', {'tags': ['old']})
+except store.TopicConflictError:
+    print('conflict')
+else:
+    raise AssertionError('retired topic was restored')
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "conflict"
+
+
+def test_extraction_finishing_during_rename_cannot_restore_the_old_topic(monkeypatch):
+    corpus()
+    parked, release, attempted = threading.Event(), threading.Event(), threading.Event()
+    original = store._save_tensions
+
+    def pause_after_papers(data):
+        parked.set()
+        assert release.wait(timeout=10)
+        original(data)
+
+    def merge():
+        attempted.set()
+        return extract.merge_extraction("first", {
+            "claims": [{"text": "Fresh extraction", "tags": ["old"]}],
+        }, prompt_tags={"old"})
+
+    monkeypatch.setattr(store, "_save_tensions", pause_after_papers)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rename = pool.submit(store.rename_tag, "old", "new")
+        try:
+            assert parked.wait(timeout=5)
+            merged = pool.submit(merge)
+            assert attempted.wait(timeout=5)
+            with pytest.raises(TimeoutError):
+                merged.result(timeout=0.2)
+        finally:
+            release.set()
+        rename.result(timeout=10)
+        paper = merged.result(timeout=10)
+    assert any(c["text"] == "Fresh extraction" for c in paper["claims"])
+    assert all("old" not in c["tags"] for c in paper["claims"])
