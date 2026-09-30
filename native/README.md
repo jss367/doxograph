@@ -6,8 +6,10 @@ always served, without a terminal or a browser tab in front of it.
 
 ## Build
 
+Requires Python 3.13 or newer.
+
 ```
-python -m venv .venv && .venv/bin/pip install -e .   # if you have not already
+python3.13 -m venv .venv && .venv/bin/pip install -e .   # if you have not already
 native/build.sh --install                            # ~/Applications/Doxograph.app
 ```
 

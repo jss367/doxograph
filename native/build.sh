@@ -30,7 +30,7 @@ if [[ -z "$command_path" ]]; then
 fi
 if [[ -z "$command_path" ]]; then
   echo "build.sh: no doxograph command found." >&2
-  echo "  Install it first (python -m venv .venv && .venv/bin/pip install -e .)," >&2
+  echo "  Install it first (python3.13 -m venv .venv && .venv/bin/pip install -e .)," >&2
   echo "  or set DOXOGRAPH_CMD to the command you want the app to run." >&2
   exit 1
 fi

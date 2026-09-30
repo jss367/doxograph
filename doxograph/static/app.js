@@ -1609,6 +1609,7 @@ function renderAll() {
 }
 
 function renderStats() {
+  renderStorageWarnings();
   const unreviewed = S.claims.filter((c) => !c.reviewed).length;
   const proposed = S.papers.reduce((n, p) => n + (p.n_proposed_tags || 0), 0);
   const bits = [
@@ -1629,6 +1630,21 @@ function renderStats() {
   if (S.ai_enabled === false) bits.push('AI analysis off');
   else if (!S.has_key) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
+}
+
+function renderStorageWarnings() {
+  const box = $('storage-warning');
+  const issues = S.storage_issues || [];
+  const signature = JSON.stringify(issues);
+  if (box.dataset.issues === signature) return;
+  box.dataset.issues = signature;
+  box.hidden = !issues.length;
+  box.innerHTML = issues.length ? `<strong>Some stored research needs attention</strong>
+    <ul>${issues.map((issue) => `<li>${issue.paper
+      ? `Paper ${esc(issue.paper)} could not be loaded. Its saved file has been left untouched; repair it or restore it from a backup.`
+      : esc(issue.detail)}
+      <details><summary>File details</summary><code>${esc(issue.path)}</code>
+        ${issue.paper ? `<p>${esc(issue.detail)}</p>` : ''}</details></li>`).join('')}</ul>` : '';
 }
 
 // The server sends papers newest-added first. The other orders are a view

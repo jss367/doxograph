@@ -62,8 +62,10 @@ says so. None of this calls the API.
 
 ## Install
 
+Requires Python 3.13 or newer.
+
 ```
-python -m venv .venv && .venv/bin/pip install -e .
+python3.13 -m venv .venv && .venv/bin/pip install -e .
 ```
 
 Doxograph needs an Anthropic API key. It reads `ANTHROPIC_API_KEY`, then falls
@@ -302,6 +304,7 @@ pdfs/<key>.pdf       the paper itself
 text/<key>.txt       its text, extracted once and reused (pages split by \f)
 locks/               lock files, so two processes do not write at once
 retired-keys.json    keys of removed papers, never issued again
+pending-topic-change.json  unfinished topic rename or deletion, when recovery is needed
 tags.yaml            the topic vocabulary
 tensions.json        where papers disagree, and what you decided about each
 syntheses.json       what the papers hold on each topic
@@ -326,6 +329,18 @@ lock files under `locks/`, so running `doxograph extract` in a shell while
 `doxograph serve` is up is safe. Locking needs `fcntl` or `msvcrt`; on a platform
 with neither, doxograph refuses to run rather than pretend the corpus is
 protected. The Windows path is implemented but untested.
+
+If a paper's saved file cannot be read, the library shows a persistent warning
+with the file path, and command-line listings report it on standard error.
+The damaged file is left untouched. Repair it or restore a backup; the warning
+clears when the library next refreshes.
+
+Topic renames and deletions record their intent in `pending-topic-change.json`
+before changing any papers. If a write fails or the app stops, the next library
+refresh, command-line operation, or vocabulary edit resumes the change. Recovery
+preserves newer notes and review decisions. While recovery is blocked, the
+library reports the problem and further vocabulary changes are refused. Keep
+the pending file until recovery completes; it is removed automatically.
 
 A removed paper's key is retired rather than reused, so a key names one paper for
 all time. Re-adding a paper you deleted therefore gets a suffixed key. That is

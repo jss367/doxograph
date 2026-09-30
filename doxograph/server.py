@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import ipaddress
+import hashlib
 import json
 import functools
 import os
@@ -54,6 +55,17 @@ async def _lifespan(_: FastAPI):
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
+
+
+@app.exception_handler(store.StorageRecoveryError)
+async def storage_recovery_error(request: Request, exc: store.StorageRecoveryError):
+    return JSONResponse({"detail": str(exc)}, status_code=503)
+
+
+@app.exception_handler(store.PaperReadError)
+async def paper_read_error(request: Request, exc: store.PaperReadError):
+    return JSONResponse({"detail": str(exc)}, status_code=500)
+
 
 _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
 _jobs: dict[int, dict] = {}
@@ -956,11 +968,13 @@ _state_cache_lock = threading.Lock()
 
 
 def _build_state() -> dict:
-    papers = store.all_papers()
+    issues = []
+    papers = store.all_papers(issues=issues)
     rows = store.claim_rows(papers)
     return {
         "workspace": config.get_workspace(),
         "notebook": notebook.load(),
+        "storage_issues": issues,
         "papers": [store.summarize(p) for p in papers],
         "claims": rows,
         "tags": store.load_tags(),
@@ -994,23 +1008,35 @@ def state(request: Request) -> Response:
     alone, and two empty workspaces have the same one.
     """
     workspace = config.workspace_id()
+    recovery_error = None
+    try:
+        store.recover_storage()
+    except store.StorageRecoveryError as exc:
+        recovery_error = str(exc)
     # Credentials and installation settings live outside the corpus, but
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
     signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}-{int(ai_enabled)}"
-    etag = f'"{workspace}-{signature}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag})
     with _state_cache_lock:
         cached = _state_cache.get(workspace)
-    if cached is None or cached[0] != signature:
+    # Retry unreadable files even when their stat is unchanged: a temporary
+    # I/O failure or an ACL repair need not change content or its timestamp.
+    if (recovery_error is not None or cached is None or cached[0] != signature
+            or cached[1].get("storage_issues")):
         payload = _build_state()
         # Match the signature even if the switch changed during the build.
         payload["ai_enabled"] = ai_enabled
-        with _state_cache_lock:
-            _state_cache[workspace] = (signature, payload)
+        if recovery_error is not None:
+            payload["storage_issues"].append({"path": str(store.tag_change_path()), "detail": recovery_error})
+        else:
+            with _state_cache_lock:
+                _state_cache[workspace] = (signature, payload)
     else:
         payload = cached[1]
+    issues_signature = hashlib.sha1(json.dumps(payload["storage_issues"], sort_keys=True).encode()).hexdigest()
+    etag = f'"{workspace}-{signature}-{issues_signature}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
     return JSONResponse(payload, headers={"ETag": etag})
 
 
@@ -1348,6 +1374,8 @@ def create_tag(body: TagBody) -> dict:
 def patch_tag(name: str, body: RenameBody) -> dict:
     try:
         store.rename_tag(name, body.name)
+    except store.PaperReadError:
+        raise
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return {"tags": store.load_tags()}
