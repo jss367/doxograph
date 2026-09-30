@@ -457,8 +457,30 @@ def paper_keys() -> list[str]:
     return sorted(p.stem for p in config.papers_dir().glob("*.json"))
 
 
+_reported_paper_issues: dict[Path, dict[str, str]] = {}
+_paper_issues_lock = threading.Lock()
+
+
+def _report_paper_issues(issues: list[dict]) -> None:
+    """Log transitions, while callers continue retrying every unreadable file."""
+    directory = config.papers_dir().absolute()
+    current = {issue["path"]: issue["detail"] for issue in issues}
+    with _paper_issues_lock:
+        previous = _reported_paper_issues.get(directory, {})
+        for path, detail in current.items():
+            if previous.get(path) != detail:
+                logger.warning("Paper omitted from the library: %s (%s)", path, detail)
+        if current:
+            _reported_paper_issues[directory] = current
+        else:
+            # A later recurrence is a new problem, including after deletion
+            # and re-import. Healthy workspaces need no retained log state.
+            _reported_paper_issues.pop(directory, None)
+
+
 def all_papers(*, issues: list[dict] | None = None) -> list[dict]:
     papers = []
+    unreadable = []
     for key in paper_keys():
         try:
             papers.append(load_paper(key))
@@ -466,9 +488,10 @@ def all_papers(*, issues: list[dict] | None = None) -> list[dict]:
             continue
         except (OSError, PaperReadError) as exc:
             issue = {"paper": key, "path": str(paper_path(key)), "detail": str(exc)}
-            if issues is not None:
-                issues.append(issue)
-            logger.warning("Paper omitted from the library: %s (%s)", issue["path"], exc)
+            unreadable.append(issue)
+    if issues is not None:
+        issues.extend(unreadable)
+    _report_paper_issues(unreadable)
     papers.sort(key=lambda p: (p.get("added") or ""), reverse=True)
     return papers
 

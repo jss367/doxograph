@@ -304,3 +304,43 @@ def test_transient_read_failure_is_retried_without_a_file_change(monkeypatch):
     assert repaired.status_code == 200
     assert repaired.json()["storage_issues"] == []
     assert len(repaired.json()["papers"]) == 1
+
+
+def test_repeated_state_polls_log_only_new_or_changed_read_errors(caplog):
+    path = store.paper_path("damaged")
+    path.write_text("{broken")
+
+    def warnings():
+        return [r for r in caplog.records if r.name == store.__name__]
+
+    with client() as c:
+        for _ in range(4):
+            assert c.get("/api/state").json()["storage_issues"]
+        assert len(warnings()) == 1
+        path.write_text("[")
+        assert c.get("/api/state").json()["storage_issues"]
+        assert len(warnings()) == 2
+        store.write_json(path, store.new_paper("damaged"))
+        assert c.get("/api/state").json()["storage_issues"] == []
+        path.write_text("[")
+        assert c.get("/api/state").json()["storage_issues"]
+        assert len(warnings()) == 3
+
+
+def test_concurrent_scans_log_the_same_error_once(caplog):
+    store.paper_path("damaged").write_text("{broken")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert list(pool.map(lambda _: store.all_papers(), range(8))) == [[]] * 8
+    assert len([r for r in caplog.records if r.name == store.__name__]) == 1
+
+
+def test_log_deduplication_is_scoped_to_the_workspace(caplog):
+    other = config.create_workspace("Other")
+    store.paper_path("damaged").write_text("{broken")
+    store.all_papers()
+    with config.use_workspace(other["id"]):
+        store.paper_path("damaged").write_text("{broken")
+        store.all_papers()
+        store.all_papers()
+    store.all_papers()
+    assert len([r for r in caplog.records if r.name == store.__name__]) == 2
