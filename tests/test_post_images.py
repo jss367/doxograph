@@ -647,3 +647,71 @@ def test_unguarded_reused_connection_and_http2_are_rejected_before_headers():
         trace("http11.receive_response_headers.started", {})
     with pytest.raises(ValueError, match="dedicated HTTP/1.1"):
         trace("http2.send_request_headers.started", {})
+
+
+def test_stalled_dns_is_abandoned_at_the_deadline(monkeypatch):
+    import threading
+    import time
+
+    release = threading.Event()
+    monkeypatch.setattr(posts.socket, "getaddrinfo", lambda *a, **k: release.wait(10) and [])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 0.2)
+    started = time.monotonic()
+    try:
+        with httpx.Client(transport=httpx.MockTransport(lambda r: pytest.fail("unexpected HTTP"))) as client:
+            assert posts._image("https://images.example/a", client) is None
+        assert time.monotonic() - started < 2
+    finally:
+        release.set()
+
+
+def test_image_takes_the_post_deadline_when_it_is_sooner(monkeypatch):
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, content=b"image")
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client, until=3.0) == b"image"
+        assert posts._image("https://images.example/a", client, until=0.0) is None
+    assert len(calls) == 1
+    assert calls[0].extensions["timeout"]["read"] == 3.0
+
+
+POST_META = {"title": "Test", "authors": [], "year": 2026, "venue": "LessWrong",
+             "source": {"url": "https://www.lesswrong.com/posts/example"}}
+
+
+def render_images(monkeypatch, count, fetch):
+    html = "".join(f'<img src="https://images.example/{i}" alt="figure {i}">' for i in range(count))
+    monkeypatch.setattr(posts, "_image", fetch)
+    with httpx.Client(transport=httpx.MockTransport(lambda r: pytest.fail("unexpected HTTP"))) as client:
+        rendered = posts.render(POST_META, html, client)
+    return " ".join(page.extract_text() for page in PdfReader(io.BytesIO(rendered)).pages)
+
+
+def test_images_past_the_post_cap_are_placeholders(monkeypatch):
+    monkeypatch.setattr(posts, "POST_IMAGES", 2)
+    fetched = []
+    text = render_images(monkeypatch, 3, lambda src, client, until: fetched.append(src))
+    assert fetched == ["https://images.example/0", "https://images.example/1"]
+    assert "[image: figure 2]" in text
+
+
+def test_images_share_one_post_deadline(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "POST_IMAGE_SECONDS", 5.0)
+    deadlines = []
+
+    def slow(src, client, until):
+        deadlines.append(until)
+        now[0] += 2.0
+
+    text = render_images(monkeypatch, 5, slow)
+    assert deadlines == [5.0, 5.0, 5.0]
+    assert "[image: figure 3]" in text and "[image: figure 4]" in text

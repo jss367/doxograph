@@ -15,6 +15,7 @@ import os
 import re
 import socket
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -63,6 +64,11 @@ IMAGE_BYTES = 8_000_000
 IMAGE_PIXELS = 16_000_000
 IMAGE_SECONDS = 30.0
 IMAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+# The images are fetched one after another, so a post of many dead links would
+# otherwise hold an import for IMAGE_SECONDS apiece. Past either limit, the rest
+# of the post's images become placeholders.
+POST_IMAGES = 40
+POST_IMAGE_SECONDS = 90.0
 
 
 def parse_url(url: str) -> tuple[str, str] | None:
@@ -365,16 +371,37 @@ def _clean(text: str) -> str:
     return re.sub("[\\x00-\\x09\\x0b-\\x1f\\x7f\\u200b\\ufeff]", "", text)
 
 
-def _image_targets(url: httpx.URL) -> list[httpx.URL]:
+def _resolve(host: str, port: int, deadline: float) -> list:
+    """`getaddrinfo`, given up on once the deadline passes.
+
+    The system resolver takes no timeout and cannot be cancelled, so it runs in
+    a daemon thread that is left to finish on its own if the lookup stalls.
+    """
+    answer: list = []
+
+    def lookup() -> None:
+        try:
+            answer.append(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+        except Exception as exc:
+            answer.append(exc)
+
+    thread = threading.Thread(target=lookup, daemon=True)
+    thread.start()
+    thread.join(_image_remaining(deadline))
+    if not answer:
+        raise TimeoutError("image host lookup exceeded the deadline")
+    if isinstance(answer[0], Exception):
+        raise answer[0]
+    return answer[0]
+
+
+def _image_targets(url: httpx.URL, deadline: float) -> list[httpx.URL]:
     """Resolve and validate all addresses before returning pinned destinations."""
     if (url.scheme not in {"http", "https"} or not url.host or url.userinfo
             or "%" in url.host or url.host.rstrip(".").lower().endswith((".localhost", ".local"))
             or url.host.rstrip(".").lower() == "localhost"):
         raise ValueError("not a public image URL")
-    addresses = socket.getaddrinfo(
-        url.host, url.port or (443 if url.scheme == "https" else 80),
-        type=socket.SOCK_STREAM,
-    )
+    addresses = _resolve(url.host, url.port or (443 if url.scheme == "https" else 80), deadline)
     if not addresses:
         raise ValueError("image host has no addresses")
     for _, _, _, _, address in addresses:
@@ -470,14 +497,18 @@ class _ImageTrace:
             raise ValueError("image deadline requires a dedicated HTTP/1.1 connection")
 
 
-def _image(src: str, client: httpx.Client) -> bytes | None:
-    """Fetch a bounded image, validating and pinning every redirect hop."""
+def _image(src: str, client: httpx.Client, until: float = float("inf")) -> bytes | None:
+    """Fetch a bounded image, validating and pinning every redirect hop.
+
+    `until` is the post's deadline for all its images; this one gets whatever
+    is left of it, up to IMAGE_SECONDS.
+    """
     try:
-        deadline = monotonic() + IMAGE_SECONDS
+        deadline = min(monotonic() + IMAGE_SECONDS, until)
         url = httpx.URL(src)
         for hop in range(6):
             _image_remaining(deadline)
-            targets = _image_targets(url)
+            targets = _image_targets(url, deadline)
             for target in targets:
                 remaining = _image_remaining(deadline)
                 timeout = httpx.Timeout(
@@ -566,11 +597,16 @@ def render(meta: dict, html: str, client: httpx.Client) -> bytes:
         header.append(("\n" + source["url"], "", source["url"]))
     write(Block(runs=header))
 
+    images_until = monotonic() + POST_IMAGE_SECONDS
+    fetched = 0
     for block in blocks_of(html):
         if block.style != "img":
             write(block)
             continue
-        data = _image(block.src, client)
+        data = None
+        if fetched < POST_IMAGES and monotonic() < images_until:
+            fetched += 1
+            data = _image(block.src, client, images_until)
         if not (data and _placed(pdf, data, width)):
             # A placeholder says where the image was.
             alt = block.runs[0][0] if block.runs else ""
