@@ -418,6 +418,58 @@ class _ImageStream(httpx.SyncByteStream):
         self.stream.close()
 
 
+class _ImageTrace:
+    """Apply the deadline to httpcore socket I/O before response headers exist.
+
+    The trace extension exposes each new TCP/TLS stream. Its reads and writes
+    receive the shrinking budget, including reads performed by the HTTP header
+    parser and proxy CONNECT parser. The connection belongs to this request
+    and is closed afterward; do not reuse an unguarded or multiplexed stream.
+    """
+
+    def __init__(self, deadline: float):
+        self.deadline = deadline
+        self.guarded = False
+
+    def __call__(self, event: str, info: dict):
+        operations = ("connect_tcp", "connect_unix_socket", "start_tls")
+        if any(event.endswith(f"{operation}.started") for operation in operations):
+            remaining = _image_remaining(self.deadline)
+            timeout = info.get("timeout")
+            info["timeout"] = remaining if timeout is None else min(timeout, remaining)
+        elif any(event.endswith(f"{operation}.complete") for operation in operations):
+            stream = info["return_value"]
+            try:
+                _image_remaining(self.deadline)
+                original_read, original_write = stream.read, stream.write
+
+                def bounded_read(max_bytes, timeout=None):
+                    remaining = _image_remaining(self.deadline)
+                    data = original_read(max_bytes, timeout=remaining if timeout is None else min(timeout, remaining))
+                    _image_remaining(self.deadline)
+                    return data
+
+                def bounded_write(data, timeout=None):
+                    remaining = _image_remaining(self.deadline)
+                    original_write(data, timeout=remaining if timeout is None else min(timeout, remaining))
+                    _image_remaining(self.deadline)
+
+                stream.read, stream.write = bounded_read, bounded_write
+                self.guarded = True
+            except (AttributeError, TypeError) as exc:
+                stream.close()
+                raise ValueError("image transport cannot enforce a socket deadline") from exc
+            except BaseException:
+                stream.close()
+                raise
+        elif event == "http11.receive_response_headers.started":
+            _image_remaining(self.deadline)
+            if not self.guarded:
+                raise ValueError("image transport reused an unguarded connection")
+        elif event.startswith("http2.") and event.endswith(".started") and "response_closed" not in event:
+            raise ValueError("image deadline requires a dedicated HTTP/1.1 connection")
+
+
 def _image(src: str, client: httpx.Client) -> bytes | None:
     """Fetch a bounded image, validating and pinning every redirect hop."""
     try:
@@ -436,7 +488,7 @@ def _image(src: str, client: httpx.Client) -> bytes | None:
                     with client.stream(
                         "GET", target, follow_redirects=False, timeout=timeout,
                         headers={"Host": url.netloc.decode("ascii"), "Connection": "close"},
-                        extensions={"sni_hostname": url.host},
+                        extensions={"sni_hostname": url.host, "trace": _ImageTrace(deadline)},
                     ) as response:
                         _image_remaining(deadline)
                         if response.status_code in {301, 302, 303, 307, 308}:

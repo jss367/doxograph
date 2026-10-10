@@ -535,3 +535,115 @@ def test_headers_finishing_after_budget_skip_body_and_close_response(monkeypatch
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         assert posts._image("https://images.example/a", client) is None
     assert stream.closed
+
+
+def header_socket(monkeypatch, now, chunks, delay):
+    """Fake the actual httpcore socket boundary; never open a socket."""
+    import httpcore
+    from httpcore._backends.sync import SyncBackend
+
+    state = {"reads": [], "writes": [], "tls": [], "connections": [], "closed": False}
+    chunks = iter(chunks)
+
+    class Stream:
+        def read(self, max_bytes, timeout=None):
+            state["reads"].append(timeout)
+            if timeout is not None and timeout < delay:
+                now[0] += timeout
+                raise httpcore.ReadTimeout("mock socket deadline")
+            now[0] += delay
+            return next(chunks, b"")
+
+        def write(self, data, timeout=None):
+            state["writes"].append((data, timeout))
+
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            state["tls"].append((server_hostname, timeout))
+            # Return a new stream just as the real TLS backend does, so its
+            # reads must receive their own guard after the handshake.
+            return Stream()
+
+        def get_extra_info(self, name):
+            return None
+
+        def close(self):
+            state["closed"] = True
+
+    def connect(self, host, port, **kwargs):
+        state["connections"].append((host, port, kwargs["timeout"]))
+        return Stream()
+
+    monkeypatch.setattr(SyncBackend, "connect_tcp", connect)
+    return state
+
+
+@pytest.mark.parametrize("mode", ["http", "https", "proxy_connect"])
+def test_socket_deadline_covers_slow_drip_headers_before_response_exists(monkeypatch, mode):
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+    # Each byte is quicker than the original per-read timeout, but the header
+    # parser cannot finish within the shared budget.
+    state = header_socket(monkeypatch, now, [bytes([c]) for c in b"HTTP/1.1 200 OK\r\n\r\n"], 2.0)
+    kwargs = {"trust_env": False}
+    if mode == "proxy_connect":
+        kwargs["proxy"] = "http://proxy.example:8080"
+    scheme = "http" if mode == "http" else "https"
+    with httpx.Client(**kwargs) as client:
+        assert posts._image(f"{scheme}://images.example/a", client) is None
+    assert now[0] == 5.0
+    assert state["reads"] == [5.0, 3.0, 1.0]
+    assert state["closed"]
+    if mode == "proxy_connect":
+        assert state["connections"] == [("proxy.example", 8080, 5.0)]
+        assert state["tls"] == []  # The CONNECT headers never completed.
+        assert b"CONNECT " + PUBLIC.encode() + b":443" in b"".join(d for d, _ in state["writes"])
+    else:
+        assert state["connections"] == [(PUBLIC, 80 if mode == "http" else 443, 5.0)]
+        if mode == "https":
+            assert state["tls"] == [("images.example", 5.0)]
+
+
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_socket_headers_and_body_finishing_within_budget_are_preserved(monkeypatch, scheme):
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+    state = header_socket(monkeypatch, now, [b"HTTP/1.1 200 OK\r\n",
+        b"Content-Length: 5\r\nConnection: close\r\n\r\nimage"], 2.0)
+    with httpx.Client(trust_env=False) as client:
+        assert posts._image(f"{scheme}://images.example/a", client) == b"image"
+    assert state["reads"] == [5.0, 3.0]
+    assert now[0] == 4.0
+    assert state["closed"]
+
+
+def test_opaque_network_stream_is_closed_when_deadline_guard_cannot_be_installed():
+    closed = []
+
+    class OpaqueStream:
+        __slots__ = ()
+
+        def read(self, max_bytes, timeout=None):
+            pytest.fail("unguarded read")
+
+        def write(self, data, timeout=None):
+            pytest.fail("unguarded write")
+
+        def close(self):
+            closed.append(True)
+
+    trace = posts._ImageTrace(posts.monotonic() + 30.0)
+    with pytest.raises(ValueError, match="cannot enforce a socket deadline"):
+        trace("connection.connect_tcp.complete", {"return_value": OpaqueStream()})
+    assert closed == [True]
+
+
+def test_unguarded_reused_connection_and_http2_are_rejected_before_headers():
+    trace = posts._ImageTrace(posts.monotonic() + 30.0)
+    with pytest.raises(ValueError, match="unguarded connection"):
+        trace("http11.receive_response_headers.started", {})
+    with pytest.raises(ValueError, match="dedicated HTTP/1.1"):
+        trace("http2.send_request_headers.started", {})
