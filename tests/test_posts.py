@@ -1,0 +1,268 @@
+"""Forum posts, which arrive as HTML and are set as PDFs."""
+
+from __future__ import annotations
+
+import io
+import json
+import socket
+
+import httpx
+import pytest
+from PIL import Image
+
+from doxograph import bib, ingest, posts, search, store
+
+POST_ID = "HhF5kESdtPHku7kim"
+LW_URL = f"https://www.lesswrong.com/posts/{POST_ID}/reproducing-steering"
+
+
+@pytest.mark.parametrize("url,expected", [
+    (LW_URL, ("lesswrong", POST_ID)),
+    (f"https://lesswrong.com/posts/{POST_ID}", ("lesswrong", POST_ID)),
+    (f"https://www.lesswrong.com/s/abcDEF123/p/{POST_ID}", ("lesswrong", POST_ID)),
+    (f"https://www.alignmentforum.org/posts/{POST_ID}/slug", ("lesswrong", POST_ID)),
+    (f"https://forum.effectivealtruism.org/posts/{POST_ID}/slug?commentId=x", ("eaforum", POST_ID)),
+    ("https://www.lesswrong.com/tag/ai", None),
+    (f"https://example.com/posts/{POST_ID}", None),
+])
+def test_a_post_link_is_read_as_the_post_it_names(url, expected):
+    assert posts.parse_url(url) == expected
+
+
+@pytest.mark.parametrize("token", [
+    "https://[bad", "https://[not-an-ip]/", "https:///missing-host",
+    "https://www.lesswrong.com\uff0f@other.example/posts/AAAAAAAAAAAAAAAAA",
+])
+def test_malformed_urls_are_unknown_without_aborting_a_batch(token):
+    assert posts.parse_url(token) is None
+    assert ingest.parse_ref(token) is None
+    refs, unknown = ingest.parse_refs(f"{token} {LW_URL} 2602.06941")
+    assert unknown == [token]
+    assert [(ref.kind, ref.value) for ref in refs] == [
+        ("lesswrong", POST_ID), ("arxiv", "2602.06941")]
+
+
+def test_a_post_on_lesswrong_and_the_alignment_forum_is_one_paper():
+    refs, unknown = ingest.parse_refs(
+        f"{LW_URL} https://www.alignmentforum.org/posts/{POST_ID}/reproducing-steering")
+    assert unknown == []
+    assert [(r.kind, r.value) for r in refs] == [("lesswrong", POST_ID)]
+
+
+def _png(color: str) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (400, 200), color).save(out, "PNG")
+    return out.getvalue()
+
+
+HTML = (
+    "<p><i>Produced as part of a team.</i></p>"
+    "<h1><span>Executive summary</span></h1>"
+    '<ul><li value="1"><b>Control vectors</b> matter as much as eval vectors.</li>'
+    '<li class="nested-list-item"><ul><li><p>A nested point.</p></li></ul></li></ul>'
+    '<ol><li>First step</li><li>Second step</li></ol>'
+    '<p>Sampled pairs <span class="math-tex"><span class="mjx-math" aria-label="(x, y)">'
+    '<span class="mjx-char">(</span><span class="mjx-char">x</span></span></span> evenly.</p>'
+    "<table><tr><th><p>Model</p></th><th>Rate</th></tr>"
+    "<tr><td><span>GLM-5</span></td><td>62%</td></tr></table>"
+    '<figure><img src="https://images.example/plot.png" alt="a plot">'
+    "<figcaption>Figure 1: blackmail rates.</figcaption></figure>"
+    '<p><img src="https://images.example/missing.png" alt="lost figure"></p>'
+    "<style>.x { color: red }</style><script>alert(1)</script>"
+    "<p>Curly “quotes” – dashes – and Ελληνικά survive.</p>"
+)
+
+POST = {
+    "_id": POST_ID,
+    "title": "Reproducing steering\n against evaluation awareness",
+    "postedAt": "2026-04-10T10:45:06.860Z",
+    "pageUrl": LW_URL,
+    "af": False,
+    "user": {"displayName": "Thomas Read"},
+    "coauthors": [{"displayName": "Joseph Bloom"}],
+    "contents": {"html": HTML},
+}
+
+
+@pytest.fixture
+def forum(monkeypatch):
+    monkeypatch.setattr(posts.socket, "getaddrinfo", lambda *a, **k: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url.copy_with(host=request.headers["host"])))
+        if request.url.host == "www.lesswrong.com":
+            asked = json.loads(request.content)["variables"]["id"]
+            result = POST if asked == POST_ID else None
+            return httpx.Response(200, json={"data": {"post": {"result": result}}})
+        if request.url.path == "/plot.png":
+            return httpx.Response(200, content=_png("navy"))
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    yield client, calls
+    client.close()
+
+
+def test_a_post_is_filed_with_its_own_metadata_and_a_pdf_of_its_text(forum):
+    client, calls = forum
+    key, created = ingest.ingest_ref(ingest.parse_ref(LW_URL), client)
+    assert created
+    paper = store.load_paper(key)
+    assert paper["title"] == "Reproducing steering against evaluation awareness"
+    assert paper["authors"] == ["Thomas Read", "Joseph Bloom"]
+    assert paper["year"] == 2026
+    assert paper["venue"] == "LessWrong"
+    assert paper["source"] == {"kind": "lesswrong", "id": POST_ID, "url": LW_URL, "pdf_url": ""}
+    assert not paper.get("error")
+    assert store.pdf_path(key).read_bytes().startswith(b"%PDF-")
+
+    text = search.paper_text(key)
+    flat = " ".join(text.split())
+    for expected in [
+        "Reproducing steering against evaluation awareness", "Thomas Read, Joseph Bloom",
+        "Produced as part of a team.", "Executive summary",
+        "Control vectors matter as much as eval vectors.", "A nested point.",
+        "1. First step", "2. Second step", "(x, y)", "GLM-5", "62%",
+        "Figure 1: blackmail rates.", "[image: lost figure]",
+        "Curly “quotes” – dashes – and Ελληνικά survive.",
+    ]:
+        assert expected in flat, expected
+    for absent in ["alert(1)", "color: red", "mjx"]:
+        assert absent not in flat
+    assert "https://images.example/plot.png" in calls
+    leftovers = list(store.pdf_path(key).parent.glob(".render-*"))
+    assert leftovers == []
+
+
+def test_pasting_a_post_again_answers_without_asking_the_forum(forum):
+    client, calls = forum
+    key, _ = ingest.ingest_ref(ingest.parse_ref(LW_URL), client)
+    calls.clear()
+    again = ingest.parse_ref(f"https://www.alignmentforum.org/posts/{POST_ID}")
+    assert ingest.already_stored(again) == key
+    assert ingest.ingest_ref(again, client) == (key, False)
+    assert calls == []
+
+
+@pytest.mark.parametrize("kind", sorted(posts.KINDS))
+def test_case_distinct_forum_ids_do_not_match_an_existing_pdf(monkeypatch, tmp_path, kind):
+    paper = {"key": "stored", "source": {"kind": kind, "id": POST_ID}}
+    pdf = tmp_path / "stored.pdf"
+    pdf.write_bytes(b"%PDF-inert-existence-fixture")
+    monkeypatch.setattr(store, "all_papers", lambda: [paper])
+    monkeypatch.setattr(store, "pdf_path", lambda key: pdf)
+    assert ingest.already_stored(ingest.Ref(kind, POST_ID, "fixture")) == "stored"
+    assert ingest.already_stored(ingest.Ref(kind, POST_ID.lower(), "fixture")) is None
+    assert ingest.find_existing({"source": {"kind": kind, "id": POST_ID.lower()}}) is None
+
+
+def test_case_changed_post_url_still_queries_the_forum(forum):
+    client, calls = forum
+    key, _ = ingest.ingest_ref(ingest.parse_ref(LW_URL), client)
+    calls.clear()
+    changed = ingest.parse_ref(f"https://www.alignmentforum.org/posts/{POST_ID.lower()}")
+    assert ingest.already_stored(changed) is None
+    with pytest.raises(ValueError, match="LessWrong has no post"):
+        ingest.ingest_ref(changed, client)
+    assert calls == [posts.API["lesswrong"]]
+    assert store.paper_keys() == [key]
+
+
+def test_a_post_the_forum_does_not_have_says_so(forum):
+    client, _ = forum
+    with pytest.raises(ValueError, match="LessWrong has no post"):
+        ingest.ingest_ref(ingest.parse_ref("https://www.lesswrong.com/posts/AAAAAAAAAAAAAAAAA"), client)
+    assert store.paper_keys() == []
+
+
+def test_a_post_that_cannot_be_set_is_kept_and_says_why(forum, monkeypatch):
+    client, _ = forum
+
+    def broken(meta, html, client):
+        raise RuntimeError("no room on the page")
+
+    working = posts.render
+    monkeypatch.setattr(posts, "render", broken)
+    key, created = ingest.ingest_ref(ingest.parse_ref(LW_URL), client)
+    assert created and not store.pdf_path(key).exists()
+    assert "no room on the page" in store.load_paper(key)["error"]
+    # Adding it again retries, as for a download that failed.
+    monkeypatch.setattr(posts, "render", working)
+    assert ingest.ingest_ref(ingest.parse_ref(LW_URL), client) == (key, False)
+    assert store.pdf_path(key).exists()
+    assert not store.load_paper(key).get("error")
+
+
+def test_a_post_is_cited_as_a_post(forum):
+    client, _ = forum
+    key, _ = ingest.ingest_ref(ingest.parse_ref(LW_URL), client)
+    entry = bib.entry(store.load_paper(key))
+    assert entry.startswith("@misc{")
+    assert "howpublished = {LessWrong}" in entry
+    assert "journal" not in entry
+
+
+@pytest.mark.parametrize("location", ["body", "title", "author", "image_alt"])
+def test_unavailable_glyphs_fail_explicitly_instead_of_publishing_partial_text(forum, monkeypatch, location):
+    monkeypatch.setattr(posts, "FALLBACKS", [])
+    meta = posts.metadata("lesswrong", POST)
+    html = "<p>Before 中文 After</p>"
+    if location == "title":
+        meta["title"] = "Title 中文"
+        html = "<p>Body</p>"
+    elif location == "author":
+        meta["authors"] = ["Author 中文"]
+        html = "<p>Body</p>"
+    elif location == "image_alt":
+        html = '<img src="http://example.com:bad/a" alt="中文">'
+    with pytest.raises(ValueError, match="could not preserve post text.*U\\+4E2D"):
+        posts.render_to_staging(meta, html, forum[0])
+    assert list(store.config.pdfs_dir().glob(".render-*")) == []
+
+
+def test_unavailable_glyph_error_is_recorded_and_no_pdf_is_published(forum, monkeypatch):
+    monkeypatch.setattr(posts, "FALLBACKS", [])
+    monkeypatch.setitem(POST, "contents", {"html": "<p>Before 中文 After</p>"})
+    key, created = ingest.ingest_ref(ingest.parse_ref(LW_URL), forum[0])
+    assert created
+    assert not store.pdf_path(key).exists()
+    paper = store.load_paper(key)
+    assert "could not preserve post text" in paper["error"]
+    assert paper["source"]["url"] == LW_URL
+
+
+def test_vendored_fonts_preserve_supported_unicode_without_system_fallback(forum, monkeypatch):
+    from pypdf import PdfReader
+
+    monkeypatch.setattr(posts, "FALLBACKS", [])
+    text = "Curly “quotes” – Ελληνικά"
+    data = posts.render(posts.metadata("lesswrong", POST), f"<p>{text}</p>", forum[0])
+    extracted = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages)
+    assert text in extracted
+
+
+def test_available_broad_script_fallback_preserves_text(forum):
+    from pypdf import PdfReader
+
+    if not any(posts.os.path.exists(path) for path in posts.FALLBACKS):
+        pytest.skip("no system fallback font installed")
+    text = "Numbers ℂ ℕ ℝ"
+    data = posts.render(posts.metadata("lesswrong", POST), f"<p><i>{text}</i></p>", forum[0])
+    extracted = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages)
+    assert text in extracted
+
+
+def test_fallback_first_title_keeps_title_and_following_page_text(forum):
+    """Regression for fpdf2's fallback-first page bug fixed in 2.8.8."""
+    from pypdf import PdfReader
+
+    if not any(posts.os.path.exists(path) for path in posts.FALLBACKS):
+        pytest.skip("no system fallback font installed")
+    meta = posts.metadata("lesswrong", POST)
+    meta["title"] = "ℂ fallback-first title"
+    data = posts.render(meta, "<p>Body after the fallback-first title survives.</p>", forum[0])
+    text = " ".join(" ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages).split())
+    assert "ℂ fallback-first title" in text
+    assert "Body after the fallback-first title survives." in text

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from . import store
+from . import posts, store
 
 # Characters that change how a .bib file parses. `%` starts a comment, so an
 # unescaped one truncates the rest of the line including its closing brace, and
@@ -91,6 +91,9 @@ def entry(paper: dict) -> str:
         fields += [("eprint", escape(source.get("id", ""))), ("archivePrefix", "arXiv")]
         if paper.get("venue") and paper["venue"] != "arXiv":
             fields.append(("note", escape(paper["venue"])))
+    elif source.get("kind") in posts.KINDS:
+        kind = "misc"
+        fields.append(("howpublished", escape(paper.get("venue", ""))))
     else:
         kind = "article" if paper.get("venue") else "misc"
         if paper.get("venue"):

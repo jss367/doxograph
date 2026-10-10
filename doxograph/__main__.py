@@ -396,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reload", action="store_true")
     p.set_defaults(func=cmd_serve)
 
-    p = sub.add_parser("add", help="add papers from arXiv IDs, DOIs, URLs, or PDF paths")
+    p = sub.add_parser("add", help="add papers from arXiv IDs, DOIs, URLs, forum posts, or PDF paths")
     p.add_argument("refs", nargs="+")
     p.add_argument("--no-extract", action="store_true", help="fetch without reading")
     p.set_defaults(func=cmd_add)

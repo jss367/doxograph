@@ -16,6 +16,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "PyYAML>=6.0",
     "pypdf>=4.0",
+    "fpdf2>=2.8.8",
+    "Pillow>=10",
 ]
 
 [project.optional-dependencies]
