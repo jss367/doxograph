@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -134,6 +134,11 @@ def parse_ref(token: str) -> Ref | None:
         if match:
             return Ref("doi", normalize_doi(match.group(0)), token)
     if token.startswith(("http://", "https://")):
+        try:
+            if not urlsplit(token).hostname:
+                return None
+        except ValueError:
+            return None
         return Ref("pdf" if token.lower().split("?")[0].endswith(".pdf") else "page", token, token)
     # Tolerate wrapping punctuation on both sides; normalize_doi then decides
     # what trailing characters are the DOI's own.

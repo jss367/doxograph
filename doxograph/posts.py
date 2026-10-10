@@ -75,8 +75,11 @@ POST_IMAGE_SECONDS = 90.0
 
 def parse_url(url: str) -> tuple[str, str] | None:
     """(kind, post id) for a link to a forum post, or None."""
-    parts = urlsplit(url)
-    host = (parts.hostname or "").lower().removeprefix("www.")
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return None
     kind = SITES.get(host)
     if not kind:
         return None

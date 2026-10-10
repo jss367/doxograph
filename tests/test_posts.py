@@ -29,6 +29,19 @@ def test_a_post_link_is_read_as_the_post_it_names(url, expected):
     assert posts.parse_url(url) == expected
 
 
+@pytest.mark.parametrize("token", [
+    "https://[bad", "https://[not-an-ip]/", "https:///missing-host",
+    "https://www.lesswrong.com\uff0f@other.example/posts/AAAAAAAAAAAAAAAAA",
+])
+def test_malformed_urls_are_unknown_without_aborting_a_batch(token):
+    assert posts.parse_url(token) is None
+    assert ingest.parse_ref(token) is None
+    refs, unknown = ingest.parse_refs(f"{token} {LW_URL} 2602.06941")
+    assert unknown == [token]
+    assert [(ref.kind, ref.value) for ref in refs] == [
+        ("lesswrong", POST_ID), ("arxiv", "2602.06941")]
+
+
 def test_a_post_on_lesswrong_and_the_alignment_forum_is_one_paper():
     refs, unknown = ingest.parse_refs(
         f"{LW_URL} https://www.alignmentforum.org/posts/{POST_ID}/reproducing-steering")
