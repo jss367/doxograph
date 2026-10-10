@@ -1,0 +1,476 @@
+"""Forum posts: LessWrong, the AI Alignment Forum and the EA Forum.
+
+A post has no arXiv ID, no DOI and no PDF, so its page gives `resolve_page`
+nothing to go on. The forums do serve every post through a GraphQL API, and a
+post read that way is set as a PDF here. From then on it is a paper like any
+other: read by the model, its quotes checked against its text, shown in the
+viewer.
+"""
+
+from __future__ import annotations
+
+import io
+import os
+import re
+import tempfile
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import httpx
+from fpdf import FPDF
+from PIL import Image
+
+from . import config
+
+# The Alignment Forum is a view onto LessWrong's database: an AF post is a
+# LessWrong post with the same id, so the two are one source.
+SITES = {
+    "lesswrong.com": "lesswrong",
+    "alignmentforum.org": "lesswrong",
+    "forum.effectivealtruism.org": "eaforum",
+}
+API = {
+    "lesswrong": "https://www.lesswrong.com/graphql",
+    "eaforum": "https://forum.effectivealtruism.org/graphql",
+}
+KINDS = frozenset(API)
+
+# `/posts/<id>/<slug>`, or `/s/<sequence>/p/<id>` for a post read inside a
+# sequence. Ids are seventeen characters.
+POST_PATH = re.compile(r"^/(?:posts|s/[A-Za-z0-9]+/p)/([A-Za-z0-9]{17})(?:/|$)")
+
+QUERY = """
+query ($id: String) {
+  post(input: {selector: {_id: $id}}) {
+    result {
+      _id title postedAt pageUrl af
+      user { displayName }
+      coauthors { displayName }
+      contents { html }
+    }
+  }
+}
+"""
+
+# Images are what a post shows its results in, so they are worth the fetch,
+# but one that is huge or slow is left out rather than holding up the post.
+IMAGE_BYTES = 8_000_000
+IMAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+
+
+def parse_url(url: str) -> tuple[str, str] | None:
+    """(kind, post id) for a link to a forum post, or None."""
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    kind = SITES.get(host)
+    if not kind:
+        return None
+    match = POST_PATH.match(parts.path)
+    return (kind, match.group(1)) if match else None
+
+
+def fetch_post(kind: str, post_id: str, client: httpx.Client) -> dict:
+    """The post as the forum's API returns it."""
+    response = client.post(API[kind], json={"query": QUERY, "variables": {"id": post_id}})
+    response.raise_for_status()
+    body = response.json()
+    if body.get("errors"):
+        raise ValueError(f"{API[kind]} refused post {post_id}: {body['errors'][0].get('message', '')}")
+    post = ((body.get("data") or {}).get("post") or {}).get("result")
+    if not post:
+        raise ValueError(f"{venue_of(kind, False)} has no post {post_id}")
+    return post
+
+
+def venue_of(kind: str, af: bool) -> str:
+    if kind == "eaforum":
+        return "EA Forum"
+    return "AI Alignment Forum" if af else "LessWrong"
+
+
+def metadata(kind: str, post: dict) -> dict:
+    """The paper record for a post, in the shape `fetch_arxiv` returns."""
+    posted = post.get("postedAt") or ""
+    names = [post.get("user") or {}] + list(post.get("coauthors") or [])
+    return {
+        "title": re.sub(r"\s+", " ", post.get("title") or "").strip() or post["_id"],
+        "authors": [n["displayName"].strip() for n in names if (n or {}).get("displayName")],
+        "year": int(posted[:4]) if posted[:4].isdigit() else None,
+        "abstract": "",
+        "venue": venue_of(kind, bool(post.get("af"))),
+        "doi": "",
+        "source": {"kind": kind, "id": post["_id"], "url": post.get("pageUrl") or "", "pdf_url": ""},
+    }
+
+
+# --- HTML to blocks -------------------------------------------------------
+
+@dataclass
+class Block:
+    style: str = "p"            # p | h1 | h2 | h3 | pre | img
+    indent: int = 0
+    prefix: str = ""
+    runs: list[tuple[str, str, str]] = field(default_factory=list)  # text, B/I, link
+    src: str = ""
+
+    def empty(self) -> bool:
+        return not "".join(text for text, _, _ in self.runs).strip()
+
+
+BLOCK_TAGS = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre",
+              "blockquote", "figure", "figcaption", "tr", "section", "hr"}
+# Content a reader never sees as text: scripts, styles, inline drawings, and
+# the per-glyph markup MathJax lays out a formula with (its source is kept from
+# the formula's aria-label instead).
+SKIPPED = {"script", "style", "svg", "noscript", "button", "math"}
+
+
+class _Reader(HTMLParser):
+    """Flatten a post's HTML into paragraphs, headings, list items and images.
+
+    Only the structure a reader of the PDF needs survives. Tables become one
+    line per row with the cells joined by bars, which keeps every word of a
+    results table in the text that quotes are checked against.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[Block] = []
+        self.block = Block()
+        self.bold = self.italic = 0
+        self.links: list[str] = []
+        self.lists: list[list] = []      # [ordered, next number] per open list
+        self.quotes = 0
+        self.cells = 0                   # open table cells
+        self.row_has_cell = False
+        self.pre = 0
+        self.skip: list[str] = []        # the tag being skipped, once per nesting
+
+    # Blocks
+
+    def _indent(self) -> int:
+        return len(self.lists) + self.quotes
+
+    def _flush(self) -> None:
+        if not self.block.empty() or self.block.style == "img":
+            self.blocks.append(self.block)
+        self.block = Block(indent=self._indent())
+
+    def _open(self, style: str = "p", prefix: str = "") -> None:
+        # A paragraph inside a list item continues the item when the item has
+        # no words yet; otherwise it starts a new, unbulleted paragraph under it.
+        if self.block.empty() and self.block.style != "img":
+            self.block.style = style if style != "p" else self.block.style
+            self.block.prefix = prefix or self.block.prefix
+            self.block.indent = self._indent()
+            return
+        self._flush()
+        self.block.style, self.block.prefix = style, prefix
+
+    def _style(self) -> str:
+        return ("B" if self.bold else "") + ("I" if self.italic else "")
+
+    def _text(self, text: str) -> None:
+        link = self.links[-1] if self.links else ""
+        self.block.runs.append((text, self._style(), link))
+
+    # Parser callbacks
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if self.skip:
+            if tag == self.skip[-1]:
+                self.skip.append(tag)
+            return
+        if tag in SKIPPED or tag.startswith("mjx-"):
+            self.skip.append(tag)
+            return
+        classes = (attrs.get("class") or "").split()
+        if "mjx-math" in classes:
+            # MathJax spells each glyph out in its own span; the label is the
+            # formula as one line of text.
+            self._text(f" {attrs.get('aria-label') or ''} ")
+            self.skip.append(tag)
+            return
+        if self.cells:
+            if tag in ("br", "p", "div", "li"):
+                self._text(" ")
+            elif tag == "img":
+                self._text(f" [image{': ' + attrs['alt'] if attrs.get('alt') else ''}] ")
+            self._inline(tag, attrs)
+            return
+        if tag in ("td", "th"):
+            if self.row_has_cell:
+                self._text("  |  ")
+            self.cells += 1
+            self.row_has_cell = True
+            if tag == "th":
+                self.bold += 1
+            return
+        if tag in ("ul", "ol"):
+            self._flush()
+            self.lists.append([tag == "ol", 1])
+            self.block.indent = self._indent()
+            return
+        if tag == "blockquote":
+            self._flush()
+            self.quotes += 1
+            self.block.indent = self._indent()
+            return
+        if tag == "li":
+            if self.lists and self.lists[-1][0]:
+                number = attrs.get("value")
+                if number and number.isdigit():
+                    self.lists[-1][1] = int(number)
+                prefix = f"{self.lists[-1][1]}. "
+                self.lists[-1][1] += 1
+            else:
+                prefix = "• "
+            self._flush()
+            self.block.prefix = prefix
+            self.block.indent = max(self._indent() - 1, 0)
+            return
+        if tag == "img":
+            src = attrs.get("src") or ""
+            if src.startswith(("http://", "https://")):
+                self._flush()
+                self.block.style, self.block.src = "img", src
+                self.block.runs = [(attrs.get("alt") or "", "", "")]
+                self._flush()
+            return
+        if tag == "br":
+            self._text("\n")
+            return
+        if tag == "hr":
+            self._flush()
+            return
+        if tag == "pre":
+            self._open("pre")
+            self.pre += 1
+            return
+        if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            self._open("h" + str(min(int(tag[1]), 3)))
+            return
+        if tag == "tr":
+            self._flush()
+            self.row_has_cell = False
+            return
+        if tag == "figcaption":
+            self._open()
+            self.italic += 1
+            return
+        if tag in BLOCK_TAGS:
+            self._open()
+            return
+        self._inline(tag, attrs)
+
+    def _inline(self, tag, attrs):
+        if tag in ("b", "strong"):
+            self.bold += 1
+        elif tag in ("i", "em"):
+            self.italic += 1
+        elif tag == "a":
+            href = attrs.get("href") or ""
+            self.links.append(href if href.startswith(("http://", "https://")) else "")
+
+    def handle_startendtag(self, tag, attrs):
+        # A void element written `<br/>` never gets an end tag; no others do.
+        self.handle_starttag(tag, attrs)
+        if tag not in ("img", "br", "hr") and not self.skip:
+            self.handle_endtag(tag)
+        elif self.skip and tag == self.skip[-1]:
+            self.skip.pop()
+
+    def handle_endtag(self, tag):
+        if self.skip:
+            if tag == self.skip[-1]:
+                self.skip.pop()
+            return
+        if tag in ("b", "strong"):
+            self.bold = max(self.bold - 1, 0)
+        elif tag in ("i", "em"):
+            self.italic = max(self.italic - 1, 0)
+        elif tag == "a":
+            if self.links:
+                self.links.pop()
+        elif tag in ("td", "th"):
+            self.cells = max(self.cells - 1, 0)
+            if tag == "th":
+                self.bold = max(self.bold - 1, 0)
+        elif self.cells:
+            return
+        elif tag in ("ul", "ol"):
+            self._flush()
+            if self.lists:
+                self.lists.pop()
+            self.block.indent = self._indent()
+        elif tag == "blockquote":
+            self._flush()
+            self.quotes = max(self.quotes - 1, 0)
+            self.block.indent = self._indent()
+        elif tag == "pre":
+            self.pre = max(self.pre - 1, 0)
+            self._flush()
+        elif tag == "figcaption":
+            self.italic = max(self.italic - 1, 0)
+            self._flush()
+        elif tag in BLOCK_TAGS:
+            self._flush()
+
+    def handle_data(self, data):
+        if self.skip:
+            return
+        if not self.pre:
+            data = re.sub(r"\s+", " ", data)
+        if data:
+            self._text(data)
+
+    def close(self) -> list[Block]:
+        super().close()
+        self._flush()
+        return self.blocks
+
+
+def blocks_of(html: str) -> list[Block]:
+    reader = _Reader()
+    reader.feed(html)
+    return reader.close()
+
+
+# --- Blocks to PDF --------------------------------------------------------
+
+FONTS = Path(__file__).parent / "static" / "vendor" / "standard_fonts"
+FACES = {"": "Regular", "B": "Bold", "I": "Italic", "BI": "BoldItalic"}
+SIZES = {"h1": 16, "h2": 14, "h3": 12, "p": 10.5, "pre": 9}
+INDENT_MM = 6
+# A wider face to fall back on for the characters Liberation Sans lacks
+# (arrows, math symbols, most scripts other than Latin, Greek and Cyrillic),
+# where the system has one.
+FALLBACKS = [
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
+
+
+def _clean(text: str) -> str:
+    # Control characters other than the line breaks a <br> leaves have no
+    # glyph in any font.
+    return re.sub("[\\x00-\\x09\\x0b-\\x1f\\x7f\\u200b\\ufeff]", "", text)
+
+
+def _image(src: str, client: httpx.Client) -> bytes | None:
+    try:
+        with client.stream("GET", src, follow_redirects=True, timeout=IMAGE_TIMEOUT) as response:
+            response.raise_for_status()
+            data = bytearray()
+            for chunk in response.iter_bytes(65536):
+                data += chunk
+                if len(data) > IMAGE_BYTES:
+                    return None
+            return bytes(data)
+    except httpx.HTTPError:
+        return None
+
+
+def render(meta: dict, html: str, client: httpx.Client) -> bytes:
+    """The post as a PDF: a title block, then the body."""
+    pdf = FPDF(format="letter")
+    pdf.set_auto_page_break(True, margin=18)
+    pdf.set_margins(20, 18, 20)
+    for style, face in FACES.items():
+        pdf.add_font("Body", style, FONTS / f"LiberationSans-{face}.ttf")
+    fallbacks = []
+    for i, path in enumerate(p for p in FALLBACKS if os.path.exists(p)):
+        pdf.add_font(f"Fallback{i}", "", path)
+        fallbacks.append(f"Fallback{i}")
+    if fallbacks:
+        pdf.set_fallback_fonts(fallbacks, exact_match=False)
+    pdf.set_title(meta["title"])
+    pdf.set_author(", ".join(meta["authors"]))
+    pdf.add_page()
+    width = pdf.epw
+
+    def write(block: Block) -> None:
+        size = SIZES.get(block.style, SIZES["p"])
+        height = size * 0.5
+        left = 20 + block.indent * INDENT_MM
+        pdf.set_left_margin(left)
+        pdf.set_x(left)
+        if block.style.startswith("h"):
+            pdf.ln(size * 0.3)
+        if block.prefix:
+            pdf.set_font("Body", "", size)
+            pdf.write(height, block.prefix)
+        for text, style, link in block.runs:
+            text = _clean(text)
+            if not text:
+                continue
+            pdf.set_font("Body", "B" if block.style.startswith("h") else style, size)
+            pdf.write(height, text, link=link)
+        pdf.ln(height + (2.5 if block.style != "pre" else 1))
+
+    source = meta["source"]
+    byline = ", ".join(meta["authors"])
+    when = f"{meta['venue']}, {meta['year']}" if meta.get("year") else meta["venue"]
+    write(Block(style="h1", runs=[(meta["title"], "B", "")]))
+    header = [(byline + "\n", "", "")] if byline else []
+    header.append((when, "I", ""))
+    if source.get("url"):
+        header.append(("\n" + source["url"], "", source["url"]))
+    write(Block(runs=header))
+
+    for block in blocks_of(html):
+        if block.style != "img":
+            write(block)
+            continue
+        data = _image(block.src, client)
+        if not (data and _placed(pdf, data, width)):
+            # A placeholder says where the image was.
+            alt = block.runs[0][0] if block.runs else ""
+            write(Block(runs=[(f"[image{': ' + alt if alt else ''}]", "I", block.src)]))
+    return bytes(pdf.output())
+
+
+def _placed(pdf, data: bytes, width: float) -> bool:
+    """Draw an image at its own size, shrunk to fit the page.
+
+    False for what Pillow cannot open, an SVG or a truncated file, before
+    anything is drawn.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            pixels_w, pixels_h = image.size
+            image.load()
+    except Exception:
+        return False
+    w_mm, h_mm = pixels_w * 0.264583, pixels_h * 0.264583   # at 96 dpi
+    scale = min(1.0, width / w_mm, (pdf.eph * 0.8) / h_mm)
+    w, h = w_mm * scale, h_mm * scale
+    if pdf.will_page_break(h):
+        pdf.add_page()
+    pdf.set_left_margin(20)
+    pdf.image(io.BytesIO(data), x=20 + (width - w) / 2, w=w, h=h)
+    pdf.ln(3)
+    return True
+
+
+def render_to_staging(meta: dict, html: str, client: httpx.Client) -> Path:
+    """Render a post into its own staging file beside the PDFs and return the path."""
+    config.pdfs_dir().mkdir(parents=True, exist_ok=True)
+    handle, staged = tempfile.mkstemp(dir=config.pdfs_dir(), prefix=".render-", suffix=".pdf")
+    os.close(handle)
+    staging = Path(staged)
+    try:
+        try:
+            data = render(meta, html, client)
+        except Exception as exc:
+            # fpdf2 reports what it cannot lay out with its own exception types;
+            # to the caller this is one more way the PDF could not be had.
+            raise ValueError(f"could not set {meta['source']['url'] or meta['title']} as a PDF: {exc}") from exc
+        staging.write_bytes(data)
+        return staging
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise

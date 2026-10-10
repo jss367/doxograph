@@ -85,7 +85,7 @@ a paper still deletes any previously uploaded copy from Anthropic.
 
 ```
 doxograph serve                       # the web app on http://127.0.0.1:8765
-doxograph add 2602.06941              # arXiv ID, arXiv URL, DOI, PDF URL, or a local PDF
+doxograph add 2602.06941              # arXiv ID, arXiv URL, DOI, PDF URL, forum post, or a local PDF
 doxograph add --no-extract paper.pdf  # fetch now, read later
 doxograph extract                     # read every paper that has no claims yet
 doxograph retag                       # reassign topics against the current vocabulary
@@ -133,6 +133,13 @@ the canonical link, `citation_doi`, `citation_pdf_url`). An arXiv link in a
 bibliography is not treated as the page's identity, since that would ingest a
 cited paper instead of the one you pasted. When nothing identifies the page,
 paste the arXiv ID, the DOI, or a direct PDF link.
+
+A post on LessWrong, the AI Alignment Forum or the EA Forum has no PDF, so
+Doxograph makes one. It reads the post through the forum's API and sets its
+title, authors, text, tables and images as a PDF, which is then read, checked
+and shown like any other paper's. Formulas come through as text, and an image
+that cannot be fetched or opened is left as a linked placeholder. An Alignment
+Forum post is the same post as on LessWrong and is filed once under either link.
 
 The search box takes a phrase or a set of words. Two characters are enough to
 ask the papers — `AI` and `RL` are words here — and a query in a script that

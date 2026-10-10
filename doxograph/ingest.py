@@ -1,7 +1,8 @@
 """Turn a pasted reference or a dropped file into a paper in the store.
 
 Accepts arXiv IDs and URLs, DOIs, direct PDF links, landing pages that
-advertise a PDF, and local PDF files.
+advertise a PDF, LessWrong, Alignment Forum and EA Forum posts, and local PDF
+files.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from . import config, fingerprint, search, store
+from . import config, fingerprint, posts, search, store
 
 class PaperRemoved(RuntimeError):
     """The paper was deleted while it was being ingested.
@@ -109,7 +110,7 @@ _ARXIV_PATTERNS = [
 
 @dataclass
 class Ref:
-    kind: str  # arxiv | doi | pdf | page
+    kind: str  # arxiv | doi | pdf | page, or a forum in `posts.KINDS`
     value: str
     raw: str
     # A PDF link the landing page advertised. Kept alongside a DOI so it can be
@@ -125,6 +126,9 @@ def parse_ref(token: str) -> Ref | None:
         match = pattern.search(token)
         if match:
             return Ref("arxiv", match.group(1), token)
+    post = posts.parse_url(token)
+    if post:
+        return Ref(post[0], post[1], token)
     if token.lower().startswith(("doi:", "https://doi.org/", "http://doi.org/")):
         match = re.search(DOI_RE, token)
         if match:
@@ -1061,11 +1065,11 @@ def find_existing(meta: dict) -> str | None:
 def ref_source(ref: Ref) -> dict:
     """The `source` this reference would be stored under, before any lookup.
 
-    An arXiv ID, a DOI and a direct PDF link each state an identity by
-    themselves. A landing page states nothing until `resolve_page` has turned
-    it into one of those three, so it has no source here.
+    An arXiv ID, a DOI, a direct PDF link and a forum post each state an
+    identity by themselves. A landing page states nothing until `resolve_page`
+    has turned it into one of the first three, so it has no source here.
     """
-    kind = {"arxiv": "arxiv", "doi": "doi", "pdf": "url"}.get(ref.kind)
+    kind = {"arxiv": "arxiv", "doi": "doi", "pdf": "url", **{k: k for k in posts.KINDS}}.get(ref.kind)
     return {"kind": kind, "id": ref.value} if kind else {}
 
 
@@ -1110,6 +1114,8 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
         if settled:
             return settled, False
 
+        # A forum post has no PDF to download; one is set from its text.
+        post_html = None
         if ref.kind == "arxiv":
             meta = fetch_arxiv(ref.value, client)
         elif ref.kind == "doi":
@@ -1124,18 +1130,29 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
                 "authors": [], "year": None, "abstract": "", "venue": "", "doi": "",
                 "source": {"kind": "url", "id": ref.value, "url": ref.value, "pdf_url": ref.value},
             }
+        elif ref.kind in posts.KINDS:
+            post = posts.fetch_post(ref.kind, ref.value, client)
+            meta = posts.metadata(ref.kind, post)
+            post_html = (post.get("contents") or {}).get("html") or ""
         else:
             raise ValueError(f"cannot ingest a {ref.kind} reference")
+        pdf_url = (meta.get("source") or {}).get("pdf_url")
+        has_pdf = bool(pdf_url) or post_html is not None
+
+        def attach_pdf(key: str) -> bool:
+            """Download or set this paper's PDF and attach it. False if the paper went away."""
+            if post_html is not None:
+                return publish_pdf(key, posts.render_to_staging(meta, post_html, client))
+            return download_pdf(pdf_url, key, client)
 
         with store.claim_lock():
             existing = find_existing(meta)
         if existing:
             # A transient download failure leaves a paper with no PDF, and every
             # later Add would return here without retrying. Recover it instead.
-            pdf_url = (meta.get("source") or {}).get("pdf_url")
-            if pdf_url and not store.pdf_path(existing).exists():
+            if has_pdf and not store.pdf_path(existing).exists():
                 try:
-                    published = download_pdf(pdf_url, existing, client)
+                    published = attach_pdf(existing)
                 except (httpx.HTTPError, ValueError):
                     published = None   # a failed retry is fine; the paper is here
                 if published is False:
@@ -1165,11 +1182,10 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             # same paper finds it while this one is still fetching the PDF.
             key = store.reserve_key(store.citekey(meta["title"], meta["authors"], meta["year"]), **meta)
 
-        pdf_url = (meta.get("source") or {}).get("pdf_url")
         failure = ""
-        if pdf_url:
+        if has_pdf:
             try:
-                if not download_pdf(pdf_url, key, client):
+                if not attach_pdf(key):
                     raise PaperRemoved(f"{key} was removed while its PDF was being fetched")
             except (httpx.HTTPError, ValueError) as exc:
                 failure = f"PDF download failed: {exc}"
