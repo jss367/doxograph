@@ -470,6 +470,13 @@ def render(meta: dict, html: str, client: httpx.Client) -> bytes:
             # A placeholder says where the image was.
             alt = block.runs[0][0] if block.runs else ""
             write(Block(runs=[(f"[image{': ' + alt if alt else ''}]", "I", block.src)]))
+    # fpdf2 records unsupported characters while writing, but otherwise only
+    # warns and omits them from the PDF. Never publish that loss as a success,
+    # including on systems where no broad-script fallback font is available.
+    missing = sorted({codepoint for font in pdf.fonts.values() for codepoint in font.missing_glyphs})
+    if missing:
+        codes = ", ".join(f"U+{codepoint:04X}" for codepoint in missing[:10])
+        raise ValueError(f"could not preserve post text: available PDF fonts lack {codes}")
     return bytes(pdf.output())
 
 

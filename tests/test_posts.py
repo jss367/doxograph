@@ -165,3 +165,53 @@ def test_a_post_is_cited_as_a_post(forum):
     assert entry.startswith("@misc{")
     assert "howpublished = {LessWrong}" in entry
     assert "journal" not in entry
+
+
+@pytest.mark.parametrize("location", ["body", "title", "author", "image_alt"])
+def test_unavailable_glyphs_fail_explicitly_instead_of_publishing_partial_text(forum, monkeypatch, location):
+    monkeypatch.setattr(posts, "FALLBACKS", [])
+    meta = posts.metadata("lesswrong", POST)
+    html = "<p>Before 中文 After</p>"
+    if location == "title":
+        meta["title"] = "Title 中文"
+        html = "<p>Body</p>"
+    elif location == "author":
+        meta["authors"] = ["Author 中文"]
+        html = "<p>Body</p>"
+    elif location == "image_alt":
+        html = '<img src="http://example.com:bad/a" alt="中文">'
+    with pytest.raises(ValueError, match="could not preserve post text.*U\\+4E2D"):
+        posts.render_to_staging(meta, html, forum[0])
+    assert list(store.config.pdfs_dir().glob(".render-*")) == []
+
+
+def test_unavailable_glyph_error_is_recorded_and_no_pdf_is_published(forum, monkeypatch):
+    monkeypatch.setattr(posts, "FALLBACKS", [])
+    monkeypatch.setitem(POST, "contents", {"html": "<p>Before 中文 After</p>"})
+    key, created = ingest.ingest_ref(ingest.parse_ref(LW_URL), forum[0])
+    assert created
+    assert not store.pdf_path(key).exists()
+    paper = store.load_paper(key)
+    assert "could not preserve post text" in paper["error"]
+    assert paper["source"]["url"] == LW_URL
+
+
+def test_vendored_fonts_preserve_supported_unicode_without_system_fallback(forum, monkeypatch):
+    from pypdf import PdfReader
+
+    monkeypatch.setattr(posts, "FALLBACKS", [])
+    text = "Curly “quotes” – Ελληνικά"
+    data = posts.render(posts.metadata("lesswrong", POST), f"<p>{text}</p>", forum[0])
+    extracted = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages)
+    assert text in extracted
+
+
+def test_available_broad_script_fallback_preserves_text(forum):
+    from pypdf import PdfReader
+
+    if not any(posts.os.path.exists(path) for path in posts.FALLBACKS):
+        pytest.skip("no system fallback font installed")
+    text = "Numbers ℂ ℕ ℝ"
+    data = posts.render(posts.metadata("lesswrong", POST), f"<p><i>{text}</i></p>", forum[0])
+    extracted = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages)
+    assert text in extracted

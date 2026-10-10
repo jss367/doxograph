@@ -243,3 +243,53 @@ def test_pixel_limit_precedes_decode_and_draw(monkeypatch):
     assert not posts._placed(pdf, b"mock", 100)
     image.load.assert_not_called()
     pdf.image.assert_not_called()
+
+
+def test_https_proxy_keeps_pinned_destination_and_certificate_errors_fail_closed(monkeypatch):
+    """Exercise CONNECT without a proxy or socket, including TLS-name support."""
+    import ssl
+    from httpcore._backends.sync import SyncBackend
+
+    dns(monkeypatch, [PUBLIC])
+    connections, tls, writes = [], [], []
+
+    class ProxyStream:
+        response = b"HTTP/1.1 200 Connection established\r\n\r\n"
+
+        def read(self, max_bytes, timeout=None):
+            value, self.response = self.response, b""
+            return value
+
+        def write(self, data, timeout=None):
+            writes.append(data)
+
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            tls.append(server_hostname)
+            # A typical public CDN certificate covers its DNS name, not its IP.
+            if server_hostname != "images.example":
+                raise ssl.SSLCertVerificationError("mock certificate does not cover pinned IP")
+            self.response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nimage"
+            return self
+
+        def get_extra_info(self, name):
+            return None
+
+        def close(self):
+            pass
+
+    def connect(self, host, port, **kwargs):
+        connections.append((host, port))
+        return ProxyStream()
+
+    monkeypatch.setattr(SyncBackend, "connect_tcp", connect)
+    with httpx.Client(proxy="http://proxy.example:8080", trust_env=False) as client:
+        data = posts._image("https://images.example/a", client)
+    assert connections == [("proxy.example", 8080)]
+    assert b"CONNECT " + PUBLIC.encode() + b":443 HTTP/1.1" in b"".join(writes)
+    if tls == [PUBLIC]:
+        # httpcore 1.0.9 does not honor sni_hostname for CONNECT tunnels.
+        assert data is None
+        assert b"GET " not in b"".join(writes)
+    else:
+        assert tls == ["images.example"]
+        assert data == b"image"
