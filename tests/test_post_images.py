@@ -245,8 +245,14 @@ def test_pixel_limit_precedes_decode_and_draw(monkeypatch):
     pdf.image.assert_not_called()
 
 
-def test_https_proxy_keeps_pinned_destination_and_certificate_errors_fail_closed(monkeypatch):
-    """Exercise CONNECT without a proxy or socket, including TLS-name support."""
+@pytest.mark.parametrize("scheme,certificate_failure", [
+    ("http", None), ("http", "image"),
+    ("https", None), ("https", "proxy"), ("https", "image"),
+])
+@pytest.mark.parametrize("configuration", ["explicit", "environment"])
+def test_https_proxy_keeps_pinned_destination_and_certificate_errors_fail_closed(
+        monkeypatch, scheme, certificate_failure, configuration):
+    """Real transport with inert socket fixtures: verify both TLS layers."""
     import ssl
     from httpcore._backends.sync import SyncBackend
 
@@ -264,11 +270,16 @@ def test_https_proxy_keeps_pinned_destination_and_certificate_errors_fail_closed
             writes.append(data)
 
         def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            layer = "proxy" if scheme == "https" and not tls else "image"
+            expected = "proxy.example" if layer == "proxy" else "images.example"
+            assert ssl_context.verify_mode == ssl.CERT_REQUIRED
+            assert ssl_context.check_hostname
+            assert server_hostname == expected
             tls.append(server_hostname)
-            # A typical public CDN certificate covers its DNS name, not its IP.
-            if server_hostname != "images.example":
-                raise ssl.SSLCertVerificationError("mock certificate does not cover pinned IP")
-            self.response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nimage"
+            if certificate_failure == layer:
+                raise ssl.SSLCertVerificationError("mock invalid certificate")
+            if layer == "image":
+                self.response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nimage"
             return self
 
         def get_extra_info(self, name):
@@ -282,17 +293,28 @@ def test_https_proxy_keeps_pinned_destination_and_certificate_errors_fail_closed
         return ProxyStream()
 
     monkeypatch.setattr(SyncBackend, "connect_tcp", connect)
-    with httpx.Client(proxy="http://proxy.example:8080", trust_env=False) as client:
+    proxy = f"{scheme}://proxy.example:8080"
+    if configuration == "environment":
+        monkeypatch.setenv("HTTPS_PROXY", proxy)
+        monkeypatch.setenv("NO_PROXY", "")
+        options = {}
+    else:
+        options = {"proxy": proxy, "trust_env": False}
+    with httpx.Client(**options) as client:
         data = posts._image("https://images.example/a", client)
     assert connections == [("proxy.example", 8080)]
-    assert b"CONNECT " + PUBLIC.encode() + b":443 HTTP/1.1" in b"".join(writes)
-    if tls == [PUBLIC]:
-        # httpcore 1.0.9 does not honor sni_hostname for CONNECT tunnels.
+    if certificate_failure == "proxy":
+        assert tls == ["proxy.example"]
+        assert not writes
+    else:
+        assert tls == (["proxy.example"] if scheme == "https" else []) + ["images.example"]
+        assert b"CONNECT " + PUBLIC.encode() + b":443 HTTP/1.1" in b"".join(writes)
+    if certificate_failure:
         assert data is None
         assert b"GET " not in b"".join(writes)
     else:
-        assert tls == ["images.example"]
         assert data == b"image"
+        assert b"Host: images.example\r\n" in b"".join(writes)
 
 
 @pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ConnectTimeout])
@@ -932,3 +954,173 @@ def test_images_share_one_post_deadline(monkeypatch):
     text = render_images(monkeypatch, 5, slow)
     assert deadlines == [5.0, 5.0, 5.0]
     assert "[image: figure 3]" in text and "[image: figure 4]" in text
+
+
+def _compressed_fixture(payload, encoding):
+    import gzip
+    import zlib
+
+    if encoding == "gzip":
+        return gzip.compress(payload)
+    return zlib.compress(payload, wbits=-zlib.MAX_WBITS if encoding == "raw-deflate" else zlib.MAX_WBITS)
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "deflate", "raw-deflate"])
+def test_decompressed_allocation_is_bounded_before_budget_check(monkeypatch, encoding):
+    dns(monkeypatch, [PUBLIC])
+    payload = _compressed_fixture(b"x" * 4096, encoding)  # Inert, small expansion fixture.
+    allocations = []
+    original = posts.zlib.decompressobj
+
+    class GuardedDecoder:
+        def __init__(self, *args, **kwargs):
+            self.decoder = original(*args, **kwargs)
+
+        def decompress(self, data, max_length=0):
+            assert 0 < max_length <= 32
+            value = self.decoder.decompress(data, max_length=max_length)
+            allocations.append((max_length, len(value)))
+            return value
+
+        def flush(self, *args, **kwargs):
+            pytest.fail("unbounded decoder flush")
+
+        def __getattr__(self, name):
+            return getattr(self.decoder, name)
+
+    monkeypatch.setattr(posts.zlib, "decompressobj", GuardedDecoder)
+    monkeypatch.setattr(httpx.Response, "iter_bytes", lambda *a, **k: pytest.fail("eager HTTPX decoding"))
+    budget = posts._PostImageBudget(posts.monotonic() + 30.0, 2, 31, 1000)
+
+    class Body(httpx.SyncByteStream):
+        closed = False
+
+        def __iter__(self):
+            yield payload
+
+        def close(self):
+            self.closed = True
+
+    stream = Body()
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, headers={"content-encoding": "gzip" if encoding == "gzip" else "deflate"}, stream=stream)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client, budget=budget) is None
+        assert posts._image("https://images.example/b", client, budget=budget) is None
+    assert allocations == [(32, 32)]
+    assert budget.reason == "post image byte budget exhausted"
+    assert len(calls) == 1
+    assert calls[0].headers["accept-encoding"] == "gzip, deflate"
+    assert stream.closed
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "deflate", "raw-deflate"])
+@pytest.mark.parametrize("fragment", [1, 3, 1000])
+def test_valid_compression_survives_fragmentation_and_bounded_drain(monkeypatch, encoding, fragment):
+    dns(monkeypatch, [PUBLIC])
+    expected = b"image bytes " * 20
+    payload = _compressed_fixture(expected, encoding)
+    monkeypatch.setattr(posts, "IMAGE_DECODE_CHUNK", 17)
+    monkeypatch.setattr(httpx.Response, "_get_content_decoder", lambda *a: pytest.fail("HTTPX decoder must not run"))
+
+    class Body(httpx.SyncByteStream):
+        closed = False
+
+        def __iter__(self):
+            for offset in range(0, len(payload), fragment):
+                yield payload[offset:offset + fragment]
+
+        def close(self):
+            self.closed = True
+
+    stream = Body()
+    budget = posts._PostImageBudget(posts.monotonic() + 30.0, 1, len(expected), 1000)
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, headers={"content-encoding": "gzip" if encoding == "gzip" else "deflate"}, stream=stream))) as client:
+        assert posts._image("https://images.example/a", client, budget=budget) == expected
+    assert budget.bytes_left == 0
+    assert stream.closed
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "deflate", "raw-deflate"])
+def test_individual_image_limit_bounds_decompression_without_post_budget(monkeypatch, encoding):
+    dns(monkeypatch, [PUBLIC])
+    monkeypatch.setattr(posts, "IMAGE_BYTES", 31)
+    payload = _compressed_fixture(b"x" * 1024, encoding)
+    limits = []
+    original = posts.zlib.decompressobj
+
+    class Decoder:
+        def __init__(self, *args, **kwargs):
+            self.decoder = original(*args, **kwargs)
+
+        def decompress(self, data, max_length=0):
+            limits.append(max_length)
+            assert 0 < max_length <= 32
+            return self.decoder.decompress(data, max_length=max_length)
+
+        def __getattr__(self, name):
+            return getattr(self.decoder, name)
+
+    monkeypatch.setattr(posts.zlib, "decompressobj", Decoder)
+
+    class Body(httpx.SyncByteStream):
+        def __iter__(self):
+            yield payload
+
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, headers={"content-encoding": "gzip" if encoding == "gzip" else "deflate"}, stream=Body()))) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert limits == [32]
+
+
+@pytest.mark.parametrize("split_members", [False, True])
+def test_concatenated_gzip_members_still_obey_total_decoded_limit(monkeypatch, split_members):
+    dns(monkeypatch, [PUBLIC])
+    first = _compressed_fixture(b"first", "gzip")
+    second = _compressed_fixture(b"second", "gzip")
+    expected = b"firstsecond"
+    monkeypatch.setattr(posts, "IMAGE_DECODE_CHUNK", 3)
+
+    class Body(httpx.SyncByteStream):
+        def __iter__(self):
+            yield first if split_members else first + second
+            if split_members:
+                yield second
+
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, headers={"content-encoding": "gzip"}, stream=Body()))) as client:
+        assert posts._image("https://images.example/a", client) == expected
+
+
+@pytest.mark.parametrize("encoding,payload", [
+    ("gzip", b"invalid"),
+    ("deflate", b"invalid"),
+    ("br", b"inert"),
+    ("zstd", b"inert"),
+    ("gzip, deflate", b"inert"),
+    ("gzip", _compressed_fixture(b"image", "gzip")[:-2]),
+    ("deflate", _compressed_fixture(b"image", "deflate")[:-2]),
+])
+def test_malformed_truncated_and_unsupported_encodings_leave_placeholder(monkeypatch, encoding, payload):
+    dns(monkeypatch, [PUBLIC])
+    monkeypatch.setattr(httpx.Response, "_get_content_decoder", lambda *a: pytest.fail("HTTPX decoder must not run"))
+
+    class Body(httpx.SyncByteStream):
+        closed = False
+
+        def __iter__(self):
+            yield payload
+
+        def close(self):
+            self.closed = True
+
+    stream = Body()
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, headers={"content-encoding": encoding}, stream=stream))) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert stream.closed

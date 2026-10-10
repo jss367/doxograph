@@ -15,6 +15,7 @@ import os
 import re
 import socket
 import tempfile
+import zlib
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -66,6 +67,7 @@ IMAGE_BYTES = 8_000_000
 IMAGE_PIXELS = 16_000_000
 IMAGE_SECONDS = 30.0
 IMAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+IMAGE_DECODE_CHUNK = 65536
 POST_IMAGES = 40
 POST_IMAGE_BYTES = 32_000_000
 POST_IMAGE_SECONDS = 90.0
@@ -498,29 +500,99 @@ def _image_remaining(deadline: float) -> float:
     return remaining
 
 
-class _ImageStream(httpx.SyncByteStream):
-    """Check the shared deadline even when a decoder buffers raw chunks."""
+def _image_body(response, deadline: float, budget, received_by_trace: bool) -> bytes | None:
+    """Read raw HTTP bytes and bound each decompression allocation first.
 
-    def __init__(self, stream: httpx.SyncByteStream, deadline: float, budget=None):
-        self.stream = stream
-        self.deadline = deadline
-        self.budget = budget
+    Never use HTTPX's iter_bytes/content decoder here: its decompress call
+    creates the full expanded chunk before the caller can check any limit.
+    """
+    if response.is_stream_consumed:
+        # Mock/custom transports may supply an already-buffered decoded body.
+        # Do not decode it again or make a second unbounded copy.
+        content = memoryview(response.content)
+        raw_chunks = (content[i:i + IMAGE_DECODE_CHUNK] for i in range(0, len(content), IMAGE_DECODE_CHUNK))
+        encoding = "identity"
+    else:
+        encoding = response.headers.get("content-encoding", "identity").strip().lower()
+        if encoding not in {"", "identity", "gzip", "deflate"}:
+            return None  # Unsupported/stacked encodings remain linked placeholders.
+        raw_chunks = response.iter_raw()
 
-    def __iter__(self):
-        chunks = iter(self.stream)
+    data = bytearray()
+    decoder = None
+    prefix = b""
+
+    def output_limit():
+        remaining = IMAGE_BYTES - len(data)
+        if budget is not None:
+            remaining = min(remaining, budget.bytes_left)
+        # A single sentinel byte detects overflow without expanding the rest.
+        return max(1, min(IMAGE_DECODE_CHUNK, remaining + 1))
+
+    def append(chunk):
+        _image_remaining(deadline)
+        if budget is not None:
+            budget.consume(len(chunk))
+        if len(data) + len(chunk) > IMAGE_BYTES:
+            raise ValueError("image decoded byte limit exceeded")
+        data.extend(chunk)
+
+    for raw in raw_chunks:
+        _image_remaining(deadline)
+        if budget is not None and not received_by_trace:
+            budget.consume(len(raw), received=True)
+        if not raw:
+            continue
+        if encoding in {"", "identity"}:
+            for offset in range(0, len(raw), IMAGE_DECODE_CHUNK):
+                append(memoryview(raw)[offset:offset + IMAGE_DECODE_CHUNK])
+            continue
+
+        if decoder is not None and decoder.eof:
+            if encoding != "gzip":
+                return None
+            decoder = None  # A gzip body can contain concatenated members.
+        if decoder is None:
+            if encoding == "deflate":
+                # Both zlib-wrapped and raw deflate occur in HTTP. Determine
+                # which using at most two bytes, including split headers.
+                take = min(2 - len(prefix), len(raw))
+                prefix += bytes(raw[:take])
+                raw = raw[take:]
+                if len(prefix) < 2:
+                    continue
+                wrapped = ((prefix[0] & 15) == 8 and (prefix[0] >> 4) <= 7
+                           and int.from_bytes(prefix, "big") % 31 == 0)
+                decoder = zlib.decompressobj(zlib.MAX_WBITS if wrapped else -zlib.MAX_WBITS)
+                raw = prefix + bytes(raw)
+                prefix = b""
+            else:
+                decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
+
+        pending = raw
         while True:
-            _image_remaining(self.deadline)
-            try:
-                chunk = next(chunks)
-            except StopIteration:
-                return
-            _image_remaining(self.deadline)
-            if self.budget is not None:
-                self.budget.consume(len(chunk), received=True)
-            yield chunk
+            _image_remaining(deadline)
+            limit = output_limit()
+            chunk = decoder.decompress(pending, max_length=limit)
+            append(chunk)
+            if decoder.eof:
+                pending = decoder.unused_data
+                if pending:
+                    if encoding != "gzip":
+                        return None
+                    decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
+                    continue
+                break
+            pending = decoder.unconsumed_tail
+            if not pending and len(chunk) < limit:
+                break
+            # Drain buffered output in bounded steps; flush() has no hard
+            # output-size cap and must not be used for untrusted bodies.
 
-    def close(self):
-        self.stream.close()
+    _image_remaining(deadline)
+    if encoding not in {"", "identity"} and (decoder is None or not decoder.eof):
+        return None
+    return bytes(data)
 
 
 class _ImageTrace:
@@ -532,7 +604,10 @@ class _ImageTrace:
     and is closed afterward; do not reuse an unguarded or multiplexed stream.
     """
 
-    def __init__(self, deadline: float, budget=None):
+    def __init__(self, deadline: float, budget=None, *, hostname=None, target_host=None):
+        self.hostname = hostname
+        self.target_host = target_host
+        self.connected_host = None
         self.deadline = deadline
         self.guarded = False
         self.budget = budget
@@ -541,6 +616,21 @@ class _ImageTrace:
         operations = ("connect_tcp", "connect_unix_socket", "start_tls")
         if any(event.endswith(f"{operation}.started") for operation in operations):
             remaining = _image_remaining(self.deadline)
+            if event == "connection.connect_tcp.started":
+                self.connected_host = info["host"]
+            elif event == "connection.start_tls.started" and self.hostname is not None:
+                # HTTPcore forwards request SNI to an HTTPS proxy's outer TLS.
+                # Verify that connection against the proxy's own hostname;
+                # only a direct connection to the pinned IP uses image SNI.
+                host = self.connected_host
+                if isinstance(host, bytes):
+                    host = host.decode("ascii")
+                if host is not None:
+                    info["server_hostname"] = self.hostname if host == self.target_host else host
+            elif event == "proxy.start_tls.started" and self.hostname is not None:
+                # CONNECT still names the validated IP. Its inner TLS must
+                # verify the original image hostname, never the numeric IP.
+                info["server_hostname"] = self.hostname
             timeout = info.get("timeout")
             info["timeout"] = remaining if timeout is None else min(timeout, remaining)
         elif any(event.endswith(f"{operation}.complete") for operation in operations):
@@ -601,11 +691,12 @@ def _image(src: str, client: httpx.Client, until: float = float("inf"), *,
                     min(IMAGE_TIMEOUT.read, remaining),
                     connect=min(IMAGE_TIMEOUT.connect, remaining),
                 )
-                trace = _ImageTrace(deadline, budget)
+                trace = _ImageTrace(deadline, budget, hostname=url.host, target_host=target.host)
                 try:
                     with client.stream(
                         "GET", target, follow_redirects=False, timeout=timeout,
-                        headers={"Host": url.netloc.decode("ascii"), "Connection": "close"},
+                        headers={"Host": url.netloc.decode("ascii"), "Connection": "close",
+                                 "Accept-Encoding": "gzip, deflate"},
                         extensions={"sni_hostname": url.host, "trace": trace},
                     ) as response:
                         _image_remaining(deadline)
@@ -616,26 +707,14 @@ def _image(src: str, client: httpx.Client, until: float = float("inf"), *,
                             url = url.join(location)
                             break
                         response.raise_for_status()
-                        response.stream = _ImageStream(response.stream, deadline, budget if not trace.guarded else None)
-                        data = bytearray()
-                        # Do not aggregate to 64 KiB: a slow drip could postpone
-                        # the deadline check for hours before yielding a chunk.
-                        for chunk in response.iter_bytes():
-                            _image_remaining(deadline)
-                            if budget is not None:
-                                budget.consume(len(chunk))
-                            data += chunk
-                            if len(data) > IMAGE_BYTES:
-                                return None
-                        _image_remaining(deadline)
-                        return bytes(data)
+                        return _image_body(response, deadline, budget, trace.guarded)
                 except (httpx.ConnectError, httpx.ConnectTimeout):
                     # Keep DNS pinning while allowing another public address
                     # (e.g. IPv4 after an unavailable IPv6 route) to connect.
                     continue
             else:
                 return None
-    except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError, zlib.error):
         if budget is not None and monotonic() >= budget.deadline:
             budget.reason = "post image time budget exhausted"
         return None
