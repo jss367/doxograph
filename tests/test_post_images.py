@@ -293,3 +293,245 @@ def test_https_proxy_keeps_pinned_destination_and_certificate_errors_fail_closed
     else:
         assert tls == ["images.example"]
         assert data == b"image"
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ConnectTimeout])
+def test_unavailable_public_address_tries_next_pinned_address(monkeypatch, failure):
+    ipv6 = "2606:4700:4700::1111"
+    resolutions = dns(monkeypatch, [ipv6, PUBLIC, PUBLIC])
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        if request.url.host == ipv6:
+            raise failure("mock unreachable IPv6", request=request)
+        return httpx.Response(200, content=b"image")
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client) == b"image"
+    assert resolutions == [("images.example", 443)]
+    assert [r.url.host for r in calls] == [ipv6, PUBLIC]
+    assert all(r.headers["host"] == "images.example" for r in calls)
+    assert all(r.extensions["sni_hostname"] == "images.example" for r in calls)
+
+
+def test_every_address_must_be_public_before_fallback_attempts(monkeypatch):
+    dns(monkeypatch, ["2606:4700:4700::1111", PUBLIC, "10.0.0.1"])
+    with httpx.Client(transport=httpx.MockTransport(lambda r: pytest.fail("unexpected HTTP"))) as client:
+        assert posts._image("https://images.example/a", client) is None
+
+
+def test_all_public_addresses_fail_and_duplicates_are_not_retried(monkeypatch):
+    dns(monkeypatch, ["2606:4700:4700::1111", PUBLIC, PUBLIC])
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.host)
+        raise httpx.ConnectError("mock unreachable", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert calls == ["2606:4700:4700::1111", PUBLIC]
+
+
+def test_redirect_after_address_fallback_validates_new_destination(monkeypatch):
+    ipv6 = "2606:4700:4700::1111"
+    resolutions = dns(monkeypatch, {"images.example": [ipv6, PUBLIC], "internal.example": ["127.0.0.1"]})
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.host)
+        if request.url.host == ipv6:
+            raise httpx.ConnectError("mock unreachable", request=request)
+        return httpx.Response(302, headers={"location": "http://internal.example/a"})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert calls == [ipv6, PUBLIC]
+    assert resolutions == [("images.example", 443), ("internal.example", 80)]
+
+
+def test_slow_drip_aborts_on_total_deadline_and_closes_stream(monkeypatch):
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+
+    class Drip(httpx.SyncByteStream):
+        count, closed = 0, False
+
+        def __iter__(self):
+            for _ in range(100):
+                now[0] += 2.0
+                self.count += 1
+                yield b"x"
+
+        def close(self):
+            self.closed = True
+
+    stream = Drip()
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=stream))) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert stream.count == 3
+    assert stream.closed
+
+
+def test_compressed_stream_checks_deadline_before_decoder_emits_data(monkeypatch):
+    import gzip
+
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+
+    class CompressedDrip(httpx.SyncByteStream):
+        count, closed = 0, False
+
+        def __iter__(self):
+            # The gzip header produces no decoded bytes in the first chunks.
+            for value in gzip.compress(b"image"):
+                now[0] += 2.0
+                self.count += 1
+                yield bytes([value])
+
+        def close(self):
+            self.closed = True
+
+    stream = CompressedDrip()
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, headers={"content-encoding": "gzip"}, stream=stream))) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert stream.count == 3
+    assert stream.closed
+
+
+def test_redirects_share_deadline_and_shrink_request_timeouts(monkeypatch):
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        now[0] += 2.0
+        return httpx.Response(302, headers={"location": "/next"})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert len(calls) == 3
+    assert [r.extensions["timeout"]["read"] for r in calls] == [5.0, 3.0, 1.0]
+    assert [r.extensions["timeout"]["connect"] for r in calls] == [5.0, 3.0, 1.0]
+
+
+def test_address_retries_share_deadline(monkeypatch):
+    dns(monkeypatch, ["2606:4700:4700::1111", PUBLIC, "1.1.1.1"])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        now[0] += 3.0
+        raise httpx.ConnectTimeout("mock timeout", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert len(calls) == 2
+    assert [r.extensions["timeout"]["connect"] for r in calls] == [5.0, 2.0]
+
+
+def test_dns_elapsed_time_can_exhaust_budget_before_any_request(monkeypatch):
+    now = [0.0]
+    resolve = dns(monkeypatch, [PUBLIC])
+    original = posts.socket.getaddrinfo
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+
+    def slow_dns(*args, **kwargs):
+        now[0] = 6.0
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(posts.socket, "getaddrinfo", slow_dns)
+    with httpx.Client(transport=httpx.MockTransport(lambda r: pytest.fail("unexpected HTTP"))) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert resolve == [("images.example", 443)]
+
+
+def test_read_failure_does_not_retry_another_address(monkeypatch):
+    dns(monkeypatch, [PUBLIC, "1.1.1.1"])
+    calls = []
+
+    class Broken(httpx.SyncByteStream):
+        closed = False
+
+        def __iter__(self):
+            yield b"partial"
+            raise httpx.ReadTimeout("mock stalled body")
+
+        def close(self):
+            self.closed = True
+
+    stream = Broken()
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, stream=stream)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert len(calls) == 1
+    assert stream.closed
+
+
+def test_compressed_image_finishing_within_budget_is_preserved(monkeypatch):
+    import gzip
+
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+
+    class Chunks(httpx.SyncByteStream):
+        closed = False
+
+        def __iter__(self):
+            now[0] += 1.0
+            yield gzip.compress(b"image")
+
+        def close(self):
+            self.closed = True
+
+    stream = Chunks()
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(
+            200, headers={"content-encoding": "gzip"}, stream=stream))) as client:
+        assert posts._image("https://images.example/a", client) == b"image"
+    assert stream.closed
+
+
+def test_headers_finishing_after_budget_skip_body_and_close_response(monkeypatch):
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 5.0)
+
+    class Body(httpx.SyncByteStream):
+        closed = False
+
+        def __iter__(self):
+            pytest.fail("body read after deadline")
+            yield b"image"
+
+        def close(self):
+            self.closed = True
+
+    stream = Body()
+
+    def handle(request):
+        now[0] = 6.0
+        return httpx.Response(200, stream=stream)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client) is None
+    assert stream.closed

@@ -18,6 +18,7 @@ import tempfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
+from time import monotonic
 from urllib.parse import urlsplit
 
 import httpx
@@ -60,6 +61,7 @@ query ($id: String) {
 # but one that is huge or slow is left out rather than holding up the post.
 IMAGE_BYTES = 8_000_000
 IMAGE_PIXELS = 16_000_000
+IMAGE_SECONDS = 30.0
 IMAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 
@@ -363,8 +365,8 @@ def _clean(text: str) -> str:
     return re.sub("[\\x00-\\x09\\x0b-\\x1f\\x7f\\u200b\\ufeff]", "", text)
 
 
-def _image_target(url: httpx.URL) -> httpx.URL:
-    """Resolve a public HTTP destination and pin the request to its address."""
+def _image_targets(url: httpx.URL) -> list[httpx.URL]:
+    """Resolve and validate all addresses before returning pinned destinations."""
     if (url.scheme not in {"http", "https"} or not url.host or url.userinfo
             or "%" in url.host or url.host.rstrip(".").lower().endswith((".localhost", ".local"))
             or url.host.rstrip(".").lower() == "localhost"):
@@ -383,33 +385,84 @@ def _image_target(url: httpx.URL) -> httpx.URL:
             raise ValueError("image host has a non-public address")
     # Avoid a second DNS lookup between validation and connecting. Keep the
     # original HTTP Host and TLS name below, so public CDN images still work.
-    return url.copy_with(host=addresses[0][4][0])
+    return [url.copy_with(host=address) for address in dict.fromkeys(a[4][0] for a in addresses)]
+
+
+def _image_remaining(deadline: float) -> float:
+    """Remaining shared budget for DNS, address attempts, redirects and body."""
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError("image download deadline exceeded")
+    return remaining
+
+
+class _ImageStream(httpx.SyncByteStream):
+    """Check the shared deadline even when a decoder buffers raw chunks."""
+
+    def __init__(self, stream: httpx.SyncByteStream, deadline: float):
+        self.stream = stream
+        self.deadline = deadline
+
+    def __iter__(self):
+        chunks = iter(self.stream)
+        while True:
+            _image_remaining(self.deadline)
+            try:
+                chunk = next(chunks)
+            except StopIteration:
+                return
+            _image_remaining(self.deadline)
+            yield chunk
+
+    def close(self):
+        self.stream.close()
 
 
 def _image(src: str, client: httpx.Client) -> bytes | None:
     """Fetch a bounded image, validating and pinning every redirect hop."""
     try:
+        deadline = monotonic() + IMAGE_SECONDS
         url = httpx.URL(src)
         for hop in range(6):
-            target = _image_target(url)
-            with client.stream(
-                "GET", target, follow_redirects=False, timeout=IMAGE_TIMEOUT,
-                headers={"Host": url.netloc.decode("ascii"), "Connection": "close"},
-                extensions={"sni_hostname": url.host},
-            ) as response:
-                if response.status_code in {301, 302, 303, 307, 308}:
-                    location = response.headers.get("location")
-                    if not location or hop == 5:
-                        return None
-                    url = url.join(location)
+            _image_remaining(deadline)
+            targets = _image_targets(url)
+            for target in targets:
+                remaining = _image_remaining(deadline)
+                timeout = httpx.Timeout(
+                    min(IMAGE_TIMEOUT.read, remaining),
+                    connect=min(IMAGE_TIMEOUT.connect, remaining),
+                )
+                try:
+                    with client.stream(
+                        "GET", target, follow_redirects=False, timeout=timeout,
+                        headers={"Host": url.netloc.decode("ascii"), "Connection": "close"},
+                        extensions={"sni_hostname": url.host},
+                    ) as response:
+                        _image_remaining(deadline)
+                        if response.status_code in {301, 302, 303, 307, 308}:
+                            location = response.headers.get("location")
+                            if not location or hop == 5:
+                                return None
+                            url = url.join(location)
+                            break
+                        response.raise_for_status()
+                        response.stream = _ImageStream(response.stream, deadline)
+                        data = bytearray()
+                        # Do not aggregate to 64 KiB: a slow drip could postpone
+                        # the deadline check for hours before yielding a chunk.
+                        for chunk in response.iter_bytes():
+                            _image_remaining(deadline)
+                            data += chunk
+                            if len(data) > IMAGE_BYTES:
+                                return None
+                        _image_remaining(deadline)
+                        return bytes(data)
+                except (httpx.ConnectError, httpx.ConnectTimeout):
+                    # Keep DNS pinning while allowing another public address
+                    # (e.g. IPv4 after an unavailable IPv6 route) to connect.
                     continue
-                response.raise_for_status()
-                data = bytearray()
-                for chunk in response.iter_bytes(65536):
-                    data += chunk
-                    if len(data) > IMAGE_BYTES:
-                        return None
-                return bytes(data)
+            else:
+                return None
     except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError):
         return None
 
