@@ -215,3 +215,17 @@ def test_available_broad_script_fallback_preserves_text(forum):
     data = posts.render(posts.metadata("lesswrong", POST), f"<p><i>{text}</i></p>", forum[0])
     extracted = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages)
     assert text in extracted
+
+
+def test_fallback_first_title_keeps_title_and_following_page_text(forum):
+    """Regression for fpdf2's fallback-first page bug fixed in 2.8.8."""
+    from pypdf import PdfReader
+
+    if not any(posts.os.path.exists(path) for path in posts.FALLBACKS):
+        pytest.skip("no system fallback font installed")
+    meta = posts.metadata("lesswrong", POST)
+    meta["title"] = "ℂ fallback-first title"
+    data = posts.render(meta, "<p>Body after the fallback-first title survives.</p>", forum[0])
+    text = " ".join(" ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages).split())
+    assert "ℂ fallback-first title" in text
+    assert "Body after the fallback-first title survives." in text

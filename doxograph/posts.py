@@ -15,10 +15,12 @@ import os
 import re
 import socket
 import tempfile
-import threading
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
+from queue import Queue
+from threading import BoundedSemaphore, Lock, Thread
 from time import monotonic
 from urllib.parse import urlsplit
 
@@ -64,10 +66,8 @@ IMAGE_BYTES = 8_000_000
 IMAGE_PIXELS = 16_000_000
 IMAGE_SECONDS = 30.0
 IMAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
-# The images are fetched one after another, so a post of many dead links would
-# otherwise hold an import for IMAGE_SECONDS apiece. Past either limit, the rest
-# of the post's images become placeholders.
 POST_IMAGES = 40
+POST_IMAGE_BYTES = 32_000_000
 POST_IMAGE_SECONDS = 90.0
 
 
@@ -371,28 +371,103 @@ def _clean(text: str) -> str:
     return re.sub("[\\x00-\\x09\\x0b-\\x1f\\x7f\\u200b\\ufeff]", "", text)
 
 
-def _resolve(host: str, port: int, deadline: float) -> list:
-    """`getaddrinfo`, given up on once the deadline passes.
+class _ImageResolver:
+    """A fixed daemon pool: expired DNS calls cannot accumulate more workers.
 
-    The system resolver takes no timeout and cannot be cancelled, so it runs in
-    a daemon thread that is left to finish on its own if the lookup stalls.
+    Running getaddrinfo calls cannot be cancelled. Their slots remain occupied
+    until they finish, and new work fails closed when all slots are occupied.
+    No executor context or shutdown waits for a late resolver answer.
     """
-    answer: list = []
 
-    def lookup() -> None:
+    def __init__(self, workers: int = 2):
+        self.jobs = Queue(maxsize=workers)
+        self.slots = BoundedSemaphore(workers)
+        self.threads = [Thread(target=self._run, daemon=True, name="post-image-dns") for _ in range(workers)]
+        for thread in self.threads:
+            thread.start()
+
+    def _run(self):
+        while True:
+            job = self.jobs.get()
+            if job is None:
+                self.jobs.task_done()
+                return
+            future, resolver, host, port, deadline = job
+            try:
+                if future.set_running_or_notify_cancel():
+                    try:
+                        _image_remaining(deadline)
+                        result = resolver(host, port, type=socket.SOCK_STREAM)
+                    except BaseException as exc:
+                        future.set_exception(exc)
+                    else:
+                        future.set_result(result)
+            finally:
+                self.slots.release()
+                self.jobs.task_done()
+
+    def resolve(self, resolver, host: str, port: int, deadline: float):
+        _image_remaining(deadline)
+        if not self.slots.acquire(blocking=False):
+            raise ValueError("image DNS workers are occupied")
+        future = Future()
         try:
-            answer.append(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
-        except Exception as exc:
-            answer.append(exc)
+            self.jobs.put_nowait((future, resolver, host, port, deadline))
+        except BaseException:
+            self.slots.release()
+            raise
+        try:
+            return future.result(timeout=_image_remaining(deadline))
+        except TimeoutError:
+            future.cancel()  # Cancels queued work; running work keeps its slot.
+            raise
 
-    thread = threading.Thread(target=lookup, daemon=True)
-    thread.start()
-    thread.join(_image_remaining(deadline))
-    if not answer:
-        raise TimeoutError("image host lookup exceeded the deadline")
-    if isinstance(answer[0], Exception):
-        raise answer[0]
-    return answer[0]
+
+_image_resolver = None
+_image_resolver_lock = Lock()
+
+
+def _resolve(host: str, port: int, deadline: float):
+    global _image_resolver
+    with _image_resolver_lock:
+        if _image_resolver is None:
+            _image_resolver = _ImageResolver()
+    # Capture the callable before dispatch, including when tests mock DNS.
+    return _image_resolver.resolve(socket.getaddrinfo, host, port, deadline)
+
+
+@dataclass
+class _PostImageBudget:
+    """Shared attempt, elapsed-time, received-byte and decoded-byte limits."""
+
+    deadline: float
+    images_left: int
+    bytes_left: int
+    received_left: int
+    reason: str = ""
+
+    def available(self) -> bool:
+        if monotonic() >= self.deadline:
+            self.reason = "post image time budget exhausted"
+        elif self.bytes_left <= 0 or self.received_left <= 0:
+            self.reason = "post image byte budget exhausted"
+        elif self.images_left <= 0:
+            self.reason = "post image count budget exhausted"
+        return not self.reason
+
+    def begin(self) -> float:
+        if not self.available():
+            raise ValueError(self.reason)
+        self.images_left -= 1
+        return min(self.deadline, monotonic() + IMAGE_SECONDS)
+
+    def consume(self, amount: int, *, received: bool = False):
+        field_name = "received_left" if received else "bytes_left"
+        remaining = getattr(self, field_name)
+        setattr(self, field_name, max(0, remaining - amount))
+        if amount > remaining:
+            self.reason = "post image byte budget exhausted"
+            raise ValueError(self.reason)
 
 
 def _image_targets(url: httpx.URL, deadline: float) -> list[httpx.URL]:
@@ -426,9 +501,10 @@ def _image_remaining(deadline: float) -> float:
 class _ImageStream(httpx.SyncByteStream):
     """Check the shared deadline even when a decoder buffers raw chunks."""
 
-    def __init__(self, stream: httpx.SyncByteStream, deadline: float):
+    def __init__(self, stream: httpx.SyncByteStream, deadline: float, budget=None):
         self.stream = stream
         self.deadline = deadline
+        self.budget = budget
 
     def __iter__(self):
         chunks = iter(self.stream)
@@ -439,6 +515,8 @@ class _ImageStream(httpx.SyncByteStream):
             except StopIteration:
                 return
             _image_remaining(self.deadline)
+            if self.budget is not None:
+                self.budget.consume(len(chunk), received=True)
             yield chunk
 
     def close(self):
@@ -454,9 +532,10 @@ class _ImageTrace:
     and is closed afterward; do not reuse an unguarded or multiplexed stream.
     """
 
-    def __init__(self, deadline: float):
+    def __init__(self, deadline: float, budget=None):
         self.deadline = deadline
         self.guarded = False
+        self.budget = budget
 
     def __call__(self, event: str, info: dict):
         operations = ("connect_tcp", "connect_unix_socket", "start_tls")
@@ -472,8 +551,14 @@ class _ImageTrace:
 
                 def bounded_read(max_bytes, timeout=None):
                     remaining = _image_remaining(self.deadline)
+                    if self.budget is not None:
+                        if self.budget.received_left <= 0:
+                            self.budget.consume(1, received=True)
+                        max_bytes = min(max_bytes, self.budget.received_left)
                     data = original_read(max_bytes, timeout=remaining if timeout is None else min(timeout, remaining))
                     _image_remaining(self.deadline)
+                    if self.budget is not None:
+                        self.budget.consume(len(data), received=True)
                     return data
 
                 def bounded_write(data, timeout=None):
@@ -497,14 +582,15 @@ class _ImageTrace:
             raise ValueError("image deadline requires a dedicated HTTP/1.1 connection")
 
 
-def _image(src: str, client: httpx.Client, until: float = float("inf")) -> bytes | None:
+def _image(src: str, client: httpx.Client, until: float = float("inf"), *,
+           budget: _PostImageBudget | None = None) -> bytes | None:
     """Fetch a bounded image, validating and pinning every redirect hop.
 
-    `until` is the post's deadline for all its images; this one gets whatever
-    is left of it, up to IMAGE_SECONDS.
+    `until` is the shared post deadline; `budget` additionally accounts for
+    received/decoded bytes and attempts across images, including failures.
     """
     try:
-        deadline = min(monotonic() + IMAGE_SECONDS, until)
+        deadline = min(budget.begin() if budget is not None else monotonic() + IMAGE_SECONDS, until)
         url = httpx.URL(src)
         for hop in range(6):
             _image_remaining(deadline)
@@ -515,11 +601,12 @@ def _image(src: str, client: httpx.Client, until: float = float("inf")) -> bytes
                     min(IMAGE_TIMEOUT.read, remaining),
                     connect=min(IMAGE_TIMEOUT.connect, remaining),
                 )
+                trace = _ImageTrace(deadline, budget)
                 try:
                     with client.stream(
                         "GET", target, follow_redirects=False, timeout=timeout,
                         headers={"Host": url.netloc.decode("ascii"), "Connection": "close"},
-                        extensions={"sni_hostname": url.host, "trace": _ImageTrace(deadline)},
+                        extensions={"sni_hostname": url.host, "trace": trace},
                     ) as response:
                         _image_remaining(deadline)
                         if response.status_code in {301, 302, 303, 307, 308}:
@@ -529,12 +616,14 @@ def _image(src: str, client: httpx.Client, until: float = float("inf")) -> bytes
                             url = url.join(location)
                             break
                         response.raise_for_status()
-                        response.stream = _ImageStream(response.stream, deadline)
+                        response.stream = _ImageStream(response.stream, deadline, budget if not trace.guarded else None)
                         data = bytearray()
                         # Do not aggregate to 64 KiB: a slow drip could postpone
                         # the deadline check for hours before yielding a chunk.
                         for chunk in response.iter_bytes():
                             _image_remaining(deadline)
+                            if budget is not None:
+                                budget.consume(len(chunk))
                             data += chunk
                             if len(data) > IMAGE_BYTES:
                                 return None
@@ -547,6 +636,8 @@ def _image(src: str, client: httpx.Client, until: float = float("inf")) -> bytes
             else:
                 return None
     except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError):
+        if budget is not None and monotonic() >= budget.deadline:
+            budget.reason = "post image time budget exhausted"
         return None
 
 
@@ -598,19 +689,25 @@ def render(meta: dict, html: str, client: httpx.Client) -> bytes:
     write(Block(runs=header))
 
     images_until = monotonic() + POST_IMAGE_SECONDS
+    image_budget = _PostImageBudget(images_until, POST_IMAGES, POST_IMAGE_BYTES, POST_IMAGE_BYTES)
     fetched = 0
     for block in blocks_of(html):
         if block.style != "img":
             write(block)
             continue
         data = None
-        if fetched < POST_IMAGES and monotonic() < images_until:
+        if fetched < POST_IMAGES and image_budget.available():
             fetched += 1
-            data = _image(block.src, client, images_until)
+            data = _image(block.src, client, images_until, budget=image_budget)
+        elif not image_budget.reason:
+            image_budget.reason = "post image count budget exhausted"
         if not (data and _placed(pdf, data, width)):
             # A placeholder says where the image was.
             alt = block.runs[0][0] if block.runs else ""
-            write(Block(runs=[(f"[image{': ' + alt if alt else ''}]", "I", block.src)]))
+            label = f"[image{': ' + alt if alt else ''}]"
+            if image_budget.reason:
+                label += f" ({image_budget.reason})"
+            write(Block(runs=[(label, "I", block.src)]))
     # fpdf2 records unsupported characters while writing, but otherwise only
     # warns and omits them from the PDF. Never publish that loss as a success,
     # including on systems where no broad-script fallback font is available.

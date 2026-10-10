@@ -140,6 +140,9 @@ title, authors, text, tables and images as a PDF, which is then read, checked
 and shown like any other paper's. Formulas come through as text, and an image
 that cannot be fetched or opened is left as a linked placeholder. An Alignment
 Forum post is the same post as on LessWrong and is filed once under either link.
+Each post shares a limit of 40 image attempts, 90 seconds of image work, and
+32 MB each of received and decoded image data. Omitted figures remain linked
+placeholders that explain when a post's image budget was exhausted.
 If the available fonts cannot represent the post's characters, it is kept with
 a rendering error rather than a PDF with missing text. Adding it again retries.
 

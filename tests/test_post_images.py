@@ -142,7 +142,7 @@ def test_dns_failure_leaves_placeholder(monkeypatch):
 def test_renderer_exception_keeps_pdf_and_image_placeholder(monkeypatch):
     data = io.BytesIO()
     Image.new("RGB", (10, 10), "navy").save(data, "PNG")
-    monkeypatch.setattr(posts, "_image", lambda *a: data.getvalue())
+    monkeypatch.setattr(posts, "_image", lambda *a, **kwargs: data.getvalue())
     monkeypatch.setattr(posts.FPDF, "image", Mock(side_effect=RuntimeError("cannot place image")))
     meta = {"title": "Test", "authors": [], "year": 2026, "venue": "LessWrong",
             "source": {"url": "https://www.lesswrong.com/posts/example"}}
@@ -649,6 +649,223 @@ def test_unguarded_reused_connection_and_http2_are_rejected_before_headers():
         trace("http2.send_request_headers.started", {})
 
 
+@pytest.fixture
+def resolver_pool(monkeypatch):
+    from threading import Event
+
+    pool = posts._ImageResolver(workers=2)
+    release = Event()
+    monkeypatch.setattr(posts, "_image_resolver", pool)
+    yield pool, release
+    # Every blocked resolver in these tests waits on this event, never real DNS.
+    release.set()
+    pool.jobs.join()
+    for _ in pool.threads:
+        pool.jobs.put(None)
+    for thread in pool.threads:
+        thread.join(timeout=1.0)
+        assert not thread.is_alive()
+
+
+def test_dns_timeout_returns_while_resolver_is_blocked_and_late_answer_never_fetches(monkeypatch, resolver_pool):
+    from threading import Event, Thread
+
+    pool, release = resolver_pool
+    entered, returned = Event(), Event()
+    calls, result = [], []
+    monkeypatch.setattr(posts, "IMAGE_SECONDS", 0.1)
+
+    def resolve(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=2.0)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC, 443))]
+
+    monkeypatch.setattr(posts.socket, "getaddrinfo", resolve)
+
+    def fetch():
+        with httpx.Client(transport=httpx.MockTransport(lambda r: calls.append(r))) as client:
+            result.append(posts._image("https://images.example/a", client))
+        returned.set()
+
+    thread = Thread(target=fetch, daemon=True)
+    thread.start()
+    try:
+        assert entered.wait(timeout=1.0)
+        assert returned.wait(timeout=1.0)  # No resolver/executor shutdown join.
+        assert not release.is_set()
+        assert result == [None]
+        assert calls == []
+    finally:
+        release.set()
+        thread.join(timeout=1.0)
+        pool.jobs.join()
+    assert calls == []  # A late public answer cannot continue the timed-out fetch.
+
+
+def test_repeated_dns_timeouts_keep_only_two_workers_and_no_pending_queue(monkeypatch, resolver_pool):
+    from concurrent.futures import Future
+    from threading import Event, Lock
+
+    pool, release = resolver_pool
+    entered = [Event(), Event()]
+    futures, dns_calls, http_calls = [], [], []
+    lock = Lock()
+
+    class TimedFuture(Future):
+        def __init__(self):
+            super().__init__()
+            self.index = len(futures)
+            futures.append(self)
+
+        def result(self, timeout=None):
+            assert timeout <= posts.IMAGE_SECONDS
+            assert entered[self.index].wait(timeout=1.0)
+            raise TimeoutError("mock resolver wait deadline")
+
+    def resolve(host, port, **kwargs):
+        with lock:
+            index = len(dns_calls)
+            dns_calls.append(host)
+        entered[index].set()
+        assert release.wait(timeout=2.0)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC, port))]
+
+    monkeypatch.setattr(posts, "Future", TimedFuture)
+    monkeypatch.setattr(posts.socket, "getaddrinfo", resolve)
+    try:
+        with httpx.Client(transport=httpx.MockTransport(lambda r: http_calls.append(r))) as client:
+            for index in range(20):
+                assert posts._image(f"https://images{index}.example/a", client) is None
+        assert len(pool.threads) == 2
+        assert all(thread.daemon for thread in pool.threads)
+        assert len(dns_calls) == len(futures) == 2
+        assert pool.jobs.qsize() == 0
+        assert http_calls == []
+    finally:
+        release.set()
+        pool.jobs.join()
+    assert all(future.done() for future in futures)
+    assert http_calls == []
+    # Finished late work releases capacity rather than permanently disabling DNS.
+    monkeypatch.setattr(posts, "Future", Future)
+    dns(monkeypatch, [PUBLIC])
+    with httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"image"))) as client:
+        assert posts._image("https://images.example/a", client) == b"image"
+
+
+def _small_png():
+    out = io.BytesIO()
+    Image.new("RGB", (10, 10), "navy").save(out, "PNG")
+    return out.getvalue()
+
+
+def _post_with_images(client, count):
+    meta = {"title": "Test", "authors": [], "year": 2026, "venue": "LessWrong", "source": {"url": ""}}
+    html = "<p>Before</p>" + "".join(
+        f'<img src="https://images.example/{i}.png" alt="figure{i}">' for i in range(count)) + "<p>After</p>"
+    data = posts.render(meta, html, client)
+    return " ".join(" ".join(page.extract_text() for page in PdfReader(io.BytesIO(data)).pages).split())
+
+
+def test_whole_post_count_limit_skips_further_requests_and_writes_placeholders(monkeypatch):
+    dns(monkeypatch, [PUBLIC])
+    monkeypatch.setattr(posts, "POST_IMAGES", 2)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, content=_small_png())
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        text = _post_with_images(client, 5)
+    assert len(calls) == 2
+    assert all(f"[image: figure{i}] (post image count budget exhausted)" in text for i in [2, 3, 4])
+    assert "Before" in text and "After" in text
+
+
+def test_whole_post_byte_limit_counts_failed_images_and_skips_later_requests(monkeypatch):
+    dns(monkeypatch, [PUBLIC])
+    monkeypatch.setattr(posts, "POST_IMAGE_BYTES", 6)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, content=b"bad!")  # Small, intentionally unreadable image.
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        text = _post_with_images(client, 4)
+    assert len(calls) == 2
+    assert "[image: figure0]" in text
+    assert all(f"[image: figure{i}] (post image byte budget exhausted)" in text for i in [1, 2, 3])
+    assert "Before" in text and "After" in text
+
+
+def test_whole_post_deadline_is_shared_instead_of_reset_for_each_image(monkeypatch):
+    dns(monkeypatch, [PUBLIC])
+    now = [0.0]
+    monkeypatch.setattr(posts, "monotonic", lambda: now[0])
+    monkeypatch.setattr(posts, "POST_IMAGE_SECONDS", 5.0)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        now[0] += 3.0
+        return httpx.Response(200, content=_small_png())
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        text = _post_with_images(client, 4)
+    assert len(calls) == 2
+    assert calls[1].extensions["timeout"]["read"] == 2.0
+    assert all(f"[image: figure{i}] (post image time budget exhausted)" in text for i in [1, 2, 3])
+    assert "Before" in text and "After" in text
+
+
+def test_shared_decoded_byte_budget_also_limits_compressed_images(monkeypatch):
+    import gzip
+
+    dns(monkeypatch, [PUBLIC])
+    budget = posts._PostImageBudget(posts.monotonic() + 30.0, 4, 4, 100)
+    calls = []
+
+    class Compressed(httpx.SyncByteStream):
+        def __iter__(self):
+            yield gzip.compress(b"12345")
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, headers={"content-encoding": "gzip"}, stream=Compressed())
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert posts._image("https://images.example/a", client, budget=budget) is None
+        assert posts._image("https://images.example/b", client, budget=budget) is None
+    assert len(calls) == 1
+    assert budget.bytes_left == 0
+    assert budget.reason == "post image byte budget exhausted"
+
+
+def test_socket_receive_size_is_clamped_to_shared_remaining_byte_budget():
+    reads = []
+
+    class Stream:
+        def read(self, max_bytes, timeout=None):
+            reads.append(max_bytes)
+            return b"x" * max_bytes
+
+        def write(self, data, timeout=None):
+            pass
+
+        def close(self):
+            pass
+
+    budget = posts._PostImageBudget(posts.monotonic() + 30.0, 1, 100, 3)
+    stream = Stream()
+    trace = posts._ImageTrace(budget.deadline, budget)
+    trace("connection.connect_tcp.complete", {"return_value": stream})
+    assert stream.read(65536, timeout=20.0) == b"xxx"
+    with pytest.raises(ValueError, match="byte budget exhausted"):
+        stream.read(65536, timeout=20.0)
+    assert reads == [3]
+
 def test_stalled_dns_is_abandoned_at_the_deadline(monkeypatch):
     import threading
     import time
@@ -688,7 +905,7 @@ POST_META = {"title": "Test", "authors": [], "year": 2026, "venue": "LessWrong",
 
 def render_images(monkeypatch, count, fetch):
     html = "".join(f'<img src="https://images.example/{i}" alt="figure {i}">' for i in range(count))
-    monkeypatch.setattr(posts, "_image", fetch)
+    monkeypatch.setattr(posts, "_image", lambda src, client, until, **kwargs: fetch(src, client, until))
     with httpx.Client(transport=httpx.MockTransport(lambda r: pytest.fail("unexpected HTTP"))) as client:
         rendered = posts.render(POST_META, html, client)
     return " ".join(page.extract_text() for page in PdfReader(io.BytesIO(rendered)).pages)
