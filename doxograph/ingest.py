@@ -1052,6 +1052,8 @@ def source_identity(source: dict) -> tuple[str, str] | None:
         return None
     if kind == "arxiv":
         return ("arxiv", re.sub(r"v\d+$", "", value, flags=re.I).lower())
+    if kind in posts.KINDS:
+        return (kind, value)  # Forum IDs are case-sensitive, including LW/AF aliases.
     return (kind, value.lower())
 
 

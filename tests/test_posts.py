@@ -146,6 +146,30 @@ def test_pasting_a_post_again_answers_without_asking_the_forum(forum):
     assert calls == []
 
 
+@pytest.mark.parametrize("kind", sorted(posts.KINDS))
+def test_case_distinct_forum_ids_do_not_match_an_existing_pdf(monkeypatch, tmp_path, kind):
+    paper = {"key": "stored", "source": {"kind": kind, "id": POST_ID}}
+    pdf = tmp_path / "stored.pdf"
+    pdf.write_bytes(b"%PDF-inert-existence-fixture")
+    monkeypatch.setattr(store, "all_papers", lambda: [paper])
+    monkeypatch.setattr(store, "pdf_path", lambda key: pdf)
+    assert ingest.already_stored(ingest.Ref(kind, POST_ID, "fixture")) == "stored"
+    assert ingest.already_stored(ingest.Ref(kind, POST_ID.lower(), "fixture")) is None
+    assert ingest.find_existing({"source": {"kind": kind, "id": POST_ID.lower()}}) is None
+
+
+def test_case_changed_post_url_still_queries_the_forum(forum):
+    client, calls = forum
+    key, _ = ingest.ingest_ref(ingest.parse_ref(LW_URL), client)
+    calls.clear()
+    changed = ingest.parse_ref(f"https://www.alignmentforum.org/posts/{POST_ID.lower()}")
+    assert ingest.already_stored(changed) is None
+    with pytest.raises(ValueError, match="LessWrong has no post"):
+        ingest.ingest_ref(changed, client)
+    assert calls == [posts.API["lesswrong"]]
+    assert store.paper_keys() == [key]
+
+
 def test_a_post_the_forum_does_not_have_says_so(forum):
     client, _ = forum
     with pytest.raises(ValueError, match="LessWrong has no post"):
