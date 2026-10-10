@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import socket
 
 import httpx
 import pytest
@@ -71,11 +72,13 @@ POST = {
 
 
 @pytest.fixture
-def forum():
+def forum(monkeypatch):
+    monkeypatch.setattr(posts.socket, "getaddrinfo", lambda *a, **k: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
     calls = []
 
     def handle(request: httpx.Request) -> httpx.Response:
-        calls.append(str(request.url))
+        calls.append(str(request.url.copy_with(host=request.headers["host"])))
         if request.url.host == "www.lesswrong.com":
             asked = json.loads(request.content)["variables"]["id"]
             result = POST if asked == POST_ID else None

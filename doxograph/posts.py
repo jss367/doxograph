@@ -10,8 +10,10 @@ viewer.
 from __future__ import annotations
 
 import io
+import ipaddress
 import os
 import re
+import socket
 import tempfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -57,6 +59,7 @@ query ($id: String) {
 # Images are what a post shows its results in, so they are worth the fetch,
 # but one that is huge or slow is left out rather than holding up the post.
 IMAGE_BYTES = 8_000_000
+IMAGE_PIXELS = 16_000_000
 IMAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 
@@ -360,17 +363,54 @@ def _clean(text: str) -> str:
     return re.sub("[\\x00-\\x09\\x0b-\\x1f\\x7f\\u200b\\ufeff]", "", text)
 
 
+def _image_target(url: httpx.URL) -> httpx.URL:
+    """Resolve a public HTTP destination and pin the request to its address."""
+    if (url.scheme not in {"http", "https"} or not url.host or url.userinfo
+            or "%" in url.host or url.host.rstrip(".").lower().endswith((".localhost", ".local"))
+            or url.host.rstrip(".").lower() == "localhost"):
+        raise ValueError("not a public image URL")
+    addresses = socket.getaddrinfo(
+        url.host, url.port or (443 if url.scheme == "https" else 80),
+        type=socket.SOCK_STREAM,
+    )
+    if not addresses:
+        raise ValueError("image host has no addresses")
+    for _, _, _, _, address in addresses:
+        ip = ipaddress.ip_address(address[0])
+        if (not ip.is_global or ip.is_multicast
+                or (isinstance(ip, ipaddress.IPv6Address)
+                    and (ip.ipv4_mapped or ip.sixtofour or ip.teredo))):
+            raise ValueError("image host has a non-public address")
+    # Avoid a second DNS lookup between validation and connecting. Keep the
+    # original HTTP Host and TLS name below, so public CDN images still work.
+    return url.copy_with(host=addresses[0][4][0])
+
+
 def _image(src: str, client: httpx.Client) -> bytes | None:
+    """Fetch a bounded image, validating and pinning every redirect hop."""
     try:
-        with client.stream("GET", src, follow_redirects=True, timeout=IMAGE_TIMEOUT) as response:
-            response.raise_for_status()
-            data = bytearray()
-            for chunk in response.iter_bytes(65536):
-                data += chunk
-                if len(data) > IMAGE_BYTES:
-                    return None
-            return bytes(data)
-    except httpx.HTTPError:
+        url = httpx.URL(src)
+        for hop in range(6):
+            target = _image_target(url)
+            with client.stream(
+                "GET", target, follow_redirects=False, timeout=IMAGE_TIMEOUT,
+                headers={"Host": url.netloc.decode("ascii"), "Connection": "close"},
+                extensions={"sni_hostname": url.host},
+            ) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location or hop == 5:
+                        return None
+                    url = url.join(location)
+                    continue
+                response.raise_for_status()
+                data = bytearray()
+                for chunk in response.iter_bytes(65536):
+                    data += chunk
+                    if len(data) > IMAGE_BYTES:
+                        return None
+                return bytes(data)
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError):
         return None
 
 
@@ -442,6 +482,8 @@ def _placed(pdf, data: bytes, width: float) -> bool:
     try:
         with Image.open(io.BytesIO(data)) as image:
             pixels_w, pixels_h = image.size
+            if pixels_w <= 0 or pixels_h <= 0 or pixels_w * pixels_h > IMAGE_PIXELS:
+                return False
             image.load()
     except Exception:
         return False
@@ -451,7 +493,10 @@ def _placed(pdf, data: bytes, width: float) -> bool:
     if pdf.will_page_break(h):
         pdf.add_page()
     pdf.set_left_margin(20)
-    pdf.image(io.BytesIO(data), x=20 + (width - w) / 2, w=w, h=h)
+    try:
+        pdf.image(io.BytesIO(data), x=20 + (width - w) / 2, w=w, h=h)
+    except Exception:
+        return False
     pdf.ln(3)
     return True
 
