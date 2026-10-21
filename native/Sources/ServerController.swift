@@ -800,6 +800,7 @@ final class ServerController {
             // so dispatching the reply there would leave both waiting forever.
             // The run loop can deliver it even inside that nested modal loop.
             RunLoop.main.perform(inModes: [.common, .modalPanel]) { completion(probe) }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
     }
 
