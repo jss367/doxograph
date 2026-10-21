@@ -799,8 +799,11 @@ final class ServerController {
             // a main-queue callback holds that queue until termination finishes,
             // so dispatching the reply there would leave both waiting forever.
             // The run loop can deliver it even inside that nested modal loop.
-            RunLoop.main.perform(inModes: [.common, .modalPanel]) { completion(probe) }
-            CFRunLoopWakeUp(CFRunLoopGetMain())
+            // Core Foundation supports scheduling across threads.
+            let mainLoop = CFRunLoopGetMain()
+            let modes = [RunLoop.Mode.common.rawValue, RunLoop.Mode.modalPanel.rawValue] as CFArray
+            CFRunLoopPerformBlock(mainLoop, modes) { completion(probe) }
+            CFRunLoopWakeUp(mainLoop)
         }
     }
 
