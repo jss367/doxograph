@@ -795,7 +795,11 @@ final class ServerController {
     func probe(completion: @escaping (Probe) -> Void) {
         queue.async {
             let probe = self.probe(on: self.port, timeout: 2)
-            DispatchQueue.main.async { completion(probe) }
+            // terminateLater runs a modal event loop. A relaunch requested from
+            // a main-queue callback holds that queue until termination finishes,
+            // so dispatching the reply there would leave both waiting forever.
+            // The run loop can deliver it even inside that nested modal loop.
+            RunLoop.main.perform(inModes: [.common, .modalPanel]) { completion(probe) }
         }
     }
 
