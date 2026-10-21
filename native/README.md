@@ -170,6 +170,12 @@ and then relaunching the app.
 - **External links go to the browser.** arXiv and DOI links open in your default
   browser; PDFs and BibTeX open in their own window.
 
+## Testing quitting and relaunching
+
+Run `bash native/test-quit.sh` on macOS. It checks health callbacks during
+ordinary use and while canceling or completing a quit requested from an update
+callback. Responses are simulated; it does not start or stop a library server.
+
 ## Configuration
 
 The app is not sandboxed and is signed ad-hoc, which is enough to run on the
