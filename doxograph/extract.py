@@ -348,7 +348,7 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     return uploaded.id
 
 
-@config.analysis_session
+@config.bind_model_access
 def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
     """Delete a paper's remote uploads before removing its local metadata."""
     with store.extraction_lock(key), store.paper_lock(key):

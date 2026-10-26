@@ -166,3 +166,59 @@ def test_malformed_native_model_answers_are_upstream_errors(monkeypatch, text):
             'messages': [{'role': 'user', 'content': 'What did the study find?'}]})
     assert response.status_code == 502
     assert 'invalid' in response.json()['detail']
+
+
+@pytest.mark.parametrize('provider', ['claude_code', 'codex'])
+@pytest.mark.parametrize('switch_at', ['metadata-load', 'cleanup-decision'])
+def test_delete_keeps_model_access_through_cleanup(monkeypatch, provider, switch_at):
+    config.set_ai_provider(provider)
+    config.save_analysis_settings('ollama', 'local-model', 'http://localhost:11434')
+    paper = store.new_paper('paper')
+    paper['pdf_upload'] = {'file_id': 'file_original', 'superseded_file_ids': ['file_superseded']}
+    store.save_paper(paper)
+    real_load, real_provider = store.load_paper, config.ai_provider
+    loaded = switched = False
+    deletions, clients = [], []
+    fake_api = SimpleNamespace(files=SimpleNamespace(delete=deletions.append))
+
+    def switch_settings():
+        nonlocal switched
+        switched = True
+        config.set_ai_provider('api')
+        config.save_analysis_settings('openai', 'next-model', 'https://api.openai.com/v1')
+
+    def load(key):
+        nonlocal loaded
+        result = real_load(key)
+        loaded = True
+        if switch_at == 'metadata-load':
+            switch_settings()
+        return result
+
+    def provider_read():
+        selected = real_provider()
+        if loaded and not switched and switch_at == 'cleanup-decision':
+            switch_settings()
+        return selected
+
+    def cleanup_client():
+        clients.append((real_provider(), config.analysis_config().provider))
+        return fake_api
+
+    monkeypatch.setattr(store, 'load_paper', load)
+    monkeypatch.setattr(config, 'ai_provider', provider_read)
+    monkeypatch.setattr(extract, 'api_client', cleanup_client)
+    other_client = Mock(side_effect=AssertionError('must not choose another provider'))
+    monkeypatch.setattr(extract, 'client', other_client)
+    delete_metadata = Mock()
+    monkeypatch.setattr(store, 'delete_paper', delete_metadata)
+
+    extract.delete_paper('paper')
+
+    assert switched
+    assert clients == [(provider, 'ollama')]
+    assert deletions == ['file_superseded', 'file_original']
+    delete_metadata.assert_called_once_with('paper')
+    other_client.assert_not_called()
+    assert real_provider() == 'api'
+    assert config.analysis_config().provider == 'openai'
