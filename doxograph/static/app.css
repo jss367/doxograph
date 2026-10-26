@@ -164,6 +164,61 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .filters label { font-size: .84rem; color: var(--muted); display: flex;
   align-items: center; gap: .25rem; }
 
+#focused-review { width: min(1500px, 96vw); max-width: 96vw; height: 94vh; max-height: 94vh;
+  padding: 1.1rem 1.4rem; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--ink); overflow: auto; }
+#focused-review::backdrop { background: rgb(0 0 0 / .55); }
+.focus-heading, .focus-navigation, .focus-source-heading, .focus-actions, .focus-pdf-controls {
+  display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.focus-heading { justify-content: space-between; padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
+.focus-heading h2 { font-size: 1.15rem; margin: 0; }
+.focus-heading p { margin: .2rem 0 0; }
+.focus-navigation { padding: .8rem 0; }
+.focus-navigation > div { margin-right: auto; min-width: 12rem; }
+#focus-progress { margin: 0 0 .25rem; font-size: .86rem; }
+#focus-meter { display: block; height: .4rem; width: 100%; accent-color: var(--accent); }
+.focus-complete { color: var(--ok); background: var(--panel); padding: .6rem; border-radius: 4px; }
+#focus-error:empty { display: none; }
+.focus-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 1.5rem; }
+.focus-details, .focus-source { min-width: 0; overflow-wrap: anywhere; }
+.focus-details { max-height: 66vh; overflow-y: auto; padding: .3rem .8rem .5rem 0; }
+.focus-paper-title { font-size: .95rem; margin: 0; }
+.focus-details > .hint { margin-top: .25rem; }
+.focus-claim { padding: 1.1rem 0; }
+.focus-meta { display: flex; gap: .7rem; flex-wrap: wrap; align-items: center; font-size: .78rem; color: var(--muted); }
+.focus-claim h3 { font-size: 1.25rem; font-weight: 500; line-height: 1.5; margin: .8rem 0; }
+.focus-claim h4 { font-size: .8rem; color: var(--muted); margin: 1.2rem 0 .3rem; }
+.focus-claim p, .focus-claim blockquote { white-space: pre-wrap; }
+.focus-claim blockquote { margin: .5rem 0; padding: .5rem .8rem; border-left: 3px solid var(--accent); background: var(--panel); }
+.focus-actions { position: sticky; bottom: 0; background: var(--bg); padding: .7rem 0; border-top: 1px solid var(--line); }
+.focus-source { border-left: 1px solid var(--line); padding-left: 1.2rem; }
+.focus-source-heading { justify-content: space-between; }
+.focus-source-heading h3 { font-size: .9rem; margin: .3rem 0; }
+.focus-source-heading a { font-size: .8rem; }
+#focus-passage { font-size: .84rem; max-height: 13vh; overflow-y: auto; margin: .5rem 0; }
+#focus-passage p { margin: .25rem 0; }
+#focus-passage mark { background: var(--sel); color: var(--ink); }
+.focus-pdf-controls { font-size: .78rem; padding: .4rem 0; }
+.focus-pdf-controls[hidden] { display: none; }
+.focus-pdf-controls input { width: 4rem; }
+.focus-pdf { max-height: 46vh; min-height: 12rem; overflow: auto; background: #555; padding: .5rem; }
+.focus-pdf canvas { display: block; margin: 0 auto; background: white; }
+.focus-shortcuts { border-top: 1px solid var(--line); padding-top: .8rem; font-size: .78rem; }
+#focused-review .edit-wrap { margin: .5rem 0; }
+#focused-review .pair { flex-wrap: wrap; }
+#focused-review .pair > div { min-width: 0; max-width: 100%; }
+#focused-review .pair input { max-width: 100%; }
+#focused-review .linkrow { flex-wrap: wrap; }
+#focused-review .linkrow input { min-width: 8rem; }
+@media (max-width: 800px) {
+  #focused-review { padding: .8rem; }
+  .focus-layout { grid-template-columns: 1fr; gap: 1rem; }
+  .focus-details { max-height: none; padding-right: 0; }
+  .focus-source { border-left: 0; border-top: 1px solid var(--line); padding: .8rem 0 0; }
+  #focus-passage { max-height: none; }
+  .focus-pdf { max-height: 55vh; }
+}
+
 .group { margin: 1.4rem 0 0; }
 .group h3 { font-size: .95rem; margin: 0 0 .1rem; }
 .group .gd { color: var(--muted); font-size: .82rem; margin: 0 0 .3rem; }

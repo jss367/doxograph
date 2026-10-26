@@ -199,6 +199,19 @@ Shortcuts button in the header. A paper that arrives with a dozen claims you
 have read in one go has "Mark N reviewed" in its header; the notice that
 follows offers to take it back, and takes back only what that click changed.
 
+**Focused review**, above the claims, puts one claim beside its source PDF.
+It starts with the claims matching your current filters and keeps that set
+throughout the session, so marking a claim reviewed does not remove your place
+when **unreviewed only** is on. Progress shows your position and how many are
+reviewed. The PDF opens at the locally matched quote (or its closest passage),
+falling back to the recorded page when no match is available; page and zoom
+controls let you check the surrounding material. Papers without a PDF can
+still be reviewed. Use **Mark reviewed & next**, **Edit claim**, or the same
+`j`, `k`, `r`, `e`, and `n` shortcuts; `Escape` exits. Unsaved edits are kept
+for the current browser session when moving between claims or exiting review;
+**Cancel** discards the current edit. Quote matching and PDF viewing run locally
+and work with AI analysis disabled.
+
 The divider between the lists and the claims can be dragged, so a session spent
 reading papers can give the side pane more of the window and a session spent
 reading claims can give it less. Focus the divider and the left and right arrow
