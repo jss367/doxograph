@@ -6,8 +6,10 @@ and a JSON schema; none of their requests use Anthropic uploads or credentials.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import anthropic
 import httpx
@@ -77,9 +79,14 @@ class TextClient:
             body["max_completion_tokens" if self.selected.provider == "openai" else "max_tokens"] = max_tokens
             route = "/chat/completions"
         headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
-        # Local inference can be slow. Do not follow redirects to another host
-        # or inherit an HTTP proxy for localhost analysis.
-        with httpx.Client(timeout=httpx.Timeout(600, connect=10), trust_env=False) as transport:
+        # Keep loopback inference off environment proxies. Remote providers
+        # still honor HTTPS_PROXY, HTTP_PROXY, NO_PROXY, and certificate settings.
+        host = (urlsplit(self.selected.base_url).hostname or "").lower()
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost" or host.endswith(".localhost")
+        with httpx.Client(timeout=httpx.Timeout(600, connect=10), trust_env=not loopback) as transport:
             result = transport.post(self.selected.base_url.rstrip("/") + route, json=body, headers=headers)
             result.raise_for_status()
             try:

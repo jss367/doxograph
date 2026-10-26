@@ -3,6 +3,8 @@
 import json
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -345,3 +347,59 @@ def test_anthropic_ignores_unused_environment_endpoint(monkeypatch):
     settings = config.analysis_settings()
     assert settings["base_url"] == ""
     assert "private-secret" not in json.dumps(settings)
+
+
+@pytest.fixture
+def chat_servers():
+    servers = []
+
+    def start():
+        paths = []
+
+        class ChatHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                paths.append(self.path)
+                content = json.dumps({"choices": [{"message": {"content": json.dumps(payload())},
+                                                    "finish_reason": "stop"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+
+            def log_message(self, *args):
+                pass
+
+        listener = ThreadingHTTPServer(("127.0.0.1", 0), ChatHandler)
+        worker = threading.Thread(target=listener.serve_forever, daemon=True)
+        worker.start()
+        servers.append((listener, worker))
+        return f"http://127.0.0.1:{listener.server_port}", paths
+
+    yield start
+    for listener, worker in servers:
+        listener.shutdown()
+        listener.server_close()
+        worker.join(timeout=5)
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_remote_analysis_uses_proxy_while_loopback_bypasses_it(monkeypatch, chat_servers, local):
+    proxy_url, proxy_paths = chat_servers()
+    destination_url, destination_paths = chat_servers()
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(name, proxy_url)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "")
+    monkeypatch.setenv("DOXOGRAPH_API_KEY", "test-key")
+    endpoint = destination_url if local else "http://provider.invalid"
+    select("openai-compatible", "model", endpoint + "/v1")
+    result = extract.extract_paper(paper())
+    assert result["claims"][0]["text"] == payload()["claims"][0]["text"]
+    if local:
+        assert destination_paths == ["/v1/chat/completions"]
+        assert proxy_paths == []
+    else:
+        assert proxy_paths == ["http://provider.invalid/v1/chat/completions"]
+        assert destination_paths == []
