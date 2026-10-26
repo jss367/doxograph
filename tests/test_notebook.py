@@ -42,6 +42,45 @@ def test_notebook_workspace_isolation_and_conflict(client):
     assert client.get('/api/state').json()['notebook'] == response.json()
 
 
+def test_workspace_notes_migration_isolation_and_concurrent_board_edits(client):
+    # Existing notebooks load with an empty document, without a migration step.
+    store.write_json(config.data_dir() / 'notebook.json', {'revision': 4, 'boards': []})
+    original = client.get('/api/notebook').json()
+    assert original['notes'] == ''
+    board_edit = dict(original, boards=[{'id': 'board', 'title': 'Evidence', 'entries': []}])
+    assert client.put('/api/notebook', json=board_edit).status_code == 200
+    text = '# Research questions\n\nWhat changes across conditions? <literal text>'
+    response = client.put('/api/notebook/notes', json={'notes': text, 'previous': ''})
+    assert response.status_code == 200
+    assert response.json()['boards'][0]['title'] == 'Evidence'
+    assert response.json()['notes'] == text
+    assert response.json()['revision'] == 6
+    assert client.get('/api/state').json()['notebook']['notes'] == text
+    assert client.put('/api/notebook', json=board_edit).status_code == 409
+
+    workspace = config.create_workspace('Other research')
+    headers = {'X-Doxograph-Workspace': workspace['id']}
+    assert client.get('/api/notebook', headers=headers).json()['notes'] == ''
+    assert client.put('/api/notebook/notes', headers=headers,
+                      json={'notes': 'Other questions', 'previous': ''}).status_code == 200
+    assert client.get('/api/notebook').json()['notes'] == text
+    assert client.put('/api/notebook/notes', json={'notes': '', 'previous': text}).status_code == 200
+    assert client.get('/api/notebook').json()['notes'] == ''
+
+
+def test_workspace_notes_conflict_keeps_saved_text(client):
+    update = {'notes': 'First writer', 'previous': ''}
+    first = client.put('/api/notebook/notes', json=update)
+    assert first.status_code == 200
+    # A lost response may cause the browser to retry an already saved edit.
+    assert client.put('/api/notebook/notes', json=update).json() == first.json()
+    response = client.put('/api/notebook/notes', json={'notes': 'Second writer', 'previous': ''})
+    assert response.status_code == 409
+    assert 'another window' in response.json()['detail']
+    assert client.get('/api/notebook').json()['notes'] == 'First writer'
+    assert client.put('/api/notebook/notes', json={'notes': None, 'previous': 'First writer'}).status_code == 422
+
+
 def test_manual_connections_validate_sources_and_keep_missing_board_entries(client):
     one, two = seed(), seed('two')
     data = client.get('/api/notebook').json()
@@ -58,6 +97,31 @@ def test_manual_connections_validate_sources_and_keep_missing_board_entries(clie
     assert client.put('/api/notebook', json=data).status_code == 404
     data['connections'][0]['source'] = two
     assert client.put('/api/notebook', json=data).status_code == 422
+
+
+def test_highlights_validate_their_paper_and_page_geometry(client):
+    seed()
+    data = client.get('/api/notebook').json()
+    highlight = {'id': 'mark', 'paper': 'one', 'page': 2, 'text': 'A quotation', 'color': 'green',
+                 'rects': [{'x': .1, 'y': .2, 'w': .5, 'h': .02}], 'note': 'Compare with the appendix'}
+    data['highlights'] = [highlight]
+    response = client.put('/api/notebook', json=data)
+    assert response.status_code == 200
+    assert client.get('/api/state').json()['notebook']['highlights'] == [highlight]
+    data = response.json()
+    for change in ({'paper': 'absent'}, {'rects': []}, {'rects': [{'x': 1.5, 'y': 0, 'w': .1, 'h': .1}]},
+                   {'color': 'red'}, {'page': 0}):
+        data['highlights'] = [dict(highlight, **change)]
+        assert client.put('/api/notebook', json=data).status_code in (404, 422), change
+    data['highlights'] = [highlight, highlight]
+    assert client.put('/api/notebook', json=data).status_code == 422
+    # A removed paper keeps the highlights already made on it.
+    store.delete_paper('one')
+    data['highlights'] = [dict(highlight, note='Still mine')]
+    assert client.put('/api/notebook', json=data).status_code == 200
+    data = client.get('/api/notebook').json()
+    data['highlights'].append(dict(highlight, id='late'))
+    assert client.put('/api/notebook', json=data).status_code == 404
 
 
 def test_history_restores_only_requested_claim_or_note_and_rechecks_quotes(client):

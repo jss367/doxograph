@@ -11,10 +11,13 @@ import functools
 import os
 import threading
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import anthropic
+import httpx
 from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
@@ -49,7 +52,10 @@ async def _lifespan(_: FastAPI):
     never calls `serve()` at all.
     """
     fingerprint.snapshot()
-    yield
+    try:
+        yield
+    finally:
+        _close_import_session()
 
 
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
@@ -420,9 +426,12 @@ def _finish(job: dict, key: str) -> None:
             note = store.load_paper(key).get("error") or "no PDF available"
         except (KeyError, json.JSONDecodeError):
             note = "the paper was removed"
-        _set(job, state="error", detail=f"no PDF stored ({note}). Add it again to retry.")
+        _set(job, state="error", detail=f"no PDF stored ({note})",
+             explanation="The paper's details were saved, but its PDF is unavailable. "
+                         "Retry to check again, or upload the PDF yourself.")
         return
     _set(job, state="done")
+    _forget_import(job)
 
 
 def _new_job(label: str) -> dict:
@@ -446,7 +455,72 @@ def _set(job: dict, **fields) -> None:
         job.update(fields)
 
 
+def _new_import_job(label: str, do_extract: bool, **source) -> dict:
+    job = _new_job(label)
+    _set(job, kind="import", retryable=True,
+         _import={**source, "extract": do_extract})
+    return job
+
+
+def _forget_import(job: dict) -> None:
+    """Release retained upload bytes when a notification no longer needs them."""
+    with _jobs_lock:
+        source = job.pop("_import", {})
+        if job.get("kind") == "import":
+            job["retryable"] = False
+    if staged := source.get("staged"):
+        staged.unlink(missing_ok=True)
+
+
+def _close_import_session() -> None:
+    """Release retry inputs now, or when an in-flight worker finishes.
+
+    Background workers can outlive the ASGI lifespan. Their input must stay
+    available until they finish, but no retry will be possible after shutdown.
+    """
+    with _jobs_lock:
+        retained = [job for job in _jobs.values() if job.get("_import")]
+        for job in retained:
+            job["_discard_import"] = True
+        finished = [job for job in retained if job["state"] in ("done", "error")]
+    for job in finished:
+        _forget_import(job)
+
+
+def _import_failed(job: dict, exc: Exception) -> None:
+    if isinstance(exc, (httpx.TimeoutException, anthropic.APITimeoutError)):
+        explanation = "The service took too long to respond. Retry to try again."
+    elif isinstance(exc, (httpx.RequestError, anthropic.APIConnectionError)):
+        explanation = "The service could not be reached. Check your connection, then retry."
+    elif isinstance(exc, anthropic.AuthenticationError):
+        explanation = "AI analysis could not sign in. Check your Anthropic credentials, then retry."
+    elif isinstance(exc, (httpx.HTTPStatusError, anthropic.APIStatusError)):
+        status = exc.response.status_code
+        if status == 429:
+            explanation = "The service is receiving too many requests. Wait a moment, then retry."
+        elif status in (401, 403):
+            explanation = "The service refused access. You may need to download and upload the PDF yourself."
+        elif status == 404:
+            explanation = "The paper could not be found at this address. Check the reference, then retry."
+        else:
+            explanation = "The service could not complete the request. Wait a moment, then retry."
+    elif isinstance(exc, ingest.InvalidPDFUpload):
+        explanation = "This file is not a PDF. Upload a valid PDF to import this paper."
+    elif isinstance(exc, ValueError):
+        explanation = "The paper or PDF could not be read. Check the reference or file, then retry."
+    elif isinstance(exc, ingest.PaperRemoved):
+        explanation = "The paper was removed during import. Retry to add it again."
+    elif job["state"] == "reading":
+        explanation = "The PDF was saved, but AI analysis failed. Retry to try the analysis again."
+    else:
+        explanation = "The import could not be completed. Retry to try again."
+    if isinstance(exc, ingest.InvalidPDFUpload):
+        _forget_import(job)
+    _set(job, state="error", detail=f"{type(exc).__name__}: {exc}", explanation=explanation)
+
+
 def _prune_jobs() -> None:
+    removed = []
     with _jobs_lock:
         by_workspace: dict[str, list[dict]] = {}
         for job in _jobs.values():
@@ -457,6 +531,9 @@ def _prune_jobs() -> None:
         for done in by_workspace.values():
             for job in sorted(done, key=lambda item: item["id"])[:-40]:
                 _jobs.pop(job["id"], None)
+                removed.append(job)
+    for job in removed:
+        _forget_import(job)
 
 
 def _workspace_job(function):
@@ -485,26 +562,38 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
             extract.extract_paper(key)
         _finish(job, key)
     except Exception as exc:
-        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        _import_failed(job, exc)
         traceback.print_exc()
     finally:
+        if job.get("_discard_import"):
+            _forget_import(job)
         _prune_jobs()
 
 
 @_workspace_job
 def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> None:
+    attempt = staged
     try:
         _set(job, state="fetching")
-        key, created = ingest.ingest_staged_pdf(staged, filename)
+        # The ingester consumes its input, including on failure. Keep the
+        # original for Retry, and give each attempt a disposable hard link.
+        if job.get("_import"):
+            attempt = staged.with_name(f".incoming-attempt-{uuid.uuid4().hex}.pdf")
+            os.link(staged, attempt)
+        key, created = ingest.ingest_staged_pdf(attempt, filename)
         _set(job, key=key, label=key, detail="" if created else "already in the corpus")
         if do_extract and config.ai_enabled() and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
         _finish(job, key)
     except Exception as exc:
-        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        _import_failed(job, exc)
         traceback.print_exc()
     finally:
+        if attempt != staged:
+            attempt.unlink(missing_ok=True)
+        if job.get("_discard_import"):
+            _forget_import(job)
         _prune_jobs()
 
 
@@ -875,6 +964,11 @@ def research_notes_css() -> FileResponse:
     return FileResponse(STATIC / "research-notes.css", media_type="text/css")
 
 
+@app.get("/focused-review.js")
+def focused_review_js() -> FileResponse:
+    return FileResponse(STATIC / "focused-review.js", media_type="text/javascript")
+
+
 @app.get("/favicon.png")
 def favicon() -> FileResponse:
     return FileResponse(STATIC / "favicon.png", media_type="image/png")
@@ -1075,7 +1169,35 @@ def jobs() -> dict:
             (job for job in _jobs.values() if job.get("workspace") == config.workspace_id()),
             key=lambda j: j["id"], reverse=True,
         )[:20]
+        # Retry sources include local paths and Ref objects; only notification
+        # fields belong on the wire.
+        recent = [{k: v for k, v in job.items() if not k.startswith("_")} for job in recent]
     return {"jobs": recent}
+
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_import(job_id: int) -> dict:
+    """Retry a failed import in place, once, in its original workspace."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None or job.get("workspace") != config.workspace_id():
+            raise HTTPException(404, "Job not found")
+        if job["state"] != "error":
+            raise HTTPException(409, "Only failed imports can be retried")
+        source = job.get("_import")
+        if not source:
+            raise HTTPException(409, "This job cannot be retried. Add the paper again.")
+        previous = {field: job.get(field, "") for field in ("detail", "explanation", "started")}
+        job.update(state="queued", detail="", explanation="", started=store.now())
+    try:
+        if "ref" in source:
+            _pool.submit(_run_ingest, job, source["ref"], source["extract"])
+        else:
+            _pool.submit(_run_upload, job, source["staged"], source["filename"], source["extract"])
+    except Exception:
+        _set(job, state="error", **previous)
+        raise HTTPException(503, "The retry could not start. Please try again.")
+    return {"id": job_id}
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
@@ -1088,6 +1210,7 @@ def dismiss_job(job_id: int) -> Response:
         if job["state"] not in ("done", "error"):
             raise HTTPException(409, "This job is still running")
         del _jobs[job_id]
+    _forget_import(job)
     return Response(status_code=204)
 
 
@@ -1131,7 +1254,7 @@ def api_ingest(body: IngestBody) -> dict:
         if settled:
             known.append({"ref": ref.raw, "key": settled})
             continue
-        job = _new_job(ref.value)
+        job = _new_import_job(ref.value, do_extract, ref=ref)
         _pool.submit(_run_ingest, job, ref, do_extract)
         queued += 1
     return {"queued": queued, "known": known, "unknown": unknown}
@@ -1160,18 +1283,20 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
         settled = _settled(await run_in_threadpool(ingest.already_uploaded, staged), do_extract)
         if settled:
             staged.unlink(missing_ok=True)
-            _set(_new_job(name), key=settled, label=settled,
+            _set(_new_job(name), kind="import", key=settled, label=settled,
                  state="done", detail="already in the corpus")
             # Nothing else will: the workers prune on their way out, and this
             # notice never reaches one. Without it a session that keeps
             # re-dropping papers it already has grows `_jobs` for ever.
             _prune_jobs()
             continue
-        job = _new_job(name)
+        job = _new_import_job(name, do_extract, staged=staged, filename=name)
         try:
             _pool.submit(_run_upload, job, staged, name, do_extract)
         except BaseException:
-            staged.unlink(missing_ok=True)
+            with _jobs_lock:
+                _jobs.pop(job["id"], None)
+            _forget_import(job)
             raise
         queued += 1
     return {"queued": queued}

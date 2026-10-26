@@ -153,9 +153,10 @@ def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
                 assert response.status_code == 200
                 await page.goto(url)
                 await page.locator("#jobs .job.error").wait_for()
+                assert await page.get_by_role("button", name="Retry", exact=True).count() == 0
                 dismiss = page.get_by_role("button", name="Dismiss notification for broken.pdf")
 
-                # A failed dismissal must leave the error available to retry.
+                # A failed dismissal must leave the error notification available.
                 async def reject_delete(route):
                     await route.fulfill(status=500, json={"detail": "Try again"})
 
@@ -178,6 +179,90 @@ def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
             await browser.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+def test_failed_import_can_be_retried_and_opened_after_success():
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from pdfs import minimal_pdf
+
+    body = minimal_pdf("A study of retrying imports")
+    downloads = []
+
+    class PaperSource(BaseHTTPRequestHandler):
+        def do_GET(self):
+            downloads.append(self.path)
+            self.send_response(503 if len(downloads) == 1 else 200)
+            self.send_header("Content-Type", "application/pdf")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), PaperSource)
+    thread = threading.Thread(target=source.serve_forever, daemon=True)
+    thread.start()
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            with _server() as url:
+                response = httpx.post(f"{url}/api/ingest", json={
+                    "text": f"http://127.0.0.1:{source.server_port}/recovered-study.pdf",
+                    "extract": False,
+                })
+                assert response.status_code == 200
+                await page.goto(url)
+                failed = page.locator("#jobs .job.error")
+                await failed.wait_for()
+                assert "PDF is unavailable" in await failed.inner_text()
+                assert await failed.get_by_role("button", name="Retry", exact=True).is_enabled()
+                assert await failed.locator("details").get_attribute("open") is None
+                await failed.get_by_text("Technical details", exact=True).click()
+                await _polled(page, rounds=1)
+                assert await failed.locator("details").get_attribute("open") is not None
+                await failed.get_by_text("Technical details", exact=True).click()
+                [original] = httpx.get(f"{url}/api/jobs").json()["jobs"]
+
+                async def reject_retry(route):
+                    await route.fulfill(status=503, json={"detail": "Please try again."})
+
+                await page.route("**/api/jobs/*/retry", reject_retry)
+                await failed.get_by_role("button", name="Retry", exact=True).click()
+                await page.locator("#toasts .toast", has_text="Could not retry import").wait_for()
+                assert await failed.get_by_role("button", name="Retry", exact=True).is_enabled()
+                await page.unroute("**/api/jobs/*/retry", reject_retry)
+
+                # Retry and Open paper both work from the keyboard.
+                await failed.get_by_role("button", name="Retry", exact=True).focus()
+                await page.keyboard.press("Enter")
+                await page.get_by_role("button", name="Open paper", exact=True).wait_for()
+                assert await page.locator("#jobs .job").count() == 1
+                assert await failed.count() == 0
+                [finished] = httpx.get(f"{url}/api/jobs").json()["jobs"]
+                assert finished["id"] == original["id"]
+                assert finished["key"] == original["key"]
+                assert finished["state"] == "done"
+                assert len(downloads) == 2
+
+                await page.reload()
+                open_paper = page.get_by_role("button", name="Open paper", exact=True)
+                await open_paper.focus()
+                await page.keyboard.press("Enter")
+                await page.locator(".paperhead h2", has_text="recovered study").wait_for()
+                assert await page.evaluate("V.paper") == finished["key"]
+                assert len(httpx.get(f"{url}/api/state").json()["papers"]) == 1
+            await browser.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        source.shutdown()
+        source.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.mark.browser
@@ -2153,7 +2238,7 @@ def test_r_does_not_move_on_when_the_review_did_not_happen():
                 await page.wait_for_timeout(300)
                 assert await page.evaluate("V.selectedId") == one
                 release.set()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
 
                 # Once the save has landed, r works and moves on as usual.
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
@@ -2399,7 +2484,7 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 await page.locator("#toasts .toast", has_text="Wait for the change in flight").wait_for()
                 release.set()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
 
                 # Once it has landed, the bulk review goes through as usual.
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
@@ -2611,7 +2696,7 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
 
                 # The offer comes back rather than being spent on a refusal.
                 release.set()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
                 again = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
                 await again.get_by_role("button", name="Undo").click()
                 await page.locator(f'.claim.unreviewed[data-claim="{one}"]').wait_for()
@@ -5912,7 +5997,7 @@ def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
                 assert await form.count() == 0
                 assert await page.locator("#toasts .toast.warn").count() == 0
                 refusing.clear()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
             await browser.close()
 
     asyncio.run(scenario())
