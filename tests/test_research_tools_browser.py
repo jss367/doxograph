@@ -1168,27 +1168,87 @@ def test_zoom_keeps_the_page_under_the_eye_across_mixed_page_sizes(engine):
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 await page.locator('#reader .pdf-page[data-page="2"]:not(.pending)').wait_for()
-                # Part way into page 3, by hand, so nothing is pinned.
-                await page.evaluate("""(() => {
-                    const scroller = document.querySelector('#pdf-scroll');
-                    const third = document.querySelector('#reader .pdf-page[data-page="3"]');
-                    scroller.scrollTo({top: third.offsetTop + third.offsetHeight * .4});
-                })()""")
-                await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
-                await saved_page(url, 3)
+                # The reading line, a third of the way down the scroller, is
+                # what names the page; the view is placed so that line is some
+                # way into page 3, by hand, so nothing is pinned.
+                async def place(fraction):
+                    await page.evaluate("""(fraction) => {
+                        const scroller = document.querySelector('#pdf-scroll');
+                        const third = document.querySelector('#reader .pdf-page[data-page="3"]');
+                        scroller.scrollTo({top: third.offsetTop + third.offsetHeight * fraction - scroller.clientHeight * .35});
+                    }""", fraction)
                 async def within():
                     return await page.evaluate("""(() => {
                         const scroller = document.querySelector('#pdf-scroll');
                         const third = document.querySelector('#reader .pdf-page[data-page="3"]');
-                        return (scroller.scrollTop - third.offsetTop) / third.offsetHeight;
+                        return (scroller.scrollTop + scroller.clientHeight * .35 - third.offsetTop) / third.offsetHeight;
                     })()""")
-                for zoom in ['2', 'fit', '1']:
-                    await page.locator('#reader-zoom').select_option(zoom)
-                    await page.locator('#reader .pdf-page[data-page="3"] .textLayer span').first.wait_for()
-                    await page.wait_for_timeout(300)
-                    assert abs(await within() - .4) < .03, (zoom, await within())
-                    assert await page.locator('#reader-page').input_value() == '3'
-                await page.wait_for_timeout(1800)
-                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 3
+                # Well inside page 3, and then just past its top, where the
+                # scroller's top is still in the wide page before it.
+                for fraction in [.4, .05]:
+                    await place(fraction)
+                    await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                    await saved_page(url, 3)
+                    for zoom in ['2', 'fit', '1', 'fit']:
+                        await page.locator('#reader-zoom').select_option(zoom)
+                        await page.locator('#reader .pdf-page[data-page="3"] .textLayer span').first.wait_for()
+                        await page.wait_for_timeout(300)
+                        assert abs(await within() - fraction) < .03, (fraction, zoom, await within())
+                        assert await page.locator('#reader-page').input_value() == '3'
+                    await page.wait_for_timeout(1800)
+                    assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 3
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_page_showing_its_end_at_the_top_keeps_the_page_under_the_reading_line(engine):
+    """A page measured late that still shows its last lines at the top of the
+    scroller is above the page under the reading line; its change in height
+    is followed so that page does not move."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper',title='A paper with a short fourth page',authors=['Ada Researcher'],year=2026))
+    from pypdf import PdfReader, PdfWriter
+    import io
+    source = PdfReader(io.BytesIO(minimal_pdf([f'Page {n}.' for n in range(1, 7)])))
+    source.pages[3].mediabox.upper_right = (612, 200)
+    writer = PdfWriter()
+    for pdf_page in source.pages:
+        writer.add_page(pdf_page)
+    with store.pdf_path('paper').open('wb') as stream:
+        writer.write(stream)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                # Page 4 is far enough from page 1 not to have been drawn or
+                # measured yet. The view is put with page 4's last stretch at
+                # the top of the scroller and the reading line in page 5.
+                assert await page.locator('#reader .pdf-page[data-page="4"].pending').count() == 1
+                before = await page.evaluate("""(() => {
+                    const scroller = document.querySelector('#pdf-scroll');
+                    const fifth = document.querySelector('#reader .pdf-page[data-page="5"]');
+                    scroller.scrollTo({top: fifth.offsetTop - scroller.clientHeight * .2});
+                    return (scroller.scrollTop + scroller.clientHeight * .35 - fifth.offsetTop) / fifth.offsetHeight;
+                })()""")
+                await page.locator('#reader .pdf-page[data-page="4"]:not(.pending)').wait_for()
+                await page.locator('#reader .pdf-page[data-page="5"] .textLayer span').first.wait_for()
+                await page.wait_for_timeout(300)
+                after = await page.evaluate("""(() => {
+                    const scroller = document.querySelector('#pdf-scroll');
+                    const fifth = document.querySelector('#reader .pdf-page[data-page="5"]');
+                    const fourth = document.querySelector('#reader .pdf-page[data-page="4"]');
+                    return {within: (scroller.scrollTop + scroller.clientHeight * .35 - fifth.offsetTop) / fifth.offsetHeight, fourthHeight: fourth.offsetHeight, fifthHeight: fifth.offsetHeight};
+                })()""")
+                assert after['fourthHeight'] < after['fifthHeight'] * .4
+                assert abs(after['within'] - before) < .02, (before, after)
+                assert await page.locator('#reader-page').input_value() == '5'
                 assert not errors
     run_browser(scenario())

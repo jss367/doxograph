@@ -425,13 +425,20 @@ const ResearchTools = (() => {
       page.el.style.height = `${Math.floor(page.base.h * scale)}px`;
     });
   }
+  // Where the eye is taken to be: the same line a third of the way down the
+  // scroller that names the current page, so the page under it is the one
+  // kept in place by every correction below.
+  const READING_LINE = .35;
+  const readingLine = scroller => scroller.scrollTop + scroller.clientHeight * READING_LINE;
   // A page above the one being read that changes height, as a page does when
   // its real size replaces the first page's it was laid out at, would move
   // the passage under the eye by that much. The scroller follows the change,
-  // so what is being read stays where it is.
+  // so what is being read stays where it is. "Above" is judged at the reading
+  // line, not the scroller's top: a page still showing its last lines at the
+  // top of the scroller is above the page being read all the same.
   function keepingView(page, resize) {
     const scroller = el('pdf-scroll');
-    const above = scroller && page.el.offsetTop + page.el.offsetHeight <= scroller.scrollTop;
+    const above = scroller && page.el.offsetTop + page.el.offsetHeight <= readingLine(scroller);
     const before = page.el.offsetHeight;
     resize();
     if (above) scroller.scrollTop += page.el.offsetHeight - before;
@@ -572,7 +579,7 @@ const ResearchTools = (() => {
       const expected = Math.min(Math.max(0, pinnedEl.offsetTop - 8), scroller.scrollHeight - scroller.clientHeight);
       if (Math.abs(scroller.scrollTop - expected) > 2) reader.pinned = null;
     }
-    const line = scroller.scrollTop + scroller.clientHeight * .35;
+    const line = readingLine(scroller);
     const page = reader.pinned ? reader.pages[reader.pinned - 1]
       : reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages[reader.pages.length - 1];
     if (page.number === reader.current && reader.tracked) return;
@@ -671,14 +678,16 @@ const ResearchTools = (() => {
     try { localStorage.setItem(zoomKey, zoom); } catch (_) { /* preference remains for this page */ }
     if (same) return;
     const scroller = el('pdf-scroll');
-    // The page under the eye and how far into it the view is, kept across the
-    // change by that page's own new geometry: under Fit width every page has
-    // a scale of its own, so no single ratio moves the scroller correctly.
+    // The page under the reading line and how far into it that line is, kept
+    // across the change by that page's own new geometry: under Fit width every
+    // page has a scale of its own, so no single ratio moves the scroller
+    // correctly, and the scroller's top may still be in the page before.
     const anchor = reader.pages[(reader.pinned || reader.current) - 1];
-    const within = reader.pinned ? null : (scroller.scrollTop - anchor.el.offsetTop) / Math.max(1, anchor.el.offsetHeight);
+    const within = reader.pinned ? null : (readingLine(scroller) - anchor.el.offsetTop) / Math.max(1, anchor.el.offsetHeight);
     reader.scale = scale;
     reader.pages.forEach(page => { clearPage(page); sizePage(page); });
-    scroller.scrollTop = within === null ? Math.max(0, anchor.el.offsetTop - 8) : anchor.el.offsetTop + within * anchor.el.offsetHeight;
+    scroller.scrollTop = within === null ? Math.max(0, anchor.el.offsetTop - 8)
+      : anchor.el.offsetTop + within * anchor.el.offsetHeight - scroller.clientHeight * READING_LINE;
     reader.tracked = false;
     await Promise.all(reader.pages.filter(pageNear).map(renderPage));
     trackCurrentPage();
