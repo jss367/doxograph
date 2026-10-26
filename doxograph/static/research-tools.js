@@ -6,7 +6,9 @@ const ResearchTools = (() => {
   let epoch = 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
   // it stays up while the research tools are opened and closed over it.
-  let reader = null, readerEpoch = 0, mountSeq = 0, highlightEditing = null, highlightDraft = '';
+  let reader = null, readerEpoch = 0, mountSeq = 0;
+  // The editor owns its identity and saved baseline across polls and requests.
+  let markEditor = null;
   // A page asked for before its paper's reader is up: {paper, workspace, page,
   // mark}. Named, so a reader mounted for another paper meanwhile discards it
   // rather than opening on a page that was meant for somewhere else.
@@ -25,8 +27,8 @@ const ResearchTools = (() => {
   // A highlight note being written in the rail is a draft until Save note. It
   // counts as unsaved once it differs from the note on file, so leaving the
   // page asks first, as it does for a board or a connection being edited.
-  const highlightDrafting = () => Boolean(highlightEditing)
-    && highlightDraft !== (S.notebook?.highlights || []).find(h => h.id === highlightEditing)?.note;
+  const highlightDrafting = () => Boolean(markEditor) && markEditor.text !== markEditor.saved;
+  const markEditorOn = paper => markEditor?.workspace === currentWorkspaceId && markEditor.paper === paper;
   const unsaved = () => dirty || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
@@ -44,20 +46,23 @@ const ResearchTools = (() => {
       // The switch has happened: an editor open on a mark of the workspace
       // left is closed here and not before, since a later guard can still
       // refuse the switch after this module has agreed to it.
-      highlightEditing = null; highlightDraft = '';
+      markEditor = null;
       claims = new Set(); papers = new Set();
       try {
         const data = JSON.parse(sessionStorage.getItem(`doxograph-selection:${workspace}`) || '{}');
         claims = new Set(data.claims || []); papers = new Set(data.papers || []);
       } catch (_) { /* no saved selection */ }
     }
-    // A mark removed in another window takes its editor off the rail with
-    // the next poll; the note being written for it is said out loud rather
-    // than kept as an unsaved draft nothing can reach.
-    if (highlightEditing && S.notebook && !(S.notebook.highlights || []).some(h => h.id === highlightEditing)) {
-      const text = highlightDraft.trim();
-      highlightEditing = null; highlightDraft = '';
-      toast(text ? `The mark you were writing a note on was removed in another window. Your note: “${text.length > 160 ? text.slice(0, 160) + '…' : text}”` : 'The mark whose note you had open was removed in another window.', {tone:'warn', timeout:0});
+    // Reconcile the editor against the new corpus without using a missing
+    // mark as its saved baseline. Clean editors close; changed text remains
+    // editable and copyable until explicitly discarded.
+    if (markEditor && S.notebook) {
+      const removed = !(S.notebook.highlights || []).some(h => h.id === markEditor.id && h.paper === markEditor.paper);
+      if (removed !== Boolean(markEditor.removed)) {
+        if (removed && !highlightDrafting()) markEditor = null;
+        else markEditor.removed = removed;
+        redrawContent();
+      }
     }
     const available = new Set(S.claims.map(refKey));
     claims = new Set([...claims].filter(k => available.has(k)));
@@ -133,8 +138,8 @@ const ResearchTools = (() => {
     notesStatus();
     return notesSaving;
   }
-  async function close() {
-    if (busy) return;
+  async function close({duringOperation = false} = {}) {
+    if (busy && !duringOperation) return;
     if (!await saveNotes()) return;
     if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
     epoch++;
@@ -437,7 +442,7 @@ const ResearchTools = (() => {
   }
   function sizePage(page) {
     const scale = pageScale(page);
-    keepingView(page, () => {
+    keepingView(() => {
       page.el.style.width = `${Math.floor(page.base.w * scale)}px`;
       page.el.style.height = `${Math.floor(page.base.h * scale)}px`;
     });
@@ -447,18 +452,38 @@ const ResearchTools = (() => {
   // kept in place by every correction below.
   const READING_LINE = .35;
   const readingLine = scroller => scroller.scrollTop + scroller.clientHeight * READING_LINE;
-  // A page above the one being read that changes height, as a page does when
-  // its real size replaces the first page's it was laid out at, would move
-  // the passage under the eye by that much. The scroller follows the change,
-  // so what is being read stays where it is. "Above" is judged at the reading
-  // line, not the scroller's top: a page still showing its last lines at the
-  // top of the scroller is above the page being read all the same.
-  function keepingView(page, resize) {
+  function pinnedPage(scroller) {
+    if (!reader.pinned) return null;
+    const page = reader.pages[reader.pinned - 1];
+    const expected = Math.min(Math.max(0, page.el.offsetTop - 8), scroller.scrollHeight - scroller.clientHeight);
+    if (Math.abs(scroller.scrollTop - expected) <= 2) return page;
+    reader.pinned = null;
+    return null;
+  }
+  function viewportAnchor() {
+    if (!reader?.pages.length) return null;
     const scroller = el('pdf-scroll');
-    const above = scroller && page.el.offsetTop + page.el.offsetHeight <= readingLine(scroller);
-    const before = page.el.offsetHeight;
+    const pinned = pinnedPage(scroller);
+    if (pinned) return {page:pinned, within:null};
+    if (reader.tracked && scroller.scrollHeight > scroller.clientHeight
+      && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) return {end:true};
+    const line = readingLine(scroller);
+    const page = reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages.at(-1);
+    return {page, within:(line - page.el.offsetTop) / Math.max(1, page.el.offsetHeight)};
+  }
+  function restoreViewport(anchor) {
+    if (!anchor) return;
+    const scroller = el('pdf-scroll');
+    scroller.scrollTop = anchor.end ? scroller.scrollHeight - scroller.clientHeight
+      : anchor.within === null ? Math.max(0, anchor.page.el.offsetTop - 8)
+      : anchor.page.el.offsetTop + anchor.within * anchor.page.el.offsetHeight - scroller.clientHeight * READING_LINE;
+  }
+  function keepingView(resize) {
+    // A navigation pin follows its target's top, even while that target's own
+    // placeholder grows. Natural reading follows the reading-line position.
+    const anchor = viewportAnchor();
     resize();
-    if (above) scroller.scrollTop += page.el.offsetHeight - before;
+    restoreViewport(anchor);
   }
   // A page scrolled far away gives back its canvas and the caches PDF.js keeps
   // behind it (operator lists, decoded images), so a long paper costs what is
@@ -497,7 +522,7 @@ const ResearchTools = (() => {
       const viewport = pdfPage.getViewport({scale});
       const container = page.el;
       container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
-      keepingView(page, () => {
+      keepingView(() => {
         container.style.width = `${viewport.width}px`;
         container.style.height = `${viewport.height}px`;
       });
@@ -589,13 +614,7 @@ const ResearchTools = (() => {
     // reach its top, as with a short last page or a paper that fits whole; it
     // stands until the reader scrolls away from where that landed.
     if (asked) reader.pinned = asked;
-    else if (reader.pinned) {
-      // Still where going to that page put the scroller, allowing for pages
-      // drawn since at their real size: anything else is the reader scrolling.
-      const pinnedEl = reader.pages[reader.pinned - 1].el;
-      const expected = Math.min(Math.max(0, pinnedEl.offsetTop - 8), scroller.scrollHeight - scroller.clientHeight);
-      if (Math.abs(scroller.scrollTop - expected) > 2) reader.pinned = null;
-    }
+    else pinnedPage(scroller);
     const line = readingLine(scroller);
     // Scrolled to the very end, the last page is the one being read even
     // when it is too short to reach the reading line.
@@ -676,8 +695,10 @@ const ResearchTools = (() => {
     el('pdf-scroll').scrollTo({top:Math.max(0, page.el.offsetTop - 8)});
     trackCurrentPage(page.number);
     if (!highlight) return;
-    reader.focus = highlight;
+    const active = reader;
+    active.focus = highlight;
     await renderPage(page);
+    if (reader !== active || active.focus !== highlight) return;
     drawPageHighlights(page);
     page.el.querySelectorAll(`.highlightLayer [data-highlight="${CSS.escape(highlight)}"]`).forEach(mark => {
       mark.classList.add('flash'); setTimeout(() => mark.classList.remove('flash'), 1600);
@@ -698,20 +719,13 @@ const ResearchTools = (() => {
     reader.zoom = zoom;
     try { localStorage.setItem(zoomKey, zoom); } catch (_) { /* preference remains for this page */ }
     if (same) return;
-    const scroller = el('pdf-scroll');
-    // The page under the reading line and how far into it that line is, kept
-    // across the change by that page's own new geometry: under Fit width every
-    // page has a scale of its own, so no single ratio moves the scroller
-    // correctly, and the scroller's top may still be in the page before.
-    const anchor = reader.pages[(reader.pinned || reader.current) - 1];
-    const within = reader.pinned ? null : (readingLine(scroller) - anchor.el.offsetTop) / Math.max(1, anchor.el.offsetHeight);
+    const active = reader, anchor = viewportAnchor();
     reader.scale = scale;
     reader.pages.forEach(page => { clearPage(page); sizePage(page); });
-    scroller.scrollTop = within === null ? Math.max(0, anchor.el.offsetTop - 8)
-      : anchor.el.offsetTop + within * anchor.el.offsetHeight - scroller.clientHeight * READING_LINE;
+    restoreViewport(anchor);
     reader.tracked = false;
-    await Promise.all(reader.pages.filter(pageNear).map(renderPage));
-    trackCurrentPage();
+    await Promise.all(active.pages.filter(pageNear).map(renderPage));
+    if (reader === active) trackCurrentPage();
   }
   // Client rectangles of the selection as fractions of the page, one per line of text.
   function selectionRects(range, pageEl) {
@@ -774,10 +788,10 @@ const ResearchTools = (() => {
     const hasPdf = S.papers.find(p => p.key === paper)?.has_pdf;
     return `<section class="highlights"><h3>Marks${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}
       ${mine.length && hasPdf ? `<span class="cact">${button('export-annotated', 'Export annotated PDF', `data-paper="${html(paper)}" title="A copy of the PDF with these marks written in as annotations"`)}</span>` : ''}</h3>${mine.length ? mine.map(h => {
-      const editing = highlightEditing === h.id, figure = h.kind === 'figure';
+      const editing = markEditorOn(paper) && markEditor.id === h.id, figure = h.kind === 'figure';
       return `<article class="highlight-entry${h.id === reader?.focus ? ' focused' : ''}${h.question ? ' question' : ''}" data-highlight="${html(h.id)}">
         <blockquote class="highlight-${html(h.color)}" data-tool="highlight-page" data-page="${h.page}" title="${figure ? 'Show this figure in the paper' : 'Show this passage in the paper'}">${figure ? '<em>Figure or region</em>' : html(h.text)}</blockquote>
-        ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="${figure ? 'Your note or question on this figure' : 'Your note or question on this passage'}" aria-label="Note on this mark">${html(highlightDraft)}</textarea>`
+        ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="${figure ? 'Your note or question on this figure' : 'Your note or question on this passage'}" aria-label="Note on this mark">${html(markEditor.text)}</textarea>`
           : h.note.trim() ? noteHtml(h.note, h.question ? 'my question' : 'my note') : ''}
         <div class="hmeta"><span>p. ${h.page}</span>
           <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
@@ -787,19 +801,35 @@ const ResearchTools = (() => {
       </article>`;
     }).join('') : empty}</section>`;
   }
-  // Whether a highlight note is being written in the rail, which holds off
-  // background redraws of it the way a claim editor does.
+  function redrawContent() {
+    const field = document.activeElement, claim = field?.closest('form[data-form]');
+    const selector = field?.matches('[data-highlight-note]')
+      ? `[data-highlight-note="${CSS.escape(field.dataset.highlightNote)}"]`
+      : claim && field.name ? `form[data-form="${CSS.escape(claim.dataset.form)}"] [name="${CSS.escape(field.name)}"]` : null;
+    const cursor = selector ? {selector, start:field.selectionStart, end:field.selectionEnd} : null;
+    captureOpenEditor();
+    renderContent();
+    const replacement = cursor && document.querySelector(cursor.selector);
+    if (replacement) {
+      replacement.focus();
+      if (cursor.start !== null && cursor.start !== undefined) replacement.setSelectionRange(cursor.start, cursor.end);
+    }
+  }
+  function recoveryHtml() {
+    if (!markEditor?.removed || markEditor.workspace !== currentWorkspaceId) return '';
+    return `<section class="highlights"><article class="highlight-entry" data-removed-mark>
+      <p class="warn" role="status">This mark was removed in another window. Your unsaved note is kept here.</p>
+      <textarea data-highlight-note="${html(markEditor.id)}" aria-label="Note on removed mark">${html(markEditor.text)}</textarea>
+      <div class="tool-actions">${button('copy-removed-note', 'Copy note')}${button('discard-removed-note', 'Discard note')}</div>
+    </article></section>`;
+  }
+  // Polls leave a visible editor alone, including one whose mark disappeared.
   function holds() {
-    return Boolean(highlightEditing) && paperHighlights(V.paper).some(h => h.id === highlightEditing);
+    return Boolean(markEditor) && markEditor.workspace === currentWorkspaceId
+      && (markEditor.removed || markEditorOn(V.paper));
   }
-  // Whether a note is being written on one of this paper's marks: its paper
-  // going would take the editor with it, and the Marks list has none.
-  function markDraftOn(paper) {
-    return highlightDrafting() && paperHighlights(paper).some(h => h.id === highlightEditing);
-  }
-  function dropMarkDraft(paper) {
-    if (markDraftOn(paper) || paperHighlights(paper).some(h => h.id === highlightEditing)) { highlightEditing = null; highlightDraft = ''; }
-  }
+  function markDraftOn(paper) { return markEditorOn(paper) && highlightDrafting(); }
+  function dropMarkDraft(paper) { if (markEditorOn(paper)) markEditor = null; }
   function goToPaper(paper, claim = null) {
     captureOpenEditor(); parkNewClaimForNavigation(paper);
     V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null;
@@ -809,7 +839,7 @@ const ResearchTools = (() => {
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
-    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated']);
+    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note']);
   async function readerAction(name, target) {
     const data = target.dataset;
     if (['previous-page', 'next-page', 'go-page'].includes(name)) {
@@ -818,13 +848,21 @@ const ResearchTools = (() => {
       if (!Number.isInteger(page) || page < 1 || page > reader.pages.length) throw new Error('Choose a page within this PDF.');
       await goToPage(page); return;
     }
+    if (name === 'copy-removed-note') { if (markEditor?.removed) await copyText(markEditor.text, 'Note copied.'); return; }
+    if (name === 'discard-removed-note') {
+      const draft = markEditor;
+      if (draft?.removed && await confirmDialog('Discard this recovered note?', {ok:'Discard note'}) && markEditor === draft) {
+        markEditor = null; redrawContent();
+      }
+      return;
+    }
     if (name === 'highlight-page') {
       const id = target.closest('[data-highlight]')?.dataset.highlight;
       if (reader) { await goToPage(Number(data.page), id); return; }
       // The PDF was put away, or this paper has none any more.
       if (!S.papers.find(p => p.key === V.paper)?.has_pdf) throw new Error('This paper has no PDF to show the passage in.');
       askPage(V.paper, currentWorkspaceId, Number(data.page), id || null);
-      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); renderContent(); }
+      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); redrawContent(); }
       return;
     }
     if (name === 'bookmark') {
@@ -844,17 +882,13 @@ const ResearchTools = (() => {
     // joins it and a queued one is marked as being read; a finished one is
     // left as it is.
     if (name === 'reader') {
+      const navigation = navigationVersion(), ws = currentWorkspaceId;
       if (el('research-tools').open) {
         if (!await discardDrafts()) return;
-        // close() refuses while busy, so busy is let go for it and taken up
-        // again: the notebook request and the navigation below are still
-        // this operation, and a workspace switch must wait for them.
-        setBusy(false); await close();
+        await close({duringOperation:true});
         if (el('research-tools').open) return;
-        setBusy(true);
       }
-      const paper = data.paper, ws = currentWorkspaceId;
-      const from = {paper:V.paper, view:V.view};
+      const paper = data.paper;
       const saved = await mutateNotebook(ws, n => {
         const entry = n.reading.find(r => r.paper === paper);
         if (!entry) { n.reading.push({paper, status:'reading', page:1, bookmarks:[]}); return; }
@@ -862,12 +896,12 @@ const ResearchTools = (() => {
         entry.status = 'reading';
       });
       // Moved on while the request was out: the paper chosen since stands.
-      if (V.paper !== from.paper || V.view !== from.view) return;
+      if (currentWorkspaceId !== ws || navigationVersion() !== navigation) return;
       const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
       if (reader?.paper === paper && reader.workspace === ws && !V.pdfHidden) { await goToPage(page, data.mark || null); return; }
       askPage(paper, ws, page, data.mark || null);
       if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
-      if (V.paper === paper && V.view === 'claims') renderContent(); else goToPaper(paper);
+      if (V.paper === paper && V.view === 'claims') redrawContent(); else goToPaper(paper);
       return;
     }
     if (name === 'figure-mode') { setFigureMode(!reader?.figureMode); return; }
@@ -901,40 +935,47 @@ const ResearchTools = (() => {
     if (name === 'edit-highlight') {
       // One note is written at a time; the one half-written is not dropped for
       // another without asking.
-      if (highlightEditing !== id && highlightDrafting()
+      if (markEditor?.id !== id && highlightDrafting()
         && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
-      highlightEditing = id; highlightDraft = highlight.note; renderContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
+      markEditor = {id, paper:highlight.paper, workspace:currentWorkspaceId, saved:highlight.note, text:highlight.note, removed:false}; redrawContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
     }
-    if (name === 'cancel-highlight') { highlightEditing = null; highlightDraft = ''; renderContent(); return; }
+    if (name === 'cancel-highlight') { markEditor = null; redrawContent(); return; }
     if (name === 'capture-highlight') {
       // The note as it is being written, when its editor is open: what is on
       // screen, not the saved version the person is in the middle of changing.
-      const note = highlightEditing === id ? highlightDraft : highlight.note;
+      const note = markEditor?.id === id ? markEditor.text : highlight.note;
       startClaimFromPassage(highlight.paper, {quote:highlight.text, locator:`p. ${highlight.page}`, note}); return;
     }
     if (name === 'save-highlight') {
-      // The rail is outside the modal, so `setBusy` leaves its editor open
-      // while the save runs: what is typed meanwhile goes into the draft, and
-      // the editor closes only if the draft is still what was saved.
-      const note = highlightDraft;
+      const draft = markEditor;
+      if (!draft || draft.id !== id || draft.workspace !== currentWorkspaceId) return;
+      const note = draft.text;
       target.disabled = true;
       try {
-        await mutateNotebook(currentWorkspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This highlight was removed in another window.'); h.note = note; });
+        await mutateNotebook(draft.workspace, n => {
+          const h = n.highlights.find(h => h.id === id && h.paper === draft.paper);
+          if (!h) throw new Error('This highlight was removed in another window.');
+          if (h.note !== draft.saved) throw new Error('This note changed in another window. Your draft is kept; copy it before reloading the saved note.');
+          h.note = note;
+        }, {refresh:false});
+        draft.saved = note;
+        // Only this exact editor may be completed by its save. New typing
+        // remains a draft against the version that actually reached disk.
+        if (markEditor === draft && draft.text === note) markEditor = null;
+        else if (markEditor === draft) toast('Saved the note as it was when you clicked Save. What you typed since is still in the editor.');
+        await refreshAll();
       } finally { target.disabled = false; }
-      if (highlightEditing !== id) return;
-      if (highlightDraft !== note) { toast('Saved the note as it was when you clicked Save. What you typed since is still in the editor.'); return; }
-      highlightEditing = null; highlightDraft = '';
-      renderContent(); return;
+      return;
     }
     if (name === 'remove-highlight') {
       const label = highlight.kind === 'figure' ? 'mark' : 'highlight';
-      const writing = highlightEditing === id && highlightDraft.trim();
+      const writing = markEditor?.id === id && markEditor.text.trim();
       if ((highlight.note || writing) && !await confirmDialog(`Remove this ${label} and its note?`, {ok:`Remove ${label}`})) return;
       // The editor goes once the write has landed and before the refresh,
       // which would otherwise find the mark gone and report a removal made
       // in another window; a write that fails leaves the editor as it was.
       await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); }, {refresh:false});
-      if (highlightEditing === id) { highlightEditing = null; highlightDraft = ''; }
+      if (markEditor?.id === id) { markEditor = null; }
       await refreshAll();
       redrawHighlights(); return;
     }
@@ -953,7 +994,7 @@ const ResearchTools = (() => {
   }
   async function action(name, target) {
     const data = target.dataset;
-    if (name === 'close') { setBusy(false); await close(); return; }
+    if (name === 'close') { await close({duringOperation:true}); return; }
     if (name === 'retry-notes') { await saveNotes(); return; }
     if (name === 'tab' || name === 'reload') {
       if (!await discardDrafts({reloadNotes:name === 'reload'})) return;
@@ -966,7 +1007,7 @@ const ResearchTools = (() => {
     if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
     if (name === 'source') {
       if (!await discardDrafts()) return;
-      setBusy(false); await close();
+      await close({duringOperation:true}); if (el('research-tools').open) return;
       goToPaper(data.paper, data.claim || null); return;
     }
     if (name === 'bulk') {
@@ -1041,7 +1082,7 @@ const ResearchTools = (() => {
       const id = target.closest('[data-search]').dataset.search, search = notebook.searches.find(s=>s.id === id);
       if (name === 'apply-search') {
         if (!await discardDrafts()) return;
-        setBusy(false); await close(); captureOpenEditor();
+        await close({duringOperation:true}); if (el('research-tools').open) return; captureOpenEditor();
         const params = new URLSearchParams();
         if (workspace !== 'default') params.set('ws',workspace);
         for (const field of ['q','paper','tag','label','kind']) if (search[field]) params.set(field, search[field]);
@@ -1160,7 +1201,10 @@ const ResearchTools = (() => {
   });
   document.addEventListener('input', event => {
     const target = event.target;
-    if (target.dataset.highlightNote) { highlightDraft = target.value; return; }
+    if (target.dataset.highlightNote) {
+      if (markEditor?.id === target.dataset.highlightNote && markEditor.workspace === currentWorkspaceId) markEditor.text = target.value;
+      return;
+    }
     if (!el('research-tools')?.contains(target)) return;
     if (target.id === 'workspace-notes') {
       notes.text = target.value;
@@ -1200,6 +1244,6 @@ const ResearchTools = (() => {
     // switch leaves the note where it was.
     return true;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds,markDraftOn,dropMarkDraft,
+  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     openBoard: id => run(() => open('boards', id))};
 })();

@@ -1370,7 +1370,7 @@ def test_a_mount_overtaken_while_the_last_reader_is_torn_down_does_not_open(engi
 def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(engine):
     """A mark note agreed to be discarded for a workspace switch is kept when a
     later guard refuses the switch; a mark removed in another window takes its
-    editor away and says what was being written; a resume that lands after the
+    editor into a recoverable draft; a resume that lands after the
     reader has moved to another paper does not move them back."""
     from test_browser import _poll
     config.set_ai_enabled(False)
@@ -1419,9 +1419,13 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 data['highlights'] = []
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
                 await _poll(page)
-                await rail.locator('[data-highlight-note]').wait_for(state='detached')
-                await page.locator('#toasts .toast', has_text='removed in another window').wait_for()
-                assert 'Changed note' in await page.locator('#toasts .toast', has_text='removed in another window').inner_text()
+                recovery = page.get_by_role('textbox', name='Note on removed mark', exact=True)
+                await recovery.wait_for()
+                assert await recovery.input_value() == 'Changed note'
+                await page.get_by_role('button', name='Discard note', exact=True).click()
+                await _answer(page, 'Discard note')
+                await ready(page)
+                assert await recovery.count() == 0
                 # No phantom draft stands in the way of a switch now.
                 await page.locator('#workspace').select_option(other['id'])
                 await page.locator('#papers li[data-paper="elsewhere"]').wait_for()

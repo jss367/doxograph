@@ -973,7 +973,19 @@ function currentHash() {
 // before `applyHash` ever saw them.
 let restoringHistory = false;
 
+// A route can change away and back while a reader request waits. Record
+// each transition, including history traversal, rather than comparing only
+// the final paper/view. Background claim selection is not navigation.
+let navigationSeq = 0, navigationRoute = null;
+function navigationVersion() {
+  const route = JSON.stringify([currentWorkspaceId, V.view, V.paper, V.tag, V.label,
+    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden]);
+  if (route !== navigationRoute) { navigationRoute = route; navigationSeq++; }
+  return navigationSeq;
+}
+
 function syncHash(push = false) {
+  navigationVersion();
   if (restoringHistory) return;
   const next = currentHash();
   if (next === hashParams().toString()) return;
@@ -1154,6 +1166,7 @@ function applyHash() {
 let popSeq = 0;
 
 window.addEventListener('popstate', async () => {
+  navigationSeq++;
   const seq = ++popSeq;
   // A question still on screen belongs to the move this one supersedes —
   // Forward pressed while Back was asking about unsaved edits. Answering it
@@ -2979,6 +2992,8 @@ function renderContent() {
   // reader did ask for off the screen, so the cursor is put back instead.
   const cursor = noteCursor();
   drawContent();
+  const recovery = ResearchTools.recoveryHtml();
+  if (recovery) $('content').insertAdjacentHTML('afterbegin', recovery);
   renderActiveFilters();
   restoreNoteCursor(cursor);
   renderContinuation();
