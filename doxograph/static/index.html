@@ -39,7 +39,15 @@
         <fieldset>
           <legend>AI analysis</legend>
           <label><input type="checkbox" id="ai-enabled" disabled aria-describedby="ai-help"> Enable AI analysis</label>
-          <p class="hint" id="ai-help">Allow the selected model to read papers and analyze claims. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+          <p class="hint" id="ai-help">Allow the selected model to read papers, analyze claims, and answer paper questions. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+
+          <label for="ai-access">Model access</label>
+          <select id="ai-access" disabled>
+            <option value="api">API or local model</option>
+            <option value="claude_code">Claude subscription (Claude Code)</option>
+            <option value="codex">ChatGPT subscription (Codex)</option>
+          </select>
+          <p class="hint" id="ai-access-help">Uses the API or local provider configured below.</p>
           <form id="ai-provider-form">
             <label for="ai-provider">Provider</label>
             <select id="ai-provider">
@@ -303,6 +311,23 @@
       <button type="button" id="ask-cancel">Cancel</button>
       <button type="submit" id="ask-ok" class="primary">OK</button>
     </div>
+  </form>
+</dialog>
+
+<dialog id="paper-chat" class="sheet paper-chat" aria-labelledby="paper-chat-title">
+  <div class="row"><h2 id="paper-chat-title">Chat about this paper</h2>
+    <button type="button" id="chat-close" style="margin-left:auto" aria-label="Close paper chat">×</button></div>
+  <p class="hint" id="chat-paper-title"></p>
+  <p class="hint" id="chat-access-help"></p>
+  <p class="hint">Sends this paper and conversation to the selected model. Your Doxograph notes stay private.
+    Chat lasts for this page session. Check answers against the paper.</p>
+  <div id="chat-messages" role="log" aria-live="polite"></div>
+  <form id="chat-form">
+    <label for="chat-question">Question about the paper</label>
+    <textarea id="chat-question" rows="3" maxlength="8000" required></textarea>
+    <p class="hint" id="chat-status" role="status"></p>
+    <div class="row right"><button type="button" id="chat-clear">New conversation</button>
+      <button type="submit" class="primary" id="chat-send">Send</button></div>
   </form>
 </dialog>
 

@@ -69,6 +69,45 @@ if needed, substitute its versioned command, such as `python3.14`.
 python3 -m venv .venv && .venv/bin/pip install -e .
 ```
 
+Choose model access in **Settings → Model access**:
+
+- **API or local model** (the default): configure Anthropic, OpenAI, Ollama,
+  or an OpenAI-compatible endpoint in the provider controls below. Anthropic reads `ANTHROPIC_API_KEY`, then an
+  `ANTHROPIC_API_KEY=` line in `~/.credentials`, then whatever the Anthropic SDK
+  resolves on its own (including an `ant auth login` profile).
+- **Claude subscription (Claude Code)**: install the [Claude Code CLI](https://code.claude.com/docs/en/setup),
+  run `claude auth login` in Terminal, and sign in with your Claude account.
+  Extraction, retagging, synthesis, agreements, tensions, and paper chat then
+  run through the installed CLI using that account. Usage follows your plan's
+  limits and credits; this does not include a subscription with Doxograph.
+  Doxograph ignores inherited API credentials for these requests and refuses
+  to fall back to API billing. If Claude Code isn't on the app's PATH, set
+  `DOXOGRAPH_CLAUDE_PATH` to its executable's absolute path.
+- **ChatGPT subscription (Codex)**: install the [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode)
+  and run `codex login` in Terminal to sign in with ChatGPT. The same analysis
+  features and paper chat use your saved ChatGPT login and its plan limits or
+  credits. Doxograph ignores inherited API credentials and refuses to fall back
+  to API billing. Set `DOXOGRAPH_CODEX_PATH` if the executable is installed in an
+  unusual location. It uses Codex's default model unless `DOXOGRAPH_CODEX_MODEL`
+  names another model available to your account.
+
+The Claude subscription route sends PDFs directly to Claude Code, with a 7 MB PDF
+limit and a combined input limit for the PDF and conversation. It runs without
+file or shell tools, project instructions, hooks, or MCP servers, and does not
+save Claude Code sessions. Removing a paper while using a subscription still requires API credentials
+if that paper has older Anthropic uploads to delete.
+
+The ChatGPT route sends extracted PDF text with page numbers, up to 600,000
+characters including the conversation. Figures and scanned pages are unavailable;
+a paper without readable text requires one of the Claude options. Codex runs in
+a temporary directory with shell commands, browsing, hooks, plugins, apps, and
+delegation disabled. User `config.toml` settings and project instructions are
+excluded, and the run is ephemeral. **Codex still loads global instructions**
+from `AGENTS.override.md` or `AGENTS.md` in its home directory and sends that
+guidance along with the paper request. This is disclosed in Settings and paper
+chat. Choose a Claude option if you want requests without global Codex guidance.
+Neither subscription option includes a paid plan with Doxograph.
+
 Choose a provider and model in **Settings → AI analysis**. Anthropic is the
 default; OpenAI, Ollama, and OpenAI-compatible endpoints are also supported.
 Ollama and local OpenAI-compatible servers can run without an API key.
@@ -77,12 +116,28 @@ See [Model](#model) for setup and the differences in PDF handling.
 To turn off model use, open **Settings** and uncheck **Enable AI analysis**.
 The preference survives restarts and applies to every workspace and the CLI
 using the same data directory. While off, imports skip extraction, and
-extraction, retagging, agreements, tensions, and synthesis cannot start new
+extraction, retagging, agreements, tensions, synthesis, and paper chat cannot start new
 model calls or upload PDFs for analysis. Requests already sent may finish.
 Browsing, manual editing, quote checks, and exports remain available. With
-Anthropic selected, removing a paper still deletes its previously uploaded
-copies. With another provider selected, deletion stays local; any earlier
+Anthropic or a subscription selected, removing a paper still deletes its
+previously uploaded Anthropic copies. With another API or local provider
+selected, deletion stays local; any earlier
 Anthropic uploads must be removed from your Anthropic account separately.
+
+## Chat about a paper
+
+Open a paper with a stored PDF and select **Chat about paper**. Ask a question
+and continue with follow-ups. The model receives that paper's PDF (or its
+page-labeled text for ChatGPT) and the
+conversation, and is asked to cite PDF page numbers. Personal Doxograph notes
+and other papers are not included; the ChatGPT option also includes your global
+Codex instructions as described above. Answers can be wrong; check them against
+the source.
+
+Conversations are separate for each paper and workspace, and last until the
+page reloads. **New conversation** clears the current paper's conversation.
+Failed questions keep their draft so you can retry. Chat uses the model access
+selected in Settings and is disabled when AI analysis is off.
 
 ## Use
 
@@ -664,6 +719,13 @@ difference between paying for 77k input tokens and paying for about a tenth of
 that.
 
 ## Model
+
+The Claude subscription uses `claude-opus-5` by default; set `DOXOGRAPH_MODEL`
+to change it. The ChatGPT option uses Codex's default model; set `DOXOGRAPH_CODEX_MODEL`
+to choose another. Extraction requests high effort and a JSON schema, so the
+response is validated structurally before it reaches the store. Switching
+providers affects new work; queued and running operations keep the provider
+selected when submitted. Retrying a failed import uses the current selection.
 
 Open **Settings → AI analysis**, choose a provider, enter its exact model name,
 and click **Save provider**. The selection survives restarts and applies to all
