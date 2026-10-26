@@ -538,6 +538,13 @@ def _prune_jobs() -> None:
         _forget_import(job)
 
 
+def _submit_job(function, *args):
+    """Capture accepted settings before a job waits in the outer worker pool."""
+    with config.use_analysis():
+        context = contextvars.copy_context()
+    return _pool.submit(functools.partial(context.run, function), *args)
+
+
 def _workspace_job(function):
     """Keep a queued job in the corpus from which it was submitted."""
     @functools.wraps(function)
@@ -1207,9 +1214,9 @@ def retry_import(job_id: int) -> dict:
         job.update(state="queued", detail="", explanation="", started=store.now())
     try:
         if "ref" in source:
-            _pool.submit(_run_ingest, job, source["ref"], source["extract"])
+            _submit_job(_run_ingest, job, source["ref"], source["extract"])
         else:
-            _pool.submit(_run_upload, job, source["staged"], source["filename"], source["extract"])
+            _submit_job(_run_upload, job, source["staged"], source["filename"], source["extract"])
     except Exception:
         _set(job, state="error", **previous)
         raise HTTPException(503, "The retry could not start. Please try again.")
@@ -1282,7 +1289,7 @@ def api_ingest(body: IngestBody) -> dict:
             known.append({"ref": ref.raw, "key": settled})
             continue
         job = _new_import_job(ref.value, do_extract, ref=ref)
-        _pool.submit(_run_ingest, job, ref, do_extract)
+        _submit_job(_run_ingest, job, ref, do_extract)
         queued += 1
     return {"queued": queued, "known": known, "unknown": unknown}
 
@@ -1319,7 +1326,7 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
             continue
         job = _new_import_job(name, do_extract, staged=staged, filename=name)
         try:
-            _pool.submit(_run_upload, job, staged, name, do_extract)
+            _submit_job(_run_upload, job, staged, name, do_extract)
         except BaseException:
             with _jobs_lock:
                 _jobs.pop(job["id"], None)
@@ -1364,7 +1371,7 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
     if not store.paper_path(key).exists():
         raise HTTPException(404, f"no paper {key}")
     job = _new_job(key)
-    _pool.submit(_run_extract, job, key, keep_reviewed)
+    _submit_job(_run_extract, job, key, keep_reviewed)
     return {"queued": job["id"]}
 
 
@@ -1476,7 +1483,7 @@ def retag(body: RetagBody) -> dict:
     if not keys:
         return {"queued": 0}
     job = _new_job(f"retag {len(keys)} papers")
-    _pool.submit(_run_retag, job, keys)
+    _submit_job(_run_retag, job, keys)
     return {"queued": len(keys)}
 
 
@@ -1569,7 +1576,7 @@ def find_tensions(body: TensionsBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"tensions in {len(topics)} topics")
-    _pool.submit(_run_tensions, job, topics, body.force)
+    _submit_job(_run_tensions, job, topics, body.force)
     return {"queued": len(topics)}
 
 
@@ -1602,7 +1609,7 @@ def find_agreements(body: AgreementsBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"agreements in {len(topics)} topics")
-    _pool.submit(_run_agreements, job, topics, body.force)
+    _submit_job(_run_agreements, job, topics, body.force)
     return {"queued": len(topics)}
 
 
@@ -1642,7 +1649,7 @@ def synthesize(body: SynthesesBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"synthesis of {len(topics)} topics")
-    _pool.submit(_run_syntheses, job, topics, body.force)
+    _submit_job(_run_syntheses, job, topics, body.force)
     return {"queued": len(topics)}
 
 

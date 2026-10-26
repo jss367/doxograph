@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -403,3 +404,62 @@ def test_remote_analysis_uses_proxy_while_loopback_bypasses_it(monkeypatch, chat
     else:
         assert proxy_paths == ["http://provider.invalid/v1/chat/completions"]
         assert destination_paths == []
+
+
+@pytest.mark.parametrize("route,operation", [
+    ("/api/papers/first/extract", "extract_paper"),
+    ("/api/retag", "retag_paper"),
+    ("/api/tensions", "find_tensions"),
+    ("/api/agreements", "find_agreements"),
+    ("/api/syntheses", "synthesize_topic"),
+])
+def test_outer_queue_keeps_settings_from_job_acceptance(monkeypatch, route, operation):
+    select()
+    original = config.analysis_config()
+    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(config, "api_key", lambda provider="anthropic": None)
+    create = Mock(side_effect=AssertionError("This regression must not create an AI client"))
+    monkeypatch.setattr(extract, "client", create)
+    store.add_tag("recovery")
+    for key in ("first", "second"):
+        store.save_paper(store.new_paper(key))
+        store.add_claim(key, {"text": "Recovery happens.", "tags": ["recovery"]})
+    seen = []
+
+    def analyze(*args, **kwargs):
+        seen.append(config.analysis_config())
+        return {"added": 0, "reopened": 0, "grown": 0, "skipped": False, "written": True}
+
+    monkeypatch.setattr(extract, operation, analyze)
+    occupied, release = threading.Event(), threading.Event()
+
+    def block_pool():
+        occupied.set()
+        assert release.wait(15), "The outer pool was not released"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(server, "_pool", pool)
+        blocker = pool.submit(block_pool)
+        assert occupied.wait(5)
+        try:
+            with client() as c:
+                body = {"keys": ["first"]} if route == "/api/retag" else {}
+                assert c.post(route, json=body).status_code == 200
+                # The accepted job is waiting; its analysis has not started.
+                assert not seen
+                assert all(job["state"] == "queued" for job in c.get("/api/jobs").json()["jobs"])
+                result = c.put("/api/settings", json={"provider": "openai-compatible", "model": "new-model",
+                                                       "base_url": "https://remote.example/v1"})
+                assert result.status_code == 200
+                changed = config.analysis_config()
+                # A later operation uses the changed settings independently.
+                assert c.post(route, json=body).status_code == 200
+                release.set()
+                blocker.result(timeout=5)
+                pool.submit(lambda: None).result(timeout=10)
+                assert all(job["state"] == "done" for job in c.get("/api/jobs").json()["jobs"])
+                assert seen == [original, changed]
+                assert config.analysis_config() == changed
+                create.assert_not_called()
+        finally:
+            release.set()
