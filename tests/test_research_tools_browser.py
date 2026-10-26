@@ -166,6 +166,18 @@ def test_pdf_selection_capture_bookmarks_history_and_conflict(engine):
                 await dialog.get_by_role('button',name='Save note',exact=True).click()
                 await ready(page)
                 assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                # A note being edited is a draft: changing pages asks first and keeps the saved note.
+                await page.locator('[data-highlight-note]').fill('An unsaved thought')
+                await page.locator('#reader-zoom').select_option('1.6')
+                await ready(page)
+                assert await page.locator('[data-highlight-note]').input_value() == 'An unsaved thought'
+                await dialog.get_by_role('button',name='Next page',exact=True).click()
+                await _answer(page,'Discard changes')
+                await ready(page)
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                await dialog.get_by_role('button',name='Previous page',exact=True).click()
+                await ready(page)
+                assert await page.locator('[data-highlight-note]').input_value() == 'Which conditions?'
                 await dialog.get_by_role('button',name='Next page',exact=True).click()
                 await ready(page)
                 assert not await page.locator('#pdf-page .highlightLayer div').count()

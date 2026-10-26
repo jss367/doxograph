@@ -12,6 +12,10 @@ const ResearchTools = (() => {
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   };
   const promptDialog = (title, value, {ok}) => askDialog({title, input:{value}, ok});
+  // A highlight note stays a draft in its textarea until Save note, like a claim being captured.
+  const noteDrafts = () => reader && tab === 'reader' ? [...document.querySelectorAll('#page-highlights [data-highlight-note]')]
+    .filter(field => field.value !== (notebook.highlights.find(h => h.id === field.dataset.highlightNote)?.note ?? field.value)) : [];
+  const unsaved = () => dirty || reader?.draft || connectionDraft || noteDrafts().length > 0;
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
   const resolve = ref => S.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
@@ -75,7 +79,7 @@ const ResearchTools = (() => {
   }
   async function close() {
     if (busy) return;
-    if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
+    if (unsaved() && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
     epoch++;
     if (reader?.document) await reader.document.loadingTask.destroy();
     reader = null; dirty = false; connectionDraft = false;
@@ -286,10 +290,11 @@ const ResearchTools = (() => {
     const percent = value => `${(value * 100).toFixed(3)}%`;
     el('pdf-page').querySelector('.highlightLayer').innerHTML = here.flatMap(h => h.rects.map(r =>
       `<div class="highlight-${html(h.color)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+    const drafts = new Map(noteDrafts().map(field => [field.dataset.highlightNote, field.value]));
     const others = [...new Set(mine.map(h => h.page))].filter(page => page !== reader.page).sort((a, b) => a - b);
     el('page-highlights').innerHTML = (here.map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
         <blockquote class="highlight-${html(h.color)}">${html(h.text)}</blockquote>
-        <label>Your note<textarea data-highlight-note="${html(h.id)}">${html(h.note)}</textarea></label>
+        <label>Your note<textarea data-highlight-note="${html(h.id)}">${html(drafts.get(h.id) ?? h.note)}</textarea></label>
         <div class="tool-actions">${button('save-highlight','Save note')}${button('capture-highlight','Capture as claim')}${button('remove-highlight','Remove highlight')}</div></article>`).join('')
       || '<p class="hint">Select a passage on the page, then highlight it.</p>')
       + (others.length ? `<div class="tool-actions"><span class="hint">Other highlighted pages</span>${others.map(page => button('highlight-page',`Page ${page}`,`data-page="${page}"`)).join('')}</div>` : '');
@@ -313,7 +318,7 @@ const ResearchTools = (() => {
       w:round((r.right - r.left) / box.width), h:round((r.bottom - r.top) / box.height)})).filter(r => r.w > 0 && r.h > 0);
   }
   async function discardDrafts() {
-    if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
+    if (unsaved() && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
     if (dirty) { notebook = await request(); dirty = false; }
     if (reader) reader.draft = false;
     connectionDraft = false;
@@ -438,7 +443,7 @@ const ResearchTools = (() => {
     }
     if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page); return; }
     if (['previous-page','next-page','go-page','highlight-page'].includes(name)) {
-      if (reader.draft && !await confirmDialog('Discard this unsaved claim before changing pages?',{ok:'Discard claim'})) return;
+      if ((reader.draft || noteDrafts().length) && !await confirmDialog('Discard the unsaved claim or note before changing pages?',{ok:'Discard changes'})) return;
       const page = name === 'go-page' ? Number(el('reader-page').value) : name === 'highlight-page' ? Number(data.page) : reader.page + (name === 'next-page' ? 1 : -1);
       if (!Number.isInteger(page) || page < 1 || page > reader.document.numPages) throw new Error('Choose a page within this PDF.');
       reader.page = page; reader.draft = false; el('capture-form').reset(); await renderPage(); return;
@@ -456,13 +461,15 @@ const ResearchTools = (() => {
     }
     if (['save-highlight','capture-highlight','remove-highlight'].includes(name)) {
       const id = target.closest('[data-highlight]').dataset.highlight, highlight = notebook.highlights.find(h => h.id === id);
+      const note = target.closest('[data-highlight]').querySelector('[data-highlight-note]').value;
       if (name === 'capture-highlight') {
         el('capture-quote').value = highlight.text; el('capture-locator').value = `p. ${highlight.page}`;
-        if (!el('capture-note').value) el('capture-note').value = highlight.note;
+        if (!el('capture-note').value) el('capture-note').value = note;
         reader.draft = true; el('capture-text').focus(); return;
       }
+      if (name === 'save-highlight') highlight.note = note;
       if (name === 'remove-highlight') {
-        if (highlight.note && !await confirmDialog('Remove this highlight and its note?',{ok:'Remove highlight'})) return;
+        if ((highlight.note || note) && !await confirmDialog('Remove this highlight and its note?',{ok:'Remove highlight'})) return;
         notebook.highlights = notebook.highlights.filter(h => h.id !== id);
       }
       await save(); renderHighlights(); return;
@@ -530,7 +537,6 @@ const ResearchTools = (() => {
     if (target.id.startsWith('connection-')) connectionDraft = true;
     if (target.id === 'board-title') { currentBoard().title = target.value; dirty = true; }
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
-    if (target.dataset.highlightNote) { notebook.highlights.find(h=>h.id === target.dataset.highlightNote).note = target.value; dirty = true; }
     if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
     if (target.closest('#capture-form') && reader) reader.draft = true;
   });
@@ -549,7 +555,7 @@ const ResearchTools = (() => {
   document.addEventListener('DOMContentLoaded', () => {
     el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
   });
-  window.addEventListener('beforeunload', event => { if (dirty || reader?.draft || connectionDraft) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
     if (!el('research-tools').open) return true;
     if (busy) { message('Finish the current operation before switching workspaces.', true); return false; }
