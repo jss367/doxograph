@@ -297,6 +297,10 @@ never sent to a model.
 - **Reading queue** keeps an ordered list of papers with queued, reading, and
   finished states, independently of claim review. The reader saves your page
   position; bookmark pages and resume them from the queue.
+- **Continue where you left off**, above the library filters, opens your last
+  paper or resumes its saved PDF page. Jump to the next unreviewed claim in
+  that paper, then the remaining corpus, even when current filters hide it.
+  The last paper and review position are remembered per workspace in this browser.
 - **Bulk organization**, under Compare & organize, adds, removes, or replaces
   topics on selected claims and labels on their papers. Explicitly selected
   papers can have topics changed across all their claims. New topics must first

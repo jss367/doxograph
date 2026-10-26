@@ -207,6 +207,8 @@ let handPicked = 0;
 function selectClaim(id) {
   V.selectedId = id;
   handPicked += 1;
+  const row = S.claims.find((row) => row.id === id);
+  if (row) rememberContinuation(row.paper, id);
 }
 
 // Claims with a save in flight. Their form is read-only until the request
@@ -924,6 +926,91 @@ function syncHash(push = false) {
   if (push) history.pushState(null, '', url);
   else history.replaceState(null, '', url);
 }
+
+// The last visit is a browser preference, scoped to the workspace. PDF pages
+// come from the existing notebook rather than a second copy of reading progress.
+let continuation = null;
+function continuationState() {
+  if (continuation?.workspace === currentWorkspaceId) return continuation;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(`doxograph-continue:${currentWorkspaceId}`)) || {}; } catch (_) { /* optional */ }
+  // A fresh deep link is a visit. On reload, the library behind a resumed PDF
+  // has already been visited and must not displace the more recent reader.
+  const reloading = performance.getEntriesByType('navigation')[0]?.type === 'reload';
+  continuation = {workspace:currentWorkspaceId, paper:saved.paper || null, claim:saved.claim || null,
+    observedPaper:reloading ? V.paper : null};
+  return continuation;
+}
+
+function rememberContinuation(paper, claim = null) {
+  const state = continuationState();
+  if (state.paper !== paper) state.claim = null;
+  state.paper = paper;
+  if (claim) state.claim = claim;
+  try { localStorage.setItem(`doxograph-continue:${currentWorkspaceId}`, JSON.stringify({paper:state.paper, claim:state.claim})); } catch (_) { /* keep for this session */ }
+}
+
+function continuationTargets() {
+  const state = continuationState();
+  // Only a new paper visit changes the shortcut. A poll while reading a PDF
+  // must not replace it with the paper still open behind the reader dialog.
+  const visiting = V.view === 'claims' ? V.paper : null;
+  if (visiting && (visiting !== state.observedPaper || !state.paper)) rememberContinuation(visiting);
+  state.observedPaper = visiting;
+  const reading = S.notebook?.reading || [];
+  const paper = S.papers.find((p) => p.key === state.paper)
+    || S.papers.find((p) => reading.some((r) => r.paper === p.key && r.status === 'reading'));
+  const progress = reading.find((r) => r.paper === paper?.key);
+  // Finish the last paper first, then continue through the rest of the corpus.
+  const rows = paper ? S.claims.filter((c) => c.paper === paper.key) : [];
+  const at = rows.findIndex((c) => c.id === state.claim);
+  const next = rows.slice(at + 1).concat(rows.slice(0, at + 1)).find((c) => !c.reviewed)
+    || S.claims.find((c) => !c.reviewed);
+  return {paper, progress, next};
+}
+
+function renderContinuation() {
+  const {paper, progress, next} = continuationTargets();
+  const card = $('continue-reading');
+  card.hidden = !paper && !next;
+  const html = `<h2 id="continue-title">Continue where you left off</h2>
+    <div class="continue-items">
+      ${paper ? `<div class="continue-item"><p class="continue-label">Last paper</p>
+        <p class="continue-text">${esc(paper.title || paper.key)}</p>
+        <div class="row"><button type="button" data-continue="paper">Open paper</button>
+        ${paper.has_pdf ? `<button type="button" class="primary" data-tool="reader" data-paper="${esc(paper.key)}">Resume at page ${progress?.page || 1}</button>` : '<span class="hint">No PDF available</span>'}</div></div>` : ''}
+      <div class="continue-item"><p class="continue-label">Claim review</p>
+        <p class="continue-text">${next ? esc(next.text) : S.claims.length ? 'All claims reviewed.' : 'No claims to review yet.'}</p>
+        ${next ? `<p class="hint">${esc(next.paper_title || next.paper)}</p>
+        <button type="button" data-continue="review">Next unreviewed claim</button>` : ''}</div>
+    </div>`;
+  // Leave focused shortcuts intact across background refreshes.
+  if (card.innerHTML !== html) card.innerHTML = html;
+}
+
+$('continue-reading').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-continue]');
+  if (!button) return;
+  const {paper, next} = continuationTargets();
+  const review = button.dataset.continue === 'review';
+  const key = review ? next?.paper : paper?.key;
+  if (!key) return;
+  captureOpenEditor();
+  parkNewClaimForNavigation(key);
+  parkSynthEditor();
+  parkNoteEditor();
+  showView('claims');
+  V.paper = key; V.tag = null; V.label = null;
+  V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false; V.editing = null;
+  $('q').value = ''; $('kind').value = '';
+  $('only-unreviewed').checked = false; $('only-unverified').checked = false;
+  selectClaim(review ? next.id : null);
+  rememberContinuation(key, review ? next.id : null);
+  scheduleTextSearch();
+  syncHash(true); renderAll();
+  if (review) scrollToSelected();
+  else $('main').scrollTop = 0;
+});
 
 // A status out of a URL is checked against the ones that exist, so a hand-edited
 // address cannot leave a view filtered to nothing with no way to see why.
@@ -1643,6 +1730,7 @@ function renderAll() {
 
 function renderStats() {
   renderStorageWarnings();
+  renderContinuation();
   const unreviewed = S.claims.filter((c) => !c.reviewed).length;
   const proposed = S.papers.reduce((n, p) => n + (p.n_proposed_tags || 0), 0);
   const bits = [
@@ -2746,6 +2834,7 @@ function renderContent() {
   const cursor = noteCursor();
   drawContent();
   restoreNoteCursor(cursor);
+  renderContinuation();
   syncHash();
 }
 
