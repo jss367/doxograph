@@ -834,7 +834,36 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
                 await page.locator('#ask').wait_for(state='hidden')
                 assert len(httpx.get(url+'/api/notebook').json()['highlights']) == 1
                 assert await rail.locator('[data-highlight-note]').input_value() == 'Not saved yet'
-                await entry.get_by_role('button', name='Cancel', exact=True).click()
+                # A removal whose write fails leaves the editor and its draft.
+                refused = []
+                async def refuse_put(route):
+                    if route.request.method == 'PUT' and not refused:
+                        refused.append(route.request.url); await route.fulfill(status=503, body='down'); return
+                    await route.continue_()
+                await page.route('**/api/notebook', refuse_put)
+                await entry.get_by_role('button', name='Remove', exact=True).click()
+                await page.locator('#ask').wait_for(state='visible')
+                await page.locator('#ask').get_by_role('button', name='Remove highlight', exact=True).click()
+                deadline = time.monotonic() + 6
+                while not refused and time.monotonic() < deadline: await asyncio.sleep(.1)
+                await page.wait_for_timeout(500)
+                assert refused and await rail.locator('[data-highlight-note]').input_value() == 'Not saved yet'
+                assert len(httpx.get(url+'/api/notebook').json()['highlights']) == 1
+                await page.unroute('**/api/notebook')
+                # Removing it with the editor still open is this window's own
+                # doing, not a removal made elsewhere to be warned about.
+                await entry.get_by_role('button', name='Remove', exact=True).click()
+                await page.locator('#ask').wait_for(state='visible')
+                await page.locator('#ask').get_by_role('button', name='Remove highlight', exact=True).click()
+                await rail.locator('.highlight-entry').wait_for(state='detached')
+                await page.wait_for_timeout(400)
+                assert await page.locator('#toasts .toast', has_text='removed in another window').count() == 0
+                assert not httpx.get(url+'/api/notebook').json()['highlights']
+                await select_first_line(page)
+                await page.get_by_role('button', name='Highlight in yellow', exact=True).click()
+                await ready(page)
+                await rail.locator('.highlight-entry').wait_for()
+                entry = rail.locator('.highlight-entry')
                 # The page saved on the way out: its first attempt fails, the
                 # retry lands, and the queue records the page the reader left.
                 failures = []

@@ -930,8 +930,12 @@ const ResearchTools = (() => {
       const label = highlight.kind === 'figure' ? 'mark' : 'highlight';
       const writing = highlightEditing === id && highlightDraft.trim();
       if ((highlight.note || writing) && !await confirmDialog(`Remove this ${label} and its note?`, {ok:`Remove ${label}`})) return;
-      await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); });
+      // The editor goes once the write has landed and before the refresh,
+      // which would otherwise find the mark gone and report a removal made
+      // in another window; a write that fails leaves the editor as it was.
+      await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); }, {refresh:false});
       if (highlightEditing === id) { highlightEditing = null; highlightDraft = ''; }
+      await refreshAll();
       redrawHighlights(); return;
     }
   }
