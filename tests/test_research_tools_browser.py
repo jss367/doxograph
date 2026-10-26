@@ -408,12 +408,13 @@ def test_pdf_eviction_releases_idle_image_page_caches(engine):
                     const doc = await pdfjs.getDocument({url:'/pdf/images?inline=1', isEvalSupported:false}).promise;
                     const prototype = Object.getPrototypeOf(await doc.getPage(1));
                     await doc.loadingTask.destroy();
-                    window.pdfCacheProbe = {calls:[], active:new Map()};
+                    window.pdfCacheProbe = {calls:[], active:new Map(), tasks:[], layers:[]};
                     const cleanup = prototype.cleanup, render = prototype.render;
                     prototype.render = function(...args) {
                         const probe = window.pdfCacheProbe;
                         probe.active.set(this, (probe.active.get(this) || 0) + 1);
                         const task = render.apply(this, args);
+                        probe.tasks.push({page:this.pageNumber, ref:new WeakRef(task)});
                         if (this.pageNumber === 2 && !probe.held) {
                             probe.held = true;
                             task.onContinue = resume => {
@@ -424,6 +425,15 @@ def test_pdf_eviction_releases_idle_image_page_caches(engine):
                         const done = () => probe.active.set(this, probe.active.get(this) - 1);
                         task.promise.then(done, done);
                         return task;
+                    };
+                    const renderText = pdfjs.TextLayer.prototype.render;
+                    pdfjs.TextLayer.prototype.render = function(...args) {
+                        const result = renderText.apply(this, args), ref = new WeakRef(this);
+                        result.then(() => {
+                            const container = ref.deref()?.textDivs[0]?.closest('.pdf-page');
+                            if (container) window.pdfCacheProbe.layers.push({page:Number(container.dataset.page), ref});
+                        }, () => {});
+                        return result;
                     };
                     prototype.cleanup = function(...args) {
                         const probe = window.pdfCacheProbe;
@@ -455,11 +465,21 @@ def test_pdf_eviction_releases_idle_image_page_caches(engine):
                 # A selected page is retained while nearby and in-flight pages remain safe.
                 await expect(first).to_have_text('Image evidence on page 1.')
                 assert not await page.evaluate('window.pdfCacheProbe.calls.some(c => c.page === 1 || c.page === 2)')
-                await page.evaluate('window.pdfCacheProbe.resumePage2()')
+                await page.evaluate('window.pdfCacheProbe.resumePage2(); delete window.pdfCacheProbe.resumePage2')
                 await page.wait_for_function('window.pdfCacheProbe.calls.some(c => c.page === 2 && c.result && c.after === 0)')
                 await page.evaluate('window.getSelection().removeAllRanges()')
                 await page.wait_for_function('window.pdfCacheProbe.calls.some(c => c.page === 1 && c.before > 0 && c.after === 0 && c.result)')
                 assert not await page.evaluate('window.pdfCacheProbe.calls.some(c => c.active || c.selected)')
+                if engine == 'chromium':
+                    # Page-proxy cleanup alone cannot release application-held tasks/layers.
+                    await page.wait_for_function('window.pdfCacheProbe.layers.some(item => item.page === 1)')
+                    session = await page.context.new_cdp_session(page)
+                    await session.send('HeapProfiler.collectGarbage')
+                    assert await page.evaluate('''() => {
+                        const probe = window.pdfCacheProbe;
+                        return [...probe.tasks, ...probe.layers].filter(item => item.page === 1).every(item => !item.ref.deref());
+                    }''')
+                    await session.detach()
                 assert await page.locator('.pdf-page canvas').count() < 6
                 await scroll.evaluate('node => node.scrollTop = 0')
                 await expect(first).to_have_text('Image evidence on page 1.')

@@ -421,6 +421,8 @@ const ResearchTools = (() => {
     // PDF.js retains operator lists and decoded images after the canvas is removed.
     // cleanup() also waits internally if a newer render is using the same proxy.
     view.page.cleanup();
+    view.renderTask = null;
+    view.textLayer = null;
   }
   async function layoutReader() {
     const active = reader;
