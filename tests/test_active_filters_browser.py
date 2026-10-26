@@ -99,6 +99,48 @@ def test_clear_active_filters(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("editor", ["claim", "research"])
+def test_poll_updates_missing_filter_chips_without_replacing_editor(engine, editor):
+    config.set_ai_enabled(False)
+    _paper("one", "Original paper", "alignment")
+    _paper("two", "Another paper", "methods")
+    store.add_tag("alignment")
+    store.set_labels("one", ["reading-list"])
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            page = await browser.new_page()
+            with _server() as url:
+                view = "view=research&" if editor == "research" else ""
+                await page.goto(f"{url}/#{view}paper=one&tag=alignment&label=reading-list&group=0")
+                chips = page.get_by_role("group", name="Active filters", exact=True)
+                await expect(chips.locator(".filter-chip")).to_have_count(3)
+                if editor == "claim":
+                    await page.locator("[data-act='edit']").first.click()
+                    field = page.locator("form[data-form='one-c1'] textarea[name='text']")
+                else:
+                    field = page.locator("#research-context")
+                await field.fill("An unfinished sentence that stays under the cursor.")
+                await field.evaluate("el => { el.focus(); el.setSelectionRange(7, 7); }")
+                original = await field.element_handle()
+
+                # A second window removes the filter's paper and its last topic/label.
+                assert httpx.delete(f"{url}/api/papers/one").status_code == 200
+                await _polled(page)
+                await expect(chips).to_be_hidden()
+                assert await original.evaluate("el => el.isConnected && el === document.activeElement && el.selectionStart === 7 && el.selectionEnd === 7")
+                await expect(field).to_have_value("An unfinished sentence that stays under the cursor.")
+                assert await page.evaluate("V.paper === null && V.tag === null && V.label === null")
+                assert all(f"{key}=" not in page.url for key in ("paper", "tag", "label"))
+                await expect(page.locator("#papers [data-paper='one']")).to_have_count(0)
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 @pytest.mark.parametrize("action", ["q", "all"])
 @pytest.mark.parametrize("fail", [False, True])
 def test_clearing_filters_preserves_pending_research_form(engine, action, fail):

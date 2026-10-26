@@ -5416,7 +5416,9 @@ async function pollOnce() {
   if (citationsFailed && V.view === 'graph') loadCitations();
   renderStats();
   renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
+  renderActiveFilters();
   if (!editorHolds()) renderContent();
+  syncHash();
   syncAnalysisControls();
   ResearchTools.sync();
 }
