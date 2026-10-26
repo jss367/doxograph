@@ -81,6 +81,8 @@ extension AppDelegate {
 
     private func viewMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.addItem(item("Command Palette…", #selector(openCommandPalette(_:)), "k", target: self))
+        menu.addItem(.separator())
         menu.addItem(item("Reload", #selector(reloadPage(_:)), "r", target: self))
         menu.addItem(item("Back", #selector(goBack(_:)), "[", target: self))
         menu.addItem(.separator())

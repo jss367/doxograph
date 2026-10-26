@@ -116,6 +116,12 @@ for the web app. A
 paper that arrives without its PDF counts as a failure and says so; running
 `add` on it again retries the download and then reads it.
 
+In the web app, failed imports explain what went wrong and offer **Retry**
+directly in the notification when trying again can help. Files that are not
+PDFs must be replaced with a valid PDF. Retry reuses the original reference or
+uploaded PDF for the current server session. Successful imports offer **Open paper**;
+dismiss a notification with **×** when you are done with it.
+
 A paper you already have is recognized from the reference itself, before any
 lookup goes out: re-pasting an arXiv ID, a DOI or a PDF link answers at once
 with the key it is already filed under, rather than querying arXiv or Crossref
@@ -183,6 +189,13 @@ links below a chosen number of shared claims; it starts at the median so
 a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
 and click a paper to read it. Clicking a topic filters to it.
 
+Press `⌘K` (`Ctrl+K` on Windows or Linux), or click **Jump to…**, to search
+papers by title, author, year, or key; topics; evidence boards; and actions in
+the current workspace. Use the arrow keys and Enter to open a result, or
+Escape to close the palette. Jumping to a paper or topic clears other filters
+so the destination is visible. Common actions include opening the map or reading
+queue, adding papers, exporting, and changing settings.
+
 Review runs from the keyboard. `j` and `k` move between claims, `e` edits the
 selected one, `r` marks it reviewed and moves to the next, and `n` jumps to the
 next claim nobody has reviewed, wrapping round the end. `/` puts the cursor in
@@ -191,6 +204,19 @@ editor or leaves the view you are in. `?` lists all of this, and so does the
 Shortcuts button in the header. A paper that arrives with a dozen claims you
 have read in one go has "Mark N reviewed" in its header; the notice that
 follows offers to take it back, and takes back only what that click changed.
+
+**Focused review**, above the claims, puts one claim beside its source PDF.
+It starts with the claims matching your current filters and keeps that set
+throughout the session, so marking a claim reviewed does not remove your place
+when **unreviewed only** is on. Progress shows your position and how many are
+reviewed. The PDF opens at the locally matched quote (or its closest passage),
+falling back to the recorded page when no match is available; page and zoom
+controls let you check the surrounding material. Papers without a PDF can
+still be reviewed. Use **Mark reviewed & next**, **Edit claim**, or the same
+`j`, `k`, `r`, `e`, and `n` shortcuts; `Escape` exits. Unsaved edits are kept
+for the current browser session when moving between claims or exiting review;
+**Cancel** discards the current edit. Quote matching and PDF viewing run locally
+and work with AI analysis disabled.
 
 The divider between the lists and the claims can be dragged, so a session spent
 reading papers can give the side pane more of the window and a session spent
@@ -232,9 +258,10 @@ by Accept; Discard just clears the proposal.
 
 ## Research without AI
 
-All of these tools work with **Enable AI analysis** turned off. Your workspace notes, boards,
-connections, reading progress, and saved searches belong to the selected workspace
-and are stored in `notebook.json`. They are never sent to a model.
+All of these tools work with **Enable AI analysis** turned off. Your workspace
+notes, boards, connections, reading progress, highlights, and saved searches
+belong to the selected workspace and are stored in `notebook.json`. They are
+never sent to a model.
 
 - **Workspace notes**, in the sidebar, opens one document for the selected
   workspace. Write questions, thoughts, and next steps, using headings for
@@ -247,6 +274,11 @@ and are stored in `notebook.json`. They are never sent to a model.
   and page fields. Write the claim in your own words, optionally add a note, and
   save. Quotes receive the same local verification as ordinary manual claims.
   Pages with no selectable text can still be read and transcribed by hand.
+- **Highlights**, in the same reader, mark a selected passage on the page in
+  yellow, green, blue, or pink. Each highlight takes a note of your own, can be
+  turned into a claim with **Capture as claim**, and stays in place at any zoom.
+  The panel lists the page's highlights and links to other highlighted pages.
+  Highlights are stored in the workspace's `notebook.json`; the PDF is not changed.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
   reload in the same browser tab. Compare sources, quotes, evidence, and notes

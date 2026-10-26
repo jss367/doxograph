@@ -73,6 +73,24 @@ class Connection(Model):
     note: str = ""
 
 
+class Rect(Model):
+    # Fractions of the rendered page, so a highlight keeps its place at any zoom.
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    w: float = Field(gt=0, le=1)
+    h: float = Field(gt=0, le=1)
+
+
+class Highlight(Model):
+    id: str
+    paper: PaperKey
+    page: int = Field(ge=1, le=100000)
+    rects: list[Rect] = Field(min_length=1, max_length=500)
+    text: str = Field(default="", max_length=20000)
+    color: Literal["yellow", "green", "blue", "pink"] = "yellow"
+    note: str = Field(default="", max_length=20000)
+
+
 class Notebook(Model):
     revision: int = Field(default=0, ge=0)
     notes: str = ""
@@ -80,6 +98,7 @@ class Notebook(Model):
     searches: list[SavedSearch] = Field(default_factory=list)
     reading: list[Reading] = Field(default_factory=list)
     connections: list[Connection] = Field(default_factory=list)
+    highlights: list[Highlight] = Field(default_factory=list)
 
 
 def load() -> dict:
@@ -146,7 +165,7 @@ def save_notebook(body: Notebook) -> dict:
         if body.revision != previous["revision"]:
             raise HTTPException(409, "Research tools changed in another window. Reload the saved version before trying again.")
         data = body.model_dump()
-        for collection in (data["boards"], data["searches"], data["connections"]):
+        for collection in (data["boards"], data["searches"], data["connections"], data["highlights"]):
             ids = [item["id"] for item in collection]
             if len(ids) != len(set(ids)):
                 raise HTTPException(422, "Duplicate item identifiers")
@@ -177,6 +196,14 @@ def save_notebook(body: Notebook) -> dict:
                     store.load_paper(reading["paper"])
                 except KeyError:
                     raise HTTPException(404, "Paper no longer exists")
+        # Like reading entries, highlights outlive their paper rather than vanish,
+        # but a new highlight needs a paper that still exists.
+        old_highlights = {(h["id"], h["paper"]) for h in previous["highlights"]}
+        for paper in {h["paper"] for h in data["highlights"] if (h["id"], h["paper"]) not in old_highlights}:
+            try:
+                store.load_paper(paper)
+            except KeyError:
+                raise HTTPException(404, "Paper no longer exists")
         data["revision"] += 1
         store.write_json(config.data_dir() / "notebook.json", data)
         return data
