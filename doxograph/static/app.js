@@ -1309,6 +1309,61 @@ async function loadWorkspaces() {
 
 // --- filtering ------------------------------------------------------------
 
+const FILTER_DEFAULTS = { paper: null, tag: null, label: null, q: '', kind: '',
+  unreviewed: false, unverified: false, tensionStatus: '', agreementStatus: '',
+  tensionFocus: null, agreementFocus: null };
+let activeFiltersHTML = null;
+
+function renderActiveFilters() {
+  const filters = [];
+  const add = (key, label) => { if (V[key]) filters.push([key, label]); };
+  add('paper', `Paper: ${S.papers.find((p) => p.key === V.paper)?.title || V.paper}`);
+  add('tag', `Topic: ${V.tag}`);
+  add('label', `Label: ${V.label}`);
+  if (V.q.trim()) add('q', `Search: ${V.q.trim()}`);
+  add('kind', `Kind: ${V.kind}`);
+  add('unreviewed', 'Unreviewed');
+  add('unverified', 'Quote not found');
+  if (V.view === 'tensions' || V.view === 'agreements') {
+    const prefix = V.view === 'tensions' ? 'tension' : 'agreement';
+    add(`${prefix}Status`, `Status: ${V[`${prefix}Status`]}`);
+    const focus = V[`${prefix}Focus`];
+    add(`${prefix}Focus`, `Claim: ${S.claims.find((c) => c.id === focus)?.text || 'no longer available'}`);
+  }
+  const container = $('active-filters');
+  const html = filters.map(([key, label]) => `<button type="button" class="filter-chip"
+    data-clear-filter="${key}" aria-label="${esc(`Remove filter: ${label}`)}" title="${esc(label)}">
+    <span class="filter-label">${esc(label)}</span><span class="filter-remove" aria-hidden="true">×</span>
+  </button>`).join('') + (filters.length
+    ? '<button type="button" class="clear-filters" data-clear-filter="all">Clear all</button>' : '');
+  // Polls and selection changes should leave a focused chip in place.
+  if (activeFiltersHTML !== html) {
+    container.innerHTML = html;
+    activeFiltersHTML = html;
+  }
+  container.hidden = !filters.length;
+}
+
+function clearFilters(key) {
+  if (key !== 'all' && !Object.hasOwn(FILTER_DEFAULTS, key)) return;
+  captureOpenEditor();
+  if (key === 'all') Object.assign(V, FILTER_DEFAULTS);
+  else V[key] = FILTER_DEFAULTS[key];
+  $('q').value = V.q;
+  $('kind').value = V.kind;
+  $('only-unreviewed').checked = V.unreviewed;
+  $('only-unverified').checked = V.unverified;
+  if (key === 'all' || key === 'q') dropTextSearch();
+  renderAll();
+  // The activated button has gone; leave keyboard users on the next action.
+  ($('active-filters').querySelector('button') || $('q')).focus();
+}
+
+$('active-filters').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-clear-filter]');
+  if (button) clearFilters(button.dataset.clearFilter);
+});
+
 // The phrase if the corpus holds it, otherwise the words.
 //
 // One substring over the whole row could not find "recovery under steering"
@@ -1573,6 +1628,7 @@ function render() {
   renderGraphNav();
   renderTags();
   renderLabels();
+  renderActiveFilters();
   if (!editorHolds()) renderContent();
   renderJobs();
   syncAnalysisControls();
@@ -2712,6 +2768,7 @@ function renderContent() {
   // reader did ask for off the screen, so the cursor is put back instead.
   const cursor = noteCursor();
   drawContent();
+  renderActiveFilters();
   restoreNoteCursor(cursor);
   syncHash();
 }
