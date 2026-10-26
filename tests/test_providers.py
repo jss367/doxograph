@@ -102,7 +102,7 @@ def test_paper_chat_explains_endpoint_failures(monkeypatch, failure):
         response = c.post(f'/api/papers/{key}/chat', json={
             'messages': [{'role': 'user', 'content': 'What did the study find?'}]})
     assert response.status_code == 502
-    assert ('could not be reached' if failure == 'offline' else '503') in response.json()['detail']
+    assert ('could not be reached' if failure == 'offline' else 'unavailable') in response.json()['detail']
 
 
 @pytest.mark.parametrize('failure', ['non-json', 'schema-invalid'])

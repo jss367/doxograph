@@ -7,6 +7,7 @@ import contextvars
 import ipaddress
 import hashlib
 import json
+import logging
 import functools
 import os
 import threading
@@ -27,6 +28,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from . import (__version__, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
                search, store, notebook, research_notes, providers)
+from .model_errors import InputTooLargeError, ModelSetupError
+
+logger = logging.getLogger(__name__)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -1430,11 +1434,32 @@ def paper_chat(key: str, body: ChatBody) -> dict:
     except KeyError:
         raise HTTPException(404, f"no paper {key}")
     except providers.ProviderResponseError as exc:
-        raise HTTPException(502, str(exc))
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(400, str(exc))
-    except (RuntimeError, anthropic.APIError, httpx.HTTPError) as exc:
-        raise HTTPException(502, str(exc))
+        logger.exception("Paper chat received an invalid provider response")
+        raise HTTPException(502, str(exc)[:500])
+    except InputTooLargeError as exc:
+        raise HTTPException(413, str(exc)[:500])
+    except FileNotFoundError:
+        raise HTTPException(400, "This paper's PDF is unavailable. Import it again before chatting.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)[:500])
+    except ModelSetupError as exc:
+        logger.exception("Paper chat model setup failed")
+        raise HTTPException(502, str(exc)[:500])
+    except (anthropic.APIError, httpx.HTTPError) as exc:
+        logger.exception("Paper chat provider request failed")
+        status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403):
+            detail = "The model service refused access. Check the selected provider's credentials, then retry."
+        elif status == 429:
+            detail = "The model service's usage limit was reached. Wait a moment, then retry."
+        elif isinstance(exc, (httpx.TimeoutException, anthropic.APITimeoutError)):
+            detail = "The model service timed out. Try again."
+        else:
+            detail = "The model service could not be reached or is unavailable. Check your connection and provider settings, then retry."
+        raise HTTPException(502, detail)
+    except RuntimeError:
+        logger.exception("Paper chat model request failed")
+        raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.")
 
 
 @app.post("/api/papers/{key}/review")

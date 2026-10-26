@@ -21,6 +21,7 @@ from pathlib import Path
 import anthropic
 
 from . import claude_code, codex_cli, config, providers, quotes, store
+from .model_errors import InputTooLargeError, ModelInputError
 
 SYSTEM = """\
 You are building a doxography: a record of what each paper claims, arranged so \
@@ -399,7 +400,7 @@ def inline_pdf(key: str) -> dict:
     if not pdf.exists():
         raise FileNotFoundError(f"no PDF stored for {key}; add one before asking about it")
     if pdf.stat().st_size > 7_000_000:
-        raise RuntimeError("This PDF exceeds Claude Code's input limit. Use a smaller PDF or Anthropic API.")
+        raise InputTooLargeError("This PDF exceeds Claude Code's input limit. Use a smaller PDF or Anthropic API.")
     return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
             "data": base64.b64encode(pdf.read_bytes()).decode("ascii")}}
 
@@ -411,7 +412,7 @@ def paper_document(key: str, api) -> dict:
             raise FileNotFoundError(f"no PDF stored for {key}; add one before asking about it")
         text = quotes.paper_text(pdf, store.text_path(key), guard=lambda: store.paper_lock(key))
         if text is None:
-            raise RuntimeError("This PDF has no readable text. Choose Claude subscription or Anthropic API for scanned papers.")
+            raise ModelInputError("This PDF has no readable text. Choose Claude subscription or Anthropic API for scanned papers.")
         pages = [f"[PDF page {i}]\n{page}" for i, page in enumerate(text.raw.split(quotes.PAGE_BREAK), 1)]
         return {"type": "text", "text": "Paper text (figures and scanned images are unavailable):\n\n" + "\n\n".join(pages)}
     return inline_pdf(key) if isinstance(api, claude_code.Client) else _pdf_block(key)

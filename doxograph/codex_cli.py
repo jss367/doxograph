@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from . import config
+from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
 
 
 def executable() -> str:
@@ -29,7 +30,7 @@ def executable() -> str:
     for path in candidates:
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
-    raise RuntimeError("Codex is not installed. Install the Codex CLI and run `codex login` in Terminal.")
+    raise ModelSetupError("Codex is not installed. Install the Codex CLI and run `codex login` in Terminal.")
 
 
 def environment() -> dict[str, str]:
@@ -47,7 +48,7 @@ def _run(args: list[str], *, env: dict, cwd: str, input: str | None = None,
         return subprocess.run(args, input=input, capture_output=True, text=True,
                               env=env, cwd=cwd, timeout=timeout)
     except OSError as exc:
-        raise RuntimeError("Codex could not start. Install the Codex CLI and run `codex login`.") from exc
+        raise ModelSetupError("Codex could not start. Install the Codex CLI and run `codex login`.") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("Codex timed out. Try again or check your ChatGPT plan's usage limits.") from exc
 
@@ -65,7 +66,7 @@ class Client:
             # that conflict with forced_login_method. Never change the user's login.
             status = (auth.stdout + auth.stderr).strip()
             if auth.returncode or status != "Logged in using ChatGPT":
-                raise RuntimeError("Sign in with ChatGPT using `codex login` in Terminal. "
+                raise ModelSetupError("Sign in with ChatGPT using `codex login` in Terminal. "
                                    "Doxograph will not fall back to API billing.")
             prompt = []
             for message in kwargs["messages"]:
@@ -74,11 +75,11 @@ class Client:
                     blocks = [{"type": "text", "text": blocks}]
                 for block in blocks:
                     if block.get("type") != "text":
-                        raise RuntimeError("Codex requires extracted paper text. Choose Claude for PDF images.")
+                        raise ModelInputError("Codex requires extracted paper text. Choose Claude for PDF images.")
                     prompt.append(block["text"])
             stdin = "\n\n".join(prompt)
             if len(stdin) > 600_000:
-                raise RuntimeError("This paper and conversation are too long for Codex. Use a shorter paper or Claude.")
+                raise InputTooLargeError("This paper and conversation are too long for Codex. Use a shorter paper or Claude.")
             instructions = Path(cwd) / "instructions.txt"
             instructions.write_text(kwargs["system"], encoding="utf-8")
             output = Path(cwd) / "answer.json"

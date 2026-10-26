@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from . import config
+from .model_errors import InputTooLargeError, ModelSetupError
 
 
 def executable() -> str:
@@ -28,7 +29,7 @@ def executable() -> str:
     for path in candidates:
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
-    raise RuntimeError("Claude Code is not installed. Install it and run `claude auth login` in Terminal.")
+    raise ModelSetupError("Claude Code is not installed. Install it and run `claude auth login` in Terminal.")
 
 
 def environment() -> dict[str, str]:
@@ -48,7 +49,7 @@ def _run(args: list[str], *, env: dict, cwd: str, input: str | None = None,
         return subprocess.run(args, input=input, capture_output=True, text=True,
                               env=env, cwd=cwd, timeout=timeout)
     except OSError as exc:
-        raise RuntimeError("Claude Code could not start. Install it and run `claude auth login`.") from exc
+        raise ModelSetupError("Claude Code could not start. Install it and run `claude auth login`.") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("Claude Code timed out. Try again or check your plan's usage limits.") from exc
 
@@ -72,7 +73,7 @@ class Client:
             if not isinstance(status, dict):
                 status = {}
             if auth.returncode or not status.get("loggedIn") or status.get("authMethod") != "claude.ai":
-                raise RuntimeError("Sign in to a Claude subscription with `claude auth login` in Terminal. "
+                raise ModelSetupError("Sign in to a Claude subscription with `claude auth login` in Terminal. "
                                    "Doxograph will not fall back to API billing.")
             content = []
             for message in kwargs["messages"]:
@@ -83,7 +84,7 @@ class Client:
             event = {"type": "user", "message": {"role": "user", "content": content}}
             stdin = json.dumps(event) + "\n"
             if len(stdin.encode("utf-8")) > 9_500_000:
-                raise RuntimeError("This paper and conversation exceed Claude Code's input limit. "
+                raise InputTooLargeError("This paper and conversation exceed Claude Code's input limit. "
                                    "Use a smaller PDF or choose Anthropic API in Settings.")
             args = [*base, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
                     "--verbose", "--model", kwargs["model"], "--system-prompt", kwargs["system"],

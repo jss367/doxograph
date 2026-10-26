@@ -86,7 +86,7 @@ def test_codex_does_not_send_a_scanned_paper_as_empty_text(codex, monkeypatch):
     monkeypatch.setattr(quotes, 'paper_text', lambda *a, **kw: None)
     run = Mock(side_effect=AssertionError('must not call model'))
     monkeypatch.setattr(subprocess, 'run', run)
-    with pytest.raises(RuntimeError, match='no readable text'):
+    with pytest.raises(ValueError, match='no readable text'):
         chat.answer('scan', [{'role': 'user', 'content': 'Question'}])
     run.assert_not_called()
 
