@@ -116,6 +116,8 @@ window.doxographWorkspaceId = currentWorkspaceId;
 // onto claims one-to-one. newClaim holds a claim being written by hand; it lives
 // only in the browser until Save, so navigating away or filtering it out cannot
 // leave a blank claim behind on the server.
+// parkedNewClaims keeps new claims whose paper scope was cleared or whose save
+// failed, keyed by their original paper so returning there can restore them.
 const NEW_CLAIM_ID = '__new__';
 // drafts holds unsaved editor contents, keyed by claim id: what was typed but
 // not yet saved, whether because the save failed or because something redrew the
@@ -150,7 +152,7 @@ const NEW_CLAIM_ID = '__new__';
 // but the reader's, so unlike a synthesis it is saved without flushing the
 // held deletes: no claim is read to write one.
 const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
-            editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
+            editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
@@ -1200,7 +1202,7 @@ function resetWorkspaceView() {
         kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
   Object.assign(V, {
     paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
-    editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
+    editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
@@ -1262,7 +1264,7 @@ async function switchWorkspace(workspaceId) {
     return;
   }
   const hasDraft = V.editing || V.synthEditing || V.noteEditing || V.newClaim
-    || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
+    || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty();
   if (hasDraft && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
                                        { ok: 'Discard and switch' })) return;
@@ -1347,6 +1349,7 @@ function renderActiveFilters() {
 function clearFilters(key) {
   if (key !== 'all' && !Object.hasOwn(FILTER_DEFAULTS, key)) return;
   captureOpenEditor();
+  if (key === 'all' || key === 'paper') parkNewClaimForNavigation(null, { retainUnsaved: true });
   if (key === 'all') Object.assign(V, FILTER_DEFAULTS);
   else V[key] = FILTER_DEFAULTS[key];
   $('q').value = V.q;
@@ -3717,20 +3720,20 @@ function closeEditorsNotBelongingTo(paper) {
   parkNewClaimForNavigation(paper);
 }
 
-function parkNewClaimForNavigation(paper) {
-  // Ordinary unsaved drafts are intentionally abandoned when leaving their
-  // paper. A failed submission is different: the user already clicked Save,
-  // so keep it outside the active-paper slot and restore it when they return.
+function parkNewClaimForNavigation(paper, { retainUnsaved = false } = {}) {
+  // Navigation normally abandons an ordinary new claim. Clearing paper scope
+  // keeps it, like a failed submission: park it under its original paper so
+  // it can be restored without offering a save to a hidden destination.
   if (V.newClaim && V.newClaim.paper !== paper) {
-    if (V.newClaim.saveFailed) {
-      V.failedNewClaims[V.newClaim.paper] = V.newClaim;
+    if (retainUnsaved || V.newClaim.saveFailed) {
+      V.parkedNewClaims[V.newClaim.paper] = V.newClaim;
     }
     V.newClaim = null;
     if (V.editing === NEW_CLAIM_ID) V.editing = null;
   }
-  if (!V.newClaim && paper && V.failedNewClaims[paper]) {
-    V.newClaim = V.failedNewClaims[paper];
-    delete V.failedNewClaims[paper];
+  if (!V.newClaim && paper && V.parkedNewClaims[paper]) {
+    V.newClaim = V.parkedNewClaims[paper];
+    delete V.parkedNewClaims[paper];
   }
 }
 
@@ -4097,13 +4100,13 @@ async function saveClaim(wrap, patch) {
       // can be gone by now. The user did click Save on this text, so put it
       // back rather than losing it to a failure they did not choose.
       const failedDraft = { ...blankClaim(paper), ...patch, saveFailed: true };
-      if ((!V.paper || V.paper === paper) &&
+      if (V.paper === paper &&
           (!V.newClaim || V.newClaim.paper === paper)) {
         V.newClaim = failedDraft;
       } else {
-        V.failedNewClaims[paper] = failedDraft;
+        V.parkedNewClaims[paper] = failedDraft;
       }
-      V.error = (!V.paper || V.paper === paper)
+      V.error = V.paper === paper
         ? `Could not save the claim: ${error.message}`
         : `Could not save a new claim in ${paper}: ${error.message}. `
           + 'What you typed is kept — open that paper to retry.';
@@ -4116,7 +4119,7 @@ async function saveClaim(wrap, patch) {
     captureOpenEditor();
     if (V.editing === NEW_CLAIM_ID) V.editing = null;
     V.newClaim = null;
-    delete V.failedNewClaims[paper];
+    delete V.parkedNewClaims[paper];
     await refreshAll();          // a row appeared, so the list has to be rebuilt
     return;
   }
@@ -4258,7 +4261,7 @@ async function removePaper(paper) {
       V.newClaim = null;
       if (V.editing === NEW_CLAIM_ID) V.editing = null;
     }
-    delete V.failedNewClaims[paper];
+    delete V.parkedNewClaims[paper];
     // The note draft goes the same way as the claim drafts. The key is retired
     // for good, so a draft kept under it can never be reopened or cancelled —
     // and every entry in `noteDrafts` counts as an unsaved edit, so one left

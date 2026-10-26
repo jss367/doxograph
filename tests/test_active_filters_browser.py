@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from urllib.parse import urlencode
 
+import httpx
 import pytest
 from playwright.async_api import async_playwright, expect
 
@@ -91,6 +92,79 @@ def test_clear_active_filters(engine):
                     await expect(chips).to_be_hidden()
                     assert f"view={view}" in page.url
                 assert not errors
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("action", ["paper", "all"])
+@pytest.mark.parametrize("draft_state", ["unsaved", "failed", "pending_failure"])
+def test_clearing_paper_scope_parks_new_claim(engine, action, draft_state):
+    config.set_ai_enabled(False)
+    _paper("one", "Original paper", "alignment")
+    _paper("two", "Another paper", "methods")
+    store.add_tag("alignment")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            page = await browser.new_page()
+            started = asyncio.Event()
+            release_failure = asyncio.Event()
+            draft_text = "A new claim that still belongs to the original paper."
+            new_form = page.locator("form[data-form='__new__']")
+            chips = page.get_by_role("group", name="Active filters", exact=True)
+
+            async def fail_save(route):
+                started.set()
+                if draft_state == "pending_failure":
+                    await release_failure.wait()
+                await route.fulfill(status=500, json={"detail": "Save failed for this test"})
+
+            with _server() as url:
+                await page.goto(f"{url}/#paper=one&tag=alignment&group=0")
+                await page.get_by_role("button", name="Add claim by hand").click()
+                await new_form.locator("textarea[name='text']").fill(draft_text)
+
+                # Removing a topic keeps the new claim and its visible destination.
+                await chips.get_by_role("button", name="Remove filter: Topic: alignment", exact=True).click()
+                await expect(new_form.locator("textarea[name='text']")).to_have_value(draft_text)
+                assert await page.evaluate("V.paper === 'one' && V.newClaim.paper === 'one'")
+
+                if draft_state != "unsaved":
+                    await page.route("**/api/papers/one/claims", fail_save)
+                    await new_form.get_by_role("button", name="Save", exact=True).click()
+                    await asyncio.wait_for(started.wait(), timeout=5)
+                    if draft_state == "failed":
+                        await expect(page.locator("#content .warn")).to_contain_text("Could not save")
+
+                name = "Clear all" if action == "all" else "Remove filter: Paper: Original paper"
+                await chips.get_by_role("button", name=name, exact=True).click()
+                await expect(new_form).to_have_count(0)
+                await expect(page.get_by_role("button", name="Resume", exact=True)).to_have_count(0)
+                assert await page.evaluate("V.paper === null && V.newClaim === null")
+                if draft_state == "pending_failure":
+                    release_failure.set()
+                    await expect(page.locator("#content .warn")).to_contain_text("What you typed is kept")
+                await expect(new_form).to_have_count(0)
+                await page.locator("#papers [data-paper='two']").click()
+                await expect(new_form).to_have_count(0)
+                await page.locator("#papers [data-paper='one']").click()
+                await page.get_by_role("button", name="Resume", exact=True).click()
+                await expect(new_form.locator("textarea[name='text']")).to_have_value(draft_text)
+                assert await page.evaluate("V.paper === 'one' && V.newClaim.paper === 'one'")
+
+                if draft_state != "unsaved":
+                    await page.unroute("**/api/papers/one/claims", fail_save)
+                async with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/api/papers/one/claims")):
+                    await new_form.get_by_role("button", name="Save", exact=True).click()
+                await expect(new_form).to_have_count(0)
+                claims = httpx.get(f"{url}/api/state").json()["claims"]
+                saved = [claim for claim in claims if claim["text"] == draft_text]
+                assert len(saved) == 1
+                assert saved[0]["paper"] == "one"
             await browser.close()
 
     asyncio.run(scenario())
