@@ -124,8 +124,10 @@ def test_command_palette_map_loads_citation_arrows(engine):
         async with async_playwright() as playwright:
             browser = await getattr(playwright, engine).launch()
             page = await browser.new_page()
+            citation_requests = []
 
             async def citations(route):
+                citation_requests.append(route.request.url)
                 await route.fulfill(json={"edges": [{"from": "one", "to": "two"}]})
 
             await page.route("**/api/citations", citations)
@@ -140,6 +142,11 @@ def test_command_palette_map_loads_citation_arrows(engine):
                     edge => edge.type === 'cite' && edge.a === 'p:one' && edge.b === 'p:two'
                 )""")
                 await expect(page.locator("#command-palette")).not_to_be_visible()
+                await _polled(page)
+                assert len(citation_requests) == 1
+                assert await page.evaluate("""window.doxographGraph().edges.some(
+                    edge => edge.type === 'cite' && edge.a === 'p:one' && edge.b === 'p:two'
+                )""")
             await browser.close()
 
     asyncio.run(scenario())
