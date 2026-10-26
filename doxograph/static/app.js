@@ -1131,6 +1131,12 @@ async function pull() {
   // count, the sidebar entry the hold kept alive goes with it, and the filter
   // has to go too or it outlives the Undo it was being kept for.
   dropMissingFilters();
+  // A paper deleted in another window can never be reopened. Do not leave
+  // its unreachable drafts counted as unsaved edits on workspace switches.
+  const papers = new Set(S.papers.map((paper) => paper.key));
+  for (const key of Object.keys(V.parkedNewClaims)) {
+    if (!papers.has(key)) delete V.parkedNewClaims[key];
+  }
   return Boolean(next);
 }
 

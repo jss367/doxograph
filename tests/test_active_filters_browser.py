@@ -100,6 +100,57 @@ def test_clear_active_filters(engine):
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 @pytest.mark.parametrize("action", ["paper", "all"])
+@pytest.mark.parametrize("failed", [False, True])
+def test_poll_prunes_only_parked_drafts_for_deleted_papers(engine, action, failed):
+    config.set_ai_enabled(False)
+    _paper("one", "Removed paper")
+    _paper("two", "Retained paper")
+    other_workspace = config.create_workspace("Another workspace")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#paper=one&group=0")
+                for key, title, text in [("one", "Removed paper", "Draft for a removed paper."),
+                                         ("two", "Retained paper", "Draft for a retained paper.")]:
+                    if key == "two":
+                        await page.locator("#papers [data-paper='two']").click()
+                    await page.get_by_role("button", name="Add claim by hand").click()
+                    form = page.locator("form[data-form='__new__']")
+                    await form.locator("[name='text']").fill(text)
+                    if key == "one" and failed:
+                        async def reject_save(route):
+                            await route.fulfill(status=500, json={"detail": "Save failed for this test"})
+                        await page.route("**/api/papers/one/claims", reject_save)
+                        await form.get_by_role("button", name="Save", exact=True).click()
+                        await expect(page.locator("#content .warn")).to_contain_text("Could not save")
+                    name = "Clear all" if action == "all" else f"Remove filter: Paper: {title}"
+                    await page.get_by_role("group", name="Active filters", exact=True).get_by_role("button", name=name, exact=True).click()
+                    await expect(form).to_have_count(0)
+
+                assert await page.evaluate("Object.keys(V.parkedNewClaims).sort()") == ["one", "two"]
+                assert httpx.delete(f"{url}/api/papers/one").status_code == 200
+                await _polled(page)
+                assert await page.evaluate("Object.keys(V.parkedNewClaims)") == ["two"]
+                await page.locator("#papers [data-paper='two']").click()
+                await page.get_by_role("button", name="Resume", exact=True).click()
+                await expect(page.locator("form[data-form='__new__'] [name='text']")).to_have_value("Draft for a retained paper.")
+                await page.locator("form[data-form='__new__']").get_by_role("button", name="Cancel", exact=True).click()
+
+                # Only the deleted paper's ghost draft could prompt now.
+                await page.locator("#workspace").select_option(other_workspace["id"])
+                await page.wait_for_function("id => currentWorkspaceId === id", arg=other_workspace["id"])
+                await expect(page.locator("#ask")).not_to_be_visible()
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("action", ["paper", "all"])
 @pytest.mark.parametrize("field", ["evidence", "kind"])
 def test_new_claim_without_text_can_be_resumed_after_clearing_scope(engine, action, field):
     config.set_ai_enabled(False)
