@@ -285,3 +285,31 @@ def test_provider_authentication_errors_explain_how_to_fix_analysis(status):
     server._import_failed(job, httpx.HTTPStatusError("Access refused", request=request, response=response))
     assert "provider's credentials" in job["explanation"]
     assert "upload the PDF" not in job["explanation"]
+
+
+@pytest.mark.parametrize("entry", ["batch", "server", "cli"])
+def test_queued_batch_items_keep_the_original_provider(monkeypatch, entry):
+    from doxograph import __main__
+
+    select()
+    monkeypatch.setattr(config, "PASS_WORKERS", 1)
+    keys = ["first", "second", "third"]
+    for key in keys:
+        store.save_paper(store.new_paper(key))
+        store.add_claim(key, {"text": "Recovery happens."})
+    requests = transport(monkeypatch, {"assignments": []},
+                         during=lambda: select("openai-compatible", "cloud-model", "https://remote.example/v1"))
+    if entry == "server":
+        job = server._new_job("retag")
+        server._run_retag(job, keys)
+        assert job["state"] == "done"
+    elif entry == "cli":
+        assert __main__.cmd_retag(SimpleNamespace(keys=keys)) == 0
+    else:
+        results = list(extract.run_concurrently(keys, extract.retag_paper))
+        assert all(error is None for _, _, error in results)
+    assert len(requests) == len(keys)
+    assert all(str(request.url) == "http://localhost:11434/api/chat" for request in requests)
+    assert all(json.loads(request.content)["model"] == "local-model" for request in requests)
+    # The batch's context does not leak back into the next operation.
+    assert config.analysis_config().provider == "openai-compatible"

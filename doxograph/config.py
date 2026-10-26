@@ -93,15 +93,22 @@ def analysis_identity() -> list[str]:
     return [selected.provider, selected.model, selected.base_url]
 
 
+@contextlib.contextmanager
+def use_analysis():
+    """Bind one provider for an operation and its copied worker contexts."""
+    token = _analysis.set(analysis_config())
+    try:
+        yield
+    finally:
+        _analysis.reset(token)
+
+
 def analysis_session(operation):
     """Keep requests and provenance on one provider even if Settings changes."""
     @functools.wraps(operation)
     def run(*args, **kwargs):
-        token = _analysis.set(analysis_config())
-        try:
+        with use_analysis():
             return operation(*args, **kwargs)
-        finally:
-            _analysis.reset(token)
     return run
 
 

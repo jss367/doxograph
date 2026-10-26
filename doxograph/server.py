@@ -541,6 +541,7 @@ def _prune_jobs() -> None:
 def _workspace_job(function):
     """Keep a queued job in the corpus from which it was submitted."""
     @functools.wraps(function)
+    @config.analysis_session
     def wrapped(job: dict, *args, **kwargs):
         with config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)):
             return function(job, *args, **kwargs)

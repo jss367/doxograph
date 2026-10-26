@@ -219,7 +219,10 @@ def run_concurrently(items: list, work, workers: int | None = None):
     # queued together still make PASS_WORKERS calls between them.
     workers = min(workers or config.PASS_WORKERS, len(items))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
-        futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
+        # Capture once before submitting any items. Queued workers must not
+        # pick up a provider selected while an earlier item is running.
+        with config.use_analysis():
+            futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
         for future in as_completed(futures):
             item = futures[future]
             try:
