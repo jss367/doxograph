@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from . import (__version__, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
                search, store, notebook, research_notes, providers)
-from .model_errors import InputTooLargeError, ModelSetupError
+from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
 
 logger = logging.getLogger(__name__)
 
@@ -1440,8 +1440,11 @@ def paper_chat(key: str, body: ChatBody) -> dict:
         raise HTTPException(413, str(exc)[:500])
     except FileNotFoundError:
         raise HTTPException(400, "This paper's PDF is unavailable. Import it again before chatting.")
-    except ValueError as exc:
+    except ModelInputError as exc:
         raise HTTPException(400, str(exc)[:500])
+    except ValueError:
+        logger.exception("Paper chat encountered invalid saved data or configuration")
+        raise HTTPException(500, "Paper chat could not read the saved paper or model configuration. Check your library and provider settings.")
     except ModelSetupError as exc:
         logger.exception("Paper chat model setup failed")
         raise HTTPException(502, str(exc)[:500])

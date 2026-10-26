@@ -383,7 +383,7 @@ def _pdf_block(key: str, force_upload: bool = False) -> dict:
             raise FileNotFoundError(f"no PDF stored for {key}; add one before extracting")
         text = quotes.paper_text(pdf, config.text_dir() / f"{key}.txt", guard=lambda: store.paper_lock(key))
         if text is None:
-            raise ValueError("This PDF has no readable text. Use an OCR-processed PDF or select Anthropic for PDF analysis.")
+            raise ModelInputError("This PDF has no readable text. Use an OCR-processed PDF or select Anthropic for PDF analysis.")
         pages = "\n\n".join(f"[Page {n}]\n{page}" for n, page in enumerate(text.raw.split(quotes.PAGE_BREAK), 1))
         return {"type": "text", "text": "Paper text (page numbers refer to PDF pages):\n\n" + pages}
     return {

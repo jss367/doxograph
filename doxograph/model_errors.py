@@ -2,7 +2,7 @@
 
 
 class ModelInputError(ValueError):
-    """A paper or conversation cannot be sent in its current form."""
+    """An application-authored paper, conversation, or configuration validation message."""
 
 
 class InputTooLargeError(ModelInputError):

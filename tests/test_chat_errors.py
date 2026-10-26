@@ -45,7 +45,7 @@ def test_subscription_chat_reports_large_pdf_as_payload_too_large(monkeypatch):
     run.assert_not_called()
 
 
-@pytest.mark.parametrize('kind', ['http', 'anthropic', 'cli'])
+@pytest.mark.parametrize('kind', ['http', 'anthropic', 'cli', 'unexpected-value'])
 def test_provider_diagnostics_stay_in_server_logs(monkeypatch, caplog, kind):
     request = httpx.Request('POST', 'https://provider.example/SECRET_DIAGNOSTIC/v1/chat/completions')
     response = httpx.Response(503, request=request)
@@ -53,11 +53,12 @@ def test_provider_diagnostics_stay_in_server_logs(monkeypatch, caplog, kind):
         'http': httpx.HTTPStatusError('SECRET_DIAGNOSTIC', request=request, response=response),
         'anthropic': anthropic.BadRequestError('SECRET_DIAGNOSTIC', response=response, body=None),
         'cli': RuntimeError('SECRET_DIAGNOSTIC at /Users/local/private'),
+        'unexpected-value': ValueError('SECRET_DIAGNOSTIC at /Users/local/private'),
     }[kind]
     monkeypatch.setattr(chat, 'answer', Mock(side_effect=error))
     caplog.set_level(logging.ERROR, logger='doxograph.server')
     result = ask()
-    assert result.status_code == 502
+    assert result.status_code == (500 if kind == 'unexpected-value' else 502)
     assert 'SECRET_DIAGNOSTIC' not in result.text and '/Users/' not in result.text
     assert len(result.json()['detail']) < 500
     assert 'SECRET_DIAGNOSTIC' in caplog.text
@@ -83,3 +84,14 @@ def test_safe_setup_instructions_remain_actionable(monkeypatch):
     response = ask()
     assert response.status_code == 502
     assert response.json()['detail'] == 'Run codex login in Terminal.'
+
+
+def test_corrupt_paper_data_is_a_server_error_without_exposing_its_path(caplog):
+    path = store.paper_path('paper')
+    path.write_text('{broken JSON')
+    caplog.set_level(logging.ERROR, logger='doxograph.server')
+    response = ask()
+    assert response.status_code == 500
+    assert str(path) not in response.text
+    assert str(path) in caplog.text
+    assert 'saved paper or model configuration' in response.json()['detail']
