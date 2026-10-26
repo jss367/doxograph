@@ -156,11 +156,13 @@ def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engi
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_focused_review_ignores_late_passages_and_failed_review_stays_put(engine):
     config.set_ai_enabled(False)
-    store.save_paper(store.new_paper('a', title='A source with a PDF'))
+    # Review follows newest-added order; do not depend on both seeds being
+    # created within the same clock tick to keep the PDF claim first.
+    store.save_paper(store.new_paper('a', title='A source with a PDF', added='2026-01-02T00:00:00Z'))
     store.pdf_path('a').write_bytes(minimal_pdf('A passage from the first paper.'))
     first = store.add_claim('a', {'text': 'The first claim.',
         'quote': 'A passage from the first paper.', 'reviewed': False})
-    store.save_paper(store.new_paper('b', title='Another source without a PDF'))
+    store.save_paper(store.new_paper('b', title='Another source without a PDF', added='2026-01-01T00:00:00Z'))
     second = store.add_claim('b', {'text': 'The second claim.', 'reviewed': False})
 
     async def scenario():

@@ -2238,7 +2238,7 @@ def test_r_does_not_move_on_when_the_review_did_not_happen():
                 await page.wait_for_timeout(300)
                 assert await page.evaluate("V.selectedId") == one
                 release.set()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
 
                 # Once the save has landed, r works and moves on as usual.
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
@@ -2484,7 +2484,7 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 await page.locator("#toasts .toast", has_text="Wait for the change in flight").wait_for()
                 release.set()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
 
                 # Once it has landed, the bulk review goes through as usual.
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
@@ -2696,7 +2696,7 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
 
                 # The offer comes back rather than being spent on a refusal.
                 release.set()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
                 again = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
                 await again.get_by_role("button", name="Undo").click()
                 await page.locator(f'.claim.unreviewed[data-claim="{one}"]').wait_for()
@@ -5997,7 +5997,7 @@ def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
                 assert await form.count() == 0
                 assert await page.locator("#toasts .toast.warn").count() == 0
                 refusing.clear()
-                await page.get_by_text("One, edited.").wait_for()
+                await page.locator("#content").get_by_text("One, edited.").wait_for()
             await browser.close()
 
     asyncio.run(scenario())
