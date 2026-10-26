@@ -1357,7 +1357,14 @@ function clearFilters(key) {
   $('only-unreviewed').checked = V.unreviewed;
   $('only-unverified').checked = V.unverified;
   if (key === 'all' || key === 'q') dropTextSearch();
-  renderAll();
+  if (V.view === 'research' && V.researchSaving) {
+    // The save owns the disabled form and inserts any failure beside it.
+    // Update the filters and sidebar while keeping that form connected.
+    render();
+    syncHash();
+  } else {
+    renderAll();
+  }
   // The activated button has gone; leave keyboard users on the next action.
   ($('active-filters').querySelector('button') || $('q')).focus();
 }

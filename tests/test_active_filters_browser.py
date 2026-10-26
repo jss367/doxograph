@@ -99,6 +99,64 @@ def test_clear_active_filters(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("action", ["q", "all"])
+@pytest.mark.parametrize("fail", [False, True])
+def test_clearing_filters_preserves_pending_research_form(engine, action, fail):
+    config.set_ai_enabled(False)
+    _paper("one", "Original paper", "alignment")
+    store.add_tag("alignment")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            page = await browser.new_page()
+            started = asyncio.Event()
+            release_save = asyncio.Event()
+
+            async def hold_save(route):
+                started.set()
+                await release_save.wait()
+                if fail:
+                    await route.fulfill(status=500, json={"detail": "Research save failed for this test"})
+                else:
+                    await route.continue_()
+
+            with _server() as url:
+                await page.goto(f"{url}/#view=research&q=alignment&tag=alignment")
+                context = page.locator("#research-context")
+                await context.fill("The context submitted while filters change.")
+                form = await page.locator("#research-form").element_handle()
+                await page.route("**/api/context", hold_save)
+                await page.locator("#research-form").get_by_role("button", name="Save", exact=True).click()
+                await asyncio.wait_for(started.wait(), timeout=5)
+                chips = page.get_by_role("group", name="Active filters", exact=True)
+                name = "Clear all" if action == "all" else "Remove filter: Search: alignment"
+                await chips.get_by_role("button", name=name, exact=True).click()
+                assert await form.evaluate("el => el.isConnected && el === document.querySelector('#research-form')")
+                await expect(context).to_be_disabled()
+                await expect(context).to_have_value("The context submitted while filters change.")
+                assert "q=" not in page.url
+                if action == "all":
+                    await expect(chips).to_be_hidden()
+                else:
+                    await expect(chips.locator(".filter-chip")).to_have_count(1)
+
+                release_save.set()
+                if fail:
+                    await expect(page.locator("#content .warn")).to_contain_text("Research save failed for this test")
+                    await expect(context).to_be_enabled()
+                    await expect(context).to_have_value("The context submitted while filters change.")
+                    await page.unroute("**/api/context", hold_save)
+                    await page.locator("#research-form").get_by_role("button", name="Save", exact=True).click()
+                await expect(page.locator("#research-form")).to_have_count(0)
+                assert httpx.get(f"{url}/api/state").json()["context"] == "The context submitted while filters change."
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 @pytest.mark.parametrize("action", ["paper", "all"])
 @pytest.mark.parametrize("draft_state", ["unsaved", "failed", "pending_failure"])
 def test_clearing_paper_scope_parks_new_claim(engine, action, draft_state):
