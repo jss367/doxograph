@@ -509,7 +509,8 @@ const ResearchTools = (() => {
   function renderPage(page) {
     if (!reader || page.rendering || (page.pdfPage && page.renderedAt === pageScale(page))) return page.rendering || Promise.resolve();
     const generation = reader.generation;
-    let scale = null;
+    let scale = null, failed = false;
+    page.error = null;
     page.rendering = (async () => {
       const pdfPage = page.pdfPage || (page.pdfPage = await reader.document.getPage(page.number));
       if (reader?.generation !== generation) return;
@@ -538,15 +539,23 @@ const ResearchTools = (() => {
       const content = page.text || (page.text = await pdfPage.getTextContent());
       if (reader?.generation !== generation || pageScale(page) !== scale) return;
       await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
+      if (reader?.generation !== generation || pageScale(page) !== scale) return;
       page.hasText = content.items.some(item => item.str?.trim());
       page.renderedAt = scale;
       container.classList.remove('pending');
       drawPageHighlights(page);
       if (page.number === reader.current) readerHint();
-    })().catch(error => { if (reader?.generation === generation) el('reader-hint').textContent = `Could not draw page ${page.number}: ${error.message}`; })
+    })().catch(error => {
+      failed = true;
+      page.error = error.message;
+      if (reader?.generation === generation && page.number === reader.current) readerHint();
+    })
       .finally(() => {
         page.rendering = null;
         if (reader?.generation !== generation) return;
+        // A failed page waits for another explicit navigation or visibility
+        // change; it must not be mistaken for a render invalidated by zoom.
+        if (failed) { clearPage(page); return; }
         // The zoom changed under this render: draw it again at the new scale.
         if (page.renderedAt !== pageScale(page) && pageNear(page)) renderPage(page);
         // Scrolled out of reach while drawing: the observer's leave came too
@@ -602,7 +611,8 @@ const ResearchTools = (() => {
     const hint = el('reader-hint');
     if (!hint || !reader) return;
     const page = reader.pages[reader.current - 1];
-    hint.textContent = reader.figureMode ? 'Drag a box around the figure on the page, then pick a color.'
+    hint.textContent = page?.error ? `Could not draw page ${page.number}: ${page.error}`
+      : reader.figureMode ? 'Drag a box around the figure on the page, then pick a color.'
       : page?.renderedAt && !page.hasText
       ? 'This page has no selectable text. You can transcribe a quote and add a claim by hand.'
       : 'Select a passage to highlight it or capture it as a claim, or mark a figure.';
@@ -867,15 +877,17 @@ const ResearchTools = (() => {
     }
     if (name === 'bookmark') {
       if (!reader?.pages.length) return;
-      const {paper, current, workspace:ws} = reader;
+      const active = reader;
+      const {paper, current, workspace:ws} = active;
       await mutateNotebook(ws, n => {
         let progress = n.reading.find(r => r.paper === paper);
         if (!progress) { progress = {paper, status:'reading', page:current, bookmarks:[]}; n.reading.push(progress); }
         progress.page = current;
         progress.bookmarks = progress.bookmarks.includes(current) ? progress.bookmarks.filter(p => p !== current) : [...progress.bookmarks, current];
       });
-      reader.savedPage = current; reader.wantedPage = current;
-      reader.tracked = false; trackCurrentPage(); return;
+      if (reader !== active) return;
+      active.savedPage = current; active.wantedPage = current;
+      active.tracked = false; trackCurrentPage(); return;
     }
     // Resuming a paper from the queue or the Continue card: it opens in the
     // main pane at that page. Resuming is reading, so a paper not on the queue

@@ -226,3 +226,134 @@ def test_mark_navigation_finishing_after_a_paper_change_has_no_effect(engine):
                 assert await page.locator('#reader').is_hidden()
                 assert not errors
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('destination', ['hidden', 'second'])
+def test_delayed_bookmark_does_not_change_a_replacement_reader(engine, destination):
+    config.set_ai_enabled(False)
+    for key in ['paper', 'second']:
+        store.save_paper(store.new_paper(key, title=key.title()))
+        store.pdf_path(key).write_bytes(minimal_pdf([f'Page {n}.' for n in range(1, 5)]))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['reading'] = [{'paper':key, 'status':'reading', 'page':number, 'bookmarks':[]}
+                                       for key, number in [('paper', 3), ('second', 1)]]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="3"]:not(.pending)').wait_for()
+                held, release = asyncio.Event(), asyncio.Event()
+                async def hold_bookmark(route):
+                    if route.request.method == 'PUT' and not held.is_set():
+                        held.set()
+                        await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_bookmark)
+                await page.get_by_role('button', name='Bookmark this page', exact=True).click()
+                await asyncio.wait_for(held.wait(), timeout=10)
+                if destination == 'hidden':
+                    await page.get_by_role('button', name='Hide PDF', exact=True).click()
+                    await page.locator('#reader').wait_for(state='hidden')
+                else:
+                    await page.locator('#papers li[data-paper="second"]').click()
+                    await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                    # Scrolling remains live while the bookmark request waits.
+                    # Its completion must not claim this newer page is saved.
+                    await page.evaluate('''() => {
+                        const pane = document.querySelector('#pdf-scroll');
+                        pane.scrollTop = pane.querySelector('[data-page="3"]').offsetTop;
+                    }''')
+                    await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                release.set()
+                await ready(page)
+                notebook = httpx.get(url + '/api/notebook').json()
+                assert notebook['reading'][0]['bookmarks'] == [3]
+                if destination == 'second':
+                    for _ in range(60):
+                        notebook = httpx.get(url + '/api/notebook').json()
+                        if notebook['reading'][1]['page'] == 3:
+                            break
+                        await asyncio.sleep(.1)
+                    assert notebook['reading'][1]['page'] == 3
+                    assert await page.locator('#reader-page').input_value() == '3'
+                else:
+                    assert await page.locator('#reader').is_hidden()
+                assert await page.locator('#toasts .toast.warn').count() == 0
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('stage', ['page', 'canvas', 'text', 'text-layer'])
+def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, stage):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='A paper with an unreadable page'))
+    store.pdf_path('paper').write_bytes(minimal_pdf([f'Page {n}.' for n in range(1, 31)]))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            async def fail_pdf_stage(route):
+                # Use real PDF.js throughout, injecting only a permanent
+                # failure at the selected boundary on a distant page.
+                module = '''
+                    export * from '/vendor/pdf.min.mjs?reader-test-original=1';
+                    import * as real from '/vendor/pdf.min.mjs?reader-test-original=1';
+                    const stage = STAGE;
+                    function fail() {
+                        window.readerFailureAttempts = (window.readerFailureAttempts || 0) + 1;
+                        // Bound the old implementation too, so a failing test
+                        // cannot starve the browser with endless microtasks.
+                        if (window.readerFailureAttempts > 4) return new Promise(() => {});
+                        return Promise.reject(new Error('Deliberate permanent PDF failure'));
+                    }
+                    export function getDocument(options) {
+                        const task = real.getDocument(options);
+                        return {promise:task.promise.then(doc => {
+                            const getPage = doc.getPage.bind(doc);
+                            doc.getPage = number => {
+                                if (number === 20 && stage === 'page') return fail();
+                                return getPage(number).then(page => {
+                                    if (number === 20 && stage === 'canvas') page.render = () => ({promise:fail()});
+                                    if (number === 20 && stage === 'text') page.getTextContent = fail;
+                                    return page;
+                                });
+                            };
+                            return doc;
+                        })};
+                    }
+                    export class TextLayer {
+                        constructor(options) { this.options = options; this.layer = new real.TextLayer(options); }
+                        render() {
+                            if (stage === 'text-layer' && this.options.container.closest('[data-page]').dataset.page === '20') return fail();
+                            return this.layer.render();
+                        }
+                    }
+                '''.replace('STAGE', repr(stage))
+                await route.fulfill(body=module, content_type='text/javascript')
+            await page.route('**/vendor/pdf.min.mjs', fail_pdf_stage)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                await page.locator('#reader-page').fill('20')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await page.locator('#reader-hint', has_text='Deliberate permanent PDF failure').wait_for()
+                await page.wait_for_timeout(400)
+                assert await page.evaluate('window.readerFailureAttempts') == 1
+                # The error remains visible; no partial canvas is retained.
+                assert 'Deliberate permanent PDF failure' in await page.locator('#reader-hint').inner_text()
+                assert await page.locator('#reader .pdf-page[data-page="20"] canvas').count() == 0
+                assert not errors
+    run_browser(scenario())
