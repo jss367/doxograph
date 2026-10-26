@@ -7,6 +7,8 @@
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/research-tools.css">
+<link rel="stylesheet" href="/vendor/katex.min.css">
+<link rel="stylesheet" href="/research-notes.css">
 </head>
 <body>
 <header>
@@ -143,6 +145,7 @@
 
     <div class="sec research-tools-nav">
       <h2>Your research tools</h2>
+      <button type="button" id="btn-research-notes">Research notes</button>
       <button type="button" data-tool="boards">Evidence boards</button>
       <button type="button" data-tool="reading">Reading queue</button>
       <button type="button" data-tool="searches">Saved searches</button>
@@ -271,6 +274,26 @@
   <p id="research-message" role="status"></p>
   <div id="research-body"></div>
 </dialog>
+<dialog id="research-notes" class="notes-sheet" aria-labelledby="notes-heading">
+  <div class="sheet-head">
+    <div><h2 id="notes-heading">Research notes</h2><span class="hint">Your writing, connected to your library.</span></div>
+    <button type="button" data-notes-action="close" aria-label="Close research notes">×</button>
+  </div>
+  <p id="notes-status" class="hint" role="status" aria-live="polite"></p>
+  <div class="notes-layout">
+    <aside class="notes-library">
+      <button type="button" data-notes-action="new" class="primary">New note</button>
+      <label for="notes-search" class="sr-only">Search research notes</label>
+      <input type="search" id="notes-search" placeholder="Search notes…">
+      <nav id="notes-list" aria-label="Research notes"></nav>
+    </aside>
+    <div id="notes-document"></div>
+  </div>
+</dialog>
+<script src="/vendor/marked.umd.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script src="/vendor/katex.min.js"></script>
+<script src="/research-notes.js"></script>
 <script src="/research-tools.js"></script>
 <script src="/app.js"></script>
 </body>

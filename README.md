@@ -235,6 +235,9 @@ by Accept; Discard just clears the proposal.
 All of these tools work with **Enable AI analysis** turned off. Your boards,
 connections, reading progress, and saved searches belong to the selected workspace
 and are stored in `notebook.json`. They are never sent to a model.
+Long-form research notes and their images are also private to the workspace,
+stored separately in `research-notes.json` and `note-images/`, and never sent
+to a model.
 
 - **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
   passage on the page and choose **Capture selected passage** to fill the quote
@@ -256,6 +259,28 @@ and are stored in `notebook.json`. They are never sent to a model.
 - **Saved searches** remember the current query, paper, topic, label, claim kind,
   review and quote-verification filters, and grouping. Opening one runs those
   filters against the current corpus, so new matching claims appear naturally.
+- **Research notes** are a separate writing space for arguments, literature
+  reviews, derivations, and experiment plans. Open **Research notes** in the
+  sidebar to create, search, rename, and write notes in Markdown with a live
+  preview. Choose Write, Split, or Preview to suit the task. Headings, lists,
+  blockquotes, code, and tables render alongside inline LaTeX (`$...$`) and
+  display equations (`$$...$$`). The toolbar inserts common formatting,
+  equations, tables, and images. Upload, drop, or paste PNG, JPEG, GIF, or WebP
+  images up to 10 MB; images and equation fonts are stored locally, so writing
+  and rendering work offline. Remote image links appear as placeholders until
+  you upload the image.
+  **Link note or paper** searches your notes and library and inserts a link
+  at the cursor. Follow it in the preview, or use **Linked research** below
+  the editor. **Backlinks** lists other saved notes that refer to the current
+  note; removed destinations are marked as missing. Note links can be bookmarked
+  and reopen the right note and workspace. Ordinary Markdown web links open
+  in another tab.
+  Save with **Save note** or Command/Ctrl+S. Leaving unsaved writing asks before
+  discarding it. A conflicting save keeps your draft; **Reload saved version**
+  lets you inspect the saved text before explicitly replacing your draft.
+  **Export Markdown** downloads your current writing, including an unsaved
+  draft. Image and library links in that file refer back to this Doxograph
+  installation; this is an export, not two-way Markdown synchronization.
 - **Reading queue** keeps an ordered list of papers with queued, reading, and
   finished states, independently of claim review. The reader saves your page
   position; bookmark pages and resume them from the queue.
@@ -323,6 +348,8 @@ tensions.json        where papers disagree, and what you decided about each
 syntheses.json       what the papers hold on each topic
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
+research-notes.json  your long-form Markdown notes, with per-note revisions
+note-images/        local images embedded in research notes
 export/              generated HTML
 ```
 

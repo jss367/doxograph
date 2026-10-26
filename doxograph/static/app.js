@@ -1256,6 +1256,7 @@ let switchSeq = 0;
 
 async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId && !workspaceSwitch) return;
+  if (!await ResearchNotes.beforeWorkspaceSwitch()) { renderWorkspacePicker(); return; }
   if (!await ResearchTools.beforeWorkspaceSwitch()) { renderWorkspacePicker(); return; }
   const seq = ++switchSeq;
   // The picker is a native select, so the browser has already moved it to the
@@ -5400,6 +5401,8 @@ async function boot() {
   // URL naming Research — a bookmark, or a reload of the page while on it —
   // with an active nav entry and a blank main pane. Draw it once here.
   if (V.view === 'research') renderContent();
+  const noteId = new URLSearchParams(location.search).get('note');
+  if (noteId) await ResearchNotes.open(noteId);
   setInterval(async () => {
     if (document.hidden || polling) return;
     polling = true;
