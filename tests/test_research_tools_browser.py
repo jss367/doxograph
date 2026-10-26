@@ -818,3 +818,108 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
                 assert not errors
             await browser.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(engine):
+    """Fit width fits each page on its own, so a landscape page in a portrait
+    paper does not overflow and marks on it still line up; a mark clicked with
+    the PDF put away is the mark the PDF comes back outlined on; a save held
+    from a reader torn down cannot overwrite the page a reader opened on the
+    same paper since has moved to."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper',title='A paper with a wide page',authors=['Ada Researcher'],year=2026))
+    store.save_paper(store.new_paper('other',title='The other paper',authors=['Bo Writer'],year=2025))
+    store.pdf_path('other').write_bytes(minimal_pdf(['The other paper.']))
+    from pypdf import PdfReader, PdfWriter
+    import io
+    source = PdfReader(io.BytesIO(minimal_pdf(['First page.', 'A wide landscape page.', 'Third page.'])))
+    source.pages[1].mediabox.upper_right = (1000, 800)   # wide, and tall enough to keep its line of text on the page
+    writer = PdfWriter()
+    for pdf_page in source.pages:
+        writer.add_page(pdf_page)
+    with store.pdf_path('paper').open('wb') as stream:
+        writer.write(stream)
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                data = httpx.get(url+'/api/notebook').json()
+                data['reading'] = [{'paper':'paper','status':'reading','page':1,'bookmarks':[]}]
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                await page.locator('#reader .pdf-page[data-page="2"] .textLayer span').first.wait_for()
+                # Every page fits the column, the wide one at a smaller scale.
+                widths = await page.evaluate("""[...document.querySelectorAll('#reader .pdf-page')].map(p => p.getBoundingClientRect().width)""")
+                column = await page.evaluate("document.querySelector('#pdf-scroll').clientWidth")
+                assert all(w <= column for w in widths) and abs(widths[0] - widths[1]) < 2
+                heights = await page.evaluate("""[...document.querySelectorAll('#reader .pdf-page')].map(p => p.getBoundingClientRect().height)""")
+                assert heights[1] < heights[0] * .7
+                # A highlight on the wide page lines up with its text.
+                await page.locator('#reader-page').fill('2')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                bounds = await select_first_line(page, 2)
+                await page.get_by_role('button', name='Highlight in green', exact=True).click()
+                await ready(page)
+                mark = page.locator('#reader .pdf-page[data-page="2"] .highlightLayer .highlight-green')
+                await mark.wait_for()
+                box = await mark.bounding_box()
+                assert abs(box['x'] - bounds['x']) < 3 and abs(box['width'] - bounds['width']) < 3
+                # A second mark, on the first page; both are listed in the rail.
+                await page.locator('#reader-page').fill('1')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
+                bounds = await select_first_line(page, 1)
+                await page.get_by_role('button', name='Highlight in yellow', exact=True).click()
+                await ready(page)
+                rail = page.locator('#content')
+                await page.wait_for_function("document.querySelectorAll('#content .highlight-entry').length === 2")
+                marks = httpx.get(url+'/api/notebook').json()['highlights']
+                second = next(h for h in marks if h['page'] == 2)
+                # With the PDF put away, clicking a mark brings it back outlined on that mark.
+                await page.get_by_role('button', name='Hide PDF', exact=True).click()
+                await page.locator('#reader').wait_for(state='hidden')
+                await rail.locator(f'.highlight-entry[data-highlight="{second["id"]}"] blockquote').click()
+                await page.locator('#panes.reading').wait_for()
+                await page.locator(f'#reader .pdf-page[data-page="2"] .highlightLayer [data-highlight="{second["id"]}"].focused').wait_for()
+                assert await page.locator('#reader .highlightLayer .focused').count() == 1
+                assert await rail.locator('.highlight-entry.focused').count() == 1
+                assert await rail.locator(f'.highlight-entry.focused[data-highlight="{second["id"]}"]').count() == 1
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                # The save of the page left on is held; the paper is reopened and
+                # read on to page 3 meanwhile; when the held save lands, page 3 stands.
+                held, release, pages = [], asyncio.Event(), []
+                async def hold_first(route):
+                    if route.request.method == 'PUT':
+                        pages.append(next(r['page'] for r in route.request.post_data_json['reading'] if r['paper'] == 'paper'))
+                        if not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_first)
+                await page.locator('#papers li[data-paper="other"]').click()
+                await page.locator('.paperhead h2', has_text='The other paper').wait_for()
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held and pages == [2]
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                await page.locator('#reader-page').fill('3')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                await page.wait_for_timeout(2000)
+                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 1
+                release.set()
+                await saved_page(url, 3)
+                await page.wait_for_timeout(300)
+                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 3
+                await page.unroute('**/api/notebook')
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())

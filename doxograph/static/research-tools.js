@@ -412,9 +412,16 @@ const ResearchTools = (() => {
     if (gone.wantedPage !== null && gone.wantedPage !== gone.savedPage) queueProgressSave(gone);
     if (gone.document) await gone.document.loadingTask.destroy();
   }
+  // The scale a page is drawn at: under Fit width each page fits the column
+  // on its own, so a landscape page in a portrait paper does not overflow;
+  // a numeric zoom is the same for every page.
+  function pageScale(page) {
+    return reader.zoom === 'fit' ? scaleFor('fit', page.base) : reader.scale;
+  }
   function sizePage(page) {
-    page.el.style.width = `${Math.floor(page.base.w * reader.scale)}px`;
-    page.el.style.height = `${Math.floor(page.base.h * reader.scale)}px`;
+    const scale = pageScale(page);
+    page.el.style.width = `${Math.floor(page.base.w * scale)}px`;
+    page.el.style.height = `${Math.floor(page.base.h * scale)}px`;
   }
   // A page scrolled far away gives back its canvas and the caches PDF.js keeps
   // behind it (operator lists, decoded images), so a long paper costs what is
@@ -438,13 +445,19 @@ const ResearchTools = (() => {
     return bottom > scroller.scrollTop - 600 && top < scroller.scrollTop + scroller.clientHeight + 600;
   }
   function renderPage(page) {
-    if (!reader || page.rendering || page.renderedAt === reader.scale) return page.rendering || Promise.resolve();
-    const generation = reader.generation, scale = reader.scale;
+    if (!reader || page.rendering || (page.pdfPage && page.renderedAt === pageScale(page))) return page.rendering || Promise.resolve();
+    const generation = reader.generation;
+    let scale = null;
     page.rendering = (async () => {
       const pdfPage = page.pdfPage || (page.pdfPage = await reader.document.getPage(page.number));
-      if (reader?.generation !== generation || reader.scale !== scale) return;
+      if (reader?.generation !== generation) return;
+      // The page's own size, known only now: until here it was laid out at
+      // the first page's, which is what most papers' pages share.
+      const unit = pdfPage.getViewport({scale:1});
+      page.base = {w:unit.width, h:unit.height};
+      scale = pageScale(page);
+      if (page.renderedAt === scale) { sizePage(page); return; }
       const viewport = pdfPage.getViewport({scale});
-      page.base = {w:viewport.width / scale, h:viewport.height / scale};
       const container = page.el;
       container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
       container.style.width = `${viewport.width}px`;
@@ -457,9 +470,9 @@ const ResearchTools = (() => {
       canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
       canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
       await pdfPage.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0]}).promise;
-      if (reader?.generation !== generation || reader.scale !== scale) return;
+      if (reader?.generation !== generation || pageScale(page) !== scale) return;
       const content = page.text || (page.text = await pdfPage.getTextContent());
-      if (reader?.generation !== generation || reader.scale !== scale) return;
+      if (reader?.generation !== generation || pageScale(page) !== scale) return;
       await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
       page.hasText = content.items.some(item => item.str?.trim());
       page.renderedAt = scale;
@@ -471,7 +484,7 @@ const ResearchTools = (() => {
         page.rendering = null;
         if (reader?.generation !== generation) return;
         // The zoom changed under this render: draw it again at the new scale.
-        if (page.renderedAt !== reader.scale && pageNear(page)) renderPage(page);
+        if (page.renderedAt !== pageScale(page) && pageNear(page)) renderPage(page);
         // Scrolled out of reach while drawing: the observer's leave came too
         // early to release it, so it is released here.
         else if (page.renderedAt && !pageNear(page)) clearPage(page);
@@ -579,11 +592,18 @@ const ResearchTools = (() => {
   // wanted page is compared again and another save follows if they differ.
   // Works on the reader it is given rather than the one mounted, so a reader
   // being torn down can still save the page it reached.
+  // One chain of saves per paper and workspace, shared by a reader torn down
+  // and the reader opened on the same paper after it, so they land in order.
+  const progressChains = new Map();
   function queueProgressSave(active) {
-    const {paper, workspace:ws} = active;
-    active.progressSave = active.progressSave.then(async () => {
+    const {paper, workspace:ws, key} = active;
+    const chain = (progressChains.get(key) || Promise.resolve()).then(async () => {
       const number = active.wantedPage;
       if (number === null || number === active.savedPage) return;
+      // Torn down and replaced by a reader on the same paper: that reader's
+      // page is the one to keep, so this save stands down.
+      const successor = reader && reader !== active && reader.key === key ? reader : null;
+      if (successor) { if (successor.wantedPage !== successor.savedPage) queueProgressSave(successor); return; }
       await mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === number) return false; r.page = number; }, {refresh:false});
       active.savedPage = number;
       // What the queue and the Continue card show until the next poll.
@@ -592,6 +612,10 @@ const ResearchTools = (() => {
         if (local) local.page = number;
         renderContinuation();
       }
+      // A reader opened on this paper while the save ran started from the
+      // page the queue had then; it now knows what the queue says.
+      const since = reader && reader !== active && reader.key === key ? reader : null;
+      if (since) { since.savedPage = number; if (since.wantedPage !== null && since.wantedPage !== number) queueProgressSave(since); }
       active.retried = false;
       if (active.wantedPage !== active.savedPage) queueProgressSave(active);
     }).catch(async error => {
@@ -600,6 +624,8 @@ const ResearchTools = (() => {
       if (!active.retried) { active.retried = true; await new Promise(resolve => setTimeout(resolve, 600)); queueProgressSave(active); return; }
       toast(`Could not save the page you stopped on (page ${active.wantedPage}): ${error.message}`, {tone:'warn'});
     });
+    progressChains.set(key, chain);
+    active.progressSave = chain;
   }
   async function goToPage(number, highlight = null) {
     if (!reader?.pages.length) { if (reader) askPage(reader.paper, reader.workspace, number); return; }
@@ -624,10 +650,11 @@ const ResearchTools = (() => {
   }
   async function setZoom(zoom) {
     if (!reader?.pages.length || !ZOOMS.includes(zoom)) return;
+    const scale = scaleFor(zoom, reader.pages[0].base);
+    const same = zoom === reader.zoom && scale === reader.scale;
     reader.zoom = zoom;
     try { localStorage.setItem(zoomKey, zoom); } catch (_) { /* preference remains for this page */ }
-    const scale = scaleFor(zoom, reader.pages[0].base);
-    if (scale === reader.scale) return;
+    if (same) return;
     const scroller = el('pdf-scroll');
     const ratio = scale / reader.scale;
     reader.scale = scale;
@@ -739,7 +766,7 @@ const ResearchTools = (() => {
       if (reader) { await goToPage(Number(data.page), id); return; }
       // The PDF was put away, or this paper has none any more.
       if (!S.papers.find(p => p.key === V.paper)?.has_pdf) throw new Error('This paper has no PDF to show the passage in.');
-      askPage(V.paper, currentWorkspaceId, Number(data.page));
+      askPage(V.paper, currentWorkspaceId, Number(data.page), id || null);
       if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); renderContent(); }
       return;
     }
