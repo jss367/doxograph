@@ -233,14 +233,19 @@ by Accept; Discard just clears the proposal.
 ## Research without AI
 
 All of these tools work with **Enable AI analysis** turned off. Your boards,
-connections, reading progress, and saved searches belong to the selected workspace
-and are stored in `notebook.json`. They are never sent to a model.
+connections, reading progress, highlights, and saved searches belong to the
+selected workspace and are stored in `notebook.json`. They are never sent to a model.
 
 - **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
   passage on the page and choose **Capture selected passage** to fill the quote
   and page fields. Write the claim in your own words, optionally add a note, and
   save. Quotes receive the same local verification as ordinary manual claims.
   Pages with no selectable text can still be read and transcribed by hand.
+- **Highlights**, in the same reader, mark a selected passage on the page in
+  yellow, green, blue, or pink. Each highlight takes a note of your own, can be
+  turned into a claim with **Capture as claim**, and stays in place at any zoom.
+  The panel lists the page's highlights and links to other highlighted pages.
+  Highlights are stored in the workspace's `notebook.json`; the PDF is not changed.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
   reload in the same browser tab. Compare sources, quotes, evidence, and notes
