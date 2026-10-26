@@ -395,8 +395,8 @@ class SelectWorkspace:
         try:
             known = config.get_workspace(selected)
         except ValueError as exc:
-            # Only a named workspace reaches the registry; the default is
-            # built in and is found without it.
+            # The default tolerates a broken registry and keeps its corpus
+            # accessible under the built-in display name.
             response = JSONResponse({"detail": _broken_registry(exc)}, status_code=500)
             return await response(scope, receive, send)
         if known is None:
@@ -1122,7 +1122,9 @@ def state(request: Request) -> Response:
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
     settings_signature = hashlib.sha256(json.dumps(config.analysis_settings(), sort_keys=True).encode()).hexdigest()
-    signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}"
+    workspace_record = config.get_workspace()
+    name_signature = hashlib.sha1(workspace_record["name"].encode()).hexdigest()
+    signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}-{name_signature}"
     with _state_cache_lock:
         cached = _state_cache.get(workspace)
     # Retry unreadable files even when their stat is unchanged: a temporary
@@ -1132,6 +1134,7 @@ def state(request: Request) -> Response:
         payload = _build_state()
         # Match the signature even if the switch changed during the build.
         payload["ai_enabled"] = ai_enabled
+        payload["workspace"] = workspace_record
         if recovery_error is not None:
             payload["storage_issues"].append({"path": str(store.tag_change_path()), "detail": recovery_error})
         else:
@@ -1238,6 +1241,17 @@ def workspaces() -> dict:
 def create_workspace(body: WorkspaceBody) -> dict:
     try:
         workspace = config.create_workspace(body.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"workspace": workspace, "workspaces": config.list_workspaces()}
+
+
+@app.patch("/api/workspaces/{workspace_id}")
+def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict:
+    try:
+        workspace = config.rename_workspace(workspace_id, body.name)
+    except KeyError:
+        raise HTTPException(404, f"no workspace {workspace_id}")
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return {"workspace": workspace, "workspaces": config.list_workspaces()}
