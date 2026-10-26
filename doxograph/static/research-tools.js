@@ -1,5 +1,6 @@
 /* Reader-owned workflows. Stored with the active workspace; never sent to a model. */
 const ResearchTools = (() => {
+  let client;
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, reader = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
@@ -19,7 +20,7 @@ const ResearchTools = (() => {
   const unsaved = () => dirty || reader?.draft || connectionDraft || noteDrafts().length > 0;
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
-  const resolve = ref => S.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
+  const resolve = ref => client.state.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
   const selectedPapers = () => [...new Set([...papers, ...refs().map(r => r.paper)])];
   const button = (action, title, data = '') => `<button type="button" data-tool="${action}" ${data}>${title}</button>`;
   const input = (label, id, value = '') => `<label>${label}<input id="${id}" value="${html(value)}"></label>`;
@@ -28,17 +29,17 @@ const ResearchTools = (() => {
     try { sessionStorage.setItem(`doxograph-selection:${workspace}`, JSON.stringify({claims:[...claims], papers:[...papers]})); } catch (_) { /* optional */ }
   }
   function sync() {
-    if (workspace !== currentWorkspaceId) {
-      workspace = currentWorkspaceId;
+    if (workspace !== client.workspaceId) {
+      workspace = client.workspaceId;
       claims = new Set(); papers = new Set();
       try {
         const data = JSON.parse(sessionStorage.getItem(`doxograph-selection:${workspace}`) || '{}');
         claims = new Set(data.claims || []); papers = new Set(data.papers || []);
       } catch (_) { /* no saved selection */ }
     }
-    const available = new Set(S.claims.map(refKey));
+    const available = new Set(client.state.claims.map(refKey));
     claims = new Set([...claims].filter(k => available.has(k)));
-    papers = new Set([...papers].filter(k => S.papers.some(p => p.key === k)));
+    papers = new Set([...papers].filter(k => client.state.papers.some(p => p.key === k)));
     remember();
     el('selection-count').textContent = `${claims.size} claims · ${papers.size} papers selected`;
     document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
@@ -46,7 +47,7 @@ const ResearchTools = (() => {
   }
   function claimCheckbox(row) {
     const key = refKey(row);
-    const connections = (S.notebook?.connections || []).filter(c => refKey(c.source) === key || refKey(c.target) === key).length;
+    const connections = (client.state.notebook?.connections || []).filter(c => refKey(c.source) === key || refKey(c.target) === key).length;
     return `<div class="claim-selection"><label><input type="checkbox" data-select-claim="${html(key)}" ${claims.has(key) ? 'checked' : ''}> Select claim</label>
       ${connections ? button('connections', `${connections} manual connection${connections === 1 ? '' : 's'}`) : ''}</div>`;
   }
@@ -54,7 +55,7 @@ const ResearchTools = (() => {
     return `<input type="checkbox" class="paper-selection" aria-label="Select paper: ${html(p.title || p.key)}" data-select-paper="${html(p.key)}" ${papers.has(p.key) ? 'checked' : ''}>`;
   }
   async function request(path = '', method = 'GET', body) {
-    return api('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':modalWorkspace || workspace},
+    return client.request('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':modalWorkspace || workspace},
       ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   }
   function message(text, error = false) {
@@ -168,7 +169,7 @@ const ResearchTools = (() => {
   }
   function renderNotes() {
     notes = {text:notebook.notes, saved:notebook.notes, error:''};
-    const name = workspaces.find(w => w.id === modalWorkspace)?.name || 'this workspace';
+    const name = client.workspaces.find(w => w.id === modalWorkspace)?.name || 'this workspace';
     el('research-body').innerHTML = `<div class="workspace-notes">
       <p class="hint">Your notes for ${html(name)}. Changes save automatically.</p>
       <label for="workspace-notes">What are you investigating?</label>
@@ -190,7 +191,7 @@ const ResearchTools = (() => {
       </div><p class="hint">Topics must already exist in the vocabulary. Paper labels also apply to the papers of selected claims.</p></fieldset>
       <div class="comparison">${refs().map(r => `<article class="comparison-card">${claimSummary(r)}${button('unpin', 'Unpin claim', `data-ref="${html(refKey(r))}"`)}</article>`).join('')}
       ${[...papers].map(key => {
-        const p = S.papers.find(p => p.key === key);
+        const p = client.state.papers.find(p => p.key === key);
         return `<article class="comparison-card"><h3>${html(p.title)}</h3><p class="hint">${html((p.authors || []).join(', '))} · ${html(p.year)}</p>
           <p>${html(p.summary || 'No summary recorded.')}</p><p>${html(p.notes)}</p>
           ${p.has_pdf ? button('reader', 'Read & capture', `data-paper="${html(key)}"`) : ''}
@@ -232,7 +233,7 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = `<div class="tool-actions">${button('queue-selection','Add selected papers')}</div>
       <p class="hint">Queue order is independent of claim review. Page position and bookmarks are saved as you read.</p>
       ${notebook.reading.map((r,i) => {
-        const p = S.papers.find(p => p.key === r.paper);
+        const p = client.state.papers.find(p => p.key === r.paper);
         return `<article class="reading-entry" data-reading="${html(r.paper)}"><h3>${html(p?.title || 'Removed paper: '+r.paper)}</h3>
           <div class="tool-actions"><label>Reading status<select data-reading-status="${html(r.paper)}">${['queued','reading','finished'].map(s => `<option ${r.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
           ${p?.has_pdf ? button('reader',`Resume at page ${r.page}`,`data-paper="${html(r.paper)}"`) : '<span class="hint">No PDF available</span>'}
@@ -245,7 +246,7 @@ const ResearchTools = (() => {
   }
   function renderMarks() {
     const marks = notebook.highlights.filter(h => marksFilter === 'all' || h.question);
-    const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:S.papers.find(p => p.key === key)}))
+    const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:client.state.papers.find(p => p.key === key)}))
       .sort((a, b) => (a.paper?.title || a.key).localeCompare(b.paper?.title || b.key));
     el('research-body').innerHTML = `<p class="hint">Passages and figures you marked in Read & capture, with your notes and questions. Open a mark to return to its page.</p>
       <div class="tool-actions"><label>Show<select id="marks-filter">${[['all','All marks'],['questions','Open questions']].map(([value, label]) => `<option value="${value}" ${marksFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
@@ -262,7 +263,7 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = `<p class="hint">Saved searches remember filters, not a fixed list of results. New matching claims appear automatically.</p>
       ${button('save-search','Save current library filters')}
       ${notebook.searches.map(s => `<article class="reading-entry" data-search="${html(s.id)}"><h3>${html(s.name)}</h3>
-        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${S.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || 'All claims')}</p>
+        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${client.state.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || 'All claims')}</p>
         ${button('apply-search','Open search')}${button('rename-search','Rename')}${button('delete-search','Delete')}</article>`).join('')}`;
   }
   async function queue(keys) {
@@ -273,7 +274,7 @@ const ResearchTools = (() => {
   async function download(format, board = null) {
     if (dirty) await save();
     if (!board && !claims.size && !papers.size) throw new Error('Select claims or papers to export first.');
-    const response = await fetch('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
+    const response = await client.response('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
       body:JSON.stringify({format,board,claims:refs(),papers:[...papers]})});
     await saveFile(response, `selected-research.${format === 'csv' ? 'csv' : 'md'}`);
   }
@@ -285,7 +286,7 @@ const ResearchTools = (() => {
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function downloadAnnotated(paper) {
-    const response = await fetch(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':modalWorkspace}});
+    const response = await client.response(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':modalWorkspace}});
     await saveFile(response, `${paper}-annotated.pdf`);
     const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
     message(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
@@ -317,7 +318,7 @@ const ResearchTools = (() => {
     tab = 'reader';
     reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false, noteValues:new Map(), figureMode:false, focus:mark};
     render();
-    el('research-body').innerHTML = `<h3>${html(S.papers.find(p => p.key === paper)?.title || paper)}</h3>
+    el('research-body').innerHTML = `<h3>${html(client.state.papers.find(p => p.key === paper)?.title || paper)}</h3>
       <div class="reader-controls tool-actions">${button('previous-page','Previous page')}
       <label>Page<input id="reader-page" type="number" min="1" value="${reader.page}"></label><span id="reader-total"></span>
       ${button('go-page','Go')}${button('next-page','Next page')}${button('bookmark','Bookmark this page')}
@@ -907,7 +908,7 @@ const ResearchTools = (() => {
     run(async () => {
       const text = el('capture-text').value.trim();
       if (!text) throw new Error('Write the claim in your own words before saving.');
-      const result = await api(`/api/papers/${encodeURIComponent(reader.paper)}/claims`,{method:'POST',headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
+      const result = await client.request(`/api/papers/${encodeURIComponent(reader.paper)}/claims`,{method:'POST',headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
         body:JSON.stringify({text,quote:el('capture-quote').value,locator:el('capture-locator').value,note:el('capture-note').value})});
       reader.draft = false; event.target.reset(); el('capture-locator').value = `p. ${reader.page}`;
       await refreshAll(); el('capture-status').textContent = result.quote_verified === false ? 'Claim saved. The quote was not found by the text check; review its wording.' : 'Claim saved with its source.';
@@ -923,6 +924,6 @@ const ResearchTools = (() => {
     await close();
     return !el('research-tools').open;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,
+  return {connect(value) { client = value; }, sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,
     openBoard: id => run(() => open('boards', id))};
 })();

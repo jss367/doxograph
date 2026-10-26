@@ -1,5 +1,6 @@
 /* Long-form, reader-owned notes. All rendering libraries are bundled locally. */
 const ResearchNotes = (() => {
+  let client;
   const el = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   let workspace, notes = [], draft = null, saved = null, busy = false, previewTimer;
@@ -27,7 +28,7 @@ const ResearchNotes = (() => {
     el('notes-status').className = error ? 'warn' : 'hint';
   }
   async function request(path = '', method = 'GET', body) {
-    return api('/api/research-notes' + path, {method, headers:{'X-Doxograph-Workspace':workspace,
+    return client.request('/api/research-notes' + path, {method, headers:{'X-Doxograph-Workspace':workspace,
       ...(body instanceof FormData ? {} : {'Content-Type':'application/json'})},
       ...(body === undefined ? {} : {body:body instanceof FormData ? body : JSON.stringify(body)})});
   }
@@ -129,7 +130,7 @@ const ResearchNotes = (() => {
       const target = internalLink(link.getAttribute('href'));
       if (target) {
         link.dataset.notesAction = 'follow'; link.dataset.linkKind = target.kind; link.dataset.linkId = target.id;
-        const exists = target.kind === 'note' ? notes.some(n => n.id === target.id) : S.papers.some(p => p.key === target.id);
+        const exists = target.kind === 'note' ? notes.some(n => n.id === target.id) : client.state.papers.some(p => p.key === target.id);
         if (!exists) { link.classList.add('note-missing-link'); link.title = 'This source has been removed.'; }
       } else { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
     });
@@ -138,7 +139,7 @@ const ResearchNotes = (() => {
     const backlinks = notes.filter(n => n.id !== draft.id && noteLinks(n.body).some(link => link.kind === 'note' && link.id === draft.id));
     const outgoing = [...new Map(noteLinks(draft.body).map(link => [link.kind+':'+link.id, link])).values()];
     el('note-backlinks').innerHTML = `<h3>Linked research</h3><div class="note-linked-items">${outgoing.map(link => {
-      const item = link.kind === 'note' ? notes.find(n => n.id === link.id) : S.papers.find(p => p.key === link.id);
+      const item = link.kind === 'note' ? notes.find(n => n.id === link.id) : client.state.papers.find(p => p.key === link.id);
       return button('follow', escape(item?.title || `Removed ${link.kind}`), `data-link-kind="${link.kind}" data-link-id="${escape(link.id)}"`);
     }).join('') || '<span class="hint">Link a note or paper to connect your research.</span>'}</div>
       <h3>Backlinks <span class="hint">${backlinks.length}</span></h3><div class="note-linked-items">${backlinks.map(n => button('open',escape(n.title),`data-note-id="${n.id}"`)).join('') || '<span class="hint">No other notes link here yet.</span>'}</div>`;
@@ -157,7 +158,7 @@ const ResearchNotes = (() => {
   }
   async function open(id) {
     if (el('research-notes').open) return;
-    workspace = currentWorkspaceId;
+    workspace = client.workspaceId;
     draft = saved = null;
     el('notes-search').value = '';
     el('research-notes').showModal();
@@ -202,7 +203,7 @@ const ResearchNotes = (() => {
   function filterLinks() {
     const query = el('note-link-search').value.toLowerCase();
     el('note-link-results').innerHTML = [...notes.filter(n => n.id !== draft.id).map(n => ({kind:'note',id:n.id,title:n.title})),
-      ...S.papers.map(p => ({kind:'paper',id:p.key,title:p.title || p.key}))]
+      ...client.state.papers.map(p => ({kind:'paper',id:p.key,title:p.title || p.key}))]
       .filter(item => item.title.toLowerCase().includes(query)).slice(0,100)
       .map(item => button('insert-link', `<small>${item.kind === 'note' ? 'Note' : 'Paper'}</small> ${escape(item.title)}`,
         `data-link-kind="${item.kind}" data-link-id="${escape(item.id)}"`)).join('') || '<p class="hint">No matching notes or papers.</p>';
@@ -257,7 +258,7 @@ const ResearchNotes = (() => {
     }
     if (name === 'export') {
       // Export the current draft so unsaved writing can be recovered on conflict.
-      const response = await fetch('/api/research-notes/export', {method:'POST',
+      const response = await client.response('/api/research-notes/export', {method:'POST',
         headers:{'Content-Type':'application/json','X-Doxograph-Workspace':workspace},
         body:JSON.stringify({title:draft.title,body:draft.body})});
       if (!response.ok) throw new Error('Could not export this note. Your writing is still in the editor.');
@@ -273,7 +274,7 @@ const ResearchNotes = (() => {
     if (name === 'link') return renderLinkPicker();
     if (name === 'insert-link') {
       const {linkKind:kind,linkId:id} = target.dataset;
-      const item = kind === 'note' ? notes.find(n => n.id === id) : S.papers.find(p => p.key === id);
+      const item = kind === 'note' ? notes.find(n => n.id === id) : client.state.papers.find(p => p.key === id);
       const title = (item?.title || id).replace(/[\\\[\]]/g, '\\$&');
       insert(`[${title}](${kind === 'note' ? noteURL(id) : paperURL(id)})`);
       el('note-link-picker').hidden = true; return;
@@ -281,7 +282,7 @@ const ResearchNotes = (() => {
     if (name === 'follow') {
       const {linkKind:kind,linkId:id} = target.dataset;
       if (kind === 'note') return choose(id);
-      if (!S.papers.some(p => p.key === id)) throw new Error('This paper has been removed.');
+      if (!client.state.papers.some(p => p.key === id)) throw new Error('This paper has been removed.');
       if (!await discard()) return;
       // Mirror ordinary paper navigation, preserving any library editor draft.
       captureOpenEditor(); parkNewClaimForNavigation(id);
@@ -330,5 +331,5 @@ const ResearchNotes = (() => {
     if (file) { event.preventDefault(); event.stopPropagation(); run(() => upload(file)); }
   });
   window.addEventListener('beforeunload', event => { if (isDirty()) { event.preventDefault(); event.returnValue = ''; } });
-  return {open, beforeWorkspaceSwitch:async () => !el('research-notes').open || await close()};
+  return {connect(value) { client = value; }, open, beforeWorkspaceSwitch:async () => !el('research-notes').open || await close()};
 })();

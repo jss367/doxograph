@@ -211,7 +211,7 @@ def test_note_workspace_navigation_and_writing_tools(engine):
                 await page.evaluate("void switchWorkspace('default')")
                 await _answer(page,'Discard changes')
                 await dialog.wait_for(state='hidden')
-                await page.wait_for_function("currentWorkspaceId === 'default'")
+                await page.wait_for_function("workspaceClient.workspaceId === 'default'")
                 await page.get_by_role('button',name='Research notes',exact=True).click()
                 await ready(page)
                 assert await page.locator('#notes-list button').count() == 0

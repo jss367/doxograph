@@ -1,27 +1,28 @@
 /* A fixed set of claim IDs keeps review progress stable as filters stop matching. */
 window.FocusedReview = (() => {
+  let client;
   const dialog = document.getElementById('focused-review');
   const body = document.getElementById('focus-body');
   let ids = [], workspace = null, current = null, editing = false, busy = false;
   let shown = '', shownPaper = '', generation = 0, loadingTask = null, pdf = null, pdfRender = null, pageNumber = 1;
   const rows = () => {
-    const byId = new Map(S.claims.map(item => [item.id, item]));
+    const byId = new Map(client.state.claims.map(item => [item.id, item]));
     return ids.map(id => byId.get(id)).filter(Boolean);
   };
   const row = () => rows().find(item => item.id === current);
   const paperSnapshot = item => {
-    const paper = S.papers.find(p => p.key === item?.paper);
+    const paper = client.state.papers.find(p => p.key === item?.paper);
     return JSON.stringify([paper?.title, paper?.authors, paper?.year, paper?.has_pdf]);
   };
   const path = item => `/api/papers/${encodeURIComponent(item.paper)}/claims/${encodeURIComponent(item.id)}`;
-  const request = (url, options = {}) => api(url, {
+  const request = (url, options = {}) => client.request(url, {
     ...options, headers: { 'X-Doxograph-Workspace': workspace, ...options.headers },
   });
   const button = (action, label, disabled = false, primary = false) =>
     `<button type="button" data-focus="${action}" ${disabled ? 'disabled' : ''} ${primary ? 'class="primary"' : ''}>${label}</button>`;
 
   function parkDraft() {
-    if (workspace !== currentWorkspaceId) return;
+    if (workspace !== client.workspaceId) return;
     const form = body.querySelector('form[data-form]');
     if (editing && form && current) V.drafts[current] = readForm(form);
   }
@@ -60,7 +61,7 @@ window.FocusedReview = (() => {
     }
     selectClaim(item.id);
     const at = items.findIndex(other => other.id === current);
-    const paper = S.papers.find(p => p.key === item.paper);
+    const paper = client.state.papers.find(p => p.key === item.paper);
     const content = editing
       ? editForm({ ...item, ...V.drafts[item.id] }, 'focus-taglist')
       : `<article class="focus-claim">
@@ -75,7 +76,7 @@ window.FocusedReview = (() => {
           <p class="hint">${esc(item.locator || 'No page or section recorded.')}</p>
           ${item.note ? `<h4>My note</h4><p>${esc(item.note)}</p>` : ''}
           ${(item.ledger_links || []).map(link => `<p class="link"><strong>${esc(link.relation)}</strong>
-            ${esc(S.ledger.find(own => own.id === link.claim)?.text || link.claim)}
+            ${esc(client.state.ledger.find(own => own.id === link.claim)?.text || link.claim)}
             ${esc(link.note || '')}</p>`).join('')}
         </article>`;
     body.innerHTML = `<div class="focus-navigation">
@@ -225,7 +226,7 @@ window.FocusedReview = (() => {
     try {
       const saved = await request(path(item), { method: 'PATCH',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
-      if (workspace !== currentWorkspaceId) return;
+      if (workspace !== client.workspaceId) return;
       // A successful write stays successful even if refreshing the list fails.
       Object.assign(item, saved);
       if (editing) delete V.drafts[item.id];
@@ -240,7 +241,7 @@ window.FocusedReview = (() => {
       markSaving(item.id, false);
       dialog.removeAttribute('aria-busy');
       enabled.forEach(field => { if (field.isConnected) field.disabled = false; });
-      if (workspace !== currentWorkspaceId) close();
+      if (workspace !== client.workspaceId) close();
     }
   }
 
@@ -249,7 +250,7 @@ window.FocusedReview = (() => {
     parkDraft();
     dialog.close();
     releasePDF();
-    if (workspace !== currentWorkspaceId) return;
+    if (workspace !== client.workspaceId) return;
     renderAll();
     scrollToSelected();
     document.getElementById('btn-focus-review').focus();
@@ -262,7 +263,7 @@ window.FocusedReview = (() => {
     captureOpenEditor();
     V.editing = null;
     ids = [...new Set(items.map(item => item.id))];
-    workspace = currentWorkspaceId;
+    workspace = client.workspaceId;
     current = items.some(item => item.id === V.selectedId) ? V.selectedId : items[0].id;
     editing = Boolean(V.drafts[current]);
     dialog.showModal();
@@ -271,7 +272,7 @@ window.FocusedReview = (() => {
 
   function sync() {
     if (!dialog.open || busy) return;
-    if (workspace !== currentWorkspaceId) { close(); return; }
+    if (workspace !== client.workspaceId) { close(); return; }
     if (!row()) { current = rows()[0]?.id; editing = Boolean(V.drafts[current]); render(); }
     else if (shownPaper !== paperSnapshot(row())) {
       // A download can finish without changing any claim. Refresh the source
@@ -340,5 +341,5 @@ window.FocusedReview = (() => {
   window.addEventListener('beforeunload', event => {
     if (dialog.open && editing) { parkDraft(); event.preventDefault(); event.returnValue = ''; }
   });
-  return { open, sync };
+  return {connect(value) { client = value; },  open, sync };
 })();

@@ -1,11 +1,14 @@
 'use strict';
 
+let mapClient;
+function connectPaperMap(client) { mapClient = client; }
+
 // --- the map: papers as nodes ----------------------------------------------
 
 // A force layout on a canvas, with no library behind it. Nodes are papers;
 // squares are the ledger's own claims. Three kinds of edge: two papers whose
 // claims share a topic, a tension between two papers, and a paper bearing on
-// one of my claims. Everything is computed here from `S`; the server knows
+// one of my claims. Everything is computed here from the client snapshot; the server knows
 // nothing about the map.
 //
 // Layout state lives outside `V`. Positions are kept across redraws so the
@@ -42,7 +45,7 @@ function graphStop() {
 }
 
 function renderGraphNav() {
-  const papers = S.papers.length;
+  const papers = mapClient.state.papers.length;
   $('graph-nav').innerHTML = `<li class="${V.view === 'graph' ? 'active' : ''}" data-view="graph">
     <span class="pt">How the papers connect</span>
     <span class="pm">${papers ? `${papers} papers as a map` : 'nothing to map yet'}</span></li>`;
@@ -69,7 +72,7 @@ async function loadCitations() {
   // takes and the poll comes round every two and a half seconds, so without
   // this a retry after a failure would start another scan on every tick until
   // one finished. A different corpus is a different question, and asks.
-  const workspace = currentWorkspaceId;
+  const workspace = mapClient.workspaceId;
   if (citationsInFlight.has(workspace)) {
     // The corpus moved while this one was reading it, so its answer describes
     // papers that have changed since. Asked again once it is out of the way.
@@ -86,7 +89,7 @@ async function loadCitations() {
   citationsStale = false;
   let edges;
   try {
-    const found = await api('/api/citations');
+    const found = await mapClient.request('/api/citations');
     edges = found.edges || [];
   } catch (error) {
     // The server may be restarting. Leave the arrows that are drawn where
@@ -97,7 +100,7 @@ async function loadCitations() {
   } finally {
     if (citationsInFlight.get(workspace) === seq) citationsInFlight.delete(workspace);
   }
-  if (seq !== citationsLatest.get(workspace) || workspace !== currentWorkspaceId) return;
+  if (seq !== citationsLatest.get(workspace) || workspace !== mapClient.workspaceId) return;
   citationsFailed = false;
   CITATIONS = edges;
   if (V.view === 'graph') renderGraph();
@@ -115,15 +118,15 @@ function graphCite(p) {
   return `${who} ${p.year || ''}`.trim();
 }
 
-// The nodes and edges the current options call for, computed fresh from `S`.
+// The nodes and edges the current options call for, computed fresh from the client snapshot.
 // `maxShared` is the heaviest topic edge before the threshold is applied, so
 // the slider's range can follow the corpus.
 function graphData() {
   const opts = V.graph;
-  const byPaper = new Map(S.papers.map((p) => [p.key, p]));
+  const byPaper = new Map(mapClient.state.papers.map((p) => [p.key, p]));
   const tagCount = new Map();     // paper -> Map(tag -> claims with it)
   const tagPapers = new Map();    // tag -> Set(paper)
-  for (const c of S.claims) {
+  for (const c of mapClient.state.claims) {
     if (!byPaper.has(c.paper)) continue;
     for (const t of c.tags || []) {
       if (!tagCount.has(c.paper)) tagCount.set(c.paper, new Map());
@@ -134,7 +137,7 @@ function graphData() {
     }
   }
   const nodes = [];
-  for (const p of S.papers) {
+  for (const p of mapClient.state.papers) {
     const counts = tagCount.get(p.key) || new Map();
     const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     nodes.push({
@@ -180,7 +183,7 @@ function graphData() {
   }
   if (opts.tensions) {
     const pairs = new Map();
-    for (const t of S.tensions || []) {
+    for (const t of mapClient.state.tensions || []) {
       if (t.status === 'dismissed' || !t.claims || t.claims.length !== 2) continue;
       const [a, b] = [t.claims[0].paper, t.claims[1].paper].sort();
       if (a === b || !byPaper.has(a) || !byPaper.has(b)) continue;
@@ -220,10 +223,10 @@ function graphData() {
     }
   }
   if (opts.ledger) {
-    const own = new Map((S.ledger || []).map((c) => [c.id, c]));
+    const own = new Map((mapClient.state.ledger || []).map((c) => [c.id, c]));
     const pairs = new Map();
     const used = new Set();
-    for (const c of S.claims) {
+    for (const c of mapClient.state.claims) {
       if (!byPaper.has(c.paper)) continue;
       for (const link of c.ledger_links || []) {
         if (!own.has(link.claim)) continue;
@@ -507,7 +510,7 @@ function graphTip(node, sx, sy) {
   if (!tip) return;
   if (!node) { tip.hidden = true; return; }
   if (node.type === 'paper') {
-    const p = S.papers.find((x) => x.key === node.key) || {};
+    const p = mapClient.state.papers.find((x) => x.key === node.key) || {};
     const topics = [...node.tags].sort().slice(0, 6).map((t) => `#${t}`).join(' ');
     tip.innerHTML = `<div>${esc(node.label)}</div>
       <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')}${p.year ? ' · ' + esc(p.year) : ''}
@@ -706,7 +709,7 @@ function renderGraph() {
     GRAPH.signature = '';
     graphSync();
     content.innerHTML = graphHeader()
-      + (S.papers.length ? '' : '<p class="empty">Nothing to map yet. Add a paper or two and come back.</p>')
+      + (mapClient.state.papers.length ? '' : '<p class="empty">Nothing to map yet. Add a paper or two and come back.</p>')
       + '<div class="graph-wrap"><canvas></canvas><div class="graph-tip" hidden></div></div>';
     wrap = content.querySelector('.graph-wrap');
     GRAPH.canvas = wrap.querySelector('canvas');
