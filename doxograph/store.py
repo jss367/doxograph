@@ -150,7 +150,7 @@ def paper_lock(key: str):
 
 @contextlib.contextmanager
 def extraction_lock(key: str):
-    """Serialize model-backed extractions for one paper.
+    """Serialize extractions, paper chats, and deletion for one paper.
 
     This is deliberately separate from ``paper_lock``. An extraction holds it
     across the slow model call so another re-read cannot take a stale snapshot,

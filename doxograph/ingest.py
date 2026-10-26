@@ -1059,6 +1059,12 @@ def source_identity(source: dict) -> tuple[str, str] | None:
         return ("arxiv", re.sub(r"v\d+$", "", value, flags=re.I).lower())
     if kind in posts.KINDS:
         return (kind, value)  # Forum IDs are case-sensitive, including LW/AF aliases.
+    if kind == "url":
+        # Only the scheme and host are case-insensitive. Paths, queries, and
+        # credentials may name different resources when their case differs.
+        url = urlsplit(value)
+        userinfo, separator, host = url.netloc.rpartition("@")
+        return (kind, url._replace(netloc=userinfo + separator + host.lower()).geturl())
     return (kind, value.lower())
 
 

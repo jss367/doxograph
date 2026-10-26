@@ -68,7 +68,9 @@ $$
                 assert await page.evaluate('window.noteUnsafe') is None
                 assert await page.locator('#note-preview [href^="javascript:"]').count() == 0
                 assert await page.locator('#note-preview img').count() == 0
-                await page.locator('#note-image').set_input_files({'name':'recovery.png','mimeType':'image/png','buffer':image_bytes()})
+                async with page.expect_file_chooser() as chooser:
+                    await dialog.get_by_role('button',name='Image',exact=True).click()
+                await (await chooser.value).set_files({'name':'recovery.png','mimeType':'image/png','buffer':image_bytes()})
                 await ready(page)
                 await page.wait_for_function("document.querySelector('#note-preview img')?.complete")
                 assert await page.locator('#note-preview img').evaluate('(img) => img.naturalWidth') == 80
