@@ -7,5 +7,5 @@
 # only the jobs retried in the final attempt.
 [ .[].jobs[] ] | group_by(.name)
 | map(max_by([.run_attempt, .id])) as $jobs
-| ["Python and browser tests"] | all(. as $name |
+| ["Python and browser tests", "Static quality checks", "Native macOS checks"] | all(. as $name |
     any($jobs[]; .name == $name and .status == "completed" and .conclusion == "success"))

@@ -30,7 +30,6 @@ def transport(monkeypatch, answer, *, status=200, reason="stop", during=None):
 
     def send(request):
         requests.append(request)
-        body = json.loads(request.content)
         if during:
             during()
         if status != 200:

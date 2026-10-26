@@ -4,15 +4,16 @@ import pytest
 from playwright.async_api import expect
 
 from browser_support import browser_session, run_browser
-from doxograph import store
+from doxograph import config, store
 from test_browser import _paper, _server
 
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_storage_warning_survives_navigation_and_clears_after_repair(engine):
+@pytest.mark.parametrize("document", ["paper", "notebook", "tensions", "agreements", "syntheses"])
+def test_storage_warning_survives_navigation_and_clears_after_repair(engine, document):
     _paper("healthy", "Healthy paper", "topic")
-    damaged = store.paper_path("damaged")
+    damaged = store.paper_path("damaged") if document == "paper" else config.data_dir() / f"{document}.json"
     damaged.write_text("{broken")
 
     async def scenario():
@@ -22,16 +23,20 @@ def test_storage_warning_survives_navigation_and_clears_after_repair(engine):
                 await page.goto(url)
                 warning = page.locator("#storage-warning")
                 await expect(warning).to_be_visible()
-                await expect(warning).to_contain_text("Paper damaged could not be loaded")
+                await expect(warning).to_contain_text(
+                    "Paper damaged could not be loaded" if document == "paper" else "saved file has been left untouched")
                 await warning.get_by_text("File details").click()
                 await expect(warning.locator("code")).to_have_text(str(damaged))
                 await page.locator('#papers [data-paper="healthy"]').click()
                 await expect(warning).to_be_visible()
                 await page.reload()
                 await expect(warning).to_be_visible()
-                store.write_json(damaged, store.new_paper("damaged", title="Recovered paper"))
+                store.write_json(damaged, store.new_paper("damaged", title="Recovered paper")
+                                 if document == "paper" else {})
                 await expect(warning).to_be_hidden(timeout=15000)
-                await expect(page.locator('#papers [data-paper="damaged"]')).to_be_visible()
+                await expect(page.locator('#papers [data-paper="healthy"]')).to_be_visible()
+                if document == "paper":
+                    await expect(page.locator('#papers [data-paper="damaged"]')).to_be_visible()
 
     run_browser(scenario())
 

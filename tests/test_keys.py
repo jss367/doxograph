@@ -43,7 +43,6 @@ def test_retiring_uses_a_lock_that_no_other_lock_nests_inside():
     rename holds vocabulary and takes paper locks — and deadlock. This asserts
     the two do not contend.
     """
-    import threading
 
     store.add_tag("alpha")
     for n in range(3):
