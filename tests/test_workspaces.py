@@ -109,6 +109,77 @@ def test_duplicate_workspace_names_receive_distinct_stable_ids():
     assert second["id"] == "consciousness-2"
 
 
+@pytest.mark.parametrize("named", [False, True], ids=["default", "named"])
+def test_rename_preserves_corpus_and_updates_cached_state(named):
+    other = config.create_workspace("Other")
+    workspace = config.create_workspace("Research") if named else config.get_workspace("default")
+    key = workspace["id"]
+    with config.use_workspace(key):
+        paper = store.new_paper("mind", title="Consciousness")
+        paper["notes"] = "Keep my reading notes."
+        store.save_paper(paper)
+        store.add_claim("mind", {"text": "A finding.", "note": "My claim note."})
+        store.pdf_path("mind").write_bytes(b"%PDF-1.4\n")
+        store.save_context("My research question.")
+        original_dir = config.data_dir()
+        paths = [store.paper_path("mind"), store.pdf_path("mind"), store.context_path()]
+        contents = {path: path.read_bytes() for path in paths}
+
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    headers = {"X-Doxograph-Workspace": key}
+    before = client.get("/api/state", headers=headers)
+    assert client.get("/api/state", headers={**headers, "If-None-Match": before.headers["etag"]}).status_code == 304
+
+    response = client.patch(f"/api/workspaces/{key}", json={"name": "  Consciousness   research  "})
+    assert response.status_code == 200
+    renamed = response.json()["workspace"]
+    assert renamed == {**workspace, "name": "Consciousness research"}
+    assert config.get_workspace(key) == renamed
+    assert config.get_workspace(other["id"]) == other
+    assert next(item for item in config.list_workspaces() if item["id"] == key) == renamed
+    assert {path: path.read_bytes() for path in paths} == contents
+    with config.use_workspace(key):
+        assert config.data_dir() == original_dir
+
+    after = client.get("/api/state", headers={**headers, "If-None-Match": before.headers["etag"]})
+    assert after.status_code == 200
+    assert after.json() == {**before.json(), "workspace": renamed}
+    assert after.headers["etag"] != before.headers["etag"]
+    assert client.get(f"/pdf/mind?workspace={key}").status_code == 200
+
+    # A second rename updates the saved entry, and later creation preserves it.
+    assert client.patch(f"/api/workspaces/{key}", json={"name": "My library"}).status_code == 200
+    config.create_workspace("New research")
+    assert config.get_workspace(key)["name"] == "My library"
+    assert sum(item["id"] == key for item in config.list_workspaces()) == 1
+
+
+@pytest.mark.parametrize("name", ["", " \n\t ", "x" * 81])
+def test_rename_rejects_invalid_names_without_changing_registry(name):
+    config.create_workspace("Other")
+    before = config.workspaces_path().read_bytes()
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    response = client.patch("/api/workspaces/default", json={"name": name})
+    assert response.status_code == 422
+    assert config.workspaces_path().read_bytes() == before
+
+
+def test_rename_missing_workspace_does_not_create_it():
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.patch("/api/workspaces/missing", json={"name": "Research"}).status_code == 404
+    assert [item["id"] for item in config.list_workspaces()] == ["default"]
+
+
+def test_rename_does_not_overwrite_a_broken_registry():
+    config.rename_workspace("default", "My library")
+    config.workspaces_path().write_text("{not valid json", encoding="utf-8")
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    response = client.patch("/api/workspaces/default", json={"name": "Research"})
+    assert response.status_code == 422
+    assert config.workspaces_path().read_text(encoding="utf-8") == "{not valid json"
+    assert client.get("/api/state").json()["workspace"]["name"] == "Default workspace"
+
+
 def test_concurrent_processes_cannot_overwrite_workspace_registry():
     context = multiprocessing.get_context("spawn")
     start = context.Event()

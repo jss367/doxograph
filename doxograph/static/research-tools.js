@@ -3,7 +3,7 @@ const ResearchTools = (() => {
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, reader = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
-  let epoch = 0;
+  let epoch = 0, progressSave = null;
   let notes = null, notesTimer = null, notesSaving = null;
   const el = (id) => document.getElementById(id);
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
@@ -13,8 +13,8 @@ const ResearchTools = (() => {
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   };
   const promptDialog = (title, value, {ok}) => askDialog({title, input:{value}, ok});
-  // A highlight note stays a draft in its textarea until Save note, like a claim being captured.
-  const noteDrafts = () => reader && tab === 'reader' ? [...document.querySelectorAll('#page-highlights [data-highlight-note]')]
+  // Keep note drafts by highlight so scrolling the sidebar does not discard them.
+  const noteDrafts = () => reader && tab === 'reader' ? [...reader.noteValues].map(([id, value]) => ({dataset:{highlightNote:id}, value}))
     .filter(field => field.value !== (notebook.highlights.find(h => h.id === field.dataset.highlightNote)?.note ?? field.value)) : [];
   const unsaved = () => dirty || reader?.draft || connectionDraft || noteDrafts().length > 0;
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
@@ -74,8 +74,11 @@ const ResearchTools = (() => {
   async function save() {
     dirty = true;
     notebook = await request('', 'PUT', notebook);
+    // Keep scrolling during a save from restoring an older page from the response.
+    if (reader?.views && tab === 'reader') rememberReaderPage();
     dirty = false;
     await refreshAll();
+    if (reader?.document && tab === 'reader') { rememberContinuation(reader.paper); renderContinuation(); }
     message('Saved.');
   }
   function notesChanged() { return notes && notes.text !== notes.saved; }
@@ -112,7 +115,9 @@ const ResearchTools = (() => {
   async function close() {
     if (busy) return;
     if (!await saveNotes()) return;
+    await flushReaderProgress();
     if (unsaved() && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
+    stopReaderViews();
     epoch++;
     if (reader?.document) await reader.document.loadingTask.destroy();
     reader = null; dirty = false; connectionDraft = false;
@@ -304,19 +309,21 @@ const ResearchTools = (() => {
       }).join('')}${entries.length ? '' : '<p class="empty">No earlier versions yet. Future edits will appear here.</p>'}`;
   }
   async function showReader(paper, requestedPage, mark = null) {
+    stopReaderViews();
     if (reader?.document) await reader.document.loadingTask.destroy();
     if (!notebook.reading.some(r => r.paper === paper)) await queue([paper]);
     const progress = notebook.reading.find(r => r.paper === paper);
     if (progress.status === 'queued') { progress.status = 'reading'; await save(); }
     tab = 'reader';
-    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false, figureMode:false, focus:mark};
+    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false, noteValues:new Map(), figureMode:false, focus:mark};
     render();
     el('research-body').innerHTML = `<h3>${html(S.papers.find(p => p.key === paper)?.title || paper)}</h3>
       <div class="reader-controls tool-actions">${button('previous-page','Previous page')}
       <label>Page<input id="reader-page" type="number" min="1" value="${reader.page}"></label><span id="reader-total"></span>
       ${button('go-page','Go')}${button('next-page','Next page')}${button('bookmark','Bookmark this page')}
       <label>Zoom<select id="reader-zoom"><option value="1">100%</option><option value="1.3" selected>130%</option><option value="1.6">160%</option><option value="2">200%</option></select></label></div>
-      <div class="reader-layout"><div class="pdf-scroll"><div id="pdf-page"><canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div></div><p id="reader-hint" class="hint">Loading PDF…</p></div>
+      <p id="reader-hint" class="hint">Loading PDF…</p>
+      <div class="reader-layout"><div class="pdf-scroll" tabindex="0" role="region" aria-label="PDF pages"><div id="pdf-pages"></div></div>
         <div class="reader-side"><section id="highlight-panel"><h3>Marks</h3>
           <div class="tool-actions"><label>Color<select id="highlight-color">${['yellow','green','blue','pink'].map(c => `<option value="${c}">${c}</option>`).join('')}</select></label>
           ${button('highlight-selection','Highlight selected passage')}${button('figure-mode','Mark a figure','aria-pressed="false"')}
@@ -336,63 +343,250 @@ const ResearchTools = (() => {
     reader.page = Math.max(1, Math.min(reader.page, doc.numPages));
     el('reader-total').textContent = `of ${doc.numPages}`;
     el('reader-page').max = doc.numPages;
-    await renderPage();
-  }
-  async function renderPage() {
-    reader.selection = ''; reader.rects = [];
-    const page = await reader.document.getPage(reader.page);
-    const viewport = page.getViewport({scale:Number(el('reader-zoom').value)});
-    const container = el('pdf-page');
-    container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
-    container.style.width = `${viewport.width}px`;
-    container.style.height = `${viewport.height}px`;
-    container.style.setProperty('--total-scale-factor', viewport.scale * (page.userUnit || 1));
-    container.style.setProperty('--scale-round-x', '1px');
-    container.style.setProperty('--scale-round-y', '1px');
-    const canvas = container.querySelector('canvas');
-    const ratio = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
-    canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
-    await page.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio,0,0,ratio,0,0]}).promise;
-    const content = await page.getTextContent();
-    await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
-    el('reader-hint').textContent = content.items.some(item => item.str?.trim()) ? 'Select a passage on the page to capture it.' : 'This page has no selectable text. You can transcribe a quote and write a claim by hand.';
-    el('reader-page').value = reader.page;
-    if (!reader.draft) el('capture-locator').value = `p. ${reader.page}`;
-    renderHighlights();
-    const progress = notebook.reading.find(r => r.paper === reader.paper);
-    progress.page = reader.page;
-    await save();
+    // Show the requested page before obtaining metadata for the rest of the PDF.
+    const active = reader, page = await doc.getPage(reader.page);
+    if (reader !== active) return;
+    const viewport = page.getViewport({scale:1});
+    active.defaultSize = {width:viewport.width, height:viewport.height, unit:page.userUnit || 1};
+    active.sizes = new Map([[active.page, active.defaultSize]]);
+    await layoutReader();
     rememberContinuation(reader.paper);
     renderContinuation();
+  }
+  function stopReaderViews() {
+    if (!reader) return;
+    reader.observer?.disconnect();
+    clearTimeout(reader.progressTimer);
+    cancelAnimationFrame(reader.scrollFrame);
+    const scroll = el('pdf-pages')?.parentElement;
+    scroll?.removeEventListener('scroll', reader.onScroll);
+    for (const type of ['wheel','touchmove','keydown']) scroll?.removeEventListener(type, reader.onScrollIntent);
+    for (const view of reader.views || []) {
+      view.renderTask?.cancel();
+      view.textLayer?.cancel();
+    }
+  }
+  async function flushReaderProgress() {
+    while (progressSave) await progressSave;
+    if (!reader?.progressPending) return;
+    const active = reader;
+    clearTimeout(active.progressTimer);
+    active.progressPending = false;
+    progressSave = save();
+    try { await progressSave; }
+    finally { progressSave = null; }
+  }
+  function scheduleReaderProgress() {
+    const active = reader;
+    clearTimeout(active.progressTimer);
+    active.progressTimer = setTimeout(() => {
+      if (reader !== active || !active.progressPending) return;
+      if (busy) { scheduleReaderProgress(); return; }
+      // Background progress saves leave text selection and claim editing interactive.
+      flushReaderProgress().catch(error => message(error.message, true));
+    }, 250);
+  }
+  function updateReaderControls() {
+    const progress = notebook.reading.find(r => r.paper === reader.paper);
+    el('reader-page').value = reader.page;
+    if (!reader.draft) el('capture-locator').value = `p. ${reader.page}`;
     el('research-body').querySelector('[data-tool="bookmark"]').textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page';
+    el('research-body').querySelector('[data-tool="previous-page"]').disabled = reader.page === 1;
+    el('research-body').querySelector('[data-tool="next-page"]').disabled = reader.page === reader.document.numPages;
+    const view = reader.views?.[reader.page - 1];
+    el('reader-hint').textContent = view?.hasText === false
+      ? 'This page has no selectable text. You can transcribe a quote and write a claim by hand.'
+      : 'Scroll to read more pages. Select a passage to capture it.';
+    if (reader.highlightsPage !== reader.page) renderHighlights();
+    rememberReaderPage();
+  }
+  function rememberReaderPage() {
+    const progress = notebook.reading.find(r => r.paper === reader.paper);
+    if (progress.page !== reader.page) {
+      progress.page = reader.page;
+      reader.progressPending = true;
+      scheduleReaderProgress();
+    }
+  }
+  function renderReaderPage(active, view) {
+    if (view.rendered) return Promise.resolve();
+    if (!view.renderPromise) {
+      view.renderPromise = renderReaderView(active, view).finally(() => { view.renderPromise = null; });
+    }
+    return view.renderPromise;
+  }
+  function sizeReaderPage(view, size, scale) {
+    view.container.style.width = `${size.width * scale}px`;
+    view.container.style.height = `${size.height * scale}px`;
+    view.container.style.setProperty('--total-scale-factor', scale * size.unit);
+    view.container.style.setProperty('--scale-round-x', '1px');
+    view.container.style.setProperty('--scale-round-y', '1px');
+  }
+  function measureReaderPage(active, view, page) {
+    const viewport = page.getViewport({scale:1});
+    const size = {width:viewport.width, height:viewport.height, unit:page.userUnit || 1};
+    active.sizes.set(view.number, size);
+    const scroll = view.container.parentElement.parentElement;
+    const anchor = active.views[active.page - 1].container;
+    const before = anchor.getBoundingClientRect().top;
+    const maxOffset = scroll.scrollHeight - scroll.clientHeight;
+    const atEnd = !active.navigation && active.page === active.views.length && maxOffset > 2 && scroll.scrollTop >= maxOffset - 2;
+    const pinned = active.navigation && Math.abs(scroll.scrollTop - active.navigation.top) < 2;
+    sizeReaderPage(view, size, active.scale);
+    // Refining an offscreen estimate must not move the passage being read.
+    if (atEnd) scroll.scrollTop = scroll.scrollHeight;
+    else scroll.scrollTop += anchor.getBoundingClientRect().top - before;
+    if (pinned) active.navigation.top = scroll.scrollTop;
+  }
+  async function renderReaderView(active, view) {
+    view.rendering = true;
+    const {container} = view;
+    try {
+      const page = await active.document.getPage(view.number);
+      if (reader !== active || !container.isConnected) return;
+      measureReaderPage(active, view, page);
+      if (!view.nearby && active.page !== view.number) return;
+      view.page = page;
+      const viewport = page.getViewport({scale:active.scale});
+      const canvas = document.createElement('canvas');
+      const layer = document.createElement('div'); layer.className = 'textLayer';
+      const highlights = document.createElement('div'); highlights.className = 'highlightLayer';
+      container.replaceChildren(canvas, highlights, layer);
+      renderHighlightLayer(view);
+      const ratio = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
+      canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
+      view.renderTask = page.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio,0,0,ratio,0,0]});
+      await view.renderTask.promise;
+      const content = await page.getTextContent();
+      if (reader !== active || !container.isConnected) return;
+      view.textLayer = new active.pdfjs.TextLayer({textContentSource:content, container:layer, viewport});
+      await view.textLayer.render();
+      view.hasText = content.items.some(item => item.str?.trim());
+      view.rendered = true;
+      if (active.page === view.number) updateReaderControls();
+    } catch (error) {
+      if (reader === active && container.isConnected && error.name !== 'RenderingCancelledException' && error.name !== 'AbortException') {
+        message(`Could not display page ${view.number}: ${error.message}`, true);
+      }
+    } finally {
+      view.rendering = false;
+      // Keep canvas memory bounded as the reader moves through a long PDF.
+      if (!view.nearby && !readerPageSelected(view)) releaseReaderPage(view);
+    }
+  }
+  function readerPageSelected(view) {
+    const selection = window.getSelection();
+    return selection?.rangeCount > 0 && selection.containsNode(view.container, true);
+  }
+  function releaseReaderPage(view) {
+    if (view.rendering || readerPageSelected(view) || !view.container.hasChildNodes()) return;
+    for (const canvas of view.container.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
+    view.container.replaceChildren();
+    view.rendered = false;
+    // PDF.js retains operator lists and decoded images after the canvas is removed.
+    // cleanup() also waits internally if a newer render is using the same proxy.
+    view.page.cleanup();
+    view.renderTask = null;
+    view.textLayer = null;
+    view.page = null;
+  }
+  async function layoutReader() {
+    const active = reader;
+    stopReaderViews();
+    active.scale = Number(el('reader-zoom').value);
+    const pages = el('pdf-pages'), scroll = pages.parentElement;
+    active.views = Array.from({length:active.document.numPages}, (_, i) => {
+      const number = i + 1, container = document.createElement('div');
+      container.className = 'pdf-page'; container.dataset.page = number;
+      container.setAttribute('role', 'group'); container.setAttribute('aria-label', `Page ${number}`);
+      const view = {number, container};
+      sizeReaderPage(view, active.sizes.get(number) || active.defaultSize, active.scale);
+      return view;
+    });
+    pages.replaceChildren(...active.views.map(view => view.container));
+    const views = active.views;
+    active.observer = new IntersectionObserver(entries => {
+      if (reader !== active || active.views !== views) return;
+      for (const entry of entries) {
+        const view = active.views[Number(entry.target.dataset.page) - 1];
+        view.nearby = entry.isIntersecting;
+        if (view.nearby) renderReaderPage(active, view);
+        else if (!readerPageSelected(view)) releaseReaderPage(view);
+      }
+    }, {root:scroll, rootMargin:'100% 0px'});
+    active.views.forEach(view => active.observer.observe(view.container));
+    active.onScroll = () => {
+      cancelAnimationFrame(active.scrollFrame);
+      active.scrollFrame = requestAnimationFrame(() => {
+        if (reader !== active || active.views !== views) return;
+        const bounds = scroll.getBoundingClientRect();
+        const readingLine = bounds.top + Math.min(scroll.clientHeight * .35, 200);
+        const navigation = active.navigation;
+        const keepTarget = navigation && Math.abs(scroll.scrollTop - navigation.top) < 2;
+        if (!keepTarget) active.navigation = null;
+        const maxOffset = scroll.scrollHeight - scroll.clientHeight;
+        if (maxOffset <= 2) return; // No scrolling: retain the explicitly selected page.
+        const atEnd = scroll.scrollTop >= maxOffset - 2;
+        const view = keepTarget ? active.views[navigation.page - 1] : atEnd ? active.views.at(-1)
+          : active.views.find(view => view.container.getBoundingClientRect().bottom > readingLine) || active.views.at(-1);
+        if (active.page !== view.number) {
+          active.page = view.number;
+          updateReaderControls();
+        }
+      });
+    };
+    active.onScrollIntent = event => {
+      if (event.type === 'wheel' && !event.deltaY) return;
+      if (event.type === 'keydown' && !['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) return;
+      active.navigation = null;
+      active.onScroll();
+    };
+    scroll.addEventListener('scroll', active.onScroll, {passive:true});
+    for (const type of ['wheel','touchmove','keydown']) scroll.addEventListener(type, active.onScrollIntent, {passive:true});
+    await goToReaderPage(active.page);
+  }
+  async function goToReaderPage(number) {
+    const active = reader, view = active.views[number - 1];
+    active.page = number;
+    const scroll = el('pdf-pages').parentElement;
+    scroll.scrollTop += view.container.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop - 8;
+    // Preserve an explicit visible target even when its scroll position is clamped.
+    active.navigation = {page:number, top:scroll.scrollTop};
+    updateReaderControls();
+    view.nearby = true;
+    await renderReaderPage(active, view);
+  }
+  function renderHighlightLayer(view) {
+    const layer = view.container.querySelector('.highlightLayer');
+    if (!layer) return;
+    const here = notebook.highlights.filter(h => h.paper === reader.paper && h.page === view.number);
+    const percent = value => `${(value * 100).toFixed(3)}%`;
+    layer.innerHTML = here.flatMap(h => h.rects.map(r =>
+      `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}${h.id === reader.focus ? ' focused' : ''}" data-mark="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
   }
   function renderHighlights() {
     const mine = notebook.highlights.filter(h => h.paper === reader.paper);
     const here = mine.filter(h => h.page === reader.page);
-    const percent = value => `${(value * 100).toFixed(3)}%`;
-    el('pdf-page').querySelector('.highlightLayer').innerHTML = here.flatMap(h => h.rects.map(r =>
-      `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}" data-mark="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
-    el('pdf-page').classList.toggle('drawing', reader.figureMode);
+    reader.highlightsPage = reader.page;
+    // A mark opened from the Marks list stays outlined until the reader moves to another page.
+    if (reader.focus && !here.some(h => h.id === reader.focus)) reader.focus = null;
+    for (const view of reader.views || []) renderHighlightLayer(view);
+    el('pdf-pages').classList.toggle('drawing', reader.figureMode);
     const toggle = el('research-body').querySelector('[data-tool="figure-mode"]');
     toggle.textContent = reader.figureMode ? 'Cancel figure mark' : 'Mark a figure';
     toggle.setAttribute('aria-pressed', String(reader.figureMode));
     const drafts = new Map(noteDrafts().map(field => [field.dataset.highlightNote, field.value]));
     const others = [...new Set(mine.map(h => h.page))].filter(page => page !== reader.page).sort((a, b) => a - b);
     el('page-highlights').innerHTML = (reader.figureMode ? '<p class="hint">Drag a box around the figure on the page.</p>' : '')
-      + (here.map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
+      + (here.map(h => `<article class="highlight-entry${h.id === reader.focus ? ' focused' : ''}" data-highlight="${html(h.id)}">
         ${markQuote(h)}
         <label>Your note or question<textarea data-highlight-note="${html(h.id)}">${html(drafts.get(h.id) ?? h.note)}</textarea></label>
         <label><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
         <div class="tool-actions">${button('save-highlight','Save note')}${h.kind === 'figure' ? '' : button('capture-highlight','Capture as claim')}${button('remove-highlight',h.kind === 'figure' ? 'Remove mark' : 'Remove highlight')}</div></article>`).join('')
       || '<p class="hint">Select a passage and highlight it, or mark a figure by dragging a box around it.</p>')
       + (others.length ? `<div class="tool-actions"><span class="hint">Other marked pages</span>${others.map(page => button('highlight-page',`Page ${page}`,`data-page="${page}"`)).join('')}</div>` : '');
-    if (reader.focus && here.some(h => h.id === reader.focus)) {
-      const entry = el('page-highlights').querySelector(`[data-highlight="${CSS.escape(reader.focus)}"]`);
-      entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'});
-      el('pdf-page').querySelector(`[data-mark="${CSS.escape(reader.focus)}"]`).scrollIntoView({block:'center', inline:'nearest'});
-    }
-    reader.focus = null;
+    el('page-highlights').querySelector('.focused')?.scrollIntoView({block:'nearest'});
   }
   // A figure is the box dragged out on the page, in the same fractions as a passage's lines.
   function figureRect(drag, event) {
@@ -403,8 +597,8 @@ const ResearchTools = (() => {
     return {x:round(x1), y:round(y1), w:round(x2 - x1), h:round(y2 - y1)};
   }
   // Client rectangles of the selection as fractions of the page, one per line of text.
-  function selectionRects(range) {
-    const box = el('pdf-page').getBoundingClientRect();
+  function selectionRects(range, container) {
+    const box = container.getBoundingClientRect();
     const rects = [...range.getClientRects()]
       .map(r => ({left:Math.max(r.left, box.left), right:Math.min(r.right, box.right), top:Math.max(r.top, box.top), bottom:Math.min(r.bottom, box.bottom)}))
       .filter(r => r.right - r.left > .5 && r.bottom - r.top > .5)
@@ -439,6 +633,7 @@ const ResearchTools = (() => {
     if (name === 'retry-notes') { await saveNotes(); return; }
     if (name === 'tab' || name === 'reload') {
       if (!await discardDrafts({reloadNotes:name === 'reload'})) return;
+      stopReaderViews();
       if (reader?.document) await reader.document.loadingTask.destroy();
       reader = null; epoch++;
       notebook = await request();
@@ -560,10 +755,9 @@ const ResearchTools = (() => {
     }
     if (name === 'figure-mode') { reader.figureMode = !reader.figureMode; renderHighlights(); return; }
     if (['previous-page','next-page','go-page','highlight-page'].includes(name)) {
-      if ((reader.draft || noteDrafts().length) && !await confirmDialog('Discard the unsaved claim or note before changing pages?',{ok:'Discard changes'})) return;
       const page = name === 'go-page' ? Number(el('reader-page').value) : name === 'highlight-page' ? Number(data.page) : reader.page + (name === 'next-page' ? 1 : -1);
       if (!Number.isInteger(page) || page < 1 || page > reader.document.numPages) throw new Error('Choose a page within this PDF.');
-      reader.page = page; reader.draft = false; reader.figureMode = false; el('capture-form').reset(); await renderPage(); return;
+      await goToReaderPage(page); return;
     }
     if (name === 'bookmark') {
       const progress = notebook.reading.find(r=>r.paper === reader.paper);
@@ -572,7 +766,7 @@ const ResearchTools = (() => {
     }
     if (name === 'highlight-selection') {
       if (!reader.selection || !reader.rects?.length) throw new Error('Select a passage on the PDF page first.');
-      notebook.highlights.push({id:uid(),paper:reader.paper,page:reader.page,rects:reader.rects,text:reader.selection,color:el('highlight-color').value,note:''});
+      notebook.highlights.push({id:uid(),paper:reader.paper,page:reader.selectionPage,rects:reader.rects,text:reader.selection,color:el('highlight-color').value,note:''});
       reader.selection = ''; reader.rects = []; window.getSelection()?.removeAllRanges();
       await save(); renderHighlights(); return;
     }
@@ -594,47 +788,57 @@ const ResearchTools = (() => {
     }
     if (name === 'capture-selection') {
       if (!reader.selection) throw new Error('Select a passage on the PDF page first.');
-      el('capture-quote').value = reader.selection; el('capture-locator').value = `p. ${reader.page}`;
+      el('capture-quote').value = reader.selection; el('capture-locator').value = reader.selectionLocator;
       reader.draft = true; el('capture-text').focus(); return;
     }
   }
   async function run(task) {
     if (busy) return;
     setBusy(true);
-    try { await task(); }
+    try { await flushReaderProgress(); await task(); }
     catch (error) { message(error.message,true); if (!el('research-tools').open) toast(error.message,{tone:'warn'}); }
-    finally { setBusy(false); }
+    finally { setBusy(false); if (reader?.progressPending) scheduleReaderProgress(); }
   }
   document.addEventListener('selectionchange', () => {
     if (!reader || tab !== 'reader') return;
-    const selection = window.getSelection(), layer = el('pdf-page')?.querySelector('.textLayer');
-    if (selection && layer?.contains(selection.anchorNode) && layer.contains(selection.focusNode)) {
+    const selection = window.getSelection();
+    const pageFor = node => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('#pdf-pages .pdf-page');
+    const start = pageFor(selection?.anchorNode), end = pageFor(selection?.focusNode);
+    if (start && end && selection.toString().trim()) {
       reader.selection = selection.toString().trim();
-      reader.rects = selection.rangeCount ? selectionRects(selection.getRangeAt(0)) : [];
+      const first = Math.min(Number(start.dataset.page), Number(end.dataset.page));
+      const last = Math.max(Number(start.dataset.page), Number(end.dataset.page));
+      reader.selectionLocator = first === last ? `p. ${first}` : `pp. ${first}–${last}`;
+      reader.selectionPage = first;
+      reader.rects = first === last && selection.rangeCount ? selectionRects(selection.getRangeAt(0), start) : [];
+    }
+    for (const view of reader.views || []) {
+      if (view.rendered && !view.nearby && !readerPageSelected(view)) releaseReaderPage(view);
     }
   });
   document.addEventListener('pointerdown', event => {
-    const page = el('pdf-page');
-    if (!reader?.figureMode || busy || event.button !== 0 || !page?.contains(event.target)) return;
+    const container = event.target.closest?.('#pdf-pages .pdf-page');
+    const layer = container?.querySelector('.highlightLayer');
+    if (!reader?.figureMode || busy || event.button !== 0 || !layer) return;
     event.preventDefault();
-    page.setPointerCapture(event.pointerId);
-    reader.drag = {box:page.getBoundingClientRect(), x:event.clientX, y:event.clientY};
-    page.querySelector('.highlightLayer').insertAdjacentHTML('beforeend', '<div class="figure-draft"></div>');
+    container.setPointerCapture(event.pointerId);
+    reader.drag = {page:Number(container.dataset.page), container, box:container.getBoundingClientRect(), x:event.clientX, y:event.clientY};
+    layer.insertAdjacentHTML('beforeend', '<div class="figure-draft"></div>');
   });
   document.addEventListener('pointermove', event => {
     if (!reader?.drag) return;
-    const r = figureRect(reader.drag, event), box = el('pdf-page').querySelector('.figure-draft');
-    Object.assign(box.style, {left:`${r.x * 100}%`, top:`${r.y * 100}%`, width:`${r.w * 100}%`, height:`${r.h * 100}%`});
+    const r = figureRect(reader.drag, event), box = reader.drag.container.querySelector('.figure-draft');
+    if (box) Object.assign(box.style, {left:`${r.x * 100}%`, top:`${r.y * 100}%`, width:`${r.w * 100}%`, height:`${r.h * 100}%`});
   });
   document.addEventListener('pointerup', event => {
     if (!reader?.drag) return;
-    const rect = figureRect(reader.drag, event);
+    const {page, container} = reader.drag, rect = figureRect(reader.drag, event);
     reader.drag = null;
-    el('pdf-page').querySelector('.figure-draft')?.remove();
+    container.querySelector('.figure-draft')?.remove();
     // A click without a drag is not a figure; stay in figure mode for another try.
     if (rect.w < .01 || rect.h < .01) return;
     run(async () => {
-      notebook.highlights.push({id:uid(),paper:reader.paper,page:reader.page,kind:'figure',rects:[rect],text:'',color:el('highlight-color').value,note:'',question:false});
+      notebook.highlights.push({id:uid(),paper:reader.paper,page,kind:'figure',rects:[rect],text:'',color:el('highlight-color').value,note:'',question:false});
       reader.figureMode = false;
       await save(); renderHighlights();
     });
@@ -673,7 +877,7 @@ const ResearchTools = (() => {
       notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;
       await save();
     });
-    if (target.id === 'reader-zoom') run(renderPage);
+    if (target.id === 'reader-zoom') run(layoutReader);
     if (target.id === 'marks-filter') { marksFilter = target.value; renderMarks(); }
     if (target.matches('[data-highlight-question]')) run(async () => {
       notebook.highlights.find(h => h.id === target.dataset.highlightQuestion).question = target.checked;
@@ -694,6 +898,7 @@ const ResearchTools = (() => {
     if (target.id === 'board-title') { currentBoard().title = target.value; dirty = true; }
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
     if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
+    if (target.dataset.highlightNote && reader) reader.noteValues.set(target.dataset.highlightNote, target.value);
     if (target.closest('#capture-form') && reader) reader.draft = true;
   });
   document.addEventListener('submit', event => {

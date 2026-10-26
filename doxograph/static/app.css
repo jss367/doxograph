@@ -40,6 +40,11 @@ header .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap
   border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .2); }
 .settings-menu[hidden] { display: none; }
+#ai-provider-form { display: grid; gap: .35rem; margin-top: .65rem; }
+#ai-provider-form label { font-size: .82rem; }
+#ai-provider-form input, #ai-provider-form select { width: 100%; box-sizing: border-box; }
+#ai-endpoint-row label { display: block; margin-bottom: .35rem; }
+#ai-provider-save { justify-self: start; }
 .settings-head { display: flex; align-items: center; justify-content: space-between;
   margin-bottom: .65rem; }
 .settings-head h2 { margin: 0; font-size: .95rem; }
@@ -174,6 +179,15 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .filters input[type=search] { flex: 1 1 14rem; }
 .filters label { font-size: .84rem; color: var(--muted); display: flex;
   align-items: center; gap: .25rem; }
+.active-filters { display: flex; flex: 0 0 100%; min-width: 0; flex-wrap: wrap;
+  align-items: center; gap: .4rem; padding-top: .2rem; }
+.active-filters[hidden] { display: none; }
+.filter-chip { display: inline-flex; align-items: center; gap: .45rem; max-width: 100%;
+  border-radius: 999px; background: var(--sel); color: var(--accent); font-size: .82rem; }
+.filter-chip .filter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-chip .filter-remove { flex-shrink: 0; font-size: 1rem; line-height: 1; }
+.clear-filters { border-color: transparent; background: transparent; color: var(--accent);
+  font-size: .82rem; }
 
 #focused-review { width: min(1500px, 96vw); max-width: 96vw; height: 94vh; max-height: 94vh;
   padding: 1.1rem 1.4rem; border: 1px solid var(--line); border-radius: 10px;

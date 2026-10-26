@@ -7,6 +7,8 @@
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/research-tools.css">
+<link rel="stylesheet" href="/vendor/katex.min.css">
+<link rel="stylesheet" href="/research-notes.css">
 </head>
 <body>
 <header>
@@ -14,6 +16,7 @@
   <span class="workspace-control">
     <label for="workspace">Workspace</label>
     <select id="workspace" aria-label="Workspace"></select>
+    <button type="button" id="btn-workspace-rename" title="Rename this workspace" aria-label="Rename workspace" disabled>Rename</button>
     <button type="button" id="btn-workspace-add" title="Create a workspace" aria-label="Create workspace">+</button>
   </span>
   <span class="stats" id="stats"></span>
@@ -36,7 +39,24 @@
         <fieldset>
           <legend>AI analysis</legend>
           <label><input type="checkbox" id="ai-enabled" disabled aria-describedby="ai-help"> Enable AI analysis</label>
-          <p class="hint" id="ai-help">Allow Claude to read papers and analyze claims. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+          <p class="hint" id="ai-help">Allow the selected model to read papers and analyze claims. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+          <form id="ai-provider-form">
+            <label for="ai-provider">Provider</label>
+            <select id="ai-provider">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="ollama">Ollama (local)</option>
+              <option value="openai-compatible">OpenAI-compatible</option>
+            </select>
+            <label for="ai-model">Model</label>
+            <input id="ai-model" type="text" required maxlength="200" placeholder="Exact model name">
+            <div id="ai-endpoint-row">
+              <label for="ai-base-url">Base URL</label>
+              <input id="ai-base-url" type="url" placeholder="http://localhost:11434">
+            </div>
+            <p class="hint" id="ai-provider-help"></p>
+            <button type="submit" id="ai-provider-save">Save provider</button>
+          </form>
           <p class="hint">Saved for all workspaces on this installation.</p>
           <p class="hint" id="ai-settings-status" role="status"></p>
         </fieldset>
@@ -145,6 +165,7 @@
 
     <div class="sec research-tools-nav">
       <h2>Your research tools</h2>
+      <button type="button" id="btn-research-notes">Research notes</button>
       <button type="button" data-tool="notes">Workspace notes</button>
       <button type="button" data-tool="boards">Evidence boards</button>
       <button type="button" data-tool="reading">Reading queue</button>
@@ -223,6 +244,7 @@
       <label><input type="checkbox" id="only-unreviewed"> unreviewed only</label>
       <label title="Claims whose quote was not found in the PDF text"><input type="checkbox" id="only-unverified"> quote not found</label>
       <label><input type="checkbox" id="group-by-tag" checked> group by topic</label>
+      <div id="active-filters" class="active-filters" role="group" aria-label="Active filters" hidden></div>
     </div>
     <div id="selection-tools" class="selection-tools">
       <span id="selection-count">Select claims or papers to work with them</span>
@@ -291,6 +313,22 @@
   <p id="research-message" role="status"></p>
   <div id="research-body"></div>
 </dialog>
+<dialog id="research-notes" class="notes-sheet" aria-labelledby="notes-heading">
+  <div class="sheet-head">
+    <div><h2 id="notes-heading">Research notes</h2><span class="hint">Your writing, connected to your library.</span></div>
+    <button type="button" data-notes-action="close" aria-label="Close research notes">×</button>
+  </div>
+  <p id="notes-status" class="hint" role="status" aria-live="polite"></p>
+  <div class="notes-layout">
+    <aside class="notes-library">
+      <button type="button" data-notes-action="new" class="primary">New note</button>
+      <label for="notes-search" class="sr-only">Search research notes</label>
+      <input type="search" id="notes-search" placeholder="Search notes…">
+      <nav id="notes-list" aria-label="Research notes"></nav>
+    </aside>
+    <div id="notes-document"></div>
+  </div>
+</dialog>
 <dialog id="focused-review" aria-labelledby="focused-review-title">
   <div class="focus-heading">
     <div><h2 id="focused-review-title">Focused review</h2>
@@ -299,6 +337,10 @@
   </div>
   <div id="focus-body"></div>
 </dialog>
+<script src="/vendor/marked.umd.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script src="/vendor/katex.min.js"></script>
+<script src="/research-notes.js"></script>
 <script src="/research-tools.js"></script>
 <script src="/app.js"></script>
 <script src="/focused-review.js"></script>

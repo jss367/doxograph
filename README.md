@@ -16,7 +16,7 @@ without either leaving empty cells behind.
 ## What it does
 
 Paste an arXiv ID or drop a PDF. Doxograph fetches the paper and its metadata,
-reads it with Claude, and records:
+reads it with your selected AI provider or a local model, and records:
 
 - a paragraph on what the paper does and a line on why it is in your pile
 - each claim it makes, as a standalone sentence in the paper's own scope
@@ -69,17 +69,20 @@ if needed, substitute its versioned command, such as `python3.14`.
 python3 -m venv .venv && .venv/bin/pip install -e .
 ```
 
-Doxograph needs an Anthropic API key. It reads `ANTHROPIC_API_KEY`, then falls
-back to an `ANTHROPIC_API_KEY=` line in `~/.credentials`, then to whatever the
-Anthropic SDK resolves on its own (including an `ant auth login` profile).
+Choose a provider and model in **Settings → AI analysis**. Anthropic is the
+default; OpenAI, Ollama, and OpenAI-compatible endpoints are also supported.
+Ollama and local OpenAI-compatible servers can run without an API key.
+See [Model](#model) for setup and the differences in PDF handling.
 
 To turn off model use, open **Settings** and uncheck **Enable AI analysis**.
 The preference survives restarts and applies to every workspace and the CLI
 using the same data directory. While off, imports skip extraction, and
 extraction, retagging, agreements, tensions, and synthesis cannot start new
 model calls or upload PDFs for analysis. Requests already sent may finish.
-Browsing, manual editing, quote checks, and exports remain available. Removing
-a paper still deletes any previously uploaded copy from Anthropic.
+Browsing, manual editing, quote checks, and exports remain available. With
+Anthropic selected, removing a paper still deletes its previously uploaded
+copies. With another provider selected, deletion stays local; any earlier
+Anthropic uploads must be removed from your Anthropic account separately.
 
 ## Use
 
@@ -170,6 +173,8 @@ separate. The existing corpus is the Default workspace; creating a workspace
 makes an empty, independent corpus with its own papers, topics, research
 context, ledger, tensions, syntheses, and exports. The last selected workspace
 is restored when the page is reopened, unless the address names another one.
+Use **Rename** beside the picker to change any workspace's name, including the
+Default workspace. Its papers, claims, notes, and exports stay in place.
 Papers dropped on the Mac app's Dock icon go to the workspace currently shown
 in its window.
 
@@ -262,6 +267,9 @@ All of these tools work with **Enable AI analysis** turned off. Your workspace
 notes, boards, connections, reading progress, marks, and saved searches
 belong to the selected workspace and are stored in `notebook.json`. They are
 never sent to a model.
+Long-form research notes and their images are also private to the workspace,
+stored separately in `research-notes.json` and `note-images/`, and never sent
+to a model.
 
 - **Workspace notes**, in the sidebar, opens one document for the selected
   workspace. Write questions, thoughts, and next steps, using headings for
@@ -269,10 +277,12 @@ never sent to a model.
   Notes also save when you close the editor or switch tools or workspaces.
   If saving fails, your text stays in the editor so you can retry. If another
   window changes the notes, copy your text before reloading the saved version.
-- **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
-  passage on the page and choose **Capture selected passage** to fill the quote
-  and page fields. Write the claim in your own words, optionally add a note, and
+- **Read & capture**, in a paper's header, opens an offline PDF reader. Scroll
+  continuously between pages; the page number and saved reading position follow
+  as you read. Select a passage on the page and choose **Capture selected passage**
+  to fill the quote and page fields. Write the claim in your own words, optionally add a note, and
   save. Quotes receive the same local verification as ordinary manual claims.
+  Your unfinished claim and its source page stay intact while you scroll or zoom.
   Pages with no selectable text can still be read and transcribed by hand.
 - **Marks**, in the same reader, annotate a paper without creating a claim.
   **Highlight selected passage** marks text on the page; **Mark a figure** lets
@@ -304,6 +314,28 @@ never sent to a model.
 - **Saved searches** remember the current query, paper, topic, label, claim kind,
   review and quote-verification filters, and grouping. Opening one runs those
   filters against the current corpus, so new matching claims appear naturally.
+- **Research notes** are a separate writing space for arguments, literature
+  reviews, derivations, and experiment plans. Open **Research notes** in the
+  sidebar to create, search, rename, and write notes in Markdown with a live
+  preview. Choose Write, Split, or Preview to suit the task. Headings, lists,
+  blockquotes, code, and tables render alongside inline LaTeX (`$...$`) and
+  display equations (`$$...$$`). The toolbar inserts common formatting,
+  equations, tables, and images. Upload, drop, or paste PNG, JPEG, GIF, or WebP
+  images up to 10 MB; images and equation fonts are stored locally, so writing
+  and rendering work offline. Remote image links appear as placeholders until
+  you upload the image.
+  **Link note or paper** searches your notes and library and inserts a link
+  at the cursor. Follow it in the preview, or use **Linked research** below
+  the editor. **Backlinks** lists other saved notes that refer to the current
+  note; removed destinations are marked as missing. Note links can be bookmarked
+  and reopen the right note and workspace. Ordinary Markdown web links open
+  in another tab.
+  Save with **Save note** or Command/Ctrl+S. Leaving unsaved writing asks before
+  discarding it. A conflicting save keeps your draft; **Reload saved version**
+  lets you inspect the saved text before explicitly replacing your draft.
+  **Export Markdown** downloads your current writing, including an unsaved
+  draft. Image and library links use absolute URLs back to this Doxograph
+  installation; this is an export, not two-way Markdown synchronization.
 - **Reading queue** keeps an ordered list of papers with queued, reading, and
   finished states, independently of claim review. The reader saves your page
   position; bookmark pages and resume them from the queue.
@@ -358,7 +390,8 @@ downloaded PDFs and in-progress notes.
 
 For compatibility, the Default workspace uses the data-directory root shown
 below. Named workspaces repeat that same structure under
-`workspaces/<workspace-id>/`; `workspaces.json` records their display names.
+`workspaces/<workspace-id>/`; `workspaces.json` records workspace display names,
+including a custom name for the Default workspace when one is set.
 Command-line commands operate on the Default workspace.
 
 ```text
@@ -375,6 +408,8 @@ tensions.json        where papers disagree, and what you decided about each
 syntheses.json       what the papers hold on each topic
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
+research-notes.json  your long-form Markdown notes, with per-note revisions
+note-images/        local images embedded in research notes
 export/              generated HTML
 ```
 
@@ -623,16 +658,62 @@ is kept either way: `--replace-reviewed` asks for your review decisions to be
 thrown out, not your writing, and a note is the one thing on a claim a re-read
 cannot produce again. Delete the claim to be rid of it.
 
-The PDF is sent with a cache breakpoint on it, so a second read of the same
+With Anthropic, the PDF is sent with a cache breakpoint on it, so a second read of the same
 paper within the hour hits the prompt cache. On a 77k-token paper that is the
 difference between paying for 77k input tokens and paying for about a tenth of
 that.
 
 ## Model
 
-`claude-opus-5` by default; set `DOXOGRAPH_MODEL` to change it. Extraction uses
-adaptive thinking at high effort and a JSON schema, so the response is validated
-structurally before it reaches the store.
+Open **Settings → AI analysis**, choose a provider, enter its exact model name,
+and click **Save provider**. The selection survives restarts and applies to all
+workspaces and the CLI. Each provider remembers its model and endpoint. Changes
+apply to new operations; running operations finish with their original provider.
+
+| Provider | Setup | Paper input |
+| --- | --- | --- |
+| Anthropic (default) | `ANTHROPIC_API_KEY`; defaults to `claude-opus-5` | Native PDF upload and prompt caching |
+| OpenAI | `OPENAI_API_KEY`; enter a model supporting JSON Schema output | Page-numbered text extracted locally |
+| Ollama (local) | Start Ollama, download a model, enter its name; defaults to `http://localhost:11434` | Page-numbered text extracted locally |
+| OpenAI-compatible | Start a server such as LM Studio; enter model and API base URL, typically `http://localhost:1234/v1`; optional `DOXOGRAPH_API_KEY` | Page-numbered text extracted locally |
+
+Keys come from the environment or matching `NAME=value` lines in
+`~/.credentials` (override with `DOXOGRAPH_CREDENTIALS_FILE`). Anthropic also
+supports the SDK's own authentication resolution. Keys are never included in
+browser state or saved provider settings.
+
+For local analysis, use a localhost endpoint and a downloaded local model.
+Analysis sends paper text, research context, vocabulary, ledger claims, and
+relevant extracted claims only to the selected endpoint. It never falls back
+to a cloud provider. Importing a remote reference still downloads the paper;
+use a local PDF when working offline. No model is bundled or downloaded by
+Doxograph.
+
+Text-based providers cannot read scanned PDFs without OCR, figures, or layout
+that the PDF text extractor misses. Ollama uses a 65,536-token context budget
+and rejects prompts that conservatively exceed it rather than sending a
+partial paper. Local models need enough memory for that context. Other
+endpoints must support the supplied JSON Schema and enough context for the
+whole paper; unsupported requests fail without changing the paper's analysis.
+Malformed, refused, and truncated responses are rejected before saving.
+Model quality varies; extracted claims and quotes still need review.
+
+For CLI-only setup, set `DOXOGRAPH_PROVIDER` (`anthropic`, `openai`, `ollama`,
+or `openai-compatible`), `DOXOGRAPH_MODEL`, and optionally `DOXOGRAPH_BASE_URL`.
+Saved settings take precedence over these defaults. For example, before saving
+provider settings:
+
+```bash
+DOXOGRAPH_PROVIDER=ollama DOXOGRAPH_MODEL=your-downloaded-model doxograph extract
+```
+
+All five operations—extraction, retagging, agreements, tensions, and synthesis—
+use the selected provider. Changing provider, endpoint, or model invalidates
+cached topic passes. Extraction records its provider, endpoint, and model;
+existing reviewed claims and manual edits retain their usual protections.
+
+The adapters follow the [OpenAI chat completion API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+and [Ollama structured output API](https://docs.ollama.com/capabilities/structured-outputs).
 
 ## Tuning
 
