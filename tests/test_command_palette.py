@@ -1,14 +1,14 @@
 """The command palette uses current workspace data and respects editing dialogs."""
 
-import asyncio
 from pathlib import Path
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 
+from browser_support import browser_session, run_browser
 from doxograph import config, notebook, store
-from test_browser import _paper, _polled, _server
+from test_browser import _paper, _poll, _server
 
 
 @pytest.mark.browser
@@ -29,8 +29,7 @@ def test_command_palette_destinations_and_actions(engine):
     store.write_json(config.data_dir() / "notebook.json", data)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={"width": 1440, "height": 1000})
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
@@ -109,9 +108,8 @@ def test_command_palette_destinations_and_actions(engine):
                 await expect(page.locator("#help")).to_be_visible()
                 await expect(palette).not_to_be_visible()
                 assert not errors
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -121,8 +119,7 @@ def test_command_palette_map_loads_citation_arrows(engine):
     _paper("two", "The cited paper")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             citation_requests = []
 
@@ -142,14 +139,13 @@ def test_command_palette_map_loads_citation_arrows(engine):
                     edge => edge.type === 'cite' && edge.a === 'p:one' && edge.b === 'p:two'
                 )""")
                 await expect(page.locator("#command-palette")).not_to_be_visible()
-                await _polled(page)
+                await _poll(page)
                 assert len(citation_requests) == 1
                 assert await page.evaluate("""window.doxographGraph().edges.some(
                     edge => edge.type === 'cite' && edge.a === 'p:one' && edge.b === 'p:two'
                 )""")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -161,8 +157,7 @@ def test_command_palette_preserves_drafts_and_updates_with_workspace(engine):
         _paper("animal", "Animal paper", "gait")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -191,7 +186,7 @@ def test_command_palette_preserves_drafts_and_updates_with_workspace(engine):
                 data = httpx.get(url + "/api/notebook").json()
                 data["boards"].append({"id": "new", "title": "New board", "entries": []})
                 assert httpx.put(url + "/api/notebook", json=data).status_code == 200
-                await _polled(page)
+                await _poll(page)
                 await expect(page.locator("#command-results li")).to_have_count(1)
                 await expect(query).to_be_focused()
                 await page.keyboard.press("Escape")
@@ -203,6 +198,5 @@ def test_command_palette_preserves_drafts_and_updates_with_workspace(engine):
                 await expect(page.locator("#command-results li")).to_have_count(0)
                 await query.fill("animal paper")
                 await expect(page.locator("#command-results li")).to_have_count(1)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())

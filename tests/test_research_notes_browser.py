@@ -1,11 +1,10 @@
 """Exercise the offline writing workflow in the browser and native WebKit engine."""
-import asyncio
 from pathlib import Path
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright
 
+from browser_support import browser_session, run_browser
 from doxograph import config, store
 from test_browser import _server, _answer
 from test_research_notes import image_bytes
@@ -22,8 +21,7 @@ def test_rich_research_notes(engine):
     store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p,engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1600,'height':1100})
             errors, external = [], []
             page.on('pageerror',lambda error: errors.append(str(error)))
@@ -156,8 +154,8 @@ $$
                 assert await page.locator('#note-preview .note-missing-link').count() == 1
                 await dialog.get_by_role('button',name='Close research notes',exact=True).click()
                 assert not errors and not external
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -167,8 +165,7 @@ def test_note_workspace_navigation_and_writing_tools(engine):
     workspace = config.create_workspace('Replication studies')
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p,engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1280,'height':900})
             with _server() as url:
                 await page.goto(url+'/#ws='+workspace['id'])
@@ -219,5 +216,5 @@ def test_note_workspace_navigation_and_writing_tools(engine):
                 await ready(page)
                 assert await page.locator('#notes-list button').count() == 0
                 assert httpx.get(url+'/api/research-notes',headers={'X-Doxograph-Workspace':workspace['id']}).json()['notes'][0]['title'] == 'Replication protocol'
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())

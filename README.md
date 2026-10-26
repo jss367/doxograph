@@ -731,7 +731,23 @@ or too confidently worded. The retagger has its own, shorter prompt in
 .venv/bin/python -m pytest
 ```
 
-The suite is offline: its browser smoke test runs against a temporary local
+For the fast Python/API checks, browser executables do not need to be installed:
+
+```
+.venv/bin/python -m pytest -m "not browser" --durations=20
+```
+
+Run browser checks separately with `-m browser`. CI splits them across four
+jobs; run the same selection locally with, for example,
+`.venv/bin/python -m pytest -m browser --browser-shard=1/4 --durations=20`.
+The shards cover every browser case exactly once. Each pytest process reuses
+its Chromium and WebKit processes, while every scenario gets fresh browser
+contexts and a temporary server and corpus. Update checks can invoke the
+normal polling function directly; scheduling checks still exercise the real
+background timer. The final **Python and browser tests** CI check passes only
+when the Python job and every browser shard pass.
+
+The suite is offline: its browser checks run against a temporary local
 server and corpus. It covers reference parsing, the store and its status
 transitions, tag renaming and deletion across claims, the extraction merge
 including the keep-reviewed path, HTML escaping in the export, and BibTeX. In

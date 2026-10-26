@@ -4,8 +4,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 
+from browser_support import browser_session, run_browser
 from doxograph import config
 from test_browser import _answer, _server
 from test_research_tools_browser import ready
@@ -24,8 +25,7 @@ def test_workspace_notes_autosave_navigation_and_isolation(engine):
     other = config.create_workspace('Other research')
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -77,8 +77,8 @@ def test_workspace_notes_autosave_navigation_and_isolation(engine):
                 await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
                 assert httpx.get(url + '/api/notebook', headers=headers).json()['notes'] == ''
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -87,8 +87,7 @@ def test_workspace_notes_inflight_edits_failures_and_conflicts(engine):
     config.set_ai_enabled(False)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -158,5 +157,5 @@ def test_workspace_notes_inflight_edits_failures_and_conflicts(engine):
                 await expect(editor).to_have_value('A note from another window')
                 await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())

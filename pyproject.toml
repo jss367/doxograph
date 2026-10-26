@@ -39,5 +39,5 @@ doxograph = ["static/*", "static/vendor/*", "static/vendor/fonts/*", "static/ven
 [tool.pytest.ini_options]
 pythonpath = ["tests"]
 markers = [
-    "browser: localhost browser smoke tests",
+    "browser: localhost browser integration tests",
 ]

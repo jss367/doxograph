@@ -5,9 +5,10 @@ from pathlib import Path
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 from pypdf import PdfReader, PdfWriter
 
+from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
 from test_browser import _server, _answer
@@ -29,8 +30,7 @@ def test_research_tools_workflow(engine, uuid_available):
     store.add_tag('methods')
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             if not uuid_available:
                 await page.add_init_script("Object.defineProperty(crypto, 'randomUUID', {value: undefined})")
@@ -111,8 +111,8 @@ def test_research_tools_workflow(engine, uuid_available):
                 if not uuid_available:
                     assert all(len(value) == 32 and int(value, 16) >= 0 for value in identifiers)
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -123,8 +123,7 @@ def test_pdf_selection_capture_bookmarks_history_and_conflict(engine):
     store.pdf_path('paper').write_bytes(minimal_pdf(['Recovery depends on conditions.\nWe measured several tasks.','Second page findings.']))
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             errors, external = [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -250,8 +249,8 @@ def test_pdf_selection_capture_bookmarks_history_and_conflict(engine):
                 await ready(page)
                 assert await page.locator('#board-title').input_value() == 'Another window title'
                 assert not errors and not external
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -272,8 +271,7 @@ def test_pdf_continuous_scrolling_preserves_capture_and_reading_position(engine)
         writer.write(stream)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -370,8 +368,8 @@ def test_pdf_continuous_scrolling_preserves_capture_and_reading_position(engine)
                 await dialog.get_by_role('button', name='Reading queue', exact=True).click()
                 await ready(page)
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -394,8 +392,7 @@ def test_pdf_eviction_releases_idle_image_page_caches(engine):
     store.pdf_path('images').write_bytes(bytes(pdf.output()))
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -491,8 +488,8 @@ def test_pdf_eviction_releases_idle_image_page_caches(engine):
                 await expect(page.locator('#reader-page')).to_have_value('12')
                 await expect(page.locator('#capture-text')).to_have_value('Keep this interpretation while evicting pages.')
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -509,8 +506,7 @@ def test_short_final_pages_preserve_scroll_and_navigation_targets(engine, fits):
     last = len(writer.pages)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -587,8 +583,8 @@ def test_short_final_pages_preserve_scroll_and_navigation_targets(engine, fits):
                 await dialog.wait_for(state='hidden')
                 assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == last - 1
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -604,8 +600,7 @@ def test_large_pdf_opens_before_offscreen_metadata_and_preserves_position(engine
         writer.write(stream)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -659,8 +654,8 @@ def test_large_pdf_opens_before_offscreen_metadata_and_preserves_position(engine
                 await expect(page.locator('#reader-page')).to_have_value('500')
                 assert (await page.evaluate('window.pdfMetadataProbe.calls'))[start] == 500
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -672,8 +667,7 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
     store.pdf_path('paper').write_bytes(original)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000}, accept_downloads=True)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -742,5 +736,5 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
                 assert await dialog.locator('.marks-paper .highlight-entry').count() == 1
                 await page.screenshot(path='.context/marks.png')
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())

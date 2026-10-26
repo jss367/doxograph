@@ -1,13 +1,13 @@
 """Resume reading and review from the library without a model call."""
-import asyncio
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 
+from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
-from test_browser import _polled, _server
+from test_browser import _poll, _server
 from test_research_tools_browser import ready
 
 
@@ -21,8 +21,7 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
     store.add_claim('one', {'text': 'Recovery depends on the experimental conditions.', 'reviewed': False})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -60,8 +59,8 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
                 assert httpx.get(url + '/api/notebook').json()['reading'][0]['page'] == 2
                 await page.screenshot(path='.context/continue-reading.png')
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -75,8 +74,7 @@ def test_continue_review_clears_filters_and_handles_missing_sources(engine):
     other = store.add_claim('two', {'text': 'A remaining finding.', 'reviewed': False})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
             with _server() as url:
                 await page.goto(url)
@@ -108,19 +106,19 @@ def test_continue_review_clears_filters_and_handles_missing_sources(engine):
                 # through to another paper regardless of the current selection.
                 store.delete_claim('one', claims[1]['id'])
                 store.update_claim('one', claims[0]['id'], {'reviewed': True})
-                await _polled(page)
+                await _poll(page)
                 await expect(card).to_contain_text('A remaining finding.')
                 await card.get_by_role('button', name='Next unreviewed claim').click()
                 await expect(page.locator(f'.claim.sel[data-claim="{other["id"]}"]')).to_be_visible()
                 store.update_claim('two', other['id'], {'reviewed': True})
-                await _polled(page)
+                await _poll(page)
                 await expect(card).to_contain_text('All claims reviewed.')
                 assert not await card.locator('[data-continue="review"]').count()
                 store.delete_paper('two')
-                await _polled(page)
+                await _poll(page)
                 await expect(card).to_be_hidden()
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -131,8 +129,7 @@ def test_continue_shortcuts_are_scoped_to_each_workspace():
         store.save_paper(store.new_paper('same', title='Other workspace research'))
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -148,8 +145,8 @@ def test_continue_shortcuts_are_scoped_to_each_workspace():
                 await expect(card).to_contain_text('Default research')
                 await page.reload()
                 await expect(card).to_contain_text('Default research')
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -170,8 +167,7 @@ def test_fresh_paper_links_replace_saved_visits_and_clear_the_old_cursor(engine)
         return await page.evaluate('(workspace) => JSON.parse(localStorage.getItem(`doxograph-continue:${workspace}`))', workspace)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             context = await browser.new_context()
             with _server() as url:
                 # Both workspaces start with an actual saved paper and cursor.
@@ -198,5 +194,5 @@ def test_fresh_paper_links_replace_saved_visits_and_clear_the_old_cursor(engine)
                     await page.goto(f'{url}/#ws={workspace}')
                     await expect(title).to_have_text(f'{workspace}: Freshly linked paper')
                     await page.close()
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
