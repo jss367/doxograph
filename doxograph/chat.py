@@ -21,32 +21,35 @@ SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"}},
 @config.bind_model_access
 def answer(key: str, messages: list[dict]) -> dict:
     config.require_ai_enabled()
-    paper = store.load_paper(key)
-    api = extract.client()
-    document = extract.paper_document(key, api)
-    prompt = f"Paper: {paper.get('title') or key}\n\nConversation:\n{json.dumps(messages, ensure_ascii=False)}"
+    # Keep uploads alive until the answer finishes, as extraction does.
+    # Deletion then sees every uploaded file ID and can clean it up.
+    with store.extraction_lock(key):
+        paper = store.load_paper(key)
+        api = extract.client()
+        document = extract.paper_document(key, api)
+        prompt = f"Paper: {paper.get('title') or key}\n\nConversation:\n{json.dumps(messages, ensure_ascii=False)}"
 
-    def ask(document):
-        return extract._create(api, model=config.model(), max_tokens=6000, system=SYSTEM,
-            schema=SCHEMA, effort="medium",
-            messages=[{"role": "user", "content": [document, {"type": "text", "text": prompt}]}])
+        def ask(document):
+            return extract._create(api, model=config.model(), max_tokens=6000, system=SYSTEM,
+                schema=SCHEMA, effort="medium",
+                messages=[{"role": "user", "content": [document, {"type": "text", "text": prompt}]}])
 
-    try:
-        response = ask(document)
-    except (anthropic.BadRequestError, anthropic.NotFoundError) as exc:
-        file_id = document.get("source", {}).get("file_id")
-        if not file_id or file_id not in str(exc):
-            raise
-        response = ask(extract._pdf_block(key, force_upload=True))
-    try:
-        payload = extract._answer(response, "paper chat", key)
-    except json.JSONDecodeError as exc:
-        raise providers.ProviderResponseError("The model returned invalid JSON. Please retry.") from exc
-    if not isinstance(payload, dict):
-        raise providers.ProviderResponseError("The model returned an invalid answer. Please retry.")
-    if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
-        raise RuntimeError("The model returned no answer. Please retry.")
-    assistant = "ChatGPT" if isinstance(api, codex_cli.Client) else "Claude"
-    if isinstance(api, providers.TextClient):
-        assistant = config.PROVIDERS[api.selected.provider]["label"]
-    return {"answer": payload["answer"], "model": config.model(), "assistant": assistant}
+        try:
+            response = ask(document)
+        except (anthropic.BadRequestError, anthropic.NotFoundError) as exc:
+            file_id = document.get("source", {}).get("file_id")
+            if not file_id or file_id not in str(exc):
+                raise
+            response = ask(extract._pdf_block(key, force_upload=True))
+        try:
+            payload = extract._answer(response, "paper chat", key)
+        except json.JSONDecodeError as exc:
+            raise providers.ProviderResponseError("The model returned invalid JSON. Please retry.") from exc
+        if not isinstance(payload, dict):
+            raise providers.ProviderResponseError("The model returned an invalid answer. Please retry.")
+        if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
+            raise RuntimeError("The model returned no answer. Please retry.")
+        assistant = "ChatGPT" if isinstance(api, codex_cli.Client) else "Claude"
+        if isinstance(api, providers.TextClient):
+            assistant = config.PROVIDERS[api.selected.provider]["label"]
+        return {"answer": payload["answer"], "model": config.model(), "assistant": assistant}

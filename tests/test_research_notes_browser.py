@@ -16,6 +16,55 @@ async def ready(page):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine',['chromium','webkit'])
+def test_same_note_image_can_be_retried_and_inserted_twice(engine, tmp_path):
+    config.set_ai_enabled(False)
+    image = tmp_path / 'figure.png'
+    image.write_bytes(image_bytes())
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            attempts = 0
+
+            async def upload(route):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    await route.fulfill(status=503, json={'detail':'Upload unavailable. Try again.'})
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/research-notes/images', upload)
+            with _server() as url:
+                note = httpx.post(url+'/api/research-notes', json={'title':'Repeated figures'}).json()
+                await page.goto(url)
+                await page.get_by_role('button',name='Research notes',exact=True).click()
+                await ready(page)
+                dialog = page.locator('#research-notes')
+                for attempt in range(1, 4):
+                    async with page.expect_file_chooser() as chooser:
+                        await dialog.get_by_role('button',name='Image',exact=True).click()
+                    await (await chooser.value).set_files(str(image))
+                    if attempt == 1:
+                        await page.get_by_text('Upload unavailable. Try again.',exact=True).wait_for()
+                        assert await page.locator('#note-preview img').count() == 0
+                    else:
+                        await page.wait_for_function(
+                            "count => document.querySelectorAll('#note-preview img').length === count",
+                            arg=attempt - 1, timeout=5000)
+                    await ready(page)
+                    assert attempts == attempt
+                await dialog.get_by_role('button',name='Save note',exact=True).click()
+                await ready(page)
+                saved = httpx.get(url+'/api/research-notes').json()['notes'][0]
+                assert saved['id'] == note['id']
+                assert saved['body'].count('![figure.png](') == 2
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine',['chromium','webkit'])
 def test_rich_research_notes(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
@@ -68,7 +117,9 @@ $$
                 assert await page.evaluate('window.noteUnsafe') is None
                 assert await page.locator('#note-preview [href^="javascript:"]').count() == 0
                 assert await page.locator('#note-preview img').count() == 0
-                await page.locator('#note-image').set_input_files({'name':'recovery.png','mimeType':'image/png','buffer':image_bytes()})
+                async with page.expect_file_chooser() as chooser:
+                    await dialog.get_by_role('button',name='Image',exact=True).click()
+                await (await chooser.value).set_files({'name':'recovery.png','mimeType':'image/png','buffer':image_bytes()})
                 await ready(page)
                 await page.wait_for_function("document.querySelector('#note-preview img')?.complete")
                 assert await page.locator('#note-preview img').evaluate('(img) => img.naturalWidth') == 80

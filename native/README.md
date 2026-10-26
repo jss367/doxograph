@@ -56,6 +56,9 @@ and then relaunching the app.
 
 ## What it adds
 
+- **Export downloads.** Markdown, CSV, and annotated PDF exports open a save
+  dialog. Replacing an existing file keeps its previous contents until the
+  new download completes successfully.
 - **Dock drops.** PDFs dropped on the icon, or opened with Doxograph from
   Finder, are posted to `/api/upload`, the same endpoint the page uses. Dropping
   a paper on the icon while the app is closed launches it and adds the paper.
@@ -211,12 +214,20 @@ A Dock launch inherits none of your shell environment, so `ANTHROPIC_API_KEY`
 exported in `.zshrc` is invisible to it. Put the key in `~/.credentials` as
 `ANTHROPIC_API_KEY=...`, which is where the server looks next.
 
+## Tests
+
+On macOS, `native/test-downloads.sh` checks exports with the real WebKit
+navigation and download handlers, including replacement, cancellation, and
+interrupted transfers. It uses a temporary local server and files, without
+opening save dialogs. `native/test-quit.sh` checks quit and relaunch behavior.
+
 ## Layout
 
 ```
 Sources/AppDelegate.swift       launch, drops, quitting
 Sources/ServerController.swift  starting, adopting and stopping the server
 Sources/WebWindow.swift         the window, link handling, page dialogs
+Sources/DownloadController.swift saving exported files through WebKit
 Sources/Uploader.swift          posting dropped PDFs to /api/upload
 Sources/Locate.swift            finding the doxograph command
 Sources/Updater.swift           pulling the checkout and rebuilding
