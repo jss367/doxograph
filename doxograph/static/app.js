@@ -5230,6 +5230,7 @@ const CommandPalette = (() => {
     const view = (id, title, next) => add(id, 'Action', title, '', () => {
       if (V.view === next) return;
       showView(next); syncHash(true); renderAll();
+      if (next === 'graph') loadCitations();
     });
     view('map', 'Open paper map', 'graph');
     view('tensions', 'Browse tensions', 'tensions');
