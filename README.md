@@ -258,10 +258,17 @@ by Accept; Discard just clears the proposal.
 
 ## Research without AI
 
-All of these tools work with **Enable AI analysis** turned off. Your boards,
-connections, reading progress, highlights, and saved searches belong to the
-selected workspace and are stored in `notebook.json`. They are never sent to a model.
+All of these tools work with **Enable AI analysis** turned off. Your workspace
+notes, boards, connections, reading progress, highlights, and saved searches
+belong to the selected workspace and are stored in `notebook.json`. They are
+never sent to a model.
 
+- **Workspace notes**, in the sidebar, opens one document for the selected
+  workspace. Write questions, thoughts, and next steps, using headings for
+  structure. Changes save automatically, with a visible saving or saved status.
+  Notes also save when you close the editor or switch tools or workspaces.
+  If saving fails, your text stays in the editor so you can retry. If another
+  window changes the notes, copy your text before reloading the saved version.
 - **Reading a paper.** Selecting a paper that has a PDF opens the paper itself
   in the middle of the page, scrolling through every page, with a rail on the
   right for what is yours: your note on the paper, your highlights, and the
@@ -518,6 +525,9 @@ rerun used to write over it.
 
 A claim is the machine's sentence about the paper. A note is yours, and it is
 the only thing here no model writes and no model reads.
+
+For questions and thoughts about the whole workspace, open **Workspace notes**
+in the sidebar. You get one document per workspace, saved automatically.
 
 A paper's note sits under the summary in its header, or at the top of the rail
 beside the paper when its PDF is open: **Write a note** opens a box, Save puts
