@@ -149,6 +149,46 @@ def test_pdf_selection_capture_bookmarks_history_and_conflict(engine):
                 await ready(page)
                 claim = httpx.get(url+'/api/state').json()['claims'][0]
                 assert claim['quote_verified'] is True and claim['locator'] == 'p. 1'
+                bounds = await page.locator('#pdf-page .textLayer span').first.bounding_box()
+                await page.mouse.move(bounds['x'] + .5, bounds['y'] + bounds['height'] / 2)
+                await page.mouse.down()
+                await page.mouse.move(bounds['x'] + bounds['width'] - .5, bounds['y'] + bounds['height'] / 2, steps=10)
+                await page.mouse.up()
+                await page.locator('#highlight-color').select_option('green')
+                await dialog.get_by_role('button',name='Highlight selected passage',exact=True).click()
+                await ready(page)
+                highlight = httpx.get(url+'/api/notebook').json()['highlights'][0]
+                assert highlight['text'] == 'Recovery depends on conditions.' and highlight['page'] == 1 and highlight['color'] == 'green'
+                assert len(highlight['rects']) == 1
+                mark = await page.locator('#pdf-page .highlightLayer .highlight-green').bounding_box()
+                assert abs(mark['x'] - bounds['x']) < 3 and abs(mark['width'] - bounds['width']) < 3
+                await page.locator('[data-highlight-note]').fill('Which conditions?')
+                await dialog.get_by_role('button',name='Save note',exact=True).click()
+                await ready(page)
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                # A note being edited is a draft: changing pages asks first and keeps the saved note.
+                await page.locator('[data-highlight-note]').fill('An unsaved thought')
+                await page.locator('#reader-zoom').select_option('1.6')
+                await ready(page)
+                assert await page.locator('[data-highlight-note]').input_value() == 'An unsaved thought'
+                await dialog.get_by_role('button',name='Next page',exact=True).click()
+                await _answer(page,'Discard changes')
+                await ready(page)
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                await dialog.get_by_role('button',name='Previous page',exact=True).click()
+                await ready(page)
+                assert await page.locator('[data-highlight-note]').input_value() == 'Which conditions?'
+                await dialog.get_by_role('button',name='Next page',exact=True).click()
+                await ready(page)
+                assert not await page.locator('#pdf-page .highlightLayer div').count()
+                await dialog.get_by_role('button',name='Page 1',exact=True).click()
+                await ready(page)
+                assert await page.locator('#pdf-page .highlightLayer div').count() == 1
+                await page.locator('#reader-zoom').select_option('2')
+                await ready(page)
+                bounds = await page.locator('#pdf-page .textLayer span').first.bounding_box()
+                mark = await page.locator('#pdf-page .highlightLayer div').bounding_box()
+                assert abs(mark['x'] - bounds['x']) < 4 and abs(mark['width'] - bounds['width']) < 4
                 await dialog.get_by_role('button',name='Next page',exact=True).click()
                 await ready(page)
                 await dialog.get_by_role('button',name='Bookmark this page',exact=True).click()
