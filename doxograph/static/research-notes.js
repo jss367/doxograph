@@ -298,7 +298,14 @@ const ResearchNotes = (() => {
     if (target.dataset.notesAction === 'close') { close(); return; }
     // Open the picker during the click, before run() disables the file input.
     // The change handler freezes the editor while the selected image uploads.
-    if (target.dataset.notesAction === 'image') { if (!busy) el('note-image').click(); return; }
+    if (target.dataset.notesAction === 'image') {
+      if (!busy) {
+        const picker = el('note-image');
+        picker.value = ''; // Re-selecting the same image must fire change, including after an upload failure.
+        picker.click();
+      }
+      return;
+    }
     run(() => action(target.dataset.notesAction, target));
   });
   el('research-notes').addEventListener('cancel', event => { event.preventDefault(); close(); });
