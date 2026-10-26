@@ -43,7 +43,7 @@ jobs:
   browser:
     name: Browser tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +62,20 @@ jobs:
           python -m pip install --require-hashes -r requirements-dev.lock
           python -m pip install --no-deps -e .
           python -m pip check
+      # Browser downloads are cached by Playwright version; the system packages
+      # still come from apt, which on some runners is slow enough to take the
+      # whole job. The step is given the time rather than cut short: killing
+      # it leaves apt-get holding the dpkg lock and every retry failing on it.
+      - name: Find the Playwright version
+        id: playwright
+        run: echo "version=$(python -c 'import importlib.metadata as m; print(m.version("playwright"))')" >> "$GITHUB_OUTPUT"
+      - name: Cache the browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       - name: Install Chromium and WebKit
+        timeout-minutes: 30
         run: python -m playwright install --with-deps chromium webkit
       - name: Run browser tests
         run: python -m pytest -m browser --browser-shard=${{ matrix.shard }}/4 -v --tb=short --durations=20
