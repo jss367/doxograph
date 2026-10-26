@@ -3768,8 +3768,11 @@ function graphFit() {
   const main = $('main');
   // Fill what is left of the pane below the header, so the map is on screen
   // whole rather than scrolling; never so short that it is useless.
-  const top = wrap.getBoundingClientRect().top - main.getBoundingClientRect().top;
-  const height = Math.max(288, main.clientHeight - top - 16);
+  const mainRect = main.getBoundingClientRect();
+  const top = wrap.getBoundingClientRect().top - mainRect.top + main.scrollTop;
+  // A wrapped header can put the pane's CSS bottom below the actual viewport.
+  const visibleHeight = Math.min(main.clientHeight, window.innerHeight - mainRect.top);
+  const height = Math.max(288, visibleHeight - top - 16);
   wrap.style.height = `${height}px`;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(wrap.clientWidth * dpr);
@@ -3864,6 +3867,7 @@ function renderGraph() {
     // wrapper's box as it was, which would never fire an observer on it.
     GRAPH.observer = new ResizeObserver(() => graphFit());
     GRAPH.observer.observe($('main'));
+    GRAPH.observer.observe(document.querySelector('header'));
     GRAPH.autofit = true;
     graphFit();
     graphHeat(1);
