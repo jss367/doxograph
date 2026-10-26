@@ -77,6 +77,34 @@ def test_paper_chat_uses_selected_api_or_local_provider(monkeypatch, provider):
     assert 'What did the study find?' in requests[0].content.decode()
 
 
+def test_paper_chat_explains_missing_pdf_text(monkeypatch):
+    select()
+    key = paper()
+    monkeypatch.setattr(quotes, 'paper_text', lambda *args, **kwargs: None)
+    with client() as c:
+        response = c.post(f'/api/papers/{key}/chat', json={
+            'messages': [{'role': 'user', 'content': 'What did the study find?'}]})
+    assert response.status_code == 400
+    assert 'no readable text' in response.json()['detail']
+
+
+@pytest.mark.parametrize('failure', ['offline', 'http-error'])
+def test_paper_chat_explains_endpoint_failures(monkeypatch, failure):
+    select()
+    key = paper()
+
+    def offline():
+        raise httpx.ConnectError('The local model endpoint could not be reached')
+
+    transport(monkeypatch, {'answer': 'unused'}, status=503 if failure == 'http-error' else 200,
+              during=offline if failure == 'offline' else None)
+    with client() as c:
+        response = c.post(f'/api/papers/{key}/chat', json={
+            'messages': [{'role': 'user', 'content': 'What did the study find?'}]})
+    assert response.status_code == 502
+    assert ('could not be reached' if failure == 'offline' else '503') in response.json()['detail']
+
+
 @pytest.mark.parametrize("provider", ["ollama", "openai", "openai-compatible"])
 def test_extraction_sends_page_text_and_schema_only_to_selected_provider(monkeypatch, provider):
     select(provider)
