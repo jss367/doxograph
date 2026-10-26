@@ -146,6 +146,8 @@ window.doxographWorkspaceId = currentWorkspaceId;
 // onto claims one-to-one. newClaim holds a claim being written by hand; it lives
 // only in the browser until Save, so navigating away or filtering it out cannot
 // leave a blank claim behind on the server.
+// parkedNewClaims keeps new claims whose paper scope was cleared or whose save
+// failed, keyed by their original paper so returning there can restore them.
 const NEW_CLAIM_ID = '__new__';
 // drafts holds unsaved editor contents, keyed by claim id: what was typed but
 // not yet saved, whether because the save failed or because something redrew the
@@ -180,7 +182,7 @@ const NEW_CLAIM_ID = '__new__';
 // but the reader's, so unlike a synthesis it is saved without flushing the
 // held deletes: no claim is read to write one.
 const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
-            editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
+            editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
@@ -193,6 +195,14 @@ function blankClaim(paper) {
     strength: 'supporting', tags: [], evidence: '', quote: '', locator: '',
     ledger_links: [], note: '', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
   };
+}
+
+function newClaimHasEdits(draft) {
+  if (!draft) return false;
+  const blank = blankClaim(draft.paper);
+  return ['text', 'kind', 'strength', 'tags', 'evidence', 'quote', 'locator',
+    'ledger_links', 'note', 'reviewed'].some((field) =>
+    JSON.stringify(draft[field]) !== JSON.stringify(blank[field]));
 }
 
 // Counts the claims the user picks by hand: j/k, n, a click on a card, a jump
@@ -1243,6 +1253,12 @@ async function pull() {
   // count, the sidebar entry the hold kept alive goes with it, and the filter
   // has to go too or it outlives the Undo it was being kept for.
   dropMissingFilters();
+  // A paper deleted in another window can never be reopened. Do not leave
+  // its unreachable drafts counted as unsaved edits on workspace switches.
+  const papers = new Set(S.papers.map((paper) => paper.key));
+  for (const key of Object.keys(V.parkedNewClaims)) {
+    if (!papers.has(key)) delete V.parkedNewClaims[key];
+  }
   return Boolean(next);
 }
 
@@ -1324,7 +1340,7 @@ function resetWorkspaceView() {
         kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
   Object.assign(V, {
     paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
-    editing: null, selectedId: null, newClaim: null, failedNewClaims: {}, drafts: {},
+    editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
@@ -1386,7 +1402,7 @@ async function switchWorkspace(workspaceId) {
     return;
   }
   const hasDraft = V.editing || V.synthEditing || V.noteEditing || V.newClaim
-    || Object.keys(V.failedNewClaims).length || Object.keys(V.drafts).length
+    || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty();
   if (hasDraft && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
                                        { ok: 'Discard and switch' })) return;
@@ -1432,6 +1448,69 @@ async function loadWorkspaces() {
 }
 
 // --- filtering ------------------------------------------------------------
+
+const FILTER_DEFAULTS = { paper: null, tag: null, label: null, q: '', kind: '',
+  unreviewed: false, unverified: false, tensionStatus: '', agreementStatus: '',
+  tensionFocus: null, agreementFocus: null };
+let activeFiltersHTML = null;
+
+function renderActiveFilters() {
+  const filters = [];
+  const add = (key, label) => { if (V[key]) filters.push([key, label]); };
+  add('paper', `Paper: ${S.papers.find((p) => p.key === V.paper)?.title || V.paper}`);
+  add('tag', `Topic: ${V.tag}`);
+  add('label', `Label: ${V.label}`);
+  if (V.q.trim()) add('q', `Search: ${V.q.trim()}`);
+  add('kind', `Kind: ${V.kind}`);
+  add('unreviewed', 'Unreviewed');
+  add('unverified', 'Quote not found');
+  if (V.view === 'tensions' || V.view === 'agreements') {
+    const prefix = V.view === 'tensions' ? 'tension' : 'agreement';
+    add(`${prefix}Status`, `Status: ${V[`${prefix}Status`]}`);
+    const focus = V[`${prefix}Focus`];
+    add(`${prefix}Focus`, `Claim: ${S.claims.find((c) => c.id === focus)?.text || 'no longer available'}`);
+  }
+  const container = $('active-filters');
+  const html = filters.map(([key, label]) => `<button type="button" class="filter-chip"
+    data-clear-filter="${key}" aria-label="${esc(`Remove filter: ${label}`)}" title="${esc(label)}">
+    <span class="filter-label">${esc(label)}</span><span class="filter-remove" aria-hidden="true">×</span>
+  </button>`).join('') + (filters.length
+    ? '<button type="button" class="clear-filters" data-clear-filter="all">Clear all</button>' : '');
+  // Polls and selection changes should leave a focused chip in place.
+  if (activeFiltersHTML !== html) {
+    container.innerHTML = html;
+    activeFiltersHTML = html;
+  }
+  container.hidden = !filters.length;
+}
+
+function clearFilters(key) {
+  if (key !== 'all' && !Object.hasOwn(FILTER_DEFAULTS, key)) return;
+  captureOpenEditor();
+  if (key === 'all' || key === 'paper') parkNewClaimForNavigation(null, { retainUnsaved: true });
+  if (key === 'all') Object.assign(V, FILTER_DEFAULTS);
+  else V[key] = FILTER_DEFAULTS[key];
+  $('q').value = V.q;
+  $('kind').value = V.kind;
+  $('only-unreviewed').checked = V.unreviewed;
+  $('only-unverified').checked = V.unverified;
+  if (key === 'all' || key === 'q') dropTextSearch();
+  if (V.view === 'research' && V.researchSaving) {
+    // The save owns the disabled form and inserts any failure beside it.
+    // Update the filters and sidebar while keeping that form connected.
+    render();
+    syncHash();
+  } else {
+    renderAll();
+  }
+  // The activated button has gone; leave keyboard users on the next action.
+  ($('active-filters').querySelector('button') || $('q')).focus();
+}
+
+$('active-filters').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-clear-filter]');
+  if (button) clearFilters(button.dataset.clearFilter);
+});
 
 // The phrase if the corpus holds it, otherwise the words.
 //
@@ -1697,6 +1776,7 @@ function render() {
   renderGraphNav();
   renderTags();
   renderLabels();
+  renderActiveFilters();
   if (!editorHolds()) renderContent();
   renderJobs();
   syncAnalysisControls();
@@ -2839,6 +2919,7 @@ function renderContent() {
   // reader did ask for off the screen, so the cursor is put back instead.
   const cursor = noteCursor();
   drawContent();
+  renderActiveFilters();
   restoreNoteCursor(cursor);
   renderContinuation();
   syncHash();
@@ -2894,12 +2975,12 @@ function drawContent() {
   if (V.newClaim && V.editing === NEW_CLAIM_ID) {
     shown.add(NEW_CLAIM_ID);
     html += editForm(V.newClaim);
-  } else if (V.newClaim && (V.newClaim.text || '').trim()) {
+  } else if (newClaimHasEdits(V.newClaim)) {
     // Held but not open — opening another claim's editor moved `V.editing`.
     // Without this the draft is unreachable: Add claim would overwrite it and
     // cancelling the other editor would drop it, losing the text silently.
     html += `<div class="proposed">
-      <span>Unsaved new claim: <em>${esc(V.newClaim.text.slice(0, 80))}${V.newClaim.text.length > 80 ? '…' : ''}</em></span>
+      <span>Unsaved new claim: <em>${esc(V.newClaim.text.slice(0, 80) || 'Details entered; claim text is still empty.')}${V.newClaim.text.length > 80 ? '…' : ''}</em></span>
       <span style="margin-left:auto"></span>
       <button type="button" data-act="resume-new">Resume</button>
       <button type="button" data-act="discard-new">Discard</button>
@@ -3836,20 +3917,20 @@ function closeEditorsNotBelongingTo(paper) {
   parkNewClaimForNavigation(paper);
 }
 
-function parkNewClaimForNavigation(paper) {
-  // Ordinary unsaved drafts are intentionally abandoned when leaving their
-  // paper. A failed submission is different: the user already clicked Save,
-  // so keep it outside the active-paper slot and restore it when they return.
+function parkNewClaimForNavigation(paper, { retainUnsaved = false } = {}) {
+  // Navigation normally abandons an ordinary new claim. Clearing paper scope
+  // keeps it, like a failed submission: park it under its original paper so
+  // it can be restored without offering a save to a hidden destination.
   if (V.newClaim && V.newClaim.paper !== paper) {
-    if (V.newClaim.saveFailed) {
-      V.failedNewClaims[V.newClaim.paper] = V.newClaim;
+    if ((retainUnsaved && newClaimHasEdits(V.newClaim)) || V.newClaim.saveFailed) {
+      V.parkedNewClaims[V.newClaim.paper] = V.newClaim;
     }
     V.newClaim = null;
     if (V.editing === NEW_CLAIM_ID) V.editing = null;
   }
-  if (!V.newClaim && paper && V.failedNewClaims[paper]) {
-    V.newClaim = V.failedNewClaims[paper];
-    delete V.failedNewClaims[paper];
+  if (!V.newClaim && paper && V.parkedNewClaims[paper]) {
+    V.newClaim = V.parkedNewClaims[paper];
+    delete V.parkedNewClaims[paper];
   }
 }
 
@@ -4216,13 +4297,13 @@ async function saveClaim(wrap, patch) {
       // can be gone by now. The user did click Save on this text, so put it
       // back rather than losing it to a failure they did not choose.
       const failedDraft = { ...blankClaim(paper), ...patch, saveFailed: true };
-      if ((!V.paper || V.paper === paper) &&
+      if (V.paper === paper &&
           (!V.newClaim || V.newClaim.paper === paper)) {
         V.newClaim = failedDraft;
       } else {
-        V.failedNewClaims[paper] = failedDraft;
+        V.parkedNewClaims[paper] = failedDraft;
       }
-      V.error = (!V.paper || V.paper === paper)
+      V.error = V.paper === paper
         ? `Could not save the claim: ${error.message}`
         : `Could not save a new claim in ${paper}: ${error.message}. `
           + 'What you typed is kept — open that paper to retry.';
@@ -4235,7 +4316,7 @@ async function saveClaim(wrap, patch) {
     captureOpenEditor();
     if (V.editing === NEW_CLAIM_ID) V.editing = null;
     V.newClaim = null;
-    delete V.failedNewClaims[paper];
+    delete V.parkedNewClaims[paper];
     await refreshAll();          // a row appeared, so the list has to be rebuilt
     return;
   }
@@ -4377,7 +4458,7 @@ async function removePaper(paper) {
       V.newClaim = null;
       if (V.editing === NEW_CLAIM_ID) V.editing = null;
     }
-    delete V.failedNewClaims[paper];
+    delete V.parkedNewClaims[paper];
     // The note draft goes the same way as the claim drafts. The key is retired
     // for good, so a draft kept under it can never be reopened or cancelled —
     // and every entry in `noteDrafts` counts as an unsaved edit, so one left
@@ -4771,7 +4852,7 @@ $('content').addEventListener('click', async (event) => {
       if (refuseWhileRemoving(paper, 'a new claim')) return;
       captureOpenEditor();
       // Resume a held draft rather than overwriting what was typed into it.
-      if (!V.newClaim || V.newClaim.paper !== paper || !(V.newClaim.text || '').trim()) {
+      if (!V.newClaim || V.newClaim.paper !== paper || !newClaimHasEdits(V.newClaim)) {
         V.newClaim = blankClaim(paper);
       }
       V.editing = NEW_CLAIM_ID;
@@ -5705,7 +5786,9 @@ async function pollOnce() {
   if (citationsFailed && V.view === 'graph') loadCitations();
   renderStats();
   renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
+  renderActiveFilters();
   if (!editorHolds()) renderContent();
+  syncHash();
   syncAnalysisControls();
   ResearchTools.sync();
   CommandPalette.sync();
