@@ -227,7 +227,10 @@ def run_concurrently(items: list, work, workers: int | None = None):
     # queued together still make PASS_WORKERS calls between them.
     workers = min(workers or config.PASS_WORKERS, len(items))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
-        futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
+        # Bind once before copying contexts, including work that waits for a
+        # worker. Release it before yielding so the caller's context stays free.
+        with config.use_ai_provider(config.ai_provider()):
+            futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
         for future in as_completed(futures):
             item = futures[future]
             try:

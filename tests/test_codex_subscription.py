@@ -3,11 +3,12 @@
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
-from doxograph import chat, codex_cli, config, extract, quotes, store
+from doxograph import __main__, chat, codex_cli, config, extract, ingest, quotes, server, store
 
 
 @pytest.fixture
@@ -125,4 +126,57 @@ def test_provider_binding_resets_after_failure(codex):
 
     with pytest.raises(RuntimeError, match='failed'):
         running()
+    assert config.ai_provider() == 'api'
+
+
+@pytest.mark.parametrize('provider', ['codex', 'claude_code'])
+def test_cli_batch_keeps_subscription_for_items_waiting_for_a_worker(provider):
+    config.set_ai_provider(provider)
+    seen = []
+
+    def work(item):
+        seen.append(config.ai_provider())
+        config.set_ai_provider('api')
+        return item
+
+    results = list(extract.run_concurrently([1, 2, 3], work, workers=1))
+    assert seen == [provider] * 3
+    assert all(error is None for _, _, error in results)
+    assert config.ai_provider() == 'api'
+
+
+@pytest.mark.parametrize('provider', ['codex', 'claude_code'])
+def test_server_batch_keeps_subscription_selected_before_queue_delay(provider, monkeypatch):
+    config.set_ai_provider(provider)
+    job = server._new_job('retag')
+    # Model access changes while the whole job is waiting for the server pool.
+    config.set_ai_provider('api')
+    monkeypatch.setattr(config, 'PASS_WORKERS', 1)
+    seen = []
+
+    def retag(key):
+        seen.append((key, config.ai_provider()))
+        config.set_ai_provider('api')
+
+    monkeypatch.setattr(extract, 'retag_paper', retag)
+    server._run_retag(job, ['first', 'second', 'third'])
+    assert job['state'] == 'done'
+    assert seen == [(key, provider) for key in ['first', 'second', 'third']]
+    assert config.ai_provider() == 'api'
+
+
+def test_cli_import_keeps_subscription_during_downloads(codex, monkeypatch):
+    seen = []
+
+    def download(ref):
+        key = f'paper{len(seen)}'
+        store.save_paper(store.new_paper(key))
+        store.pdf_path(key).write_bytes(b'%PDF')
+        config.set_ai_provider('api')
+        return key, True
+
+    monkeypatch.setattr(ingest, 'ingest_ref', download)
+    monkeypatch.setattr(extract, 'extract_paper', lambda key: seen.append(config.ai_provider()))
+    assert __main__.cmd_add(SimpleNamespace(refs=['2602.06941', '2602.01234'], no_extract=False)) == 0
+    assert seen == ['codex', 'codex']
     assert config.ai_provider() == 'api'

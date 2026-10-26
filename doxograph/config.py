@@ -122,12 +122,19 @@ def bind_model_access(work):
     """Keep a running operation on the provider it started with."""
     @functools.wraps(work)
     def bound(*args, **kwargs):
-        token = _analysis_provider.set(ai_provider())
-        try:
+        with use_ai_provider(ai_provider()):
             return work(*args, **kwargs)
-        finally:
-            _analysis_provider.reset(token)
     return bound
+
+
+@contextlib.contextmanager
+def use_ai_provider(provider: str):
+    """Use an operation's saved provider without changing installation settings."""
+    token = _analysis_provider.set(provider)
+    try:
+        yield
+    finally:
+        _analysis_provider.reset(token)
 
 
 def set_ai_provider(provider: str) -> None:

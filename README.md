@@ -671,7 +671,8 @@ The Claude options use `claude-opus-5` by default; set `DOXOGRAPH_MODEL` to chan
 it. The ChatGPT option uses Codex's default model; set `DOXOGRAPH_CODEX_MODEL`
 to choose another. Extraction requests high effort and a JSON schema, so the
 response is validated structurally before it reaches the store. Switching
-providers affects new work; running operations keep their original provider.
+providers affects new work; queued and running operations keep the provider
+selected when submitted. Retrying a failed import uses the current selection.
 
 ## Tuning
 

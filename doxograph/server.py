@@ -446,6 +446,7 @@ def _new_job(label: str) -> dict:
         job = {"id": _job_counter, "label": label, "state": "queued",
                "detail": "", "key": None, "started": store.now()}
         job["workspace"] = config.workspace_id()
+        job["ai_provider"] = config.ai_provider()
         _jobs[job["id"]] = job
         return job
 
@@ -537,10 +538,13 @@ def _prune_jobs() -> None:
 
 
 def _workspace_job(function):
-    """Keep a queued job in the corpus from which it was submitted."""
+    """Keep the workspace and model access selected when the job was queued."""
     @functools.wraps(function)
     def wrapped(job: dict, *args, **kwargs):
-        with config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)):
+        with (
+            config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)),
+            config.use_ai_provider(job.get("ai_provider", config.ai_provider())),
+        ):
             return function(job, *args, **kwargs)
     return wrapped
 
@@ -1210,8 +1214,8 @@ def retry_import(job_id: int) -> dict:
         source = job.get("_import")
         if not source:
             raise HTTPException(409, "This job cannot be retried. Add the paper again.")
-        previous = {field: job.get(field, "") for field in ("detail", "explanation", "started")}
-        job.update(state="queued", detail="", explanation="", started=store.now())
+        previous = {field: job.get(field, "") for field in ("detail", "explanation", "started", "ai_provider")}
+        job.update(state="queued", detail="", explanation="", started=store.now(), ai_provider=config.ai_provider())
     try:
         if "ref" in source:
             _pool.submit(_run_ingest, job, source["ref"], source["extract"])
