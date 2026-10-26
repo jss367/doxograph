@@ -274,6 +274,8 @@ const ResearchTools = (() => {
     const progress = notebook.reading.find(r => r.paper === reader.paper);
     progress.page = reader.page;
     await save();
+    rememberContinuation(reader.paper);
+    renderContinuation();
     el('research-body').querySelector('[data-tool="bookmark"]').textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page';
   }
   async function discardDrafts() {
