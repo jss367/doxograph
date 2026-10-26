@@ -80,6 +80,35 @@ def test_parallel_writers_preserve_notes_and_reject_stale_edits(client):
     assert len(research_notes.load()) == 8
 
 
+def test_exports_make_research_links_absolute_and_preserve_drafts_and_code(client):
+    links = ('[Note](/?note=' + 'a'*32 + '#ws=default)\n'
+             '[Paper](/#ws=default&paper=one)\n'
+             '![Figure](/api/research-notes/images/' + 'b'*64 + '.png?workspace=default)\n'
+             '[reference]: /?note=' + 'a'*32 + '#ws=default\n')
+    literal = ('`[Example](/#paper=one)`\n\n'
+               '```markdown\n[Example](/#paper=one)\n```\n\n'
+               '    [Example](/#paper=one)\n\n'
+               '> ~~~markdown\n> [Example](/#paper=one)\n> ~~~\n')
+    body = links + '\n[Web](https://example.org/paper)\n\n' + literal
+    note = client.post('/api/research-notes',json={'title':'Saved argument','body':body}).json()
+    exported = client.get('/api/research-notes/'+note['id']+'/export')
+    expected = links.replace('](/','](http://127.0.0.1:8765/').replace(']: /',']: http://127.0.0.1:8765/')
+    assert exported.text == '# Saved argument\n\n' + expected + '\n[Web](https://example.org/paper)\n\n' + literal
+    draft = client.post('/api/research-notes/export',json={'title':'Unsaved argument','body':body+'\nMore writing.'})
+    assert draft.status_code == 200
+    assert draft.text.startswith('# Unsaved argument\n\n'+expected)
+    assert draft.text.endswith('More writing.')
+    assert client.get('/api/research-notes').json()['notes'] == [note]
+
+
+def test_export_distinguishes_list_links_from_indented_and_fenced_examples(client):
+    body = ('- Evidence:\n\n    [Paper](/#paper=one)\n\n'
+            '  ```markdown\n  [Example](/#paper=one)\n  ```\n\n'
+            '      [Example](/#paper=one)\n')
+    response = client.post('/api/research-notes/export',json={'title':'Lists','body':body})
+    assert response.text == '# Lists\n\n'+body.replace('[Paper](/#paper=one)','[Paper](http://127.0.0.1:8765/#paper=one)')
+
+
 @pytest.mark.parametrize('payload',[{'title':' '},{'title':'x','body':'x'*2_000_001},{'title':'x','extra':'unexpected'}])
 def test_invalid_notes_are_rejected_without_writing(client,payload):
     assert client.post('/api/research-notes',json=payload).status_code == 422

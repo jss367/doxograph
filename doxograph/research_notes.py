@@ -4,11 +4,13 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import uuid
 import warnings
 from typing import Annotated
+from urllib.parse import urljoin
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
@@ -88,12 +90,77 @@ def delete_note(note_id: NoteId, revision: Annotated[int, Query(ge=1)]) -> dict:
         return {"deleted": note_id}
 
 
-@router.get("/{note_id}/export")
-def export_note(note_id: NoteId) -> Response:
-    note = find(load(), note_id)
-    filename = (store.slugify(note["title"]) or "research-note")[:120] + ".md"
-    return Response("# " + note["title"] + "\n\n" + note["body"], media_type="text/markdown",
+def absolute_research_links(body: str, base_url: str) -> str:
+    """Keep Markdown source while making this installation's links portable."""
+    destinations = re.compile(
+        r"(?P<code>(?<!`)(?P<ticks>`+)(?!`)[\s\S]*?(?<!`)(?P=ticks)(?!`))"
+        r"|(?P<prefix>\]\([ \t]*<?|^[ ]{0,3}\[[^\]\n]+\]:[ \t]*<?)"
+        r"(?P<url>/(?:api/research-notes/images/|[?#])[^\s)>]*)", re.MULTILINE)
+
+    def replace(match):
+        if match.group("code") is not None:
+            return match.group()
+        return match.group("prefix") + urljoin(base_url, match.group("url"))
+
+    output, prose = [], []
+    fence = None
+    list_indents = []
+
+    def flush():
+        output.append(destinations.sub(replace, "".join(prose)))
+        prose.clear()
+
+    for line in body.splitlines(keepends=True):
+        # Quote containers do not change whether a fenced example is code.
+        normalized = re.sub(r"^(?: {0,3}>[ \t]?)+", "", line)
+        indent = len(normalized) - len(normalized.lstrip(" "))
+        item = None
+        if normalized.strip() and not fence:
+            while list_indents and indent < list_indents[-1]:
+                list_indents.pop()
+            base = list_indents[-1] if list_indents else 0
+            item = re.match(r"^ *(?:[-+*]|\d+[.)])[ \t]+", normalized)
+            if item and indent - base < 4:
+                list_indents.append(item.end())
+        if list_indents and indent >= list_indents[-1]:
+            normalized = normalized[list_indents[-1]:]
+        elif item and list_indents:
+            normalized = normalized[item.end():]
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", normalized.rstrip("\r\n"))
+        if fence:
+            output.append(line)
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = None
+        elif marker:
+            flush()
+            fence = marker[1]
+            output.append(line)
+        elif normalized.startswith(("    ", "\t")):
+            flush()
+            output.append(line)  # Indented code remains a literal example.
+        else:
+            prose.append(line)
+    flush()
+    return "".join(output)
+
+
+def markdown_export(title: str, body: str, request: Request) -> Response:
+    filename = (store.slugify(title) or "research-note")[:120] + ".md"
+    content = "# " + title + "\n\n" + absolute_research_links(body, str(request.base_url))
+    return Response(content, media_type="text/markdown",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/{note_id}/export")
+def export_note(note_id: NoteId, request: Request) -> Response:
+    note = find(load(), note_id)
+    return markdown_export(note["title"], note["body"], request)
+
+
+@router.post("/export")
+def export_draft(body: NoteBody, request: Request) -> Response:
+    # Export a conflicting or unsaved draft without changing the stored note.
+    return markdown_export(body.title, body.body, request)
 
 
 @router.post("/images", status_code=201)

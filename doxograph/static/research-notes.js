@@ -257,7 +257,11 @@ const ResearchNotes = (() => {
     }
     if (name === 'export') {
       // Export the current draft so unsaved writing can be recovered on conflict.
-      const url = URL.createObjectURL(new Blob(['# ' + draft.title + '\n\n' + draft.body], {type:'text/markdown;charset=utf-8'}));
+      const response = await fetch('/api/research-notes/export', {method:'POST',
+        headers:{'Content-Type':'application/json','X-Doxograph-Workspace':workspace},
+        body:JSON.stringify({title:draft.title,body:draft.body})});
+      if (!response.ok) throw new Error('Could not export this note. Your writing is still in the editor.');
+      const url = URL.createObjectURL(await response.blob());
       const link = document.createElement('a'); link.href = url; link.download = (draft.title.replace(/[^a-zA-Z0-9_-]+/g,'-').slice(0,100) || 'research-note') + '.md';
       link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); return;
     }

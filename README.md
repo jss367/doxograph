@@ -317,7 +317,7 @@ to a model.
   discarding it. A conflicting save keeps your draft; **Reload saved version**
   lets you inspect the saved text before explicitly replacing your draft.
   **Export Markdown** downloads your current writing, including an unsaved
-  draft. Image and library links in that file refer back to this Doxograph
+  draft. Image and library links use absolute URLs back to this Doxograph
   installation; this is an export, not two-way Markdown synchronization.
 - **Reading queue** keeps an ordered list of papers with queued, reading, and
   finished states, independently of claim review. The reader saves your page

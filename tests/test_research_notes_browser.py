@@ -109,7 +109,12 @@ $$
                 assert await page.locator('#note-title').input_value() == 'My unsaved argument'
                 async with page.expect_download() as download:
                     await dialog.get_by_role('button',name='Export Markdown',exact=True).click()
-                assert (await download.value).suggested_filename == 'My-unsaved-argument.md'
+                downloaded = await download.value
+                assert downloaded.suggested_filename == 'My-unsaved-argument.md'
+                exported = Path(await downloaded.path()).read_text()
+                assert exported.startswith('# My unsaved argument\n\n')
+                assert ']('+url+'/api/research-notes/images/' in exported
+                assert ']('+url+'/#ws=default&paper=paper)' in exported
                 await ready(page)
                 await dialog.get_by_role('button',name='Reload saved version',exact=True).click()
                 await ready(page)
