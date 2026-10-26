@@ -42,6 +42,45 @@ def test_notebook_workspace_isolation_and_conflict(client):
     assert client.get('/api/state').json()['notebook'] == response.json()
 
 
+def test_workspace_notes_migration_isolation_and_concurrent_board_edits(client):
+    # Existing notebooks load with an empty document, without a migration step.
+    store.write_json(config.data_dir() / 'notebook.json', {'revision': 4, 'boards': []})
+    original = client.get('/api/notebook').json()
+    assert original['notes'] == ''
+    board_edit = dict(original, boards=[{'id': 'board', 'title': 'Evidence', 'entries': []}])
+    assert client.put('/api/notebook', json=board_edit).status_code == 200
+    text = '# Research questions\n\nWhat changes across conditions? <literal text>'
+    response = client.put('/api/notebook/notes', json={'notes': text, 'previous': ''})
+    assert response.status_code == 200
+    assert response.json()['boards'][0]['title'] == 'Evidence'
+    assert response.json()['notes'] == text
+    assert response.json()['revision'] == 6
+    assert client.get('/api/state').json()['notebook']['notes'] == text
+    assert client.put('/api/notebook', json=board_edit).status_code == 409
+
+    workspace = config.create_workspace('Other research')
+    headers = {'X-Doxograph-Workspace': workspace['id']}
+    assert client.get('/api/notebook', headers=headers).json()['notes'] == ''
+    assert client.put('/api/notebook/notes', headers=headers,
+                      json={'notes': 'Other questions', 'previous': ''}).status_code == 200
+    assert client.get('/api/notebook').json()['notes'] == text
+    assert client.put('/api/notebook/notes', json={'notes': '', 'previous': text}).status_code == 200
+    assert client.get('/api/notebook').json()['notes'] == ''
+
+
+def test_workspace_notes_conflict_keeps_saved_text(client):
+    update = {'notes': 'First writer', 'previous': ''}
+    first = client.put('/api/notebook/notes', json=update)
+    assert first.status_code == 200
+    # A lost response may cause the browser to retry an already saved edit.
+    assert client.put('/api/notebook/notes', json=update).json() == first.json()
+    response = client.put('/api/notebook/notes', json={'notes': 'Second writer', 'previous': ''})
+    assert response.status_code == 409
+    assert 'another window' in response.json()['detail']
+    assert client.get('/api/notebook').json()['notes'] == 'First writer'
+    assert client.put('/api/notebook/notes', json={'notes': None, 'previous': 'First writer'}).status_code == 422
+
+
 def test_manual_connections_validate_sources_and_keep_missing_board_entries(client):
     one, two = seed(), seed('two')
     data = client.get('/api/notebook').json()
