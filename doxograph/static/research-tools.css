@@ -33,8 +33,10 @@
 .research-sheet.is-busy #research-body, .research-sheet.is-busy #research-tabs { pointer-events: none; opacity: .7; }
 .reader-controls input { width: 5rem; }
 .reader-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 1rem; }
-.pdf-scroll { overflow: auto; max-height: 65vh; padding: .5rem; background: #555; }
-#pdf-page { position: relative; background: white; color: black; }
+.pdf-scroll { position: relative; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; max-height: 65vh; padding: .5rem; background: #555; }
+#pdf-pages { display: flex; flex-direction: column; align-items: flex-start; gap: .75rem; width: max-content; min-width: 100%; }
+.pdf-page { position: relative; flex: none; background: white; color: black; }
+#capture-form { min-width: 0; }
 .reader-side { min-width: 0; }
 #highlight-panel { border-bottom: 1px solid var(--line); margin-bottom: .75rem; }
 .highlight-entry { border: 1px solid var(--line); border-radius: 6px; margin: .6rem 0; padding: .6rem; }
@@ -44,27 +46,27 @@
 .highlight-entry blockquote.highlight-green { border-left-color: #43c463; }
 .highlight-entry blockquote.highlight-blue { border-left-color: #4a9df0; }
 .highlight-entry blockquote.highlight-pink { border-left-color: #f06aa8; }
-#pdf-page .highlightLayer { position: absolute; inset: 0; pointer-events: none; }
-#pdf-page .highlightLayer div { position: absolute; mix-blend-mode: multiply; }
-#pdf-page .highlightLayer .highlight-yellow { background: rgb(255 226 0 / .45); }
-#pdf-page .highlightLayer .highlight-green { background: rgb(70 210 100 / .4); }
-#pdf-page .highlightLayer .highlight-blue { background: rgb(80 160 255 / .38); }
-#pdf-page .highlightLayer .highlight-pink { background: rgb(255 100 170 / .38); }
+.pdf-page .highlightLayer { position: absolute; inset: 0; pointer-events: none; }
+.pdf-page .highlightLayer div { position: absolute; mix-blend-mode: multiply; }
+.pdf-page .highlightLayer .highlight-yellow { background: rgb(255 226 0 / .45); }
+.pdf-page .highlightLayer .highlight-green { background: rgb(70 210 100 / .4); }
+.pdf-page .highlightLayer .highlight-blue { background: rgb(80 160 255 / .38); }
+.pdf-page .highlightLayer .highlight-pink { background: rgb(255 100 170 / .38); }
 #capture-form textarea { min-height: 6rem; }
 #reader-hint { background: var(--bg); padding: .5rem; }
 /* Text layer adapted from Mozilla PDF.js 6.3.289 (Apache 2.0; vendor/PDFJS-LICENSE). */
-#pdf-page .textLayer { color-scheme: only light; position: absolute; text-align: initial; inset: 0;
+.pdf-page .textLayer { color-scheme: only light; position: absolute; text-align: initial; inset: 0;
   overflow: clip; opacity: 1; line-height: 1; letter-spacing: normal; word-spacing: normal;
   -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0;
   --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size)); }
-#pdf-page .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre;
+.pdf-page .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre;
   cursor: text; transform-origin: 0% 0%; -webkit-user-select: text; user-select: text; }
-#pdf-page .textLayer > :not(.markedContent), #pdf-page .textLayer .markedContent span:not(.markedContent) {
+.pdf-page .textLayer > :not(.markedContent), .pdf-page .textLayer .markedContent span:not(.markedContent) {
   z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
   --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
-#pdf-page .textLayer .markedContent { display: contents; }
-#pdf-page .textLayer ::selection { background: rgb(30 110 230 / .35); }
+.pdf-page .textLayer .markedContent { display: contents; }
+.pdf-page .textLayer ::selection { background: rgb(30 110 230 / .35); }
 @media (max-width: 800px) {
   .reader-layout, .connection-pair, .history-diff { grid-template-columns: 1fr; }
   .comparison-card { flex-basis: 85vw; }

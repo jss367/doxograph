@@ -274,10 +274,12 @@ to a model.
   Notes also save when you close the editor or switch tools or workspaces.
   If saving fails, your text stays in the editor so you can retry. If another
   window changes the notes, copy your text before reloading the saved version.
-- **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
-  passage on the page and choose **Capture selected passage** to fill the quote
-  and page fields. Write the claim in your own words, optionally add a note, and
+- **Read & capture**, in a paper's header, opens an offline PDF reader. Scroll
+  continuously between pages; the page number and saved reading position follow
+  as you read. Select a passage on the page and choose **Capture selected passage**
+  to fill the quote and page fields. Write the claim in your own words, optionally add a note, and
   save. Quotes receive the same local verification as ordinary manual claims.
+  Your unfinished claim and its source page stay intact while you scroll or zoom.
   Pages with no selectable text can still be read and transcribed by hand.
 - **Highlights**, in the same reader, mark a selected passage on the page in
   yellow, green, blue, or pink. Each highlight takes a note of your own, can be
