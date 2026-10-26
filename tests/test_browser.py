@@ -139,6 +139,37 @@ def _paper_with_proposal(key: str, title: str, proposal: str, updated: str) -> N
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_answering_one_dialog_keeps_the_next_question_open(engine):
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
+                await page.evaluate("""() => {
+                    window.answers = [];
+                    void (async () => {
+                        answers.push(await confirmDialog('First question?', {ok: 'Continue'}));
+                        answers.push(await confirmDialog('Second question?', {ok: 'Finish'}));
+                        answers.push(await confirmDialog('Third question?'));
+                    })();
+                }""")
+                await page.locator('#ask').get_by_role("button", name="Continue", exact=True).click()
+                await page.locator('#ask').get_by_role("button", name="Finish", exact=True).click(timeout=5000)
+                await page.locator('#ask-title', has_text="Third question?").wait_for()
+                # Closing the element directly still cancels its own question.
+                await page.evaluate("document.querySelector('#ask').close()")
+                await page.wait_for_function("answers.length === 3")
+                assert await page.evaluate("answers") == [True, True, False]
+                await page.locator('#ask').wait_for(state="hidden")
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 @pytest.mark.parametrize("named", [False, True], ids=["default", "named"])
 def test_workspace_rename_persists_and_reaches_another_window_with_a_draft(named):
     from doxograph import config
@@ -1017,6 +1048,7 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
 
                 # Clicking a paper's node opens that paper's claims.
                 node = next(n for n in graph["nodes"] if n["id"] == "p:paper-c")
+                await page.locator(".graph-wrap canvas").scroll_into_view_if_needed()
                 box = await page.locator(".graph-wrap canvas").bounding_box()
                 sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
                 sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
@@ -2773,6 +2805,9 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
                 graph = await page.evaluate("window.doxographGraph()")
 
                 node = next(n for n in graph["nodes"] if n["id"] == "p:paper-b")
+                # Linux fonts make the header taller, leaving this node below
+                # the viewport. Raw mouse coordinates do not scroll to it.
+                await page.locator(".graph-wrap canvas").scroll_into_view_if_needed()
                 box = await page.locator(".graph-wrap canvas").bounding_box()
                 sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
                 sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
