@@ -59,8 +59,30 @@ final class DownloadController: NSObject, WKDownloadDelegate {
                 try files.moveItem(at: staged, to: destination)
             }
         } catch {
-            try? FileManager.default.removeItem(at: staged)
-            reportError(error, download.webView?.window)
+            let failure = Self.restoreOriginal(after: error, to: destination)
+            let original = (error as NSError).userInfo["NSFileOriginalItemLocationKey"] as? URL
+            // A failed replacement can relocate the previous export, even to
+            // the staging path. Preserve it there if recovery could not finish.
+            if original?.standardizedFileURL != staged.standardizedFileURL {
+                try? FileManager.default.removeItem(at: staged)
+            }
+            reportError(failure, download.webView?.window)
+        }
+    }
+
+    static func restoreOriginal(after error: Error, to destination: URL) -> Error {
+        let failure = error as NSError
+        guard let original = failure.userInfo["NSFileOriginalItemLocationKey"] as? URL,
+              !FileManager.default.fileExists(atPath: destination.path) else { return error }
+        do {
+            try FileManager.default.moveItem(at: original, to: destination)
+            return error
+        } catch let restorationError {
+            var info = failure.userInfo
+            info[NSLocalizedRecoverySuggestionErrorKey] =
+                "The previous export was moved to \(original.path). Restore it to \(destination.path). " +
+                "Automatic recovery failed: \(restorationError.localizedDescription)"
+            return NSError(domain: failure.domain, code: failure.code, userInfo: info)
         }
     }
 

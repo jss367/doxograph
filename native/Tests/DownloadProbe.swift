@@ -80,7 +80,41 @@ private final class DownloadProbe: NSObject, NSApplicationDelegate {
 
 @main
 private enum DownloadProbeTest {
+    private static func testFileRecovery(in folder: URL) {
+        let files = FileManager.default
+        let original = folder.appendingPathComponent("relocated-original.md")
+        let destination = folder.appendingPathComponent("recovered.md")
+        let contents = Data("Previous export".utf8)
+        let failure = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+                              userInfo: ["NSFileOriginalItemLocationKey": original])
+
+        try! contents.write(to: original)
+        let restored = DownloadController.restoreOriginal(after: failure, to: destination) as NSError
+        precondition(restored === failure)
+        precondition(try! Data(contentsOf: destination) == contents, "The previous export was not restored")
+        precondition(!files.fileExists(atPath: original.path))
+
+        // Recovery must not overwrite a file another writer put at the destination.
+        try! contents.write(to: original)
+        let concurrent = Data("Another writer's export".utf8)
+        try! concurrent.write(to: destination)
+        _ = DownloadController.restoreOriginal(after: failure, to: destination)
+        precondition(try! Data(contentsOf: destination) == concurrent)
+        precondition(try! Data(contentsOf: original) == contents)
+
+        // A missing parent makes restoration fail deterministically, even as root.
+        let unavailable = folder.appendingPathComponent("missing-folder/recovered.md")
+        let recoveryFailure = DownloadController.restoreOriginal(after: failure, to: unavailable) as NSError
+        let suggestion = recoveryFailure.userInfo[NSLocalizedRecoverySuggestionErrorKey] as? String
+        precondition(suggestion?.contains(original.path) == true, "Recovery errors must identify the previous export")
+        precondition(try! Data(contentsOf: original) == contents)
+
+        let ordinaryFailure = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError)
+        precondition((DownloadController.restoreOriginal(after: ordinaryFailure, to: unavailable) as NSError) === ordinaryFailure)
+    }
+
     static func main() {
+        testFileRecovery(in: URL(fileURLWithPath: CommandLine.arguments[2]))
         DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
             fputs("FAIL: native download did not complete\n", stderr)
             exit(1)
