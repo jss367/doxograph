@@ -72,18 +72,22 @@ final class DownloadController: NSObject, WKDownloadDelegate {
 
     static func restoreOriginal(after error: Error, to destination: URL) -> Error {
         let failure = error as NSError
-        guard let original = failure.userInfo["NSFileOriginalItemLocationKey"] as? URL,
-              !FileManager.default.fileExists(atPath: destination.path) else { return error }
-        do {
-            try FileManager.default.moveItem(at: original, to: destination)
-            return error
-        } catch let restorationError {
-            var info = failure.userInfo
-            info[NSLocalizedRecoverySuggestionErrorKey] =
-                "The previous export was moved to \(original.path). Restore it to \(destination.path). " +
-                "Automatic recovery failed: \(restorationError.localizedDescription)"
-            return NSError(domain: failure.domain, code: failure.code, userInfo: info)
+        guard let original = failure.userInfo["NSFileOriginalItemLocationKey"] as? URL else { return error }
+        var suggestion = "The previous export is at \(original.path). "
+        if FileManager.default.fileExists(atPath: destination.path) {
+            suggestion += "A file already exists at \(destination.path), so it was not overwritten."
+        } else {
+            do {
+                try FileManager.default.moveItem(at: original, to: destination)
+                return error
+            } catch let restorationError {
+                suggestion += "Restore it to \(destination.path). " +
+                    "Automatic recovery failed: \(restorationError.localizedDescription)"
+            }
         }
+        var info = failure.userInfo
+        info[NSLocalizedRecoverySuggestionErrorKey] = suggestion
+        return NSError(domain: failure.domain, code: failure.code, userInfo: info)
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {

@@ -98,7 +98,9 @@ private enum DownloadProbeTest {
         try! contents.write(to: original)
         let concurrent = Data("Another writer's export".utf8)
         try! concurrent.write(to: destination)
-        _ = DownloadController.restoreOriginal(after: failure, to: destination)
+        let occupied = DownloadController.restoreOriginal(after: failure, to: destination) as NSError
+        let occupiedSuggestion = occupied.userInfo[NSLocalizedRecoverySuggestionErrorKey] as? String
+        precondition(occupiedSuggestion?.contains(original.path) == true, "An occupied destination must not hide the original's location")
         precondition(try! Data(contentsOf: destination) == concurrent)
         precondition(try! Data(contentsOf: original) == contents)
 
