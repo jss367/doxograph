@@ -13,15 +13,17 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
+import anthropic
 from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-from . import (__version__, bib, cites, config, export, extract, fingerprint, ingest, pairs,
+from . import (__version__, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
                search, store, notebook)
 
 STATIC = Path(__file__).parent / "static"
@@ -651,6 +653,29 @@ class SettingsBody(BaseModel):
     ai_enabled: bool
 
 
+class ProviderBody(BaseModel):
+    ai_provider: Literal["api", "claude_code", "codex"]
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=32000)
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
+
+    @field_validator("messages")
+    @classmethod
+    def conversation(cls, messages):
+        if any(m.role != ("user" if i % 2 == 0 else "assistant") or not m.content.strip()
+               for i, m in enumerate(messages)) or messages[-1].role != "user":
+            raise ValueError("Send alternating user and assistant messages, ending with a question.")
+        if sum(len(m.content) for m in messages) > 80000:
+            raise ValueError("Start a new conversation; this one is too long.")
+        return messages
+
+
 class IngestBody(BaseModel):
     text: str = ""
     extract: bool = True
@@ -996,8 +1021,9 @@ def _build_state() -> dict:
         "strengths": config.CLAIM_STRENGTHS,
         "relations": config.LEDGER_RELATIONS,
         "data_dir": str(config.data_dir()),
-        "model": config.MODEL,
+        "model": config.model(),
         "has_key": config.api_key() is not None,
+        "ai_provider": config.ai_provider(),
         "ai_enabled": config.ai_enabled(),
     }
 
@@ -1021,7 +1047,7 @@ def state(request: Request) -> Response:
     # Credentials and installation settings live outside the corpus, but
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
-    signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}-{int(ai_enabled)}"
+    signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}-{int(ai_enabled)}-{config.ai_provider()}"
     with _state_cache_lock:
         cached = _state_cache.get(workspace)
     # Retry unreadable files even when their stat is unchanged: a temporary
@@ -1049,6 +1075,12 @@ def state(request: Request) -> Response:
 def update_settings(body: SettingsBody) -> dict:
     config.set_ai_enabled(body.ai_enabled)
     return {"ai_enabled": config.ai_enabled()}
+
+
+@app.put("/api/settings/provider")
+def update_provider(body: ProviderBody) -> dict:
+    config.set_ai_provider(body.ai_provider)
+    return {"ai_provider": config.ai_provider()}
 
 
 def _require_analysis() -> None:
@@ -1203,6 +1235,19 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
     job = _new_job(key)
     _pool.submit(_run_extract, job, key, keep_reviewed)
     return {"queued": job["id"]}
+
+
+@app.post("/api/papers/{key}/chat")
+def paper_chat(key: str, body: ChatBody) -> dict:
+    _require_analysis()
+    try:
+        return chat.answer(key, [message.model_dump() for message in body.messages])
+    except KeyError:
+        raise HTTPException(404, f"no paper {key}")
+    except FileNotFoundError as exc:
+        raise HTTPException(400, str(exc))
+    except (RuntimeError, anthropic.APIError) as exc:
+        raise HTTPException(502, str(exc))
 
 
 @app.post("/api/papers/{key}/review")

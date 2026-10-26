@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import functools
 import json
 import os
 import re
@@ -28,6 +29,8 @@ _workspace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "doxograph_workspace", default=DEFAULT_WORKSPACE_ID
 )
 _workspaces_lock = threading.RLock()
+_settings_lock = threading.RLock()
+_analysis_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar("analysis_provider", default=None)
 
 try:
     import fcntl
@@ -79,7 +82,58 @@ def ai_enabled() -> bool:
 
 
 def set_ai_enabled(enabled: bool) -> None:
-    _write_json(base_data_dir() / "settings.json", {"ai_enabled": enabled})
+    _update_settings(ai_enabled=enabled)
+
+
+def _update_settings(**changes) -> None:
+    with _settings_lock:
+        path = base_data_dir() / "settings.json"
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            settings = {"ai_enabled": True}
+        except (OSError, ValueError):
+            settings = {"ai_enabled": False}
+        if not isinstance(settings, dict):
+            settings = {"ai_enabled": False}
+        settings.update(changes)
+        _write_json(path, settings)
+
+
+def ai_provider() -> str:
+    bound = _analysis_provider.get()
+    if bound is not None:
+        return bound
+    try:
+        settings = json.loads((base_data_dir() / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "api"
+    provider = settings.get("ai_provider") if isinstance(settings, dict) else None
+    return provider if provider in ("claude_code", "codex") else "api"
+
+
+def model() -> str:
+    if ai_provider() == "codex":
+        return os.environ.get("DOXOGRAPH_CODEX_MODEL") or "Codex default"
+    return MODEL
+
+
+def bind_model_access(work):
+    """Keep a running operation on the provider it started with."""
+    @functools.wraps(work)
+    def bound(*args, **kwargs):
+        token = _analysis_provider.set(ai_provider())
+        try:
+            return work(*args, **kwargs)
+        finally:
+            _analysis_provider.reset(token)
+    return bound
+
+
+def set_ai_provider(provider: str) -> None:
+    if provider not in ("api", "claude_code", "codex"):
+        raise ValueError("Choose Anthropic API, Claude subscription, or ChatGPT subscription.")
+    _update_settings(ai_provider=provider)
 
 
 def require_ai_enabled() -> None:

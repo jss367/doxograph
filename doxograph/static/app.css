@@ -374,6 +374,11 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
   color: var(--ink); padding: 1rem; width: min(30rem, calc(100vw - 2rem));
   box-shadow: 0 10px 40px rgba(0, 0, 0, .3); }
 .sheet::backdrop { background: rgba(0, 0, 0, .35); }
+.paper-chat { width: min(46rem, 92vw); max-width: 46rem; }
+#chat-messages { max-height: 45vh; overflow-y: auto; margin: 1rem 0; }
+#chat-messages p { white-space: pre-wrap; }
+#chat-form { margin-top: 1rem; }
+#chat-form .row { margin-top: .75rem; }
 .sheet h2 { font-size: 1rem; margin: 0 0 .5rem; }
 .sheet .hint { margin: .5rem 0 0; }
 .sheet input { width: 100%; margin-top: .4rem; }

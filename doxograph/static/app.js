@@ -1658,6 +1658,8 @@ function renderStats() {
   const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
   if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
   if (S.ai_enabled === false) bits.push('AI analysis off');
+  else if (S.ai_provider === 'claude_code') bits.push('Claude subscription');
+  else if (S.ai_provider === 'codex') bits.push('ChatGPT subscription');
   else if (!S.has_key) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
 }
@@ -1840,6 +1842,7 @@ function paperHeader(key) {
       ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
         title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
       ${p.has_pdf ? `<button type="button" data-tool="reader" data-paper="${esc(key)}">Read & capture</button>` : ''}
+      ${p.has_pdf ? `<button type="button" data-paper-chat="${esc(key)}" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'}>Chat about paper</button>` : ''}
       <button type="button" data-tool="queue-paper" data-paper="${esc(key)}">Add to reading queue</button>
       <button type="button" data-tool="history" data-paper="${esc(key)}">Edit history</button>
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
@@ -4805,6 +4808,7 @@ $('btn-synth').addEventListener('click', async () => {
 // --- settings ------------------------------------------------------------
 
 let savingAnalysisSetting = false;
+let savingProviderSetting = false;
 let readOnArrival = $('auto-extract').checked;
 $('auto-extract').addEventListener('change', () => { readOnArrival = $('auto-extract').checked; });
 
@@ -4813,6 +4817,18 @@ function syncAnalysisControls() {
   const toggle = $('ai-enabled');
   toggle.disabled = savingAnalysisSetting || typeof S.ai_enabled !== 'boolean';
   if (!savingAnalysisSetting) toggle.checked = enabled;
+  $('ai-provider').disabled = savingProviderSetting || !S.ai_provider;
+  if (!savingProviderSetting) $('ai-provider').value = S.ai_provider || 'api';
+  const providerHelp = {
+    api: 'Uses your Anthropic API credentials.',
+    claude_code: 'Uses your signed-in Claude Code account and its plan limits or credits. Run claude auth login in Terminal first. API billing is never used as a fallback.',
+    codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Reads extracted PDF text; figures and scanned pages are unavailable. API billing is never used as a fallback.',
+  };
+  $('ai-provider-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
+  $('chat-access-help').textContent = S.ai_provider === 'codex'
+    ? 'ChatGPT receives page-labeled PDF text. Figures and scanned pages are unavailable.'
+    : 'Claude receives the PDF, including its page images.';
+  $('chat-send').disabled = !enabled || Boolean(activeChat && activeChat.busy);
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;
   document.querySelectorAll('[data-ai-action]').forEach((button) => {
@@ -4839,6 +4855,83 @@ $('ai-enabled').addEventListener('change', async () => {
     savingAnalysisSetting = false;
     syncAnalysisControls();
     renderStats();
+  }
+});
+
+$('ai-provider').addEventListener('change', async () => {
+  const provider = $('ai-provider').value;
+  savingProviderSetting = true;
+  syncAnalysisControls();
+  $('ai-settings-status').textContent = 'Saving…';
+  try {
+    const settings = await api('/api/settings/provider', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ai_provider: provider }),
+    });
+    S.ai_provider = settings.ai_provider;
+    stateEtag = null;
+    $('ai-settings-status').textContent = 'Model access saved.';
+  } catch (error) {
+    $('ai-settings-status').textContent = `Could not save: ${error.message}`;
+  } finally {
+    savingProviderSetting = false;
+    syncAnalysisControls();
+    renderStats();
+  }
+});
+
+// Conversations are scoped by workspace and paper, and live only in this tab.
+const paperChats = new Map();
+let activeChat = null;
+function renderPaperChat() {
+  if (!activeChat) return;
+  $('chat-messages').innerHTML = activeChat.messages.map((m) =>
+    `<div class="note"><span class="who">${m.role === 'user' ? 'You' : esc(m.assistant || 'Claude')}</span>
+      ${paragraphs(m.content).map((p) => `<p>${esc(p)}</p>`).join('')}</div>`).join('');
+  $('chat-question').value = activeChat.draft;
+  $('chat-question').disabled = activeChat.busy;
+  $('chat-clear').disabled = activeChat.busy;
+  $('chat-status').textContent = activeChat.busy ? 'Reading the paper…' : activeChat.error || '';
+  syncAnalysisControls();
+}
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-paper-chat]');
+  if (!button || button.disabled) return;
+  const key = button.dataset.paperChat;
+  const id = JSON.stringify([currentWorkspaceId, key]);
+  if (!paperChats.has(id)) paperChats.set(id, { key, workspace: currentWorkspaceId, messages: [], draft: '', busy: false, error: '' });
+  activeChat = paperChats.get(id);
+  $('chat-paper-title').textContent = (S.papers.find((p) => p.key === key) || {}).title || key;
+  renderPaperChat();
+  $('paper-chat').showModal();
+  $('chat-question').focus();
+});
+$('chat-question').addEventListener('input', () => { if (activeChat) activeChat.draft = $('chat-question').value; });
+$('chat-close').addEventListener('click', () => $('paper-chat').close());
+$('chat-clear').addEventListener('click', () => {
+  if (!activeChat || activeChat.busy) return;
+  activeChat.messages = []; activeChat.draft = ''; activeChat.error = '';
+  renderPaperChat();
+});
+$('chat-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const chat = activeChat;
+  if (!chat || chat.busy || S.ai_enabled !== true || !chat.draft.trim()) return;
+  const question = chat.draft.trim();
+  const messages = [...chat.messages, { role: 'user', content: question }];
+  chat.busy = true; chat.error = '';
+  renderPaperChat();
+  try {
+    const result = await api(`/api/papers/${encodeURIComponent(chat.key)}/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': chat.workspace },
+      body: JSON.stringify({ messages: messages.map(({ role, content }) => ({ role, content })) }),
+    });
+    chat.messages = [...messages, { role: 'assistant', content: result.answer, assistant: result.assistant || 'Claude' }];
+    chat.draft = '';
+  } catch (error) { chat.error = error.message; }
+  finally {
+    chat.busy = false;
+    if (activeChat === chat) renderPaperChat();
   }
 });
 

@@ -194,6 +194,17 @@ else, including a number too large to be a port and a value that is not a
 number at all, is ignored and the app starts its search at 8765. The search
 still walks upward from wherever it starts, and stops at 65535.
 
+A Claude subscription can be selected in **Settings → Model access** after
+installing Claude Code and running `claude auth login` in Terminal. The app
+looks for Claude Code on PATH and in the usual native, Homebrew, and nvm install
+locations. `DOXOGRAPH_CLAUDE_PATH` can specify another executable location.
+
+For a ChatGPT subscription, install the Codex CLI, run `codex login` in Terminal,
+and select **ChatGPT subscription (Codex)** in the same menu. The app searches
+PATH, common Homebrew and nvm locations, and bundled app locations;
+`DOXOGRAPH_CODEX_PATH` can specify another executable. ChatGPT reads page-labeled
+PDF text; use Claude for figures or scanned pages.
+
 A Dock launch inherits none of your shell environment, so `ANTHROPIC_API_KEY`
 exported in `.zshrc` is invisible to it. Put the key in `~/.credentials` as
 `ANTHROPIC_API_KEY=...`, which is where the server looks next.
