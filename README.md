@@ -496,6 +496,12 @@ with the file path, and command-line listings report it on standard error.
 The damaged file is left untouched. Repair it or restore a backup; the warning
 clears when the library next refreshes.
 
+The same protection applies to saved research tools, tensions, agreements, and
+syntheses. If one of those documents cannot be read, the library still shows
+the healthy papers and reports the damaged document's path. Its section stays
+unavailable until repaired; saves refuse to overwrite it. Syntheses remain
+visible but are marked stale while their supporting tensions cannot be read.
+
 Topic renames and deletions record their intent in `pending-topic-change.json`
 before changing any papers. If a write fails or the app stops, the next library
 refresh, command-line operation, or vocabulary edit resumes the change. Recovery
@@ -795,10 +801,33 @@ or too confidently worded. The retagger has its own, shorter prompt in
 ## Tests
 
 ```
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install --require-hashes -r requirements-dev.lock
+.venv/bin/pip install --no-deps -e .
 .venv/bin/python -m playwright install chromium webkit
 .venv/bin/python -m pytest
+.venv/bin/python -m ruff check doxograph tests
+.venv/bin/python -m mypy
 ```
+
+CI runs these checks, JavaScript syntax checks, and macOS Swift type checking
+and quit/relaunch tests. Type checking currently covers the shared storage
+reader and saved analysis models in `storage.py` and `records.py`; the older
+dictionary-based modules can be added as their contracts are narrowed.
+
+`requirements-dev.lock` pins the development and runtime dependencies with
+hashes for Python 3.13 and newer across platforms. To update it after editing
+dependencies in `pyproject.toml`, run:
+
+```
+uv pip compile pyproject.toml --extra dev --python-version 3.13 --universal --generate-hashes --output-file requirements-dev.lock
+```
+
+Browser features live in separate assets under `doxograph/static/`: appearance
+preferences in `appearance.js`, the paper map and citation loading in
+`paper-map.js`, and the research tools, long-form notes, and focused review in
+their corresponding scripts. `app.js` coordinates the library and its shared
+workspace state. These are classic scripts loaded in the order in `index.html`,
+so they need no JavaScript build step.
 
 For the fast Python/API checks, browser executables do not need to be installed:
 

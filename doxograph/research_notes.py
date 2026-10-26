@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import re
 import uuid
 import warnings
@@ -13,9 +12,9 @@ from urllib.parse import urljoin
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from . import config, store
+from . import config, storage, store
 
 router = APIRouter(prefix="/api/research-notes")
 NoteId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
@@ -33,9 +32,20 @@ class NoteUpdate(NoteBody):
     revision: int = Field(ge=1)
 
 
+class SavedNote(NoteBody):
+    model_config = ConfigDict(extra="allow", strict=True)
+    id: NoteId
+    revision: int = Field(ge=1)
+    created: str
+    updated: str
+
+
+class SavedNotes(RootModel[list[SavedNote]]):
+    root: list[SavedNote] = Field(default_factory=list)
+
+
 def load() -> list[dict]:
-    path = config.data_dir() / "research-notes.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    return storage.read_model(config.data_dir() / "research-notes.json", SavedNotes).model_dump()
 
 
 def find(notes: list[dict], note_id: str) -> dict:
@@ -59,7 +69,7 @@ def list_notes() -> dict:
 def create_note(body: NoteBody) -> dict:
     if not body.title.strip():
         raise HTTPException(422, "Give your note a title.")
-    with store._reentrant_file_lock("research-notes", config.locks_dir() / "research-notes.lock"):
+    with store.document_lock("research-notes"):
         notes = load()
         note = dict(body.model_dump(), id=uuid.uuid4().hex, revision=1,
                     created=store.now(), updated=store.now())
@@ -72,7 +82,7 @@ def create_note(body: NoteBody) -> dict:
 def update_note(note_id: NoteId, body: NoteUpdate) -> dict:
     if not body.title.strip():
         raise HTTPException(422, "Give your note a title.")
-    with store._reentrant_file_lock("research-notes", config.locks_dir() / "research-notes.lock"):
+    with store.document_lock("research-notes"):
         notes = load()
         note = find(notes, note_id)
         check_revision(note, body.revision)
@@ -83,7 +93,7 @@ def update_note(note_id: NoteId, body: NoteUpdate) -> dict:
 
 @router.delete("/{note_id}")
 def delete_note(note_id: NoteId, revision: Annotated[int, Query(ge=1)]) -> dict:
-    with store._reentrant_file_lock("research-notes", config.locks_dir() / "research-notes.lock"):
+    with store.document_lock("research-notes"):
         notes = load()
         check_revision(find(notes, note_id), revision)
         store.write_json(config.data_dir() / "research-notes.json", [n for n in notes if n["id"] != note_id])
@@ -183,7 +193,7 @@ async def upload_image(file: UploadFile) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     # Content-addressed images are immutable and remain when a note is deleted:
     # another note may still embed the same image.
-    with store._reentrant_file_lock("research-notes", config.locks_dir() / "research-notes.lock"):
+    with store.document_lock("research-notes"):
         path = folder / name
         if not path.exists():
             temporary = folder / (uuid.uuid4().hex + ".tmp")
