@@ -1,11 +1,11 @@
 """Provider settings remain usable in the browser and the native WebKit shell."""
 
-import asyncio
 from pathlib import Path
 
 import pytest
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 
+from browser_support import browser_session, run_browser
 from doxograph import config
 from test_browser import _server
 
@@ -14,8 +14,7 @@ from test_browser import _server
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_choose_local_provider_and_restore_each_profile(engine):
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={"width": 1440, "height": 1000})
             errors = []
             page.on("pageerror", lambda exc: errors.append(str(exc)))
@@ -55,5 +54,5 @@ def test_choose_local_provider_and_restore_each_profile(engine):
                 screenshot.parent.mkdir(exist_ok=True)
                 await page.screenshot(path=str(screenshot))
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())

@@ -12,8 +12,8 @@ from contextlib import contextmanager
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright
 
+from browser_support import browser_session, run_browser
 from doxograph import store
 
 
@@ -110,6 +110,19 @@ async def _polled(page, rounds: int = 2) -> None:
     await page.wait_for_function("n => polls >= n", arg=done + rounds, timeout=30000)
 
 
+async def _poll(page) -> None:
+    """Run the normal poll now, after any in-flight scheduled poll finishes.
+
+    Most scenarios test how the UI responds to a changed corpus, rather than
+    the timer itself. Keep _polled for the tests that exercise scheduling.
+    """
+    await asyncio.wait_for(page.evaluate("""async () => {
+        while (polling) await new Promise(resolve => setTimeout(resolve, 10));
+        polling = true;
+        try { await pollOnce(); } finally { polling = false; }
+    }"""), timeout=30)
+
+
 def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
     paper = store.new_paper(key, title=title, year=year)
     paper["claims"] = [
@@ -142,8 +155,7 @@ def _paper_with_proposal(key: str, title: str, proposal: str, updated: str) -> N
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_answering_one_dialog_keeps_the_next_question_open(engine):
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -164,9 +176,8 @@ def test_answering_one_dialog_keeps_the_next_question_open(engine):
                 await page.wait_for_function("answers.length === 3")
                 assert await page.evaluate("answers") == [True, True, False]
                 await page.locator('#ask').wait_for(state="hidden")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -180,8 +191,7 @@ def test_workspace_rename_persists_and_reaches_another_window_with_a_draft(named
         _paper("mind", "Consciousness", "awareness")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             observer = await browser.new_page()
             with _server() as url:
@@ -214,16 +224,14 @@ def test_workspace_rename_persists_and_reaches_another_window_with_a_draft(named
                 await page.reload()
                 await expect(page.locator("#workspace option:checked")).to_have_text("Consciousness research")
                 await expect(page.locator('.claim[data-claim="mind-c1"]')).to_be_visible()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
 def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 # An invalid PDF fails locally, without network or model calls.
@@ -257,9 +265,7 @@ def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
                 await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
                 assert await page.locator("#jobs .job").count() == 0
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -287,8 +293,7 @@ def test_failed_import_can_be_retried_and_opened_after_success():
     thread.start()
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 response = httpx.post(f"{url}/api/ingest", json={
@@ -336,10 +341,10 @@ def test_failed_import_can_be_retried_and_opened_after_success():
                 await page.locator(".paperhead h2", has_text="recovered study").wait_for()
                 assert await page.evaluate("V.paper") == finished["key"]
                 assert len(httpx.get(f"{url}/api/state").json()["papers"]) == 1
-            await browser.close()
+
 
     try:
-        asyncio.run(scenario())
+        run_browser(scenario())
     finally:
         source.shutdown()
         source.server_close()
@@ -357,8 +362,7 @@ def test_proposed_topic_cache_is_isolated_between_workspaces():
         _paper_with_proposal("shared", "Animal paper", "gait-control", timestamp)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -370,9 +374,7 @@ def test_proposed_topic_cache_is_isolated_between_workspaces():
                 await page.locator('.proposed .pn', has_text="gait-control").wait_for()
                 assert await page.locator('.proposed .pn', has_text="consciousness").count() == 0
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -388,8 +390,7 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
         delete_started = asyncio.Event()
         release_delete = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def delay_delete(route, request):
@@ -416,9 +417,7 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
                 await page.locator("#workspace").select_option(label="Animal locomotion")
                 await page.get_by_text("Animal paper", exact=True).wait_for()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -444,8 +443,7 @@ def test_a_second_workspace_selection_waits_for_the_one_already_running():
         reading = asyncio.Event()
         release_read = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def arm_on_delete(route, request):
@@ -484,9 +482,7 @@ def test_a_second_workspace_selection_waits_for_the_one_already_running():
                 assert await page.locator("#workspace").input_value() == embodied["id"]
                 assert "An animal locomotion paper" not in await page.locator("#papers").inner_text()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -499,8 +495,7 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
         _paper("gait", "An animal locomotion paper")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -523,9 +518,7 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
                 await page.get_by_text("Nothing here yet", exact=False).wait_for()
                 assert "An animal locomotion paper" not in await papers.inner_text()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -538,8 +531,7 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
         release_failure = asyncio.Event()
         draft_text = "A draft that must survive a failed save."
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def fail_after_navigation(route):
@@ -569,16 +561,13 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
                 textarea = page.locator('form[data-form="__new__"] textarea[name="text"]')
                 assert await textarea.input_value() == draft_text
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
 def test_theme_settings_apply_immediately_and_survive_a_reload():
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -610,9 +599,7 @@ def test_theme_settings_apply_immediately_and_survive_a_reload():
                 assert await root.get_attribute("data-appearance") == "system"
                 assert await root.get_attribute("data-color-theme") == "slate"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -621,8 +608,7 @@ def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
     _paper("paper-b", "Paper B")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -655,9 +641,7 @@ def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
                 assert "active" in (await paper_b.get_attribute("class") or "")
                 assert "Paper B" in await page.locator(".paperhead h2").inner_text()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -668,8 +652,7 @@ def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
     async def scenario():
         draft_text = "An edit that Escape on the menu must not throw away."
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -689,9 +672,7 @@ def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
                 await page.keyboard.press("Escape")
                 await textarea.wait_for(state="detached")
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -702,8 +683,7 @@ def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
     async def scenario():
         draft_text = "An edit on Paper B that outlives removing Paper A."
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -724,9 +704,7 @@ def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
                 await cards_a.first.wait_for(state="detached")
                 assert await textarea.input_value() == draft_text
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -743,8 +721,7 @@ def test_a_stale_confirmed_tension_can_be_confirmed_again_without_reopening():
     assert store.tension_rows()[0]["stale"] is True
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -764,9 +741,8 @@ def test_a_stale_confirmed_tension_can_be_confirmed_again_without_reopening():
                 assert await card.locator(".st").text_content() == "confirmed"
                 assert await card.get_by_role("button", name="Confirm").count() == 0
                 assert await card.get_by_role("button", name="Reopen").count() == 1
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     [tension] = store.tension_rows()
     assert tension["status"] == "confirmed" and tension["stale"] is False
 
@@ -781,8 +757,7 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
     assert store.synthesis_rows()[0]["stale"] is True
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -835,9 +810,8 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
                 await synth.get_by_text("written by hand", exact=False).wait_for()
                 assert await synth.locator(".stale").count() == 0
                 assert await synth.locator(".cite").count() == 1
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     [row] = store.synthesis_rows()
     assert row["text"] == "Corrected [paper-a-c1]." and row["source"] == "hand" and row["stale"] is False
 
@@ -852,8 +826,7 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
     store.record_synthesis("scaling", "Scaling as written.", shown)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -894,9 +867,8 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
                 assert await page.locator('textarea[data-synth="scaling"]').input_value() == "Scaling as written."
                 await recovery.get_by_role("button", name="edit").click()
                 assert await page.locator('textarea[data-synth="recovery"]').input_value() == "Recovery draft."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written.", "Scaling as written."]
 
 
@@ -908,8 +880,7 @@ def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelle
     store.record_synthesis("recovery", "Recovery as written.", shown)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -936,12 +907,12 @@ def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelle
                 await synth_field.wait_for(state="hidden")
                 await synth.get_by_text("Recovery corrected.").wait_for()
                 assert await claim_field.input_value() == "Claim text typed before the synthesis was saved."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [row["text"] for row in store.synthesis_rows()] == ["Recovery corrected."]
 
 
+@pytest.mark.browser
 def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redraws_its_form_away():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
@@ -949,8 +920,7 @@ def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redr
     store.record_synthesis("recovery", "Recovery as written.", shown)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -985,9 +955,8 @@ def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redr
                 await claim_form.wait_for(state="hidden")
                 await page.get_by_text("Claim saved while the synthesis editor was open.").wait_for()
                 assert await synth_field.input_value() == "Synthesis draft kept across a claim save."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     saved = {r["id"]: r for r in store.claim_rows()}
     assert saved["paper-a-c1"]["text"] == "Claim saved while the synthesis editor was open."
     assert [row["text"] for row in store.synthesis_rows()] == ["Recovery as written."]
@@ -1008,8 +977,7 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
     ], shown)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 800})
             with _server() as url:
                 await page.goto(url)
@@ -1057,9 +1025,8 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
                 await page.mouse.click(sx, sy)
                 await page.locator(".paperhead h2", has_text="Paper C").wait_for()
                 assert await page.locator('#papers [data-paper="paper-c"].active').count() == 1
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1073,8 +1040,7 @@ def test_the_map_repaints_on_a_theme_change_omits_independent_links_and_clamps_t
     ]})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 800})
             with _server() as url:
                 await page.goto(url)
@@ -1104,9 +1070,8 @@ def test_the_map_repaints_on_a_theme_change_omits_independent_links_and_clamps_t
                 assert any(e["type"] == "topic" for e in graph["edges"]), graph["edges"]
                 label = await page.locator("[data-graph-min]").text_content()
                 assert label == "1", label
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 @pytest.mark.browser
 def test_the_research_context_and_ledger_are_edited_in_the_app():
@@ -1114,8 +1079,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
     store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1160,7 +1124,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 # A poll while the form is open must not redraw it: wait out a
                 # tick and check the typed text is still there. Nor must a
                 # click on the sidebar item that is already active.
-                await _polled(page)
+                await _poll(page)
                 await nav.click()
                 assert await rows.nth(1).locator('[name="ledger-text"]').input_value() == "Steering is reversible."
                 # Nor must leaving for a paper and coming back: the draft is
@@ -1184,9 +1148,8 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 await page.locator('.claim[data-claim="paper-a-c1"] button[data-act="edit"]').click()
                 options = page.locator('form[data-form] select[name="link-claim"] option')
                 assert "L2" in " ".join(await options.all_text_contents())
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_context() == "Steering vectors and what recovers from them."
     assert store.load_ledger() == [
         {"id": "L1", "text": "Recovery is path-dependent."},
@@ -1201,8 +1164,7 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
                        {"id": "L3", "text": "Steering is reversible."}])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1227,9 +1189,8 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
                 assert "saving" not in (await form.get_attribute("class"))
                 assert await rows.count() == 3
                 assert await rows.nth(2).locator('[name="ledger-text"]').input_value() == "Typed, then refused."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_context() == ""
     assert store.load_ledger() == [{"id": "L1", "text": "Recovery is path-dependent."},
                                    {"id": "L3", "text": "Steering is reversible."}]
@@ -1245,8 +1206,7 @@ def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
                             {r["id"]: r for r in store.claim_rows()})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1264,9 +1224,8 @@ def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
                 await card.get_by_role("button", name="Confirm").click()
                 await page.locator('.tcard.confirmed[data-agreement="a1"]').wait_for(state="visible")
                 await page.locator('#agreements-nav', has_text="1 confirmed").wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.agreement_rows()[0]["status"] == "confirmed"
 
 
@@ -1277,8 +1236,7 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
     store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1296,9 +1254,8 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
                 await form.get_by_role("button", name="Save").click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
                 await nav.get_by_text("1 claims of my own", exact=False).wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_context() == "Changed from the shell while the form was open."
     assert store.load_ledger() == [{"id": "L1", "text": "Recovery is path-dependent, at every scale."}]
 
@@ -1316,8 +1273,7 @@ def test_paper_sort_orders_the_list_and_survives_a_reload():
     paper("new", "Mango groves", "2026-06-05T09:00:00+00:00", None)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1349,9 +1305,7 @@ def test_paper_sort_orders_the_list_and_survives_a_reload():
                 assert await sort.input_value() == "title"
                 assert await keys() == ["mid", "new", "old"]
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1363,8 +1317,7 @@ def test_analysis_setting_survives_reload_and_disables_actions():
     config.create_workspace("Other")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1398,9 +1351,8 @@ def test_analysis_setting_survives_reload_and_disables_actions():
                 await expect(page.locator('#ai-settings-status')).to_have_text("AI analysis enabled.")
                 await expect(page.locator('#btn-retag')).to_be_enabled()
                 await expect(page.locator('#auto-extract')).to_be_checked()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1409,8 +1361,7 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
     from playwright.async_api import expect
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             context = await browser.new_context()
             page = await context.new_page()
             other_page = await context.new_page()
@@ -1437,9 +1388,8 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
                                      '#btn-synth', '#auto-extract', f'[data-act="find-{view}"]']:
                         await expect(page.locator(selector)).to_be_enabled(enabled=enabled)
                     await expect(page.locator('#auto-extract')).to_be_checked(checked=enabled)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1452,8 +1402,7 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
                            {row["id"]: row for row in store.claim_rows()})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             context = await browser.new_context()
             page = await context.new_page()
             other_page = await context.new_page()
@@ -1484,9 +1433,8 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
                     await expect(field).to_have_value("Unsaved draft that polling must preserve.")
                     assert await original_field.evaluate("el => el.isConnected")
                     assert await field.evaluate("el => [el.selectionStart, el.selectionEnd]") == [8, 13]
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 def _paper_without_claims(key: str, title: str) -> None:
@@ -1502,8 +1450,7 @@ def test_the_query_filters_the_paper_list_and_says_how_many_match():
     _paper_without_claims("wu2026silent", "Introspection without any claims yet")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1530,9 +1477,7 @@ def test_the_query_filters_the_paper_list_and_says_how_many_match():
                 await page.locator("#q").fill("")
                 assert await page.locator("#papers li").count() == 4
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1542,8 +1487,7 @@ def test_a_paper_found_by_its_key_or_year_shows_that_paper_s_claims():
     _paper("survey", "A survey of everything", "locomotion", year=2019)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1561,9 +1505,7 @@ def test_a_paper_found_by_its_key_or_year_shows_that_paper_s_claims():
                 assert await page.locator('#papers [data-paper="han2026reports"]').count() == 0
                 assert await page.locator("#content .claim").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1571,8 +1513,7 @@ def test_a_claim_citation_carries_its_paper_title():
     _paper("introspect", "Introspection in language models", "introspection")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1580,9 +1521,7 @@ def test_a_claim_citation_carries_its_paper_title():
                 await cite.wait_for()
                 assert await cite.get_attribute("title") == "Introspection in language models"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 def _paper_with_claims(key: str, title: str, texts: list[str], **fields) -> list[str]:
@@ -1602,8 +1541,7 @@ def test_reviewing_by_keyboard_advances_and_n_jumps_to_the_next_unreviewed():
         "doe2026study", "A study", ["One.", "Two.", "Three."], reviewed=False)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1639,9 +1577,8 @@ def test_reviewing_by_keyboard_advances_and_n_jumps_to_the_next_unreviewed():
                 await page.keyboard.press("n")
                 await page.locator("#toasts .toast", has_text="has been reviewed").wait_for()
                 assert await page.locator(f'.claim.sel[data-claim="{three}"]').count() == 1
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: True, two: True, three: True}
 
 
@@ -1657,8 +1594,7 @@ def test_reviewing_leaves_a_claim_picked_while_the_review_was_in_flight():
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_patch(route, request):
@@ -1684,9 +1620,8 @@ def test_reviewing_leaves_a_claim_picked_while_the_review_was_in_flight():
                 await page.wait_for_timeout(300)
                 assert await page.locator(f'.claim.sel[data-claim="{three}"]').count() == 1
                 assert await page.locator(f'.claim.sel[data-claim="{two}"]').count() == 0
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: True, two: False, three: False}
 
 
@@ -1697,8 +1632,7 @@ def test_marking_a_whole_paper_reviewed_can_be_undone():
     store.update_claim("doe2026study", two, {"reviewed": True})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1714,9 +1648,8 @@ def test_marking_a_whole_paper_reviewed_can_be_undone():
                 # it was not part of what was just done.
                 await notice.get_by_role("button", name="Undo").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: False, two: True, three: False}
 
 
@@ -1727,8 +1660,7 @@ def test_a_deleted_claim_waits_for_its_notice_and_can_be_brought_back():
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1752,9 +1684,8 @@ def test_a_deleted_claim_waits_for_its_notice_and_can_be_brought_back():
                 await notice.get_by_role("button", name="Dismiss: Deleted the claim.").click()
                 await page.wait_for_function(
                     "() => S.claims.length === 1", timeout=10000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
 
 
@@ -1764,8 +1695,7 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
     _paper("ling2025gait", "Quadruped gait", "locomotion")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1794,9 +1724,8 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
                 await page.go_back()
                 await page.locator('#papers [data-paper=""].active').wait_for()
                 assert "paper=" not in page.url
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1805,8 +1734,7 @@ def test_slash_reaches_the_search_box_and_question_mark_shows_the_shortcuts():
     _paper("ling2025gait", "Quadruped gait", "locomotion")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1838,9 +1766,8 @@ def test_slash_reaches_the_search_box_and_question_mark_shows_the_shortcuts():
                 assert "mark the claim reviewed" in await help_sheet.inner_text()
                 await page.keyboard.press("Escape")
                 await help_sheet.wait_for(state="hidden")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1853,8 +1780,7 @@ def test_a_claim_links_to_its_own_page_of_the_pdf_and_the_paper_menu_has_a_butto
     store.pdf_path("doe2026study").write_bytes(minimal_pdf("On page three."))
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1877,16 +1803,14 @@ def test_a_claim_links_to_its_own_page_of_the_pdf_and_the_paper_menu_has_a_butto
                 await page.locator('#papers [data-paper="ling2025gait"] .pmenu').click()
                 await menu.wait_for(state="visible")
                 assert await menu.get_by_role("button", name="Open the PDF").count() == 0
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
 def test_references_that_could_not_be_read_are_named_where_they_were_pasted():
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1897,9 +1821,8 @@ def test_references_that_could_not_be_read_are_named_where_they_were_pasted():
                 text = await warning.inner_text()
                 assert "“wibble”" in text and "“flimflam”" in text
                 assert await page.input_value("#refs") == "wibble\nflimflam"
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1912,8 +1835,7 @@ def test_a_reference_already_in_the_corpus_is_named_straight_away():
     store.add_claim("doe2026study", {"text": "Steering recovers."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1923,9 +1845,8 @@ def test_a_reference_already_in_the_corpus_is_named_straight_away():
                                    has_text="Already in the corpus: doe2026study").wait_for()
                 assert await page.input_value("#refs") == ""
                 assert await page.locator("#jobs .job").count() == 0
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1933,8 +1854,7 @@ def test_the_export_notice_opens_the_file_it_just_wrote():
     _paper("doe2026study", "A study", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             context = await browser.new_context()
             page = await context.new_page()
             with _server() as url:
@@ -1949,9 +1869,8 @@ def test_the_export_notice_opens_the_file_it_just_wrote():
                 exported = await opened.value
                 await exported.wait_for_load_state()
                 assert "A claim from A study" in await exported.inner_text("body")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -1966,8 +1885,7 @@ def test_back_to_another_workspace_restores_that_entrys_paper_and_filters():
         _paper("gait", "An animal locomotion paper", "locomotion")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -1998,9 +1916,8 @@ def test_back_to_another_workspace_restores_that_entrys_paper_and_filters():
                 await page.locator(".paperhead h2", has_text="An animal locomotion paper").wait_for()
                 assert await page.locator("#workspace").input_value() == animal["id"]
                 assert "paper=gait" in page.url
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2010,8 +1927,7 @@ def test_a_bulk_review_reaches_a_claim_whose_editor_is_open():
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2033,9 +1949,8 @@ def test_a_bulk_review_reaches_a_claim_whose_editor_is_open():
                 assert await reviewed.is_checked()
                 await form.get_by_role("button", name="Save").click()
                 await form.wait_for(state="detached")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     reviewed = _reviewed("doe2026study")
     assert reviewed == {one: True, two: True}
     text = {c["id"]: c["text"] for c in store.load_paper("doe2026study")["claims"]}
@@ -2048,8 +1963,7 @@ def test_history_restores_a_paper_only_when_it_still_exists_and_parks_a_new_clai
     _paper("paper-b", "Paper B", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2082,9 +1996,8 @@ def test_history_restores_a_paper_only_when_it_still_exists_and_parks_a_new_clai
                 await page.locator('#papers [data-paper=""].active').wait_for()
                 assert await page.locator(".paperhead h2").count() == 0
                 assert "paper=paper-a" not in page.url
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2099,8 +2012,7 @@ def test_a_bulk_review_undo_writes_to_the_workspace_it_was_taken_in():
         _paper_with_claims("shared", "A study", ["One.", "Two."], reviewed=False)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2117,9 +2029,8 @@ def test_a_bulk_review_undo_writes_to_the_workspace_it_was_taken_in():
 
                 await notice.get_by_role("button", name="Undo").click()
                 await page.wait_for_timeout(1500)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     # The discriminating assertion: the undo has to have landed in the
     # workspace the review was taken in, which is the one no longer on screen.
     assert _reviewed("shared") == {i: False for i in ids}
@@ -2140,8 +2051,7 @@ def test_a_refused_workspace_switch_leaves_the_entry_alone():
         _paper("shared", "Other paper", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2166,9 +2076,8 @@ def test_a_refused_workspace_switch_leaves_the_entry_alone():
                 assert f"ws={other['id']}" in page.url
                 assert "paper=shared" not in page.url
                 assert await field.input_value() == "A draft worth keeping."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2183,8 +2092,7 @@ def test_a_link_naming_a_workspace_writes_there_before_the_registry_loads():
         held = asyncio.Event()
         release = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_registry(route):
@@ -2207,9 +2115,8 @@ def test_a_link_naming_a_workspace_writes_there_before_the_registry_loads():
                 from playwright.async_api import expect
 
                 await expect(page.locator("#workspace")).to_have_value(other["id"])
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2217,8 +2124,7 @@ def test_a_held_delete_is_sent_once_and_settles_before_its_paper_is_removed():
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2248,9 +2154,8 @@ def test_a_held_delete_is_sent_once_and_settles_before_its_paper_is_removed():
                 await page.evaluate("flushTrash()")
                 await page.wait_for_timeout(500)
                 assert await page.locator("#toasts .toast", has_text="Could not delete").count() == 0
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.all_papers() == []
 
 
@@ -2261,8 +2166,7 @@ def test_a_bulk_review_leaves_a_claim_that_is_waiting_out_a_delete_alone():
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2278,9 +2182,8 @@ def test_a_bulk_review_leaves_a_claim_that_is_waiting_out_a_delete_alone():
                 # reviewed by a decision taken while it was off the page.
                 await notice.get_by_role("button", name="Undo").click()
                 await page.locator(f'.claim.unreviewed[data-claim="{one}"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: False, two: True}
 
 
@@ -2294,8 +2197,7 @@ def test_r_does_not_move_on_when_the_review_did_not_happen():
         release = asyncio.Event()
         started = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_patch(route, request):
@@ -2326,9 +2228,8 @@ def test_r_does_not_move_on_when_the_review_did_not_happen():
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 await page.keyboard.press("r")
                 await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: True, two: False}
 
 
@@ -2340,8 +2241,7 @@ def test_a_deleted_synthesis_takes_its_parked_draft_with_it():
                            {row["id"]: row for row in store.claim_rows()})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2366,9 +2266,8 @@ def test_a_deleted_synthesis_takes_its_parked_draft_with_it():
                 await synth.get_by_role("button", name="edit").click()
                 assert await page.locator('textarea[data-synth="recovery"]').input_value() \
                     == "Recovery as written."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2381,8 +2280,7 @@ def test_undoing_a_bulk_review_freezes_the_editors_it_is_undoing():
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_undo(route, request):
@@ -2412,9 +2310,8 @@ def test_undoing_a_bulk_review_freezes_the_editors_it_is_undoing():
                 await page.locator(f'form[data-form="{one}"] [name="reviewed"]:not(:checked)').wait_for()
                 await form.get_by_role("button", name="Save").click()
                 await form.wait_for(state="detached")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: False, two: False}
 
 
@@ -2426,8 +2323,7 @@ def test_removing_a_paper_settles_only_that_papers_deletions():
     _paper_with_claims("paper-b", "Paper B", ["B one."])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2445,9 +2341,8 @@ def test_removing_a_paper_settles_only_that_papers_deletions():
                 assert len(store.load_paper("paper-a")["claims"]) == 2
                 await notice.get_by_role("button", name="Undo").click()
                 await page.locator(f'.claim[data-claim="{a_one}"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 2
 
 
@@ -2463,8 +2358,7 @@ def test_moving_forward_withdraws_the_question_back_was_asking():
         _paper("shared", "Other paper", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2493,9 +2387,8 @@ def test_moving_forward_withdraws_the_question_back_was_asking():
                 assert await page.locator("#workspace").input_value() == other["id"]
                 assert await page.evaluate("V.drafts['shared-c1'].text") == "A draft worth keeping."
                 assert f"ws={other['id']}" in page.url
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2509,8 +2402,7 @@ def test_the_status_filter_is_part_of_the_view_the_url_carries():
     store.set_tension_status(store.tension_rows()[0]["id"], "dismissed")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2528,9 +2420,8 @@ def test_the_status_filter_is_part_of_the_view_the_url_carries():
                 await page.goto(f"{url}/#view=tensions&tstatus=wibble")
                 await page.locator(".tcard").wait_for()
                 assert await page.locator("#tension-status").input_value() == ""
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2543,8 +2434,7 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_patch(route, request):
@@ -2571,9 +2461,8 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
                 # Once it has landed, the bulk review goes through as usual.
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 await page.locator("#toasts .toast", has_text="2 claims marked reviewed").wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: True, two: True}
 
 
@@ -2591,8 +2480,7 @@ def test_removing_a_paper_names_the_workspace_it_was_asked_in():
     async def scenario():
         sent_to = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def move_after_claim_delete(route, request):
@@ -2620,11 +2508,11 @@ def test_removing_a_paper_names_the_workspace_it_was_asked_in():
                     if sent_to:
                         break
                     await page.wait_for_timeout(100)
-            await browser.close()
+
 
         assert sent_to == ["default"]
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     from doxograph import config as cfg
     assert store.all_papers() == []
     with cfg.use_workspace(other["id"]):
@@ -2644,8 +2532,7 @@ def test_a_claim_cannot_be_deleted_while_its_paper_is_being_removed():
         release = asyncio.Event()
         claim_deletes = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_paper_delete(route, request):
@@ -2690,11 +2577,11 @@ def test_a_claim_cannot_be_deleted_while_its_paper_is_being_removed():
                 assert await page.locator(
                     "#toasts .toast", has_text="Could not delete"
                 ).count() == 0
-            await browser.close()
+
 
         assert claim_deletes == []
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.all_papers() == []
 
 
@@ -2710,8 +2597,7 @@ def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
     async def scenario():
         sent_to = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def move_after_claim_delete(route, request):
@@ -2734,11 +2620,11 @@ def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
                     if sent_to:
                         break
                     await page.wait_for_timeout(100)
-            await browser.close()
+
 
         assert sent_to == ["default"]
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2749,8 +2635,7 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_patch(route, request):
@@ -2782,9 +2667,8 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
                 again = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
                 await again.get_by_role("button", name="Undo").click()
                 await page.locator(f'.claim.unreviewed[data-claim="{one}"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: False, two: False}
 
 
@@ -2794,8 +2678,7 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
     _paper("paper-b", "Paper B", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 800})
             with _server() as url:
                 await page.goto(url)
@@ -2817,9 +2700,8 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
                 await page.go_back()
                 await page.locator(".graph-wrap canvas").wait_for()
                 assert "view=graph" in page.url
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2829,8 +2711,7 @@ def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine)
     _paper("paper-b", "Paper B", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 900})
             with _server() as url:
                 await page.goto(url)
@@ -2856,8 +2737,8 @@ def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine)
                 await page.go_back()
                 await canvas.wait_for()
                 assert "view=graph" in page.url
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2868,8 +2749,7 @@ def test_no_undo_is_offered_for_a_delete_that_has_already_been_sent():
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2887,9 +2767,8 @@ def test_no_undo_is_offered_for_a_delete_that_has_already_been_sent():
 
                 assert await page.locator("#toasts .toast", has_text="Deleted the claim.").count() == 0
                 await page.locator(f'.claim[data-claim="{one}"]').wait_for(state="detached")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
 
 
@@ -2898,8 +2777,7 @@ def test_back_from_the_analysis_views_returns_to_the_claims():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2910,9 +2788,8 @@ def test_back_from_the_analysis_views_returns_to_the_claims():
                     await page.go_back()
                     await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
                     assert "view=" not in page.url
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -2922,8 +2799,7 @@ def test_a_flush_takes_deletes_made_while_it_is_running():
     one, two, three = _paper_with_claims("doe2026study", "A study", ["One.", "Two.", "Three."])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2938,9 +2814,8 @@ def test_a_flush_takes_deletes_made_while_it_is_running():
                   })()
                 """, [one, two])
                 assert await page.evaluate("trash.size") == 0
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [three]
 
 
@@ -2955,8 +2830,7 @@ def test_a_flush_leaves_alone_a_delete_made_in_another_workspace():
     config.create_workspace("Other")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -2977,9 +2851,8 @@ def test_a_flush_leaves_alone_a_delete_made_in_another_workspace():
                 # and its absence from the flush kept the flush a success.
                 assert waiting
                 assert settled
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two, three]
 
 
@@ -2988,8 +2861,7 @@ def test_back_returns_to_the_research_form_after_leaving_it():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3009,9 +2881,8 @@ def test_back_returns_to_the_research_form_after_leaving_it():
                     await page.locator('#research-nav [data-view="research"].active').wait_for()
                     await page.go_forward()
                     await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3021,8 +2892,7 @@ def test_a_url_naming_a_topic_that_is_gone_falls_back_to_the_corpus():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#tag=gait")
@@ -3039,9 +2909,8 @@ def test_a_url_naming_a_topic_that_is_gone_falls_back_to_the_corpus():
                 await page.go_back()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
                 assert "tag=recovery&" not in page.url and not page.url.endswith("tag=recovery")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3052,8 +2921,7 @@ def test_a_page_closing_does_not_send_a_delete_that_is_already_on_its_way():
         deletes = []
         release = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_delete(route, request):
@@ -3084,9 +2952,8 @@ def test_a_page_closing_does_not_send_a_delete_that_is_already_on_its_way():
                     if len(store.load_paper("doe2026study")["claims"]) == 1:
                         break
                     await page.wait_for_timeout(100)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
 
 
@@ -3108,8 +2975,7 @@ def test_a_reworded_quote_is_shown_beside_the_paper_and_can_take_its_wording():
     assert claim["quote_verified"] is False
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3131,9 +2997,7 @@ def test_a_reworded_quote_is_shown_beside_the_paper_and_can_take_its_wording():
                 await page.locator(".claim .qflag").wait_for(state="detached")
                 assert await page.locator(".qctx").count() == 0
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
     saved = store.load_paper(key)["claims"][0]
     assert saved["quote"].startswith("Recovery under steering is a path-dependent outcome")
@@ -3156,8 +3020,7 @@ def test_the_query_takes_words_in_any_order_and_finds_them_in_the_pdfs():
     ]))
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3181,9 +3044,7 @@ def test_the_query_takes_words_in_any_order_and_finds_them_in_the_pdfs():
                 await page.locator("#papers li.active").wait_for()
                 assert await page.locator("#papers li.active").get_attribute("data-paper") == "wu2026silent"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3196,8 +3057,7 @@ def test_alike_shows_claims_from_other_papers_worded_the_same_way():
                        {"text": "Steered Llama-3 70B recovers the original task about half the time."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3213,9 +3073,7 @@ def test_alike_shows_claims_from_other_papers_worded_the_same_way():
                 await row.click()
                 await page.locator('.claim.sel[data-claim="li2025steer-c1"]').wait_for()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3232,8 +3090,7 @@ def test_the_map_draws_a_citation_from_one_paper_to_another():
     ]))
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3253,9 +3110,7 @@ def test_the_map_draws_a_citation_from_one_paper_to_another():
                 await page.wait_for_function(
                     "window.doxographGraph().edges.every((e) => e.type !== 'cite')")
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3272,8 +3127,7 @@ def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
     assert claim["quote_verified"] is False
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3291,9 +3145,7 @@ def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
                 await page.locator(".claim .qflag").wait_for(state="detached")
                 assert await page.locator(".qctx").count() == 0
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3314,8 +3166,7 @@ def test_rewrite_asks_again_even_when_nothing_has_changed():
             await route.fulfill(status=200, json={"queued": 1})
             asked.set()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3327,9 +3178,7 @@ def test_rewrite_asks_again_even_when_nothing_has_changed():
                 await asyncio.wait_for(asked.wait(), timeout=10)
                 assert posted == [{"topics": ["recovery-rate"], "force": True}]
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3362,8 +3211,7 @@ def test_citations_do_not_cross_between_workspaces():
                 await held.wait()
             await route.continue_()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             page.on("response", lambda r: answers.append(r.url) if "/api/citations" in r.url else None)
             with _server() as url:
@@ -3383,9 +3231,7 @@ def test_citations_do_not_cross_between_workspaces():
                 edges = await page.evaluate("window.doxographGraph().edges")
                 assert [e for e in edges if e["type"] == "cite"] == []
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3404,8 +3250,7 @@ def test_a_passage_stands_aside_when_the_claim_changes_underneath_it():
         "quote": "Steering recovery is path dependant across all scales."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3418,9 +3263,7 @@ def test_a_passage_stands_aside_when_the_claim_changes_underneath_it():
                 await page.locator(".qctx", has_text="changed while the passage was open").wait_for()
                 assert await page.get_by_role("button", name="Use the paper's wording").count() == 0
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3430,8 +3273,7 @@ def test_a_paper_arriving_after_the_search_still_turns_up_in_it():
     _paper("han2026reports", "Introspection in language models", "introspection")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3447,9 +3289,7 @@ def test_a_paper_arriving_after_the_search_still_turns_up_in_it():
                     "A silent paper", "This one discusses sandbagging at length."]))
                 await page.locator('.pdfhits [data-paper="wu2026silent"]').wait_for()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3458,8 +3298,7 @@ def test_a_query_with_no_words_in_it_matches_nothing():
     _paper("ling2025gait", "Quadruped gait control", "locomotion")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3472,9 +3311,7 @@ def test_a_query_with_no_words_in_it_matches_nothing():
                 # The "all papers" row stays; no paper does.
                 assert await page.locator('#papers li[data-paper]:not([data-paper=""])').count() == 0
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3489,8 +3326,7 @@ def test_opening_a_passage_keeps_what_is_typed_in_another_claims_editor():
     store.add_claim(key, {"text": "Second claim.", "quote": "a path-dependent outcome"})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3506,9 +3342,7 @@ def test_opening_a_passage_keeps_what_is_typed_in_another_claims_editor():
                 await page.locator(".qctx .qpassage").wait_for()
                 assert await page.locator('textarea[name="text"]').input_value() == "Half-typed correction"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3521,8 +3355,7 @@ def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
                        {"text": "Steered Llama-3 70B recovers the original task about half the time."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3538,9 +3371,7 @@ def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
                                    {"text": "Something else entirely, about penguins."})
                 await page.locator(".alike").wait_for(state="detached")
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3552,8 +3383,7 @@ def test_the_map_picks_up_a_paper_that_arrives_while_it_is_open():
         minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3572,9 +3402,7 @@ def test_the_map_picks_up_a_paper_that_arrives_while_it_is_open():
                 await page.wait_for_function(
                     "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=15000)
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3592,8 +3420,7 @@ def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
     store.add_claim(key, {"text": "Second claim.", "quote": "a path-dependent outcome"})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3616,9 +3443,7 @@ def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
                 await page.locator(".warn", has_text="changed while the passage was open").wait_for()
                 assert await page.locator('textarea[name="text"]').input_value() == "Half-typed correction"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
     assert store.load_paper(key)["claims"][0]["quote"] == "Recovery under steering"
 
@@ -3636,8 +3461,7 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
                           "quote": "Recovery under steering"})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3652,9 +3476,7 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
                 second = page.locator(".claim").nth(1)
                 assert await second.locator(".qctx").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3670,8 +3492,7 @@ def test_a_dropped_pdf_brings_its_arrows_while_the_map_is_open():
         minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3688,9 +3509,7 @@ def test_a_dropped_pdf_brings_its_arrows_while_the_map_is_open():
                 await page.wait_for_function(
                     "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3702,8 +3521,7 @@ def test_the_page_finds_what_the_server_finds_whatever_the_case():
                        {"text": "Die Straße ist lang."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3714,9 +3532,7 @@ def test_the_page_finds_what_the_server_finds_whatever_the_case():
                     assert await page.locator("#content .claim").count() == 1, query
                     assert await page.locator('#papers [data-paper="weber2026strasse"]').count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3731,8 +3547,7 @@ def test_the_alike_panel_goes_even_while_an_editor_holds_the_content():
                        {"text": "Steered Llama-3 70B recovers the original task about half the time."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3750,9 +3565,7 @@ def test_the_alike_panel_goes_even_while_an_editor_holds_the_content():
                 await page.locator(".alike").wait_for(state="detached")
                 assert await page.locator('textarea[name="text"]').input_value() == "Half-typed correction"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3767,8 +3580,7 @@ def test_following_an_alike_suggestion_keeps_what_was_typed():
                        {"text": "Steered Llama-3 70B recovers the original task about half the time."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3785,9 +3597,7 @@ def test_following_an_alike_suggestion_keeps_what_was_typed():
                 assert await page.locator(
                     'textarea[name="text"]').input_value() == "Half-typed correction"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3801,8 +3611,7 @@ def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
                        {"text": "Steered Llama-3 70B recovers the original task about half the time."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3814,9 +3623,7 @@ def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
                 await cards.nth(1).locator(".alike .alikerow").wait_for()
                 assert await page.locator(".alike").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3841,8 +3648,7 @@ def test_a_corpus_change_during_a_citation_scan_is_asked_again():
                 await release.wait()
             await route.continue_()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3860,7 +3666,7 @@ def test_a_corpus_change_during_a_citation_scan_is_asked_again():
                 # Polls see the import and one more runs after it, all of them
                 # suppressed: the scan already open is the only one asked for.
                 await page.wait_for_function("S.papers.length === 2", timeout=30000)
-                await _polled(page, 1)
+                await _poll(page)
                 assert len(asked) == 1
                 release.set()
 
@@ -3868,9 +3674,7 @@ def test_a_corpus_change_during_a_citation_scan_is_asked_again():
                 await page.wait_for_function(
                     "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3883,8 +3687,7 @@ def test_a_pdf_result_can_be_reached_from_the_keyboard():
         "A silent paper", "Nobody has read this one yet, but it discusses sandbagging."]))
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3899,9 +3702,7 @@ def test_a_pdf_result_can_be_reached_from_the_keyboard():
                 await page.locator("#papers li.active").wait_for()
                 assert await page.locator("#papers li.active").get_attribute("data-paper") == "wu2026silent"
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3910,21 +3711,23 @@ def test_the_page_folds_a_greek_iota_subscript_as_the_server_does():
     mark, and stripping it would hide the claim behind a PDF hit."""
     _paper("pap2026greek", "Περὶ τῆς ᾳδούσης", "introspection")
     store.update_claim("pap2026greek", "pap2026greek-c1", {"text": "Ἡ ᾳδουσα λέγει."})
+    _paper("other", "An unrelated study", "introspection")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
-                await page.locator("#content .claim").first.wait_for()
+                from playwright.async_api import expect
+                claims = page.locator("#content .claim")
+                await expect(claims).to_have_count(2)
                 await page.locator("#q").fill("αιδουσα")
-                await page.locator("#content .claim").first.wait_for()
-                assert await page.locator("#content .claim").count() == 1
+                await expect(claims).to_have_count(1)
+                await expect(claims).to_have_attribute("data-paper", "pap2026greek")
+                await page.locator("#q").fill("no matching words")
+                await expect(claims).to_have_count(0)
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3937,8 +3740,7 @@ def test_the_page_keeps_a_vowel_sign_the_server_keeps():
     store.update_claim("verma2026kal", "verma2026kal-c1", {"text": "यह कल है।"})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3947,9 +3749,7 @@ def test_the_page_keeps_a_vowel_sign_the_server_keeps():
                 await page.locator("#content .claim").first.wait_for()
                 assert await page.locator("#content .claim").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3960,8 +3760,7 @@ def test_the_page_drops_an_arabic_vowel_mark_as_the_server_does():
     store.update_claim("nasr2026kitab", "nasr2026kitab-c1", {"text": "هذا كِتاب جيد."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3970,9 +3769,7 @@ def test_the_page_drops_an_arabic_vowel_mark_as_the_server_does():
                 await page.locator("#content .claim").first.wait_for()
                 assert await page.locator("#content .claim").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -3983,8 +3780,7 @@ def test_a_word_whose_vowels_are_marks_is_one_term_on_the_page_too():
     store.update_claim("verma2026baat", "verma2026baat-c1", {"text": "बात की एक नई कहानी।"})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -3993,9 +3789,7 @@ def test_a_word_whose_vowels_are_marks_is_one_term_on_the_page_too():
                 await page.locator("#content .claim").first.wait_for()
                 assert await page.locator("#content .claim").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -4006,8 +3800,7 @@ def test_the_page_folds_a_historic_cyrillic_letter_as_the_server_does():
     store.update_claim("ivanov2026old", "ivanov2026old-c1", {"text": "Стаᲀъ текстъ."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4016,9 +3809,7 @@ def test_the_page_folds_a_historic_cyrillic_letter_as_the_server_does():
                 await page.locator("#content .claim").first.wait_for()
                 assert await page.locator("#content .claim").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -4029,8 +3820,7 @@ def test_the_page_folds_what_a_decomposition_produces():
     store.update_claim("pap2026sigma", "pap2026sigma-c1", {"text": "The value 𝛓 is fixed."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4039,9 +3829,7 @@ def test_the_page_folds_what_a_decomposition_produces():
                 await page.locator("#content .claim").first.wait_for()
                 assert await page.locator("#content .claim").count() == 1
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -4054,8 +3842,7 @@ def test_an_export_does_not_run_on_a_delete_that_failed():
     async def scenario():
         exports = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def refuse_delete(route, request):
@@ -4084,9 +3871,8 @@ def test_an_export_does_not_run_on_a_delete_that_failed():
 
                 # The claim is back on screen, because it is back on file.
                 await page.locator(f'.claim[data-claim="{one}"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [one, two]
 
 
@@ -4098,8 +3884,7 @@ def test_a_kind_the_url_names_that_does_not_exist_is_dropped():
     _paper_with_claims("doe2026study", "A study", ["One.", "Two."], kind="finding")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#kind=wibble")
@@ -4112,9 +3897,8 @@ def test_a_kind_the_url_names_that_does_not_exist_is_dropped():
                 await page.goto(f"{url}/#kind=finding")
                 await page.locator("#content .claim").first.wait_for()
                 assert await page.locator("#kind").input_value() == "finding"
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -4125,8 +3909,7 @@ def test_a_url_naming_the_research_view_draws_it_at_boot():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=research")
@@ -4136,9 +3919,8 @@ def test_a_url_naming_the_research_view_draws_it_at_boot():
                 # A reload of the same address redraws it too.
                 await page.reload()
                 await page.locator("#research-form").wait_for(timeout=5000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -4159,8 +3941,7 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
     tid = store.tension_rows()[0]["id"]
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4190,9 +3971,8 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
                 assert await group.locator(".kind.agreement").text_content() == "3 papers"
                 await page.locator('#tensions-nav [data-view="tensions"]').click()
                 await page.locator(f'.tcard[data-tension="{tid}"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
 
 
@@ -4206,8 +3986,7 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
     _paper("paper-b", "Paper B", "shared")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4231,9 +4010,8 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
                 await notice.get_by_role("button", name="Undo").click()
                 await page.locator('#tags [data-tag="solo"]').wait_for()
                 assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
 
 
@@ -4249,8 +4027,7 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
     _paper("paper-b", "Paper B", "shared")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4286,9 +4063,8 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
                 await page.locator('#tags [data-tag="solo"]').wait_for(state="detached")
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
                 assert "tag=solo" not in page.url
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-a")["claims"] == []
 
 
@@ -4311,8 +4087,7 @@ def test_a_focused_tension_keeps_its_way_out_when_the_claim_it_names_goes():
     second = found[("paper-b-c1", "paper-c-c1")]
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4330,9 +4105,8 @@ def test_a_focused_tension_keeps_its_way_out_when_the_claim_it_names_goes():
                 await escape.click()
                 await page.locator(f'.tcard[data-tension="{second}"]').wait_for()
                 assert await escape.count() == 0
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -4346,8 +4120,7 @@ def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
     async def scenario():
         refusing = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def refuse_read(route, request):
@@ -4375,9 +4148,8 @@ def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
                 # The notice runs out and sends the delete it was holding.
                 await notice.wait_for(state="detached", timeout=20000)
                 await card.wait_for(state="detached", timeout=20000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
 
 
@@ -4393,8 +4165,7 @@ def test_a_deleted_row_leaves_the_screen_when_the_redraw_after_it_fails():
     async def scenario():
         refusing = asyncio.Event()
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def refuse_read(route, request):
@@ -4425,9 +4196,8 @@ def test_a_deleted_row_leaves_the_screen_when_the_redraw_after_it_fails():
 
                 refusing.clear()
                 await notice.wait_for(state="detached", timeout=20000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [c["id"] for c in store.load_paper("doe2026study")["claims"]] == [two]
 
 
@@ -4449,8 +4219,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
                            {r["id"]: r for r in store.topic_claims("solo")})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4487,9 +4256,8 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
                 await notice.get_by_role("button", name="Undo").click()
                 await card.locator(".stale").wait_for(state="detached")
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
     assert len(store.load_paper("paper-d")["claims"]) == 1
 
@@ -4519,8 +4287,7 @@ def test_a_held_claim_moves_the_paper_status_dot_with_it():
     _extracted("paper-c")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4561,9 +4328,8 @@ def test_a_held_claim_moves_the_paper_status_dot_with_it():
                 await dot("paper-c", "extracted").wait_for(timeout=5000)
                 await undo(notice)
                 await dot("paper-c", "reviewed").wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 2
     assert len(store.load_paper("paper-b")["claims"]) == 1
     assert len(store.load_paper("paper-c")["claims"]) == 1
@@ -4585,8 +4351,7 @@ def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
     _paper("paper-c", "Paper C", "recovery")   # added since: the card reads stale
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4605,9 +4370,8 @@ def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
                 await notice.get_by_role("button", name="Undo").click()
                 await card.locator(".stale").wait_for()
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-c")["claims"]) == 1
 
 
@@ -4637,8 +4401,7 @@ def test_a_held_claim_leaves_the_agreements_in_the_order_the_server_would_send()
     assert [r["id"] for r in store.agreement_rows()] == ["a2", "a1"]
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             order = ("() => [...document.querySelectorAll('.tcard[data-agreement]')]"
                      ".map((node) => node.dataset.agreement).join(',') === '%s'")
@@ -4657,9 +4420,8 @@ def test_a_held_claim_leaves_the_agreements_in_the_order_the_server_would_send()
 
                 await notice.get_by_role("button", name="Undo").click()
                 await page.wait_for_function(order % "a2,a1", timeout=5000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-c")["claims"]) == 1
 
 
@@ -4687,8 +4449,7 @@ def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
     assert row["topics"] == [] and row["topics_on_file"] == ["recovery"]
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             shows = ("() => [...document.querySelectorAll('.tcard[data-agreement]')]"
                      ".map((node) => node.dataset.agreement).join(',') === '%s'")
@@ -4711,9 +4472,8 @@ def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
                 await notice.get_by_role("button", name="Undo").click()
                 # C is back and carries something else, so the topic goes again.
                 await page.wait_for_function(shows % "", timeout=5000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert len(store.load_paper("paper-c")["claims"]) == 1
 
 
@@ -4733,8 +4493,7 @@ def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
     assert store.synthesis_rows()[0]["stale"] is False
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4756,9 +4515,8 @@ def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
                     "button", name="Save", exact=True).click()
                 await page.locator('textarea[data-synth="recovery"]').wait_for(
                     state="detached", timeout=10000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     # The delete went before the save, so the claim is gone and the basis names
     # the two the reader was looking at — and reads current, not stale.
     assert store.load_paper("paper-a")["claims"] == []
@@ -4785,8 +4543,7 @@ def test_deciding_an_agreement_settles_a_held_claim_delete_first():
         {r["id"]: r for r in store.topic_claims("recovery")})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -4804,9 +4561,8 @@ def test_deciding_an_agreement_settles_a_held_claim_delete_first():
                 await card.locator(".stale").wait_for()
                 await card.get_by_role("button", name="Confirm").click()
                 await card.locator(".stale").wait_for(state="detached", timeout=10000)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-c")["claims"] == []
     (record,) = store.load_agreements()
     assert record["status"] == "confirmed"
@@ -4834,8 +4590,7 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
         release = asyncio.Event()
         wrote = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_paper_delete(route, request):
@@ -4881,11 +4636,11 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
 
                 release.set()
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
-            await browser.close()
+
 
         assert wrote == []
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.all_papers() == []
 
 
@@ -4905,8 +4660,7 @@ def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
         release = asyncio.Event()
         wrote_to = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_claim_delete(route, request):
@@ -4953,9 +4707,8 @@ def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
                     await page.wait_for_timeout(100)
                 assert await page.locator("#workspace").input_value() == other["id"]
                 assert await page.evaluate("window.doxographWorkspaceId") == other["id"]
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     from doxograph import config as cfg
 
     assert "midswitch" in store.tag_names()
@@ -4980,8 +4733,7 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
         release = asyncio.Event()
         wrote = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_claim_delete(route, request):
@@ -5024,11 +4776,11 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
 
                 release.set()
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
-            await browser.close()
+
 
         assert wrote == []
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.all_papers() == []
 
 
@@ -5045,8 +4797,7 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
         release = asyncio.Event()
         paper_deletes = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_claim_patch(route, request):
@@ -5084,11 +4835,11 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
                 await page.get_by_role("button", name="Remove", exact=True).click()
                 await _answer(page, "Remove")
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
-            await browser.close()
+
 
         assert len(paper_deletes) == 1
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.all_papers() == []
 
 
@@ -5098,8 +4849,7 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
     _paper("paper-b", "Paper B", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5125,9 +4875,8 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
                     "Read this one for the method.").wait_for()
                 # With a note on file the header offers to edit it instead.
                 assert await page.get_by_role("button", name="Write a note").count() == 0
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-a")["notes"] == "Read this one for the method."
     assert store.load_paper("paper-b")["notes"] == ""
 
@@ -5141,8 +4890,7 @@ def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
     store.save_paper(noted)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5169,9 +4917,8 @@ def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
                 await page.click('#papers [data-paper="paper-a"]')
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-a")["claims"][0]["note"] == (
         "Overstated: the appendix contradicts this.")
 
@@ -5188,8 +4935,7 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
         release = asyncio.Event()
         wrote = []
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def hold_delete_record_patch(route, request):
@@ -5222,11 +4968,11 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
 
                 release.set()
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
-            await browser.close()
+
 
         assert wrote == []
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.all_papers() == []
 
 
@@ -5243,8 +4989,7 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
     animal = config.create_workspace("Animal locomotion")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5263,9 +5008,8 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
                 await page.wait_for_function(
                     "typeof S !== 'undefined' && S.workspace && S.papers.length === 0")
                 assert await page.locator("#ask").is_hidden()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert [p["key"] for p in store.all_papers()] == ["other"]
 
 
@@ -5277,8 +5021,7 @@ def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5301,9 +5044,8 @@ def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_
                 await note_field.wait_for(state="hidden")
                 await page.locator(".paperhead .note").get_by_text("A note of my own.").wait_for()
                 assert await claim_field.input_value() == "Claim text typed before the note was saved."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-a")["notes"] == "A note of my own."
     # The claim itself was never saved: its editor was reopened, not submitted.
     assert store.load_paper("paper-a")["claims"][0]["text"] == "A claim from Paper A."
@@ -5316,8 +5058,7 @@ def test_the_background_poll_leaves_a_note_being_written_alone():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5335,9 +5076,8 @@ def test_the_background_poll_leaves_a_note_being_written_alone():
 
                 assert await _cursor(page, 'textarea[data-note="paper-a"]') == {
                     "value": "Half a sentence", "focused": True, "start": 15}
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5348,8 +5088,7 @@ def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             held = asyncio.Event()
 
@@ -5379,9 +5118,8 @@ def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
 
                 assert await _cursor(page, 'textarea[data-note="paper-a"]') == {
                     "value": "Half a sentence", "focused": True, "start": 4}
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5391,8 +5129,7 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
     _paper("paper-b", "Paper B", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             in_flight = asyncio.Event()
             release = asyncio.Event()
@@ -5427,11 +5164,10 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
                 # A's answer lands, and a poll redraws after it: B's editor is
                 # still open on B's text.
                 await page.wait_for_function("!V.noteSaving", timeout=10000)
-                await _polled(page, 1)
+                await _poll(page)
                 assert await field_b.input_value() == "B's note, still being written."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-a")["notes"] == "A's note."
     assert store.load_paper("paper-b")["notes"] == ""
 
@@ -5444,8 +5180,7 @@ def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5463,9 +5198,8 @@ def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
                 await page.locator('.claim[data-claim="paper-a-c1"]').get_by_text(
                     "Corrected by hand.").wait_for()
                 assert await page.locator('textarea[data-note="paper-a"]').input_value() == "Mine."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."
 
 
@@ -5477,8 +5211,7 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             in_flight = asyncio.Event()
             release = asyncio.Event()
@@ -5512,9 +5245,8 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
                 assert await _cursor(page, "#research-context") == {
                     "value": "What I am studying, typed while the claim saved.",
                     "focused": True, "start": 7}
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert store.load_paper("paper-a")["claims"][0]["text"] == "Corrected by hand."
 
 
@@ -5523,8 +5255,7 @@ def test_side_pane_width_is_dragged_kept_and_put_back():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1280, "height": 800})
             with _server() as url:
                 await page.goto(url)
@@ -5579,9 +5310,8 @@ def test_side_pane_width_is_dragged_kept_and_put_back():
                 # A double-click that did not drag still resets.
                 await handle.dblclick()
                 assert (await side.bounding_box())["width"] == 320
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5589,8 +5319,7 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1280, "height": 800})
             # A browser set to a larger default font size draws 20rem wider.
             # Playwright cannot set that preference, so put the size on the
@@ -5657,9 +5386,8 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window():
                 await page.wait_for_function(
                     "document.getElementById('side').getBoundingClientRect().width === 400"
                 )
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5667,8 +5395,7 @@ def test_side_pane_width_survives_a_browser_that_will_not_store_it():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1280, "height": 800})
             # Private windows and blocked storage throw on write. The width is
             # then only in memory, and resizing the window must not lose it.
@@ -5697,9 +5424,8 @@ def test_side_pane_width_survives_a_browser_that_will_not_store_it():
                 # width asked for is still the width that comes back.
                 await resize_to(700, 350)
                 await resize_to(1280, 440)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5720,8 +5446,7 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
                        {"text": "Steered Llama-3 70B recovers the original task about half the time."})
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5742,9 +5467,8 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
                 await card.locator(".qctx").wait_for(state="detached")
                 await card.get_by_role("button", name="in the paper").click()
                 await card.locator(".qctx .qpassage").wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5754,8 +5478,7 @@ def test_a_shortcut_key_held_with_a_modifier_is_left_to_the_browser():
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5776,9 +5499,8 @@ def test_a_shortcut_key_held_with_a_modifier_is_left_to_the_browser():
                 # Without one, the keys are the page's as before.
                 await page.keyboard.press("r")
                 await page.locator(f'.claim.sel[data-claim="{two}"]').wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: True, two: False}
 
 
@@ -5789,8 +5511,7 @@ def test_clicking_the_words_select_claim_ticks_the_box_on_a_card_not_yet_picked(
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -5802,9 +5523,8 @@ def test_clicking_the_words_select_claim_ticks_the_box_on_a_card_not_yet_picked(
                 await page.wait_for_function(
                     "document.getElementById('selection-count').textContent.startsWith('1 claims')")
                 assert await page.locator(f'.claim[data-claim="{two}"] [data-select-claim]').is_checked()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5812,8 +5532,7 @@ def test_a_review_that_fails_says_so_and_r_stays_on_the_claim():
     one, two = _paper_with_claims("doe2026study", "A study", ["One.", "Two."], reviewed=False)
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def refuse_patch(route, request):
@@ -5831,9 +5550,8 @@ def test_a_review_that_fails_says_so_and_r_stays_on_the_claim():
                                    has_text="Could not mark the claim reviewed: Disk full").wait_for()
                 assert await page.evaluate("V.selectedId") == one
                 assert not await page.evaluate("isSaving(V.selectedId)")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: False, two: False}
 
 
@@ -5842,8 +5560,7 @@ def test_a_topic_that_could_not_be_added_says_so_and_keeps_its_name():
     _paper("paper-a", "Paper A", "recovery")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def refuse(route):
@@ -5857,9 +5574,8 @@ def test_a_topic_that_could_not_be_added_says_so_and_keeps_its_name():
                 await page.locator("#toasts .toast.warn",
                                    has_text="Could not add the topic: Disk full").wait_for()
                 assert await page.locator("#new-tag").input_value() == "interpretability"
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5890,8 +5606,7 @@ def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back(
             await release.wait()
             await route.fulfill(response=response)
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.route("**/api/state", hold_one)
@@ -5909,9 +5624,8 @@ def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back(
                 release.set()
                 await page.wait_for_function("n => polls > n", arg=polls, timeout=10000)
                 assert await page.evaluate("S.tags.some((t) => t.name === 'interpretability')")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -5922,8 +5636,7 @@ def test_a_review_whose_read_back_fails_still_counts_and_r_moves_on():
 
     async def scenario():
         refusing = asyncio.Event()
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def refuse_read(route):
@@ -5945,9 +5658,8 @@ def test_a_review_whose_read_back_fails_still_counts_and_r_moves_on():
                 # The poll brings the review in once the reads are answered.
                 await page.wait_for_function(
                     f"S.claims.find((c) => c.id === {one!r}).reviewed === true")
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     assert _reviewed("doe2026study") == {one: True, two: False}
 
 
@@ -5960,8 +5672,7 @@ def test_an_action_refused_while_the_reads_are_refused_too_still_says_so():
     async def scenario():
         refusing = asyncio.Event()
         rejections = []
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             page.on("pageerror", lambda error: rejections.append(str(error)))
 
@@ -5984,9 +5695,8 @@ def test_an_action_refused_while_the_reads_are_refused_too_still_says_so():
                 await page.locator("#content .warn",
                                    has_text="Could not accept the proposed topic: Disk full").wait_for()
                 assert rejections == []
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 # What each action writes to, what it is refused with, and how it is reached.
@@ -6026,8 +5736,7 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
     async def scenario():
         refusing = asyncio.Event()
         rejections = []
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             page.on("pageerror", lambda error: rejections.append(str(error)))
 
@@ -6083,9 +5792,8 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     assert await field.input_value() in ("Recovery corrected.",
                                                          "Worth reading for the method.")
                 assert rejections == []
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -6097,8 +5805,7 @@ def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
 
     async def scenario():
         refusing = asyncio.Event()
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
 
             async def refuse_read(route):
@@ -6121,8 +5828,7 @@ def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
                 assert await page.locator("#toasts .toast.warn").count() == 0
                 refusing.clear()
                 await page.locator("#content").get_by_text("One, edited.").wait_for()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
     texts = {c["id"]: c["text"] for c in store.load_paper("doe2026study")["claims"]}
     assert texts[one] == "One, edited."
