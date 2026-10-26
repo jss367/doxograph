@@ -173,9 +173,10 @@ def save_notebook(body: Notebook) -> dict:
                     store.load_paper(reading["paper"])
                 except KeyError:
                     raise HTTPException(404, "Paper no longer exists")
-        # Like reading entries, highlights outlive their paper rather than vanish.
-        old_highlights = {h["paper"] for h in previous["highlights"]}
-        for paper in {h["paper"] for h in data["highlights"]} - old_highlights:
+        # Like reading entries, highlights outlive their paper rather than vanish,
+        # but a new highlight needs a paper that still exists.
+        old_highlights = {(h["id"], h["paper"]) for h in previous["highlights"]}
+        for paper in {h["paper"] for h in data["highlights"] if (h["id"], h["paper"]) not in old_highlights}:
             try:
                 store.load_paper(paper)
             except KeyError:
