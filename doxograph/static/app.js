@@ -498,7 +498,11 @@ $('ask-form').addEventListener('submit', (event) => {
 });
 $('ask-cancel').addEventListener('click', () => settleAsk(null));
 $('ask').addEventListener('cancel', () => settleAsk(null));   // Escape
-$('ask').addEventListener('close', () => settleAsk(null));
+$('ask').addEventListener('close', () => {
+  // close() queues this event. An answer can open the next question before
+  // it arrives, so only cancel a question whose dialog is still closed.
+  if (!$('ask').open) settleAsk(null);
+});
 
 const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
   askDialog({ title, note, ok }).then((answer) => answer === true);
