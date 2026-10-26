@@ -2788,6 +2788,44 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine):
+    _paper("paper-a", "Paper A", "recovery")
+    _paper("paper-b", "Paper B", "recovery")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            page = await browser.new_page(viewport={"width": 1200, "height": 900})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                # Reproduce a wrapped header regardless of the platform's system font.
+                await page.add_style_tag(content="header { min-height: 180px; }")
+                await page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+                canvas = page.locator(".graph-wrap canvas")
+                box = await canvas.bounding_box()
+                assert box["y"] + box["height"] <= 900
+                await page.set_viewport_size({"width": 1200, "height": 850})
+                await page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+                graph = await page.evaluate("window.doxographGraph()")
+                box = await canvas.bounding_box()
+                assert box["y"] + box["height"] <= 850
+                node = next(n for n in graph["nodes"] if n["id"] == "p:paper-b")
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                assert await page.evaluate("([x,y]) => document.elementFromPoint(x,y)?.matches('.graph-wrap canvas')", [sx, sy])
+                await page.mouse.click(sx, sy)
+                await page.locator(".paperhead h2", has_text="Paper B").wait_for()
+                await page.go_back()
+                await canvas.wait_for()
+                assert "view=graph" in page.url
+            await browser.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_no_undo_is_offered_for_a_delete_that_has_already_been_sent():
     """The entry stays in the trash while its request is in flight, which is
     what keeps the row off the screen — so the trash alone cannot say whether
