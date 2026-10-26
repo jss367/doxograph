@@ -31,6 +31,8 @@ _workspace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "doxograph_workspace", default=DEFAULT_WORKSPACE_ID
 )
 _workspaces_lock = threading.RLock()
+_settings_lock = threading.RLock()
+_analysis_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar("analysis_provider", default=None)
 
 try:
     import fcntl
@@ -49,7 +51,6 @@ PROVIDERS = {
     "ollama": {"label": "Ollama (local)", "model": "", "base_url": "http://localhost:11434"},
     "openai-compatible": {"label": "OpenAI-compatible", "model": "", "base_url": "http://localhost:1234/v1"},
 }
-_settings_lock = threading.RLock()
 
 
 def _settings() -> dict:
@@ -72,10 +73,10 @@ class AnalysisConfig:
 _analysis: contextvars.ContextVar[AnalysisConfig | None] = contextvars.ContextVar("analysis", default=None)
 
 
-def analysis_config() -> AnalysisConfig:
+def analysis_config(settings: dict | None = None) -> AnalysisConfig:
     if current := _analysis.get():
         return current
-    settings = _settings()
+    settings = _settings() if settings is None else settings
     provider = settings.get("provider", os.environ.get("DOXOGRAPH_PROVIDER", "anthropic"))
     if provider not in PROVIDERS:
         raise ValueError(f"Unsupported AI provider: {provider}")
@@ -92,6 +93,8 @@ def analysis_config() -> AnalysisConfig:
 
 
 def analysis_identity() -> list[str]:
+    if ai_provider() != "api":
+        return [ai_provider(), model(), ""]
     selected = analysis_config()
     return [selected.provider, selected.model, selected.base_url]
 
@@ -201,10 +204,80 @@ def ai_enabled() -> bool:
 
 
 def set_ai_enabled(enabled: bool) -> None:
+    _update_settings(ai_enabled=enabled)
+
+
+def _update_settings(**changes) -> None:
     with _settings_lock:
-        settings = _settings()
-        settings["ai_enabled"] = enabled
-        _write_json(base_data_dir() / "settings.json", settings)
+        path = base_data_dir() / "settings.json"
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            settings = {"ai_enabled": True}
+        except (OSError, ValueError):
+            settings = {"ai_enabled": False}
+        if not isinstance(settings, dict):
+            settings = {"ai_enabled": False}
+        settings.update(changes)
+        _write_json(path, settings)
+
+
+def ai_provider() -> str:
+    bound = _analysis_provider.get()
+    if bound is not None:
+        return bound
+    settings = _settings()
+    provider = settings.get("ai_provider") if isinstance(settings, dict) else None
+    return provider if provider in ("claude_code", "codex") else "api"
+
+
+def model() -> str:
+    if ai_provider() == "codex":
+        return os.environ.get("DOXOGRAPH_CODEX_MODEL") or "Codex default"
+    return MODEL if ai_provider() == "claude_code" else analysis_config().model
+
+
+def bind_model_access(work):
+    """Keep a running operation on the provider it started with."""
+    @functools.wraps(work)
+    def bound(*args, **kwargs):
+        with use_model_access():
+            return work(*args, **kwargs)
+    return bound
+
+
+@contextlib.contextmanager
+def use_model_access():
+    """Capture access mode and API/local profile from one saved settings read."""
+    settings = _settings()
+    access = _analysis_provider.get()
+    if access is None:
+        saved = settings.get("ai_provider")
+        access = saved if saved in ("claude_code", "codex") else "api"
+    selected = analysis_config(settings)
+    access_token = _analysis_provider.set(access)
+    analysis_token = _analysis.set(selected)
+    try:
+        yield
+    finally:
+        _analysis.reset(analysis_token)
+        _analysis_provider.reset(access_token)
+
+
+@contextlib.contextmanager
+def use_ai_provider(provider: str):
+    """Use an operation's saved provider without changing installation settings."""
+    token = _analysis_provider.set(provider)
+    try:
+        yield
+    finally:
+        _analysis_provider.reset(token)
+
+
+def set_ai_provider(provider: str) -> None:
+    if provider not in ("api", "claude_code", "codex"):
+        raise ValueError("Choose Anthropic API, Claude subscription, or ChatGPT subscription.")
+    _update_settings(ai_provider=provider)
 
 
 def require_ai_enabled() -> None:

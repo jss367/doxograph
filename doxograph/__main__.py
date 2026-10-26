@@ -9,6 +9,7 @@ from pathlib import Path
 from . import bib, cites, config, export, extract, ingest, search, store
 
 
+@config.bind_model_access
 def cmd_add(args) -> int:
     """Add papers. Exits nonzero if any requested reference did not go through."""
     config.ensure_dirs()

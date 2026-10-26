@@ -16,6 +16,11 @@ import httpx
 from jsonschema import Draft202012Validator, ValidationError
 
 from . import config
+from .model_errors import InputTooLargeError, ModelInputError
+
+
+class ProviderResponseError(ValueError):
+    """The endpoint returned an unusable response to a valid request."""
 
 
 def anthropic_client():
@@ -28,10 +33,10 @@ def client():
     if selected.provider == "anthropic":
         return anthropic_client()
     if not selected.model.strip():
-        raise ValueError("Choose a model in Settings before running AI analysis")
+        raise ModelInputError("Choose a model in Settings before running AI analysis")
     key = config.api_key(selected.provider)
     if selected.provider == "openai" and not key:
-        raise ValueError("Set OPENAI_API_KEY in the environment or credentials file before running analysis")
+        raise ModelInputError("Set OPENAI_API_KEY in the environment or credentials file before running analysis")
     return TextClient(selected, key)
 
 
@@ -60,7 +65,7 @@ class TextClient:
             content = message["content"]
             if isinstance(content, list):
                 if any(block.get("type") != "text" for block in content):
-                    raise ValueError("This provider accepts extracted paper text only")
+                    raise ModelInputError("This provider accepts extracted paper text only")
                 content = "\n\n".join(block["text"] for block in content)
             chat.append({"role": message["role"], "content": content})
         body = {"model": self.selected.model, "messages": chat, "stream": False}
@@ -70,7 +75,7 @@ class TextClient:
             # Reserve space for the answer and chat framing; Ollama otherwise
             # can silently discard the start of an oversized paper.
             if sum(len(m["content"].encode("utf-8")) for m in chat) + max_tokens + 1024 > 65536:
-                raise ValueError("This analysis exceeds the local context limit. Select an endpoint with a larger context window.")
+                raise InputTooLargeError("This analysis exceeds the local context limit. Select an endpoint with a larger context window.")
             body.update(format=schema, options={"num_predict": max_tokens, "num_ctx": 65536})
             route = "/api/chat"
         else:
@@ -92,9 +97,9 @@ class TextClient:
             try:
                 data = result.json()
             except ValueError as exc:
-                raise ValueError("AI analysis returned invalid JSON; nothing was saved") from exc
+                raise ProviderResponseError("AI analysis returned invalid JSON; nothing was saved") from exc
         if not isinstance(data, dict):
-            raise ValueError("AI analysis returned an unreadable response; nothing was saved")
+            raise ProviderResponseError("AI analysis returned an unreadable response; nothing was saved")
         if data.get("error"):
             raise RuntimeError(f"{self.selected.provider} could not complete AI analysis")
         try:
@@ -123,7 +128,7 @@ class TextClient:
             payload = json.loads(message.get("content") or "")
             Draft202012Validator(schema).validate(payload)
         except (ValueError, TypeError, ValidationError) as exc:
-            raise ValueError("The selected model returned invalid analysis JSON; nothing was saved. "
+            raise ProviderResponseError("The selected model returned invalid analysis JSON; nothing was saved. "
                              "Use a model and endpoint that support structured JSON output.") from exc
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(payload))],
                                stop_reason="end_turn", usage=usage)
