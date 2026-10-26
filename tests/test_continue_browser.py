@@ -150,3 +150,53 @@ def test_continue_shortcuts_are_scoped_to_each_workspace():
                 await expect(card).to_contain_text('Default research')
             await browser.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_fresh_paper_links_replace_saved_visits_and_clear_the_old_cursor(engine):
+    other = config.create_workspace('Other research')
+    workspace_ids = ['default', other['id']]
+    cursors = {}
+    for workspace in workspace_ids:
+        with config.use_workspace(workspace):
+            for key, title in [('one', 'Previously visited paper'), ('two', 'Freshly linked paper')]:
+                store.save_paper(store.new_paper(key, title=f'{workspace}: {title}'))
+            store.add_claim('one', {'text': 'First old finding.', 'reviewed': False})
+            cursors[workspace] = store.add_claim('one', {'text': 'Second old finding.', 'reviewed': False})['id']
+            store.add_claim('two', {'text': 'New finding.', 'reviewed': False})
+
+    async def saved(page, workspace):
+        return await page.evaluate('(workspace) => JSON.parse(localStorage.getItem(`doxograph-continue:${workspace}`))', workspace)
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            context = await browser.new_context()
+            with _server() as url:
+                # Both workspaces start with an actual saved paper and cursor.
+                for workspace in workspace_ids:
+                    page = await context.new_page()
+                    await page.goto(f'{url}/#ws={workspace}&paper=one')
+                    review = page.locator('#continue-reading [data-continue="review"]')
+                    await review.click()
+                    await review.click()
+                    assert await saved(page, workspace) == {'paper': 'one', 'claim': cursors[workspace]}
+                    await page.close()
+
+                for workspace in workspace_ids:
+                    # A new tab is a new document, unlike a same-page hash change.
+                    page = await context.new_page()
+                    await page.goto(f'{url}/#ws={workspace}&paper=two')
+                    title = page.locator('#continue-reading .continue-item').first.locator('.continue-text')
+                    await expect(title).to_have_text(f'{workspace}: Freshly linked paper')
+                    assert await saved(page, workspace) == {'paper': 'two', 'claim': None}
+                    if workspace == 'default':
+                        assert await saved(page, other['id']) == {'paper': 'one', 'claim': cursors[other['id']]}
+                    await page.reload()
+                    await expect(title).to_have_text(f'{workspace}: Freshly linked paper')
+                    await page.goto(f'{url}/#ws={workspace}')
+                    await expect(title).to_have_text(f'{workspace}: Freshly linked paper')
+                    await page.close()
+            await browser.close()
+    asyncio.run(scenario())

@@ -904,8 +904,11 @@ function continuationState() {
   if (continuation?.workspace === currentWorkspaceId) return continuation;
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(`doxograph-continue:${currentWorkspaceId}`)) || {}; } catch (_) { /* optional */ }
+  // A fresh deep link is a visit. On reload, the library behind a resumed PDF
+  // has already been visited and must not displace the more recent reader.
+  const reloading = performance.getEntriesByType('navigation')[0]?.type === 'reload';
   continuation = {workspace:currentWorkspaceId, paper:saved.paper || null, claim:saved.claim || null,
-    observedPaper:V.paper};
+    observedPaper:reloading ? V.paper : null};
   return continuation;
 }
 
