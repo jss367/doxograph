@@ -575,7 +575,7 @@ def test_a_web_ingest_with_no_pdf_is_reported_as_a_failure(monkeypatch):
 
     assert job["state"] == "error", job
     assert "no PDF stored" in job["detail"]
-    assert "Add it again to retry" in job["detail"]
+    assert "Retry to check again" in job["explanation"]
 
 
 def test_a_web_ingest_that_lands_its_pdf_is_done(monkeypatch):

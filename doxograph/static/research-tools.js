@@ -12,6 +12,10 @@ const ResearchTools = (() => {
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   };
   const promptDialog = (title, value, {ok}) => askDialog({title, input:{value}, ok});
+  // Keep note drafts by highlight so scrolling the sidebar does not discard them.
+  const noteDrafts = () => reader && tab === 'reader' ? [...reader.noteValues].map(([id, value]) => ({dataset:{highlightNote:id}, value}))
+    .filter(field => field.value !== (notebook.highlights.find(h => h.id === field.dataset.highlightNote)?.note ?? field.value)) : [];
+  const unsaved = () => dirty || reader?.draft || connectionDraft || noteDrafts().length > 0;
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
   const resolve = ref => S.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
@@ -73,19 +77,20 @@ const ResearchTools = (() => {
     if (reader?.views && tab === 'reader') rememberReaderPage();
     dirty = false;
     await refreshAll();
+    if (reader?.document && tab === 'reader') { rememberContinuation(reader.paper); renderContinuation(); }
     message('Saved.');
   }
   async function close() {
     if (busy) return;
     await flushReaderProgress();
-    if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
+    if (unsaved() && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
     stopReaderViews();
     epoch++;
     if (reader?.document) await reader.document.loadingTask.destroy();
     reader = null; dirty = false; connectionDraft = false;
     el('research-tools').close();
   }
-  async function open(next = 'compare') {
+  async function open(next = 'compare', requestedBoard = null) {
     sync();
     modalWorkspace = workspace;
     tab = next;
@@ -93,6 +98,10 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
     message('');
     notebook = await request();
+    if (requestedBoard !== null) {
+      boardId = requestedBoard;
+      if (!currentBoard()) throw new Error('That board no longer exists.');
+    }
     dirty = false;
     render();
   }
@@ -230,7 +239,7 @@ const ResearchTools = (() => {
     const progress = notebook.reading.find(r => r.paper === paper);
     if (progress.status === 'queued') { progress.status = 'reading'; await save(); }
     tab = 'reader';
-    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false};
+    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false, noteValues:new Map()};
     render();
     el('research-body').innerHTML = `<h3>${html(S.papers.find(p => p.key === paper)?.title || paper)}</h3>
       <div class="reader-controls tool-actions">${button('previous-page','Previous page')}
@@ -239,11 +248,14 @@ const ResearchTools = (() => {
       <label>Zoom<select id="reader-zoom"><option value="1">100%</option><option value="1.3" selected>130%</option><option value="1.6">160%</option><option value="2">200%</option></select></label></div>
       <p id="reader-hint" class="hint">Loading PDF…</p>
       <div class="reader-layout"><div class="pdf-scroll" tabindex="0" role="region" aria-label="PDF pages"><div id="pdf-pages"></div></div>
+        <div class="reader-side"><section id="highlight-panel"><h3>Highlights</h3>
+          <div class="tool-actions"><label>Color<select id="highlight-color">${['yellow','green','blue','pink'].map(c => `<option value="${c}">${c}</option>`).join('')}</select></label>
+          ${button('highlight-selection','Highlight selected passage')}</div><div id="page-highlights"></div></section>
         <form id="capture-form"><h3>Capture a claim</h3><p class="hint">Select text directly on the page, then capture it. Add your interpretation before saving.</p>
           ${button('capture-selection','Capture selected passage')}${area('Verbatim quote','capture-quote')}
           ${input('Page or section','capture-locator')}${area('Claim in your own words','capture-text')}${area('Your note (optional)','capture-note')}
           <button type="submit" class="primary">Save claim</button><p id="capture-status" role="status"></p>
-        </form></div>`;
+        </form></div></div>`;
     const generation = ++epoch;
     const pdfjs = await import('/vendor/pdf.min.mjs');
     pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
@@ -259,6 +271,8 @@ const ResearchTools = (() => {
     active.pages = await Promise.all(Array.from({length:doc.numPages}, (_, i) => doc.getPage(i + 1)));
     if (reader !== active) return;
     await layoutReader();
+    rememberContinuation(reader.paper);
+    renderContinuation();
   }
   function stopReaderViews() {
     if (!reader) return;
@@ -302,6 +316,7 @@ const ResearchTools = (() => {
     el('reader-hint').textContent = view?.hasText === false
       ? 'This page has no selectable text. You can transcribe a quote and write a claim by hand.'
       : 'Scroll to read more pages. Select a passage to capture it.';
+    if (reader.highlightsPage !== reader.page) renderHighlights();
     rememberReaderPage();
   }
   function rememberReaderPage() {
@@ -318,7 +333,9 @@ const ResearchTools = (() => {
     const {container, viewport, page} = view;
     const canvas = document.createElement('canvas');
     const layer = document.createElement('div'); layer.className = 'textLayer';
-    container.replaceChildren(canvas, layer);
+    const highlights = document.createElement('div'); highlights.className = 'highlightLayer';
+    container.replaceChildren(canvas, highlights, layer);
+    renderHighlightLayer(view);
     const ratio = Math.min(devicePixelRatio || 1, 2);
     canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
     canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
@@ -404,8 +421,48 @@ const ResearchTools = (() => {
     view.nearby = true;
     await renderReaderPage(active, view);
   }
+  function renderHighlightLayer(view) {
+    const layer = view.container.querySelector('.highlightLayer');
+    if (!layer) return;
+    const here = notebook.highlights.filter(h => h.paper === reader.paper && h.page === view.page.pageNumber);
+    const percent = value => `${(value * 100).toFixed(3)}%`;
+    layer.innerHTML = here.flatMap(h => h.rects.map(r =>
+      `<div class="highlight-${html(h.color)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+  }
+  function renderHighlights() {
+    const mine = notebook.highlights.filter(h => h.paper === reader.paper);
+    const here = mine.filter(h => h.page === reader.page);
+    reader.highlightsPage = reader.page;
+    for (const view of reader.views || []) renderHighlightLayer(view);
+    const drafts = new Map(noteDrafts().map(field => [field.dataset.highlightNote, field.value]));
+    const others = [...new Set(mine.map(h => h.page))].filter(page => page !== reader.page).sort((a, b) => a - b);
+    el('page-highlights').innerHTML = (here.map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
+        <blockquote class="highlight-${html(h.color)}">${html(h.text)}</blockquote>
+        <label>Your note<textarea data-highlight-note="${html(h.id)}">${html(drafts.get(h.id) ?? h.note)}</textarea></label>
+        <div class="tool-actions">${button('save-highlight','Save note')}${button('capture-highlight','Capture as claim')}${button('remove-highlight','Remove highlight')}</div></article>`).join('')
+      || '<p class="hint">Select a passage on the page, then highlight it.</p>')
+      + (others.length ? `<div class="tool-actions"><span class="hint">Other highlighted pages</span>${others.map(page => button('highlight-page',`Page ${page}`,`data-page="${page}"`)).join('')}</div>` : '');
+  }
+  // Client rectangles of the selection as fractions of the page, one per line of text.
+  function selectionRects(range, container) {
+    const box = container.getBoundingClientRect();
+    const rects = [...range.getClientRects()]
+      .map(r => ({left:Math.max(r.left, box.left), right:Math.min(r.right, box.right), top:Math.max(r.top, box.top), bottom:Math.min(r.bottom, box.bottom)}))
+      .filter(r => r.right - r.left > .5 && r.bottom - r.top > .5)
+      .sort((a, b) => a.top - b.top || a.left - b.left);
+    const lines = [];
+    for (const r of rects) {
+      // A selection reports both whole spans and their text; overlapping boxes on a line become one.
+      const line = lines.find(l => Math.abs(l.top - r.top) < (r.bottom - r.top) / 2 && r.left <= l.right + 2 && r.right >= l.left - 2);
+      if (line) Object.assign(line, {left:Math.min(line.left, r.left), right:Math.max(line.right, r.right), top:Math.min(line.top, r.top), bottom:Math.max(line.bottom, r.bottom)});
+      else lines.push({...r});
+    }
+    const round = value => Math.round(value * 1e5) / 1e5;
+    return lines.slice(0, 500).map(r => ({x:round((r.left - box.left) / box.width), y:round((r.top - box.top) / box.height),
+      w:round((r.right - r.left) / box.width), h:round((r.bottom - r.top) / box.height)})).filter(r => r.w > 0 && r.h > 0);
+  }
   async function discardDrafts() {
-    if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
+    if (unsaved() && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
     if (dirty) { notebook = await request(); dirty = false; }
     if (reader) reader.draft = false;
     connectionDraft = false;
@@ -530,8 +587,8 @@ const ResearchTools = (() => {
       message(restored.deleted ? 'Claim removed. Its wording remains in history.' : restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
     if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page); return; }
-    if (['previous-page','next-page','go-page'].includes(name)) {
-      const page = name === 'go-page' ? Number(el('reader-page').value) : reader.page + (name === 'next-page' ? 1 : -1);
+    if (['previous-page','next-page','go-page','highlight-page'].includes(name)) {
+      const page = name === 'go-page' ? Number(el('reader-page').value) : name === 'highlight-page' ? Number(data.page) : reader.page + (name === 'next-page' ? 1 : -1);
       if (!Number.isInteger(page) || page < 1 || page > reader.document.numPages) throw new Error('Choose a page within this PDF.');
       await goToReaderPage(page); return;
     }
@@ -539,6 +596,27 @@ const ResearchTools = (() => {
       const progress = notebook.reading.find(r=>r.paper === reader.paper);
       progress.bookmarks = progress.bookmarks.includes(reader.page) ? progress.bookmarks.filter(p=>p !== reader.page) : [...progress.bookmarks,reader.page];
       await save(); target.textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page'; return;
+    }
+    if (name === 'highlight-selection') {
+      if (!reader.selection || !reader.rects?.length) throw new Error('Select a passage on the PDF page first.');
+      notebook.highlights.push({id:uid(),paper:reader.paper,page:reader.selectionPage,rects:reader.rects,text:reader.selection,color:el('highlight-color').value,note:''});
+      reader.selection = ''; reader.rects = []; window.getSelection()?.removeAllRanges();
+      await save(); renderHighlights(); return;
+    }
+    if (['save-highlight','capture-highlight','remove-highlight'].includes(name)) {
+      const id = target.closest('[data-highlight]').dataset.highlight, highlight = notebook.highlights.find(h => h.id === id);
+      const note = target.closest('[data-highlight]').querySelector('[data-highlight-note]').value;
+      if (name === 'capture-highlight') {
+        el('capture-quote').value = highlight.text; el('capture-locator').value = `p. ${highlight.page}`;
+        if (!el('capture-note').value) el('capture-note').value = note;
+        reader.draft = true; el('capture-text').focus(); return;
+      }
+      if (name === 'save-highlight') highlight.note = note;
+      if (name === 'remove-highlight') {
+        if ((highlight.note || note) && !await confirmDialog('Remove this highlight and its note?',{ok:'Remove highlight'})) return;
+        notebook.highlights = notebook.highlights.filter(h => h.id !== id);
+      }
+      await save(); renderHighlights(); return;
     }
     if (name === 'capture-selection') {
       if (!reader.selection) throw new Error('Select a passage on the PDF page first.');
@@ -563,6 +641,8 @@ const ResearchTools = (() => {
       const first = Math.min(Number(start.dataset.page), Number(end.dataset.page));
       const last = Math.max(Number(start.dataset.page), Number(end.dataset.page));
       reader.selectionLocator = first === last ? `p. ${first}` : `pp. ${first}–${last}`;
+      reader.selectionPage = first;
+      reader.rects = first === last && selection.rangeCount ? selectionRects(selection.getRangeAt(0), start) : [];
     }
     for (const view of reader.views || []) {
       if (view.rendered && !view.nearby && !readerPageSelected(view)) releaseReaderPage(view);
@@ -611,6 +691,7 @@ const ResearchTools = (() => {
     if (target.id === 'board-title') { currentBoard().title = target.value; dirty = true; }
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
     if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
+    if (target.dataset.highlightNote && reader) reader.noteValues.set(target.dataset.highlightNote, target.value);
     if (target.closest('#capture-form') && reader) reader.draft = true;
   });
   document.addEventListener('submit', event => {
@@ -628,12 +709,13 @@ const ResearchTools = (() => {
   document.addEventListener('DOMContentLoaded', () => {
     el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
   });
-  window.addEventListener('beforeunload', event => { if (dirty || reader?.draft || connectionDraft) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
     if (!el('research-tools').open) return true;
     if (busy) { message('Finish the current operation before switching workspaces.', true); return false; }
     await close();
     return !el('research-tools').open;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch};
+  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,
+    openBoard: id => run(() => open('boards', id))};
 })();

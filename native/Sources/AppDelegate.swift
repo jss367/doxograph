@@ -674,6 +674,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func reloadPage(_ sender: Any?) { window.webView.reload() }
 
+    @objc func openCommandPalette(_ sender: Any?) {
+        window.webView.evaluateJavaScript("document.getElementById('btn-command-palette')?.click()", completionHandler: nil)
+    }
+
     @objc func goBack(_ sender: Any?) { window.webView.goBack() }
 
     @objc func actualSize(_ sender: Any?) { window.webView.pageZoom = 1 }
@@ -689,7 +693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(goBack(_:)): return window.webView.canGoBack
-        case #selector(reloadPage(_:)), #selector(addPapers(_:)): return ready
+        case #selector(reloadPage(_:)), #selector(addPapers(_:)), #selector(openCommandPalette(_:)): return ready
         // Not while the server is still coming up, since the restart after
         // the update needs to know whether it is owned. A start that failed is
         // settled, and updating is then the way out.
