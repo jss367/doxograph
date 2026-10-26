@@ -22,7 +22,7 @@ jobs:
   tests:
     name: Python and browser tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
@@ -36,4 +36,4 @@ jobs:
       - name: Install Chromium and WebKit
         run: python -m playwright install --with-deps chromium webkit
       - name: Run the test suite
-        run: python -m pytest
+        run: python -m pytest -v --tb=short

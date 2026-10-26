@@ -14,6 +14,7 @@
   <span class="workspace-control">
     <label for="workspace">Workspace</label>
     <select id="workspace" aria-label="Workspace"></select>
+    <button type="button" id="btn-workspace-rename" title="Rename this workspace" aria-label="Rename workspace" disabled>Rename</button>
     <button type="button" id="btn-workspace-add" title="Create a workspace" aria-label="Create workspace">+</button>
   </span>
   <span class="stats" id="stats"></span>
@@ -152,6 +153,7 @@
 
     <div class="sec research-tools-nav">
       <h2>Your research tools</h2>
+      <button type="button" data-tool="notes">Workspace notes</button>
       <button type="button" data-tool="boards">Evidence boards</button>
       <button type="button" data-tool="reading">Reading queue</button>
       <button type="button" data-tool="searches">Saved searches</button>

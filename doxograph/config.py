@@ -173,7 +173,7 @@ def workspaces_path() -> Path:
 
 @contextlib.contextmanager
 def _workspace_file_lock():
-    """Serialize registry read-create-write sequences across processes."""
+    """Serialize registry read-modify-write sequences across processes."""
     path = base_data_dir() / "locks" / "workspaces.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     if fcntl is not None:
@@ -221,15 +221,19 @@ def _read_workspace_records() -> list[dict]:
     return loaded
 
 
-def _default_workspace() -> dict:
-    return {"id": DEFAULT_WORKSPACE_ID, "name": DEFAULT_WORKSPACE_NAME, "created": None}
+def _default_workspace(records: list[dict]) -> dict:
+    name = next((item["name"] for item in records
+                 if isinstance(item, dict) and item.get("id") == DEFAULT_WORKSPACE_ID
+                 and isinstance(item.get("name"), str)), DEFAULT_WORKSPACE_NAME)
+    return {"id": DEFAULT_WORKSPACE_ID, "name": name, "created": None}
 
 
 def list_workspaces() -> list[dict]:
     """List the built-in default workspace followed by user-created ones."""
-    records = [_default_workspace()]
+    saved = _read_workspace_records()
+    records = [_default_workspace(saved)]
     seen = {DEFAULT_WORKSPACE_ID}
-    for item in _read_workspace_records():
+    for item in saved:
         if not isinstance(item, dict):
             continue
         key = item.get("id")
@@ -247,10 +251,14 @@ def list_workspaces() -> list[dict]:
 
 def get_workspace(value: str | None = None) -> dict | None:
     wanted = value or workspace_id()
-    # The default is built in, not registered, so a broken registry must not
-    # cost it: the corpus it names is still there to read.
+    # The default corpus exists independently of the registry. A broken
+    # registry can lose its custom display name, but must not block its papers.
     if wanted == DEFAULT_WORKSPACE_ID:
-        return _default_workspace()
+        try:
+            records = _read_workspace_records()
+        except ValueError:
+            records = []
+        return _default_workspace(records)
     return next((item for item in list_workspaces() if item["id"] == wanted), None)
 
 
@@ -276,13 +284,39 @@ def _write_json(path: Path, value) -> None:
         raise
 
 
-def create_workspace(name: str) -> dict:
-    """Create and register an empty workspace with a stable, readable id."""
+def _clean_workspace_name(name: str) -> str:
     clean = " ".join(name.split())
     if not clean:
         raise ValueError("workspace name cannot be empty")
     if len(clean) > 80:
         raise ValueError("workspace name must be 80 characters or fewer")
+    return clean
+
+
+def rename_workspace(value: str, name: str) -> dict:
+    """Change a display name without changing the corpus's id or paths."""
+    clean = _clean_workspace_name(name)
+    with _workspaces_lock, _workspace_file_lock():
+        records = _read_workspace_records()
+        workspace = get_workspace(value)
+        if workspace is None:
+            raise KeyError(value)
+        renamed = {**workspace, "name": clean}
+        for index, item in enumerate(records):
+            if (isinstance(item, dict) and item.get("id") == value
+                    and isinstance(item.get("name"), str)):
+                records[index] = {**item, "name": clean}
+                break
+        else:
+            # The original corpus needs a registry entry only once renamed.
+            records.append(renamed)
+        _write_workspace_records(records)
+    return renamed
+
+
+def create_workspace(name: str) -> dict:
+    """Create and register an empty workspace with a stable, readable id."""
+    clean = _clean_workspace_name(name)
     with _workspaces_lock, _workspace_file_lock():
         records = _read_workspace_records()
         used = {item["id"] for item in list_workspaces()}

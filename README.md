@@ -214,6 +214,8 @@ separate. The existing corpus is the Default workspace; creating a workspace
 makes an empty, independent corpus with its own papers, topics, research
 context, ledger, tensions, syntheses, and exports. The last selected workspace
 is restored when the page is reopened, unless the address names another one.
+Use **Rename** beside the picker to change any workspace's name, including the
+Default workspace. Its papers, claims, notes, and exports stay in place.
 Papers dropped on the Mac app's Dock icon go to the workspace currently shown
 in its window.
 
@@ -302,10 +304,17 @@ by Accept; Discard just clears the proposal.
 
 ## Research without AI
 
-All of these tools work with **Enable AI analysis** turned off. Your boards,
-connections, reading progress, highlights, and saved searches belong to the
-selected workspace and are stored in `notebook.json`. They are never sent to a model.
+All of these tools work with **Enable AI analysis** turned off. Your workspace
+notes, boards, connections, reading progress, highlights, and saved searches
+belong to the selected workspace and are stored in `notebook.json`. They are
+never sent to a model.
 
+- **Workspace notes**, in the sidebar, opens one document for the selected
+  workspace. Write questions, thoughts, and next steps, using headings for
+  structure. Changes save automatically, with a visible saving or saved status.
+  Notes also save when you close the editor or switch tools or workspaces.
+  If saving fails, your text stays in the editor so you can retry. If another
+  window changes the notes, copy your text before reloading the saved version.
 - **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
   passage on the page and choose **Capture selected passage** to fill the quote
   and page fields. Write the claim in your own words, optionally add a note, and
@@ -385,7 +394,8 @@ downloaded PDFs and in-progress notes.
 
 For compatibility, the Default workspace uses the data-directory root shown
 below. Named workspaces repeat that same structure under
-`workspaces/<workspace-id>/`; `workspaces.json` records their display names.
+`workspaces/<workspace-id>/`; `workspaces.json` records workspace display names,
+including a custom name for the Default workspace when one is set.
 Command-line commands operate on the Default workspace.
 
 ```text
@@ -556,6 +566,9 @@ rerun used to write over it.
 
 A claim is the machine's sentence about the paper. A note is yours, and it is
 the only thing here no model writes and no model reads.
+
+For questions and thoughts about the whole workspace, open **Workspace notes**
+in the sidebar. You get one document per workspace, saved automatically.
 
 A paper's note sits under the summary in its header: **Write a note** opens a
 box, Save puts it on the paper, and it is there the next time you open it.
