@@ -303,7 +303,8 @@ def test_delayed_bookmark_does_not_change_a_replacement_reader(engine, destinati
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('stage', ['page', 'canvas', 'text', 'text-layer'])
-def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, stage):
+@pytest.mark.parametrize('persistent', [True, False])
+def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, stage, persistent):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('paper', title='A paper with an unreadable page'))
     store.pdf_path('paper').write_bytes(minimal_pdf([f'Page {n}.' for n in range(1, 31)]))
@@ -319,7 +320,8 @@ def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, sta
                 module = '''
                     export * from '/vendor/pdf.min.mjs?reader-test-original=1';
                     import * as real from '/vendor/pdf.min.mjs?reader-test-original=1';
-                    const stage = STAGE;
+                    const stage = STAGE, persistent = PERSISTENT;
+                    const shouldFail = () => persistent || !window.readerFailureAttempts;
                     function fail() {
                         window.readerFailureAttempts = (window.readerFailureAttempts || 0) + 1;
                         // Bound the old implementation too, so a failing test
@@ -332,10 +334,16 @@ def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, sta
                         return {promise:task.promise.then(doc => {
                             const getPage = doc.getPage.bind(doc);
                             doc.getPage = number => {
-                                if (number === 20 && stage === 'page') return fail();
+                                if (number === 20 && stage === 'page' && shouldFail()) return fail();
                                 return getPage(number).then(page => {
-                                    if (number === 20 && stage === 'canvas') page.render = () => ({promise:fail()});
-                                    if (number === 20 && stage === 'text') page.getTextContent = fail;
+                                    if (number === 20 && stage === 'canvas') {
+                                        const render = page.render.bind(page);
+                                        page.render = (...args) => shouldFail() ? {promise:fail()} : render(...args);
+                                    }
+                                    if (number === 20 && stage === 'text') {
+                                        const text = page.getTextContent.bind(page);
+                                        page.getTextContent = (...args) => shouldFail() ? fail() : text(...args);
+                                    }
                                     return page;
                                 });
                             };
@@ -345,11 +353,11 @@ def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, sta
                     export class TextLayer {
                         constructor(options) { this.options = options; this.layer = new real.TextLayer(options); }
                         render() {
-                            if (stage === 'text-layer' && this.options.container.closest('[data-page]').dataset.page === '20') return fail();
+                            if (stage === 'text-layer' && shouldFail() && this.options.container.closest('[data-page]').dataset.page === '20') return fail();
                             return this.layer.render();
                         }
                     }
-                '''.replace('STAGE', repr(stage))
+                '''.replace('STAGE', repr(stage)).replace('PERSISTENT', str(persistent).lower())
                 await route.fulfill(body=module, content_type='text/javascript')
             await page.route('**/vendor/pdf.min.mjs', fail_pdf_stage)
             with _server() as url:
@@ -364,6 +372,12 @@ def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, sta
                 # The error remains visible; no partial canvas is retained.
                 assert 'Deliberate permanent PDF failure' in await page.locator('#reader-hint').inner_text()
                 assert await page.locator('#reader .pdf-page[data-page="20"] canvas').count() == 0
+                if not persistent:
+                    # The page stays within the observer margin throughout;
+                    # Go retries it explicitly without an intersection change.
+                    await page.get_by_role('button', name='Go', exact=True).click()
+                    await page.locator('#reader .pdf-page[data-page="20"] .textLayer span').first.wait_for()
+                    assert 'Could not draw' not in await page.locator('#reader-hint').inner_text()
                 assert not errors
     run_browser(scenario())
 
@@ -437,5 +451,54 @@ def test_pdf_open_failure_can_be_retried_and_cannot_replace_a_newer_view(engine,
                 assert await page.locator('#reader').is_hidden()
                 assert await page.get_by_role('button', name='Retry PDF', exact=True).count() == 0
                 assert await page.locator('#toasts .toast.warn').count() == 0
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('move_after_reopen', [False, True])
+def test_bookmark_reconciles_a_reopened_paper_without_overriding_new_navigation(engine, move_after_reopen):
+    from test_research_tools_browser import saved_page
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='A paper not yet on the queue'))
+    store.pdf_path('paper').write_bytes(minimal_pdf([f'Page {n}.' for n in range(1, 5)]))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                await page.locator('#reader-page').fill('3')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await ready(page)
+                held, release = asyncio.Event(), asyncio.Event()
+                async def hold_bookmark(route):
+                    if route.request.method == 'PUT' and not held.is_set():
+                        held.set()
+                        await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_bookmark)
+                await page.get_by_role('button', name='Bookmark this page', exact=True).click()
+                await asyncio.wait_for(held.wait(), timeout=10)
+                await page.get_by_role('button', name='Hide PDF', exact=True).click()
+                await page.get_by_role('button', name='Show PDF', exact=True).click()
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                if move_after_reopen:
+                    await page.evaluate('''() => {
+                        const pane = document.querySelector('#pdf-scroll');
+                        pane.scrollTop = pane.querySelector('[data-page="2"]').offsetTop;
+                    }''')
+                    await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                release.set()
+                await ready(page)
+                expected = 2 if move_after_reopen else 3
+                await saved_page(url, expected)
+                assert await page.locator('#reader-page').input_value() == str(expected)
+                assert httpx.get(url + '/api/notebook').json()['reading'][0]['bookmarks'] == [3]
                 assert not errors
     run_browser(scenario())

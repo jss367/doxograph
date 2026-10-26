@@ -361,7 +361,7 @@ const ResearchTools = (() => {
     if (!paper || reader) return;
     const generation = ++readerEpoch;
     const zoom = savedZoom();
-    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, figureMode:false, drag:null, figure:null, focus:null, loadingTask:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, wantedPage:null, progressSave:Promise.resolve()};
+    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, navigated:false, selection:null, figureMode:false, drag:null, figure:null, focus:null, loadingTask:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, wantedPage:null, progressSave:Promise.resolve()};
     el('reader').innerHTML = `<div class="reader-toolbar">${button('previous-page', 'Previous page')}
       <label>Page<input id="reader-page" type="number" min="1" value="1" aria-label="Page number"></label><span id="reader-total"></span>${button('go-page', 'Go')}${button('next-page', 'Next page')}
       <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
@@ -400,7 +400,10 @@ const ResearchTools = (() => {
         for (const entry of entries) {
           const page = reader.pages[Number(entry.target.dataset.page) - 1];
           if (entry.isIntersecting) renderPage(page);
-          else if (page.renderedAt) clearPage(page);
+          else if (!pageNear(page)) {
+            page.error = null;
+            if (page.renderedAt) clearPage(page);
+          }
         }
       }, {root:scroller, rootMargin:'600px 0px'});
       reader.pages.forEach(page => reader.observer.observe(page.el));
@@ -412,13 +415,17 @@ const ResearchTools = (() => {
       reader.resizer.observe(scroller);
       scroller.addEventListener('scroll', () => {
         if (reader?.generation !== generation || reader.scrollTick) return;
-        reader.scrollTick = requestAnimationFrame(() => { reader.scrollTick = null; trackCurrentPage(); });
+        reader.scrollTick = requestAnimationFrame(() => {
+          if (reader?.generation !== generation) return;
+          reader.scrollTick = null; trackCurrentPage();
+          if (!reader.pinned) reader.navigated = true;
+        });
       }, {passive:true});
       const progress = (S.notebook?.reading || []).find(r => r.paper === paper);
       reader.savedPage = progress?.page ?? null;
       const asked = pendingPage && pendingPage.paper === paper && pendingPage.workspace === ws ? pendingPage : null;
       pendingPage = null;
-      goToPage(asked?.page || progress?.page || 1, asked?.mark || null);
+      goToPage(asked?.page || progress?.page || 1, asked?.mark || null, {initial:true});
       trackCurrentPage();
     } catch (error) {
       if (reader?.generation === generation) {
@@ -515,8 +522,9 @@ const ResearchTools = (() => {
     const top = page.el.offsetTop, bottom = top + page.el.offsetHeight;
     return bottom > scroller.scrollTop - 600 && top < scroller.scrollTop + scroller.clientHeight + 600;
   }
-  function renderPage(page) {
+  function renderPage(page, {retry = false} = {}) {
     if (!reader || page.rendering || (page.pdfPage && page.renderedAt === pageScale(page))) return page.rendering || Promise.resolve();
+    if (page.error && !retry) return Promise.resolve();
     const generation = reader.generation;
     let scale = null, failed = false;
     page.error = null;
@@ -708,16 +716,16 @@ const ResearchTools = (() => {
     progressChains.set(key, chain);
     active.progressSave = chain;
   }
-  async function goToPage(number, highlight = null) {
+  async function goToPage(number, highlight = null, {initial = false} = {}) {
     if (!reader?.pages.length) { if (reader) askPage(reader.paper, reader.workspace, number, highlight); return; }
+    if (!initial) reader.navigated = true;
     const page = reader.pages[Math.max(1, Math.min(number, reader.pages.length)) - 1];
     el('pdf-scroll').scrollTo({top:Math.max(0, page.el.offsetTop - 8)});
     trackCurrentPage(page.number);
-    if (!highlight) return;
     const active = reader;
-    active.focus = highlight;
-    await renderPage(page);
-    if (reader !== active || active.focus !== highlight) return;
+    if (highlight) active.focus = highlight;
+    await renderPage(page, {retry:true});
+    if (!highlight || reader !== active || active.focus !== highlight) return;
     drawPageHighlights(page);
     page.el.querySelectorAll(`.highlightLayer [data-highlight="${CSS.escape(highlight)}"]`).forEach(mark => {
       mark.classList.add('flash'); setTimeout(() => mark.classList.remove('flash'), 1600);
@@ -743,7 +751,7 @@ const ResearchTools = (() => {
     reader.pages.forEach(page => { clearPage(page); sizePage(page); });
     restoreViewport(anchor);
     reader.tracked = false;
-    await Promise.all(active.pages.filter(pageNear).map(renderPage));
+    await Promise.all(active.pages.filter(pageNear).map(page => renderPage(page, {retry:true})));
     if (reader === active) trackCurrentPage();
   }
   // Client rectangles of the selection as fractions of the page, one per line of text.
@@ -902,9 +910,12 @@ const ResearchTools = (() => {
         progress.page = current;
         progress.bookmarks = progress.bookmarks.includes(current) ? progress.bookmarks.filter(p => p !== current) : [...progress.bookmarks, current];
       });
-      if (reader !== active) return;
-      active.savedPage = current; active.wantedPage = current;
-      active.tracked = false; trackCurrentPage(); return;
+      // A replacement on the same paper learns what reached disk. Resume
+      // that page only if it has not received a newer navigation or scroll.
+      if (!reader || reader.key !== active.key) return;
+      reader.savedPage = current;
+      if (reader !== active && !reader.navigated) { await goToPage(current); return; }
+      reader.tracked = false; trackCurrentPage(); return;
     }
     // Resuming a paper from the queue or the Continue card: it opens in the
     // main pane at that page. Resuming is reading, so a paper not on the queue
