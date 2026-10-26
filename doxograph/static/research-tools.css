@@ -45,7 +45,9 @@
 .reader-toolbar label { display: flex; align-items: center; gap: .3rem; }
 .reader-toolbar input { width: 4rem; }
 .reader-toolbar .reader-status { margin-left: auto; }
-.pdf-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; padding: .5rem; background: #555; border-radius: 6px; }
+/* The reader keeps its own place when a page above is resized, so the
+   browser's scroll anchoring must not do it a second time. */
+.pdf-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; padding: .5rem; background: #555; border-radius: 6px; }
 .pdf-page { position: relative; background: white; color: black; margin: 0 auto .5rem; box-shadow: 0 1px 3px rgb(0 0 0 / .4); }
 .pdf-page.pending::after { content: attr(data-page); position: absolute; inset: 0; display: grid; place-items: center; color: #bbb; font-size: 2rem; }
 .pdf-page canvas { display: block; position: absolute; inset: 0; }

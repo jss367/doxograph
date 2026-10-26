@@ -4524,15 +4524,16 @@ async function removePaper(paper) {
       toast(`Could not remove the paper: ${error.message}`, { tone: 'warn' });
       return;
     }
-    // The note being written on one of its marks goes with the paper, and only
-    // now: a removal refused or failed above leaves the paper, and the note.
-    ResearchTools.dropMarkDraft(paper);
     // Moved on meanwhile: the view belongs to another corpus now, and the drafts
-    // and selection this would tidy up went with `resetWorkspaceView`.
+    // and selection this would tidy up went with `resetWorkspaceView`. A note
+    // being written there on a mark of the same key is that corpus's own.
     if (currentWorkspaceId !== workspace) {
       await refreshAll();
       return;
     }
+    // The note being written on one of its marks goes with the paper, and only
+    // now: a removal refused or failed above leaves the paper, and the note.
+    ResearchTools.dropMarkDraft(paper);
     // Close an editor that belonged to the deleted paper, so its form is not
     // captured as a draft for a claim that no longer exists. An editor on some
     // other paper's claim stays open, which is why this ends in `refreshAll`:

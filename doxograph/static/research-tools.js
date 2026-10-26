@@ -420,8 +420,21 @@ const ResearchTools = (() => {
   }
   function sizePage(page) {
     const scale = pageScale(page);
-    page.el.style.width = `${Math.floor(page.base.w * scale)}px`;
-    page.el.style.height = `${Math.floor(page.base.h * scale)}px`;
+    keepingView(page, () => {
+      page.el.style.width = `${Math.floor(page.base.w * scale)}px`;
+      page.el.style.height = `${Math.floor(page.base.h * scale)}px`;
+    });
+  }
+  // A page above the one being read that changes height, as a page does when
+  // its real size replaces the first page's it was laid out at, would move
+  // the passage under the eye by that much. The scroller follows the change,
+  // so what is being read stays where it is.
+  function keepingView(page, resize) {
+    const scroller = el('pdf-scroll');
+    const above = scroller && page.el.offsetTop + page.el.offsetHeight <= scroller.scrollTop;
+    const before = page.el.offsetHeight;
+    resize();
+    if (above) scroller.scrollTop += page.el.offsetHeight - before;
   }
   // A page scrolled far away gives back its canvas and the caches PDF.js keeps
   // behind it (operator lists, decoded images), so a long paper costs what is
@@ -460,8 +473,10 @@ const ResearchTools = (() => {
       const viewport = pdfPage.getViewport({scale});
       const container = page.el;
       container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
-      container.style.width = `${viewport.width}px`;
-      container.style.height = `${viewport.height}px`;
+      keepingView(page, () => {
+        container.style.width = `${viewport.width}px`;
+        container.style.height = `${viewport.height}px`;
+      });
       container.style.setProperty('--total-scale-factor', viewport.scale * (pdfPage.userUnit || 1));
       container.style.setProperty('--scale-round-x', '1px');
       container.style.setProperty('--scale-round-y', '1px');
@@ -656,10 +671,14 @@ const ResearchTools = (() => {
     try { localStorage.setItem(zoomKey, zoom); } catch (_) { /* preference remains for this page */ }
     if (same) return;
     const scroller = el('pdf-scroll');
-    const ratio = scale / reader.scale;
+    // The page under the eye and how far into it the view is, kept across the
+    // change by that page's own new geometry: under Fit width every page has
+    // a scale of its own, so no single ratio moves the scroller correctly.
+    const anchor = reader.pages[(reader.pinned || reader.current) - 1];
+    const within = reader.pinned ? null : (scroller.scrollTop - anchor.el.offsetTop) / Math.max(1, anchor.el.offsetHeight);
     reader.scale = scale;
     reader.pages.forEach(page => { clearPage(page); sizePage(page); });
-    scroller.scrollTop *= ratio;
+    scroller.scrollTop = within === null ? Math.max(0, anchor.el.offsetTop - 8) : anchor.el.offsetTop + within * anchor.el.offsetHeight;
     reader.tracked = false;
     await Promise.all(reader.pages.filter(pageNear).map(renderPage));
     trackCurrentPage();

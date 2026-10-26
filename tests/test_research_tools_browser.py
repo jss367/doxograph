@@ -1018,3 +1018,177 @@ def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(eng
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_page_above_measured_later_keeps_the_view_in_place(engine):
+    """Pages are laid out at the first page's size until each is measured; a
+    short page above the one being read, measured after the reader opened on
+    that page, must not move the page under the eye."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper',title='A paper with a short second page',authors=['Ada Researcher'],year=2026))
+    from pypdf import PdfReader, PdfWriter
+    import io
+    source = PdfReader(io.BytesIO(minimal_pdf(['First page.', 'Short.', 'Third page.', 'Fourth page.'])))
+    source.pages[1].mediabox.upper_right = (612, 160)
+    writer = PdfWriter()
+    for pdf_page in source.pages:
+        writer.add_page(pdf_page)
+    with store.pdf_path('paper').open('wb') as stream:
+        writer.write(stream)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                data = httpx.get(url+'/api/notebook').json()
+                data['reading'] = [{'paper':'paper','status':'reading','page':3,'bookmarks':[]}]
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                # Opened on page 3 while page 2 was still the first page's size.
+                await page.locator('#reader .pdf-page[data-page="3"] .textLayer span').first.wait_for()
+                await page.locator('#reader .pdf-page[data-page="2"]:not(.pending)').wait_for()
+                await page.wait_for_timeout(300)
+                placed = await page.evaluate("""(() => {
+                    const scroller = document.querySelector('#pdf-scroll');
+                    const third = document.querySelector('#reader .pdf-page[data-page="3"]');
+                    const second = document.querySelector('#reader .pdf-page[data-page="2"]');
+                    return {scrollTop: scroller.scrollTop, top: third.offsetTop, secondHeight: second.offsetHeight, firstHeight: document.querySelector('#reader .pdf-page[data-page="1"]').offsetHeight};
+                })()""")
+                assert placed['secondHeight'] < placed['firstHeight'] * .3
+                assert abs(placed['scrollTop'] - (placed['top'] - 8)) <= 2, placed
+                assert await page.locator('#reader-page').input_value() == '3'
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_removing_a_paper_after_switching_workspaces_leaves_the_other_workspaces_draft(engine):
+    """A paper removal whose flush is still refreshing when the reader switches
+    workspaces finishes in the workspace it started in; a note being written
+    there on a mark of a same-key paper in the new workspace is left alone."""
+    config.set_ai_enabled(False)
+    other = config.create_workspace('Elsewhere')
+    with config.use_workspace(other['id']):
+        store.save_paper(store.new_paper('paper', title='The same key elsewhere'))
+    store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
+    claim = store.add_claim('paper', {'text':'A claim to delete.', 'tags':[]})
+    rect = {'x':.1,'y':.08,'w':.3,'h':.02}
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                elsewhere = {'X-Doxograph-Workspace': other['id']}
+                data = httpx.get(url+'/api/notebook', headers=elsewhere).json()
+                data['highlights'] = [{'id':'far','paper':'paper','page':1,'rects':[rect],'text':'Elsewhere.','color':'blue','note':''}]
+                assert httpx.put(url+'/api/notebook', json=data, headers=elsewhere).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator(f'.claim[data-claim="{claim["id"]}"]').wait_for()
+                # A claim deleted and still in its Undo window.
+                await page.locator(f'.claim[data-claim="{claim["id"]}"]').get_by_role('button', name='delete', exact=True).click()
+                await page.locator('#toasts .toast', has_text='Deleted').wait_for()
+                # Removing the paper flushes that delete first; the refresh that
+                # ends the flush is held, and the reader switches workspaces.
+                armed, held, release = [], [], asyncio.Event()
+                async def hold_refresh(route):
+                    request = route.request
+                    if request.method == 'DELETE' and '/claims/' in request.url: armed.append(request.url)
+                    elif (armed and request.method == 'GET' and '/api/state' in request.url
+                            and request.headers.get('x-doxograph-workspace', 'default') == 'default'):
+                        held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/**', hold_refresh)
+                await page.get_by_role('button', name='Remove', exact=True).first.click()
+                ask = page.locator('#ask')
+                await ask.wait_for(state='visible')
+                await ask.get_by_role('button', name='Remove', exact=True).click()
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert armed and held
+                await page.locator('#workspace').select_option(other['id'])
+                await page.locator('#papers li[data-paper="paper"]', has_text='The same key elsewhere').wait_for()
+                await page.locator('#papers li[data-paper="paper"]').click()
+                rail = page.locator('#content')
+                await rail.locator('.highlight-entry[data-highlight="far"]').wait_for()
+                await rail.locator('.highlight-entry[data-highlight="far"]').get_by_role('button', name='Add note', exact=True).click()
+                await rail.locator('[data-highlight-note]').fill('Written elsewhere')
+                # The held flush ends; the removal goes on in its own workspace.
+                release.set()
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    if not any(p['key'] == 'paper' for p in httpx.get(url+'/api/state').json()['papers']): break
+                    await asyncio.sleep(.1)
+                assert not any(p['key'] == 'paper' for p in httpx.get(url+'/api/state').json()['papers'])
+                await page.wait_for_timeout(500)
+                assert any(p['key'] == 'paper' for p in httpx.get(url+'/api/state', headers=elsewhere).json()['papers'])
+                assert await rail.locator('[data-highlight-note]').input_value() == 'Written elsewhere'
+                assert await page.locator('#workspace').input_value() == other['id']
+                await page.unroute('**/api/**')
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_zoom_keeps_the_page_under_the_eye_across_mixed_page_sizes(engine):
+    """Under Fit width every page has a scale of its own, so a zoom change is
+    anchored on the page being read and how far into it the view is, not on
+    one ratio: a wide page above must not move the passage or the page saved."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper',title='A paper with a wide page',authors=['Ada Researcher'],year=2026))
+    from pypdf import PdfReader, PdfWriter
+    import io
+    source = PdfReader(io.BytesIO(minimal_pdf(['First page.', 'A wide landscape page.', 'Third page.', 'Fourth page.'])))
+    source.pages[1].mediabox.upper_right = (1000, 800)
+    writer = PdfWriter()
+    for pdf_page in source.pages:
+        writer.add_page(pdf_page)
+    with store.pdf_path('paper').open('wb') as stream:
+        writer.write(stream)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                data = httpx.get(url+'/api/notebook').json()
+                data['reading'] = [{'paper':'paper','status':'reading','page':1,'bookmarks':[]}]
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                await page.locator('#reader .pdf-page[data-page="2"]:not(.pending)').wait_for()
+                # Part way into page 3, by hand, so nothing is pinned.
+                await page.evaluate("""(() => {
+                    const scroller = document.querySelector('#pdf-scroll');
+                    const third = document.querySelector('#reader .pdf-page[data-page="3"]');
+                    scroller.scrollTo({top: third.offsetTop + third.offsetHeight * .4});
+                })()""")
+                await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                await saved_page(url, 3)
+                async def within():
+                    return await page.evaluate("""(() => {
+                        const scroller = document.querySelector('#pdf-scroll');
+                        const third = document.querySelector('#reader .pdf-page[data-page="3"]');
+                        return (scroller.scrollTop - third.offsetTop) / third.offsetHeight;
+                    })()""")
+                for zoom in ['2', 'fit', '1']:
+                    await page.locator('#reader-zoom').select_option(zoom)
+                    await page.locator('#reader .pdf-page[data-page="3"] .textLayer span').first.wait_for()
+                    await page.wait_for_timeout(300)
+                    assert abs(await within() - .4) < .03, (zoom, await within())
+                    assert await page.locator('#reader-page').input_value() == '3'
+                await page.wait_for_timeout(1800)
+                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 3
+                assert not errors
+    run_browser(scenario())
