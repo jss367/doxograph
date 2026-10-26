@@ -18,6 +18,10 @@ from jsonschema import Draft202012Validator, ValidationError
 from . import config
 
 
+class ProviderResponseError(ValueError):
+    """The endpoint returned an unusable response to a valid request."""
+
+
 def anthropic_client():
     key = config.api_key("anthropic")
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
@@ -92,9 +96,9 @@ class TextClient:
             try:
                 data = result.json()
             except ValueError as exc:
-                raise ValueError("AI analysis returned invalid JSON; nothing was saved") from exc
+                raise ProviderResponseError("AI analysis returned invalid JSON; nothing was saved") from exc
         if not isinstance(data, dict):
-            raise ValueError("AI analysis returned an unreadable response; nothing was saved")
+            raise ProviderResponseError("AI analysis returned an unreadable response; nothing was saved")
         if data.get("error"):
             raise RuntimeError(f"{self.selected.provider} could not complete AI analysis")
         try:
@@ -123,7 +127,7 @@ class TextClient:
             payload = json.loads(message.get("content") or "")
             Draft202012Validator(schema).validate(payload)
         except (ValueError, TypeError, ValidationError) as exc:
-            raise ValueError("The selected model returned invalid analysis JSON; nothing was saved. "
+            raise ProviderResponseError("The selected model returned invalid analysis JSON; nothing was saved. "
                              "Use a model and endpoint that support structured JSON output.") from exc
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(payload))],
                                stop_reason="end_turn", usage=usage)

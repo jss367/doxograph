@@ -38,7 +38,12 @@ def answer(key: str, messages: list[dict]) -> dict:
         if not file_id or file_id not in str(exc):
             raise
         response = ask(extract._pdf_block(key, force_upload=True))
-    payload = extract._answer(response, "paper chat", key)
+    try:
+        payload = extract._answer(response, "paper chat", key)
+    except json.JSONDecodeError as exc:
+        raise providers.ProviderResponseError("The model returned invalid JSON. Please retry.") from exc
+    if not isinstance(payload, dict):
+        raise providers.ProviderResponseError("The model returned an invalid answer. Please retry.")
     if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
         raise RuntimeError("The model returned no answer. Please retry.")
     assistant = "ChatGPT" if isinstance(api, codex_cli.Client) else "Claude"

@@ -105,6 +105,23 @@ def test_paper_chat_explains_endpoint_failures(monkeypatch, failure):
     assert ('could not be reached' if failure == 'offline' else '503') in response.json()['detail']
 
 
+@pytest.mark.parametrize('failure', ['non-json', 'schema-invalid'])
+def test_paper_chat_classifies_invalid_provider_responses_as_upstream_failures(monkeypatch, failure):
+    select()
+    key = paper()
+    if failure == 'non-json':
+        real = httpx.Client
+        malformed = httpx.MockTransport(lambda request: httpx.Response(200, text='<html>Unavailable</html>'))
+        monkeypatch.setattr(providers.httpx, 'Client', lambda **kwargs: real(**kwargs, transport=malformed))
+    else:
+        transport(monkeypatch, {'answer': 7})
+    with client() as c:
+        response = c.post(f'/api/papers/{key}/chat', json={
+            'messages': [{'role': 'user', 'content': 'What did the study find?'}]})
+    assert response.status_code == 502
+    assert 'invalid' in response.json()['detail']
+
+
 @pytest.mark.parametrize("provider", ["ollama", "openai", "openai-compatible"])
 def test_extraction_sends_page_text_and_schema_only_to_selected_provider(monkeypatch, provider):
     select(provider)

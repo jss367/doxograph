@@ -26,7 +26,7 @@ from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from . import (__version__, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook, research_notes)
+               search, store, notebook, research_notes, providers)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -1429,6 +1429,8 @@ def paper_chat(key: str, body: ChatBody) -> dict:
         return chat.answer(key, [message.model_dump() for message in body.messages])
     except KeyError:
         raise HTTPException(404, f"no paper {key}")
+    except providers.ProviderResponseError as exc:
+        raise HTTPException(502, str(exc))
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(400, str(exc))
     except (RuntimeError, anthropic.APIError, httpx.HTTPError) as exc:

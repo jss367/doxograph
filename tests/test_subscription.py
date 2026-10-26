@@ -151,3 +151,18 @@ def test_paper_chat_reuploads_a_missing_api_file_once(monkeypatch):
     monkeypatch.setattr(extract, '_pdf_block', document)
     assert chat.answer('paper', [{'role': 'user', 'content': 'Question'}])['answer'] == 'Recovered'
     assert document.call_args.kwargs == {'force_upload': True}
+
+
+@pytest.mark.parametrize('text', ['not-json', '[]'])
+def test_malformed_native_model_answers_are_upstream_errors(monkeypatch, text):
+    store.save_paper(store.new_paper('paper'))
+    api = Mock()
+    api.messages.create.return_value = SimpleNamespace(stop_reason='end_turn', content=[
+        SimpleNamespace(type='text', text=text)])
+    monkeypatch.setattr(extract, 'client', lambda: api)
+    monkeypatch.setattr(extract, '_pdf_block', lambda key: {'type': 'text', 'text': 'Paper text'})
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.post('/api/papers/paper/chat', json={
+            'messages': [{'role': 'user', 'content': 'What did the study find?'}]})
+    assert response.status_code == 502
+    assert 'invalid' in response.json()['detail']
