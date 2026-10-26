@@ -465,6 +465,7 @@ def annotated_pdf(key: Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$", max_leng
     """
     from pypdf import PdfReader, PdfWriter
     from pypdf.annotations import Highlight as HighlightAnnotation, Rectangle
+    from pypdf.constants import AnnotationFlag
     from pypdf.errors import PdfReadError
     from pypdf.generic import ArrayObject, FloatObject, NameObject, TextStringObject
 
@@ -494,6 +495,7 @@ def annotated_pdf(key: Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$", max_leng
         color = MARK_COLORS[mark["color"]]
         if mark["kind"] == "figure":
             annotation = Rectangle(bounds)
+            annotation.flags = AnnotationFlag.PRINT
             annotation[NameObject("/C")] = ArrayObject(FloatObject(int(color[i:i + 2], 16) / 255) for i in (0, 2, 4))
         else:
             quads = ArrayObject(FloatObject(n) for x1, y1, x2, y2 in boxes for n in (x1, y2, x2, y2, x1, y1, x2, y1))

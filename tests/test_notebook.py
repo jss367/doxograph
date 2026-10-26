@@ -166,6 +166,8 @@ def test_annotated_pdf_carries_marks_without_changing_the_stored_pdf(client):
     assert len(highlight['/QuadPoints']) == 16
     [square] = [a.get_object() for a in pages[1]['/Annots']]
     assert square['/Subtype'] == '/Square' and square['/Contents'] == 'Question: Which model?'
+    # Both kinds print: flag 4 is Print.
+    assert highlight['/F'] == square['/F'] == 4
     assert [round(float(n), 2) for n in square['/Rect']] == [306.0, 198.0, 459.0, 396.0]
 
 
