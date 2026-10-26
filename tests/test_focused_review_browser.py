@@ -106,6 +106,54 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("editing", [False, True])
+def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engine, editing):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='A paper whose download is pending'))
+    store.add_claim('paper', {'text': 'A manually recorded claim.',
+        'quote': 'The source eventually arrives.', 'reviewed': False})
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#content .claim').wait_for()
+                await page.locator('#btn-focus-review').click()
+                dialog = page.locator('#focused-review')
+                await expect(page.locator('#focus-passage')).to_contain_text('No PDF is available')
+                if editing:
+                    await dialog.get_by_role('button', name='Edit claim', exact=True).click()
+                    await dialog.get_by_label('Claim', exact=True).fill('Keep the unsaved claim wording.')
+                    await dialog.get_by_label('Claim', exact=True).evaluate('el => el.setSelectionRange(8, 8)')
+                before = httpx.get(url + '/api/state').json()['claims']
+                store.pdf_path('paper').write_bytes(minimal_pdf('The source eventually arrives.'))
+                # Let the ordinary background poll notice the PDF, with no claim edit.
+                await expect(page.locator('#focus-pdf canvas')).to_be_visible(timeout=15000)
+                await expect(page.locator('#focus-passage')).to_contain_text('Quote found on page 1')
+                assert httpx.get(url + '/api/state').json()['claims'] == before
+                if editing:
+                    await expect(dialog.get_by_label('Claim', exact=True)).to_have_value('Keep the unsaved claim wording.')
+                    await expect(dialog.get_by_label('Claim', exact=True)).to_be_focused()
+                    assert await dialog.get_by_label('Claim', exact=True).evaluate('el => el.selectionStart') == 8
+                store.pdf_path('paper').unlink()
+                await expect(page.locator('#focus-passage')).to_contain_text('No PDF is available', timeout=15000)
+                await expect(page.locator('#focus-pdf')).not_to_be_visible()
+                if editing:
+                    await expect(dialog.get_by_label('Claim', exact=True)).to_have_value('Keep the unsaved claim wording.')
+                    await expect(dialog.get_by_label('Claim', exact=True)).to_be_focused()
+                    await dialog.get_by_role('button', name='Cancel', exact=True).click()
+                await dialog.get_by_role('button', name='Exit review', exact=True).click()
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_focused_review_ignores_late_passages_and_failed_review_stays_put(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('a', title='A source with a PDF'))

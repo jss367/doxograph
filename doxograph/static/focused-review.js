@@ -3,12 +3,16 @@ window.FocusedReview = (() => {
   const dialog = document.getElementById('focused-review');
   const body = document.getElementById('focus-body');
   let ids = [], workspace = null, current = null, editing = false, busy = false;
-  let shown = '', generation = 0, loadingTask = null, pdf = null, pdfRender = null, pageNumber = 1;
+  let shown = '', shownPaper = '', generation = 0, loadingTask = null, pdf = null, pdfRender = null, pageNumber = 1;
   const rows = () => {
     const byId = new Map(S.claims.map(item => [item.id, item]));
     return ids.map(id => byId.get(id)).filter(Boolean);
   };
   const row = () => rows().find(item => item.id === current);
+  const paperSnapshot = item => {
+    const paper = S.papers.find(p => p.key === item?.paper);
+    return JSON.stringify([paper?.title, paper?.authors, paper?.year, paper?.has_pdf]);
+  };
   const path = item => `/api/papers/${encodeURIComponent(item.paper)}/claims/${encodeURIComponent(item.id)}`;
   const request = (url, options = {}) => api(url, {
     ...options, headers: { 'X-Doxograph-Workspace': workspace, ...options.headers },
@@ -49,6 +53,7 @@ window.FocusedReview = (() => {
     const items = rows();
     const item = row();
     shown = JSON.stringify(item);
+    shownPaper = paperSnapshot(item);
     if (!item) {
       body.innerHTML = '<p class="empty">These claims are no longer in this workspace. Exit review to choose another set.</p>';
       return;
@@ -268,6 +273,23 @@ window.FocusedReview = (() => {
     if (!dialog.open || busy) return;
     if (workspace !== currentWorkspaceId) { close(); return; }
     if (!row()) { current = rows()[0]?.id; editing = Boolean(V.drafts[current]); render(); }
+    else if (shownPaper !== paperSnapshot(row())) {
+      // A download can finish without changing any claim. Refresh the source
+      // even during an edit, keeping the draft, cursor, and reading position.
+      const fields = [...body.querySelectorAll('input, textarea, select')];
+      const focused = fields.indexOf(document.activeElement);
+      const start = fields[focused]?.selectionStart;
+      const end = fields[focused]?.selectionEnd;
+      const scrollTop = body.querySelector('.focus-details').scrollTop;
+      parkDraft();
+      render();
+      const replacement = body.querySelectorAll('input, textarea, select')[focused];
+      if (replacement) {
+        replacement.focus({ preventScroll: true });
+        if (start != null) replacement.setSelectionRange(start, end);
+      }
+      body.querySelector('.focus-details').scrollTop = scrollTop;
+    }
     else if (!editing && shown !== JSON.stringify(row())) render();
     else progress();
   }
