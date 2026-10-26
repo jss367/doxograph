@@ -628,7 +628,7 @@ const ResearchTools = (() => {
     active.progressSave = chain;
   }
   async function goToPage(number, highlight = null) {
-    if (!reader?.pages.length) { if (reader) askPage(reader.paper, reader.workspace, number); return; }
+    if (!reader?.pages.length) { if (reader) askPage(reader.paper, reader.workspace, number, highlight); return; }
     const page = reader.pages[Math.max(1, Math.min(number, reader.pages.length)) - 1];
     el('pdf-scroll').scrollTo({top:Math.max(0, page.el.offsetTop - 8)});
     trackCurrentPage(page.number);
@@ -742,6 +742,14 @@ const ResearchTools = (() => {
   // background redraws of it the way a claim editor does.
   function holds() {
     return Boolean(highlightEditing) && paperHighlights(V.paper).some(h => h.id === highlightEditing);
+  }
+  // Whether a note is being written on one of this paper's marks: its paper
+  // going would take the editor with it, and the Marks list has none.
+  function markDraftOn(paper) {
+    return highlightDrafting() && paperHighlights(paper).some(h => h.id === highlightEditing);
+  }
+  function dropMarkDraft(paper) {
+    if (markDraftOn(paper) || paperHighlights(paper).some(h => h.id === highlightEditing)) { highlightEditing = null; highlightDraft = ''; }
   }
   function goToPaper(paper, claim = null) {
     captureOpenEditor(); parkNewClaimForNavigation(paper);
@@ -1111,8 +1119,14 @@ const ResearchTools = (() => {
   });
   window.addEventListener('beforeunload', event => { if (unsaved() || notesChanged() || notesSaving) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
+    // A reader action waiting on the notebook would finish in the workspace
+    // it started in and open its paper over the one switched to.
+    if (busy) {
+      const text = 'Finish the current operation before switching workspaces.';
+      if (el('research-tools').open) message(text, true); else toast(text, {tone:'warn'});
+      return false;
+    }
     if (el('research-tools').open) {
-      if (busy) { message('Finish the current operation before switching workspaces.', true); return false; }
       await close();
       if (el('research-tools').open) return false;
     }
@@ -1124,6 +1138,6 @@ const ResearchTools = (() => {
     }
     return true;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds,
+  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds,markDraftOn,dropMarkDraft,
     openBoard: id => run(() => open('boards', id))};
 })();

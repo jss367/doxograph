@@ -4437,11 +4437,14 @@ async function removePaper(paper) {
   const p = S.papers.find((x) => x.key === paper);
   // The one delete with no undo: a removed paper's key is retired for good, so
   // adding it again would make a different paper. Hence a question first.
+  const draft = ResearchTools.markDraftOn(paper);
   const go = await confirmDialog(`Remove ${p ? p.title || paper : paper} and its claims?`, {
-    note: 'The PDF and every claim on it go with it, and the key is never reissued.',
+    note: 'The PDF and every claim on it go with it, and the key is never reissued.'
+      + (draft ? ' The note you are writing on one of its marks goes too.' : ''),
     ok: 'Remove',
   });
   if (!go) return;
+  ResearchTools.dropMarkDraft(paper);
   // The question is a wait like any other, and the header and the paper list
   // stay live across it: a second Remove could have been answered first, and
   // this one would ask the server for a paper that is already going.

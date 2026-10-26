@@ -923,3 +923,92 @@ def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(eng
                 assert not errors
             await browser.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(engine):
+    """A mark clicked while the paper is still loading is the mark it opens
+    outlined on; a workspace switch waits for a reader request in flight;
+    removing a paper warns about a note being written on one of its marks and
+    drops the draft with it."""
+    config.set_ai_enabled(False)
+    other = config.create_workspace('Elsewhere')
+    with config.use_workspace(other['id']):
+        store.save_paper(store.new_paper('elsewhere', title='Elsewhere paper'))
+    store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['Recovery depends on conditions.','Second page findings.']))
+    store.save_paper(store.new_paper('second',title='A second paper',authors=['Bo Writer'],year=2025))
+    store.pdf_path('second').write_bytes(minimal_pdf(['The second paper.']))
+    rect = {'x':.1,'y':.08,'w':.3,'h':.02}
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                data = httpx.get(url+'/api/notebook').json()
+                data['reading'] = [{'paper':'paper','status':'reading','page':1,'bookmarks':[]}]
+                data['highlights'] = [
+                    {'id':'one','paper':'paper','page':1,'rects':[rect],'text':'Recovery depends on conditions.','color':'yellow','note':''},
+                    {'id':'two','paper':'paper','page':2,'rects':[rect],'text':'Second page findings.','color':'green','note':''},
+                    {'id':'three','paper':'second','page':1,'rects':[rect],'text':'The second paper.','color':'blue','note':''}]
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await page.goto(url)
+                rail = page.locator('#content')
+                # The PDF is held while a rail mark is clicked: once it arrives,
+                # the reader opens on that mark's page with the mark outlined.
+                pdf_held, pdf_release = [], asyncio.Event()
+                async def hold_pdf(route):
+                    pdf_held.append(route); await pdf_release.wait(); await route.continue_()
+                await page.route('**/pdf/paper?*', hold_pdf)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await rail.locator('.highlight-entry[data-highlight="two"]').wait_for()
+                deadline = time.monotonic() + 6
+                while not pdf_held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert pdf_held
+                await rail.locator('.highlight-entry[data-highlight="two"] blockquote').click()
+                pdf_release.set()
+                await page.locator('#reader .pdf-page[data-page="2"] .highlightLayer [data-highlight="two"].focused').wait_for()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                assert await rail.locator('.highlight-entry.focused[data-highlight="two"]').count() == 1
+                await page.unroute('**/pdf/paper?*')
+                # A workspace switch while a reader request waits on the notebook
+                # is refused, and the picker goes back to the live workspace.
+                held, release = [], asyncio.Event()
+                async def hold_get(route):
+                    if route.request.method == 'GET' and not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_get)
+                await page.get_by_role('button', name='Bookmark this page', exact=True).click()
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held
+                await page.locator('#workspace').select_option(other['id'])
+                await page.locator('#toasts .toast', has_text='Finish the current operation').wait_for()
+                assert await page.locator('#workspace').input_value() == 'default'
+                release.set()
+                await page.get_by_role('button', name='Remove bookmark', exact=True).wait_for()
+                await page.unroute('**/api/notebook')
+                assert await page.locator('#papers li[data-paper="paper"]').count() == 1
+                # Removing the paper while a note is being written on one of its
+                # marks says so; the draft goes with the paper, so a note begun
+                # on another paper's mark afterwards opens without a question.
+                await rail.locator('.highlight-entry[data-highlight="one"]').get_by_role('button', name='Add note', exact=True).click()
+                await rail.locator('[data-highlight-note]').fill('A thought about recovery')
+                await page.get_by_role('button', name='Remove', exact=True).first.click()
+                ask = page.locator('#ask')
+                await ask.wait_for(state='visible')
+                assert 'note you are writing' in await ask.inner_text()
+                await ask.get_by_role('button', name='Remove', exact=True).click()
+                await page.locator('#papers li[data-paper="paper"]').wait_for(state='detached')
+                await page.locator('#papers li[data-paper="second"]').click()
+                await rail.locator('.highlight-entry[data-highlight="three"]').wait_for()
+                await rail.locator('.highlight-entry[data-highlight="three"]').get_by_role('button', name='Add note', exact=True).click()
+                await rail.locator('[data-highlight-note]').wait_for()
+                assert await ask.count() == 0 or not await ask.is_visible()
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())
