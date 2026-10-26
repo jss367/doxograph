@@ -499,7 +499,7 @@ const ResearchTools = (() => {
   function setFigureMode(on) {
     if (!reader) return;
     reader.figureMode = on;
-    if (!on) { reader.drag = null; el('reader').querySelector('.figure-draft')?.remove(); }
+    if (!on) { reader.drag = null; el('reader').querySelector('.figure-draft')?.remove(); hidePassageTools(); }
     el('pdf-scroll')?.classList.toggle('drawing', on);
     const toggle = el('reader').querySelector('[data-tool="figure-mode"]');
     if (toggle) { toggle.textContent = on ? 'Cancel figure mark' : 'Mark a figure'; toggle.setAttribute('aria-pressed', String(on)); }
@@ -530,11 +530,23 @@ const ResearchTools = (() => {
       ? 'This page has no selectable text. You can transcribe a quote and add a claim by hand.'
       : 'Select a passage to highlight it or capture it as a claim, or mark a figure.';
   }
-  function trackCurrentPage() {
+  function trackCurrentPage(asked = null) {
     if (!reader?.pages.length) return;
     const scroller = el('pdf-scroll');
+    // A page gone to by name is the current page even when the scroller cannot
+    // reach its top, as with a short last page or a paper that fits whole; it
+    // stands until the reader scrolls away from where that landed.
+    if (asked) reader.pinned = asked;
+    else if (reader.pinned) {
+      // Still where going to that page put the scroller, allowing for pages
+      // drawn since at their real size: anything else is the reader scrolling.
+      const pinnedEl = reader.pages[reader.pinned - 1].el;
+      const expected = Math.min(Math.max(0, pinnedEl.offsetTop - 8), scroller.scrollHeight - scroller.clientHeight);
+      if (Math.abs(scroller.scrollTop - expected) > 2) reader.pinned = null;
+    }
     const line = scroller.scrollTop + scroller.clientHeight * .35;
-    const page = reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages[reader.pages.length - 1];
+    const page = reader.pinned ? reader.pages[reader.pinned - 1]
+      : reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages[reader.pages.length - 1];
     if (page.number === reader.current && reader.tracked) return;
     reader.current = page.number; reader.tracked = true;
     // The mark opened from the Marks list stays outlined until the reader moves to another page.
@@ -580,14 +592,20 @@ const ResearchTools = (() => {
         if (local) local.page = number;
         renderContinuation();
       }
+      active.retried = false;
       if (active.wantedPage !== active.savedPage) queueProgressSave(active);
-    }).catch(() => { /* a later scroll tries again */ });
+    }).catch(async error => {
+      // Once more after a moment, since a reader already torn down has no
+      // later scroll to try again; then say so rather than lose the page.
+      if (!active.retried) { active.retried = true; await new Promise(resolve => setTimeout(resolve, 600)); queueProgressSave(active); return; }
+      toast(`Could not save the page you stopped on (page ${active.wantedPage}): ${error.message}`, {tone:'warn'});
+    });
   }
   async function goToPage(number, highlight = null) {
     if (!reader?.pages.length) { if (reader) askPage(reader.paper, reader.workspace, number); return; }
     const page = reader.pages[Math.max(1, Math.min(number, reader.pages.length)) - 1];
     el('pdf-scroll').scrollTo({top:Math.max(0, page.el.offsetTop - 8)});
-    trackCurrentPage();
+    trackCurrentPage(page.number);
     if (!highlight) return;
     reader.focus = highlight;
     await renderPage(page);
@@ -819,7 +837,8 @@ const ResearchTools = (() => {
     }
     if (name === 'remove-highlight') {
       const label = highlight.kind === 'figure' ? 'mark' : 'highlight';
-      if (highlight.note && !await confirmDialog(`Remove this ${label} and its note?`, {ok:`Remove ${label}`})) return;
+      const writing = highlightEditing === id && highlightDraft.trim();
+      if ((highlight.note || writing) && !await confirmDialog(`Remove this ${label} and its note?`, {ok:`Remove ${label}`})) return;
       await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); });
       if (highlightEditing === id) { highlightEditing = null; highlightDraft = ''; }
       redrawHighlights(); return;

@@ -263,7 +263,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.get_by_role('button', name='Previous page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
                 await saved_page(url, 1)
-                # A save that fails is tried again by the next move.
+                # A save that fails is tried once more on its own.
                 failures = []
                 async def fail_once(route):
                     if route.request.method == 'PUT' and not failures:
@@ -272,8 +272,8 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.route('**/api/notebook', fail_once)
                 await page.get_by_role('button', name='Next page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
-                await page.wait_for_timeout(2200)
-                assert failures and httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 1
+                await saved_page(url, 2)
+                assert failures
                 await page.get_by_role('button', name='Next page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
                 await saved_page(url, 3)
@@ -717,6 +717,104 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
                 await page.keyboard.press('Escape')
                 await page.get_by_role('button', name='Mark a figure', exact=True).wait_for()
                 assert len(httpx.get(url+'/api/notebook').json()['highlights']) == 1
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(engine):
+    """Going to a page the scroller cannot reach the top of still makes it the
+    current page; canceling a figure drops the box drawn; removing a mark with
+    a note being written asks first; the page saved on the way out survives a
+    failed first attempt."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper',title='A study with a short last page',authors=['Ada Researcher'],year=2026))
+    store.save_paper(store.new_paper('other',title='The other paper',authors=['Bo Writer'],year=2025))
+    store.pdf_path('other').write_bytes(minimal_pdf(['The other paper.']))
+    from pypdf import PdfReader, PdfWriter
+    import io
+    source = PdfReader(io.BytesIO(minimal_pdf(['First page.', 'Second page.', 'Short last page.'])))
+    source.pages[2].mediabox.upper_right = (612, 120)
+    writer = PdfWriter()
+    for pdf_page in source.pages:
+        writer.add_page(pdf_page)
+    with store.pdf_path('paper').open('wb') as stream:
+        writer.write(stream)
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                data = httpx.get(url+'/api/notebook').json()
+                data['reading'] = [{'paper':'paper','status':'reading','page':1,'bookmarks':[]}]
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                # The last page is too short for its top to reach the scroller's
+                # top: Go there anyway, and it is the page bookmarked and saved.
+                await page.locator('#reader-page').fill('3')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                await page.get_by_role('button', name='Bookmark this page', exact=True).click()
+                await ready(page)
+                await page.get_by_role('button', name='Remove bookmark', exact=True).wait_for()
+                reading = httpx.get(url+'/api/notebook').json()['reading'][0]
+                assert reading['bookmarks'] == [3] and reading['page'] == 3
+                # Scrolling away lets the reading line decide again.
+                await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: 0})")
+                await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
+                # A box drawn and then canceled is no mark, and selecting text works again.
+                await page.get_by_role('button', name='Mark a figure', exact=True).click()
+                first = page.locator('#reader .pdf-page[data-page="1"]')
+                box = await first.bounding_box()
+                await page.mouse.move(box['x'] + box['width'] * .3, box['y'] + 40)
+                await page.mouse.down()
+                await page.mouse.move(box['x'] + box['width'] * .6, box['y'] + 140, steps=6)
+                await page.mouse.up()
+                await page.locator('#passage-tools.for-figure').wait_for(state='visible')
+                await page.get_by_role('button', name='Cancel figure mark', exact=True).click()
+                await page.locator('#passage-tools').wait_for(state='hidden')
+                assert await page.locator('#passage-tools.for-figure').count() == 0
+                await select_first_line(page)
+                assert await page.get_by_role('button', name='Capture as claim', exact=True).is_visible()
+                await page.get_by_role('button', name='Highlight in yellow', exact=True).click()
+                await ready(page)
+                marks = httpx.get(url+'/api/notebook').json()['highlights']
+                assert len(marks) == 1 and marks[0]['kind'] == 'passage'
+                # Removing a mark whose note is only being written asks first.
+                rail = page.locator('#content')
+                entry = rail.locator('.highlight-entry')
+                await entry.get_by_role('button', name='Add note', exact=True).click()
+                await rail.locator('[data-highlight-note]').fill('Not saved yet')
+                await entry.get_by_role('button', name='Remove', exact=True).click()
+                await page.locator('#ask').wait_for(state='visible')
+                await page.locator('#ask').get_by_role('button', name='Cancel', exact=True).click()
+                await page.locator('#ask').wait_for(state='hidden')
+                assert len(httpx.get(url+'/api/notebook').json()['highlights']) == 1
+                assert await rail.locator('[data-highlight-note]').input_value() == 'Not saved yet'
+                await entry.get_by_role('button', name='Cancel', exact=True).click()
+                # The page saved on the way out: its first attempt fails, the
+                # retry lands, and the queue records the page the reader left.
+                failures = []
+                async def fail_once(route):
+                    if route.request.method == 'PUT' and not failures:
+                        failures.append(route.request.url); await route.fulfill(status=503, body='down'); return
+                    await route.continue_()
+                await page.route('**/api/notebook', fail_once)
+                await page.locator('#reader-page').fill('2')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                await page.locator('#papers li[data-paper="other"]').click()
+                await page.locator('.paperhead h2', has_text='The other paper').wait_for()
+                await saved_page(url, 2)
+                assert failures
+                await page.unroute('**/api/notebook')
                 assert not errors
             await browser.close()
     asyncio.run(scenario())
