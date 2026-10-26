@@ -1,0 +1,235 @@
+name: Auto-merge on Codex 👍
+
+# Codex reacts 👍 on a PR once all its reviews finish with no findings.
+# There is no webhook for reactions, so poll on a schedule, and also run
+# shortly after Codex posts or edits its review-summary comment.
+# Adapted from jss367/muse. The test suite must pass on the reviewed commit.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  # Naming any scope sets the rest to none, and labels, reactions, the
+  # timeline and comments all live under the issues scope even on a PR.
+  issues: read
+
+concurrency:
+  group: auto-merge
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    # Every other comment in the repository would otherwise start a run,
+    # burning runner time and holding the concurrency group against the run
+    # that matters.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request &&
+       github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
+       contains(github.event.comment.body, 'codex-pull-request-review-summary'))
+    steps:
+      - name: Wait for the reaction to land
+        # The 👍 arrives ~20s after the summary comment is updated.
+        if: github.event_name == 'issue_comment'
+        run: sleep 60
+
+      - name: Merge every open PR that Codex approved
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BOT: "chatgpt-codex-connector[bot]"
+          # GraphQL drops the [bot] suffix on review authors.
+          AUTHOR: "chatgpt-codex-connector"
+        run: |
+          set -euo pipefail
+
+          # A poll that merges nothing costs one request: this query carries
+          # every open PR, and PRs with no sign of a 👍 are dropped without
+          # any further lookup. Everything a merge decision rests on is then
+          # confirmed per candidate with paginated requests below.
+          # GraphQL variables must reach GitHub literally.
+          # shellcheck disable=SC2016
+          prs=$(gh api graphql --paginate \
+            -f owner="${REPO%/*}" -f name="${REPO#*/}" \
+            -f query='query($owner:String!,$name:String!,$endCursor:String){
+              repository(owner:$owner,name:$name){
+                defaultBranchRef{name}
+                pullRequests(states:OPEN, first:100, after:$endCursor){
+                  pageInfo{hasNextPage endCursor}
+                  nodes{
+                    number headRefOid baseRefName isDraft mergeable
+                    labels(first:100){nodes{name}}
+                    reactions(content:THUMBS_UP, first:100){
+                      totalCount
+                      nodes{user{login} createdAt}
+                    }
+                    reviews(last:20){nodes{author{login} submittedAt}}
+                  }
+                }
+              }
+            }')
+
+          # --paginate advances pullRequests, not the nested reactions, so a
+          # PR carrying more thumbs-up than the page holds goes through as a
+          # candidate on the strength of totalCount alone. The authoritative
+          # reaction lookup below then decides it.
+          jq -r --arg bot "$BOT" --arg author "$AUTHOR" '
+            .data.repository as $repo
+            | $repo.pullRequests.nodes[]
+            | .number as $num
+            | ([.reactions.nodes[]
+                | select(.user.login == $bot) | .createdAt] | sort | last) as $thumbedAt
+            | ([.reviews.nodes[]
+                | select(.author.login == $author) | .submittedAt] | sort | last) as $findingsAt
+            | (.reactions.totalCount > (.reactions.nodes | length)) as $truncated
+            | if .isDraft then "\($num)\tskip\tdraft"
+              elif [.labels.nodes[].name] | index("no-automerge") then
+                "\($num)\tskip\tlabelled no-automerge"
+              elif .baseRefName != $repo.defaultBranchRef.name then
+                "\($num)\tskip\ttargets \(.baseRefName), not \($repo.defaultBranchRef.name)"
+              elif .mergeable != "MERGEABLE" then
+                "\($num)\tskip\tnot mergeable (\(.mergeable))"
+              elif $thumbedAt == null and ($truncated | not) then
+                "\($num)\tskip\tno 👍 from Codex yet"
+              elif $thumbedAt != null and $findingsAt != null and $findingsAt >= $thumbedAt then
+                "\($num)\tskip\t👍 does not postdate Codex'"'"'s latest findings"
+              else "\($num)\tcandidate\t\(.headRefOid)"
+              end' <<<"$prs" \
+          | while IFS=$'\t' read -r num verdict head; do
+            if [ "$verdict" = skip ]; then
+              echo "PR #$num: $head, skipping"; continue
+            fi
+
+            # Seeing the label in the query above is proof, but not seeing it
+            # is not, so confirm before spending anything else on this PR.
+            labels=$(gh api "repos/$REPO/issues/$num/labels" --paginate --jq '.[].name')
+            if grep -qxF no-automerge <<<"$labels"; then
+              echo "PR #$num: labelled no-automerge, skipping"; continue
+            fi
+
+            thumbs=$(gh api "repos/$REPO/issues/$num/reactions" --paginate \
+              --jq ".[] | select(.content == \"+1\")
+                        | select(.user.login == \"$BOT\") | .created_at" \
+              | sort | tail -n1)
+            if [ -z "$thumbs" ]; then
+              echo "PR #$num: no 👍 from Codex yet, skipping"; continue
+            fi
+
+            # Retargeting a PR changes its diff while leaving the head SHA
+            # alone, so an approval from before the change says nothing about
+            # what would now be merged.
+            retargeted=$(gh api "repos/$REPO/issues/$num/timeline" --paginate \
+              --jq '.[] | select(.event == "base_ref_changed") | .created_at' \
+              | sort | tail -n1)
+            # Both timestamps have second precision, so require the 👍 to be
+            # strictly newer: a tie means the order is unknown.
+            if [ -n "$retargeted" ] && [[ ! "$thumbs" > "$retargeted" ]]; then
+              echo "PR #$num: base branch changed after the 👍, skipping"; continue
+            fi
+
+            # Codex creates a review only when it has findings, and reacts 👍
+            # once every review finishes clean. So the 👍 must postdate every
+            # set of findings. A clean rerun creates no review, which lets a
+            # fresh 👍 supersede older findings on an unchanged commit.
+            findings=$(gh api "repos/$REPO/pulls/$num/reviews" --paginate \
+              --jq ".[] | select(.user.login == \"$BOT\") | .submitted_at" \
+              | sort | tail -n1)
+            if [ -n "$findings" ] && [[ ! "$thumbs" > "$findings" ]]; then
+              echo "PR #$num: 👍 does not postdate Codex's latest findings, skipping"
+              continue
+            fi
+
+            # The reaction carries no commit, so take the commit from Codex's
+            # own summary comment. Resolve the abbreviated SHA through the API
+            # and compare all 40 characters, so seven hex digits can never
+            # stand in for a different commit.
+            summary=$(gh api "repos/$REPO/issues/$num/comments" --paginate --slurp \
+              | jq -c --arg bot "$BOT" '
+                  [ .[][] | select(.user.login == $bot)
+                    | select(.body | contains("codex-pull-request-review-summary")) ]
+                  | sort_by(.updated_at) | last // empty')
+            if [ -z "$summary" ]; then
+              echo "PR #$num: no Codex review summary, skipping"; continue
+            fi
+            summary_updated=$(jq -r .updated_at <<<"$summary")
+            if [[ ! "$thumbs" > "$summary_updated" ]]; then
+              echo "PR #$num: 👍 predates the latest review summary, skipping"; continue
+            fi
+            # Match literal Markdown backticks around the reviewed commit.
+            # shellcheck disable=SC2016
+            abbrev=$(jq -r .body <<<"$summary" \
+              | { grep -oE '`[0-9a-f]{7,40}`' || true; } | tr -d '`' | sort -u)
+            reviewed=$(for sha in $abbrev; do
+              gh api "repos/$REPO/commits/$sha" --jq .sha 2>/dev/null || true
+            done)
+            if ! grep -qxF "$head" <<<"$reviewed"; then
+              echo "PR #$num: Codex has not reviewed $head, skipping"; continue
+            fi
+
+            # Recheck mutable PR state after the slower review lookups.
+            # GitHub only atomically guards the head SHA, so this narrows but
+            # cannot close the race for base, draft status, and opt-out labels.
+            default=$(gh api "repos/$REPO" --jq .default_branch)
+            live=$(gh api "repos/$REPO/pulls/$num")
+            if ! jq -e '.state == "open" and .draft == false
+                and ([.labels[].name] | index("no-automerge") | not)' <<<"$live" >/dev/null; then
+              echo "PR #$num: closed, draft, or labelled no-automerge, skipping"; continue
+            fi
+            base=$(jq -r .base.ref <<<"$live")
+            if [ "$base" != "$default" ]; then
+              echo "PR #$num: base changed to $base, skipping"; continue
+            fi
+
+            # Review approval is necessary but not sufficient. Require the newest
+            # CI run associated with this PR and exact source commit/branch,
+            # including its latest rerun attempt. Another PR using the same head
+            # can test a different base's merge ref, so its success is insufficient.
+            # Missing, pending, failed, or skipped tests fail closed.
+            source_repo=$(jq -r .head.repo.full_name <<<"$live")
+            source_branch=$(jq -r .head.ref <<<"$live")
+            # The run name captures its target at creation time, rather than
+            # reading mutable PR metadata after a retarget. This disambiguates
+            # old/new targets when GitHub timestamps both events in one second.
+            target_title="Tests for pull request #$num against $base"
+            runs=$(gh api "repos/$REPO/actions/workflows/test-suite.yml/runs?event=pull_request&head_sha=$head&per_page=100" \
+              --paginate --slurp)
+            ci=$(jq -c --arg head "$head" --arg source_repo "$source_repo" \
+              --arg source_branch "$source_branch" --arg retargeted "$retargeted" \
+              --argjson number "$num" --arg target_title "$target_title" '
+                [ .[].workflow_runs[]
+                  | select(.head_sha == $head and .event == "pull_request")
+                  | select(.head_repository.full_name == $source_repo and .head_branch == $source_branch)
+                  | select(any(.pull_requests[]?; .number == $number))
+                  | select(.display_title == $target_title)
+                  | select($retargeted == "" or .created_at >= $retargeted) ]
+                | max_by(.run_number) // null' <<<"$runs")
+            if ! jq -e '.status == "completed" and .conclusion == "success"' <<<"$ci" >/dev/null; then
+              echo "PR #$num: latest test run for $head has not passed, skipping"; continue
+            fi
+            run_id=$(jq -r .id <<<"$ci")
+            # Rerun-failed-jobs can retain a successful job from an earlier
+            # attempt. Require each job's newest execution, not an arbitrary
+            # earlier success or only the jobs retried in the final attempt.
+            jobs=$(gh api "repos/$REPO/actions/runs/$run_id/jobs?filter=all&per_page=100" \
+              --paginate --slurp)
+            if ! jq -e '
+              [ .[].jobs[] ] | group_by(.name)
+              | map(max_by([.run_attempt, .id])) as $jobs
+              | ["Python and browser tests"] | all(. as $name |
+                  any($jobs[]; .name == $name and .status == "completed" and .conclusion == "success"))
+              ' <<<"$jobs" >/dev/null; then
+              echo "PR #$num: the test suite must pass, skipping"; continue
+            fi
+
+            echo "PR #$num: Codex approved $head, squash-merging"
+            gh pr merge "$num" --repo "$REPO" --squash --delete-branch \
+              --match-head-commit "$head" \
+              || echo "PR #$num: merge failed, leaving it open"
+          done
