@@ -52,6 +52,17 @@
 .pdf-page .highlightLayer .highlight-green { background: rgb(70 210 100 / .4); }
 .pdf-page .highlightLayer .highlight-blue { background: rgb(80 160 255 / .38); }
 .pdf-page .highlightLayer .highlight-pink { background: rgb(255 100 170 / .38); }
+.pdf-page .highlightLayer .figure { mix-blend-mode: normal; background: none; border: 2px solid; }
+.pdf-page .highlightLayer .figure.highlight-yellow { border-color: #e0b800; }
+.pdf-page .highlightLayer .figure.highlight-green { border-color: #2fa64c; }
+.pdf-page .highlightLayer .figure.highlight-blue { border-color: #2f7fd6; }
+.pdf-page .highlightLayer .figure.highlight-pink { border-color: #d94b8f; }
+.pdf-page .highlightLayer .figure-draft { border: 2px dashed #555; background: rgb(80 160 255 / .12); }
+.pdf-page .highlightLayer .focused { outline: 3px solid var(--accent); outline-offset: 2px; }
+#pdf-pages.drawing .pdf-page { cursor: crosshair; touch-action: none; user-select: none; }
+#pdf-pages.drawing .textLayer, #pdf-pages.drawing .textLayer * { pointer-events: none; }
+.highlight-entry.focused { outline: 2px solid var(--accent); }
+.marks-paper { border-bottom: 1px solid var(--line); padding-bottom: .5rem; }
 #capture-form textarea { min-height: 6rem; }
 #reader-hint { background: var(--bg); padding: .5rem; }
 /* Text layer adapted from Mozilla PDF.js 6.3.289 (Apache 2.0; vendor/PDFJS-LICENSE). */

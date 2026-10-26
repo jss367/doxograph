@@ -5564,8 +5564,8 @@ const CommandPalette = (() => {
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
-    ['boards', 'reading', 'searches', 'connections', 'compare'].forEach(tool => {
-      const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', searches: 'Open saved searches',
+    ['boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
+      const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
         connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
       add(`tool:${tool}`, 'Action', titles[tool], '', () => document.querySelector(`[data-tool="${tool}"]`).click());
     });

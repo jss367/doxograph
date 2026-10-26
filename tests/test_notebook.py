@@ -5,9 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
+from pypdf import PdfReader, PdfWriter
 
 from doxograph import config, notebook, store
 from doxograph.server import app
+from pdfs import minimal_pdf
 
 
 @pytest.fixture
@@ -107,7 +109,7 @@ def test_highlights_validate_their_paper_and_page_geometry(client):
     data['highlights'] = [highlight]
     response = client.put('/api/notebook', json=data)
     assert response.status_code == 200
-    assert client.get('/api/state').json()['notebook']['highlights'] == [highlight]
+    assert client.get('/api/state').json()['notebook']['highlights'] == [dict(highlight, kind='passage', question=False)]
     data = response.json()
     for change in ({'paper': 'absent'}, {'rects': []}, {'rects': [{'x': 1.5, 'y': 0, 'w': .1, 'h': .1}]},
                    {'color': 'red'}, {'page': 0}):
@@ -122,6 +124,64 @@ def test_highlights_validate_their_paper_and_page_geometry(client):
     data = client.get('/api/notebook').json()
     data['highlights'].append(dict(highlight, id='late'))
     assert client.put('/api/notebook', json=data).status_code == 404
+
+
+def test_figure_marks_and_questions_are_saved_with_highlights(client):
+    seed()
+    data = client.get('/api/notebook').json()
+    figure = {'id': 'fig', 'paper': 'one', 'page': 1, 'kind': 'figure', 'text': '', 'color': 'blue',
+              'rects': [{'x': .1, 'y': .1, 'w': .4, 'h': .3}], 'note': 'Why is the axis logarithmic?', 'question': True}
+    data['highlights'] = [figure]
+    data = client.put('/api/notebook', json=data).json()
+    assert data['highlights'] == [figure]
+    data['highlights'] = [dict(figure, rects=figure['rects'] * 2)]
+    assert client.put('/api/notebook', json=data).status_code == 422
+    data['highlights'] = [dict(figure, kind='table')]
+    assert client.put('/api/notebook', json=data).status_code == 422
+
+
+def test_annotated_pdf_carries_marks_without_changing_the_stored_pdf(client):
+    seed()
+    original = minimal_pdf(['First page.', 'Second page.'])
+    store.pdf_path('one').write_bytes(original)
+    assert client.get('/api/notebook/annotated/one').status_code == 404
+    data = client.get('/api/notebook').json()
+    data['highlights'] = [
+        {'id': 'passage', 'paper': 'one', 'page': 1, 'text': 'First page.', 'color': 'green', 'note': 'Compare later',
+         'rects': [{'x': .1, 'y': .1, 'w': .5, 'h': .02}, {'x': .1, 'y': .12, 'w': .3, 'h': .02}]},
+        {'id': 'figure', 'paper': 'one', 'page': 2, 'kind': 'figure', 'color': 'pink', 'question': True,
+         'note': 'Which model?', 'rects': [{'x': .5, 'y': .5, 'w': .25, 'h': .25}]},
+        {'id': 'replaced', 'paper': 'one', 'page': 9, 'rects': [{'x': 0, 'y': 0, 'w': .1, 'h': .1}]}]
+    client.put('/api/notebook', json=data).raise_for_status()
+    response = client.get('/api/notebook/annotated/one')
+    assert response.status_code == 200 and response.headers['content-type'] == 'application/pdf'
+    assert 'one-annotated.pdf' in response.headers['content-disposition']
+    assert response.headers['x-doxograph-skipped-marks'] == '1'
+    assert store.pdf_path('one').read_bytes() == original
+    pages = PdfReader(io.BytesIO(response.content)).pages
+    [highlight] = [a.get_object() for a in pages[0]['/Annots']]
+    assert highlight['/Subtype'] == '/Highlight' and highlight['/Contents'] == 'Compare later'
+    # 612 x 792 points: x runs from the left, y from the top of the page as drawn.
+    assert [round(float(n), 2) for n in highlight['/Rect']] == [61.2, 681.12, 367.2, 712.8]
+    assert len(highlight['/QuadPoints']) == 16
+    [square] = [a.get_object() for a in pages[1]['/Annots']]
+    assert square['/Subtype'] == '/Square' and square['/Contents'] == 'Question: Which model?'
+    # Both kinds print: flag 4 is Print.
+    assert highlight['/F'] == square['/F'] == 4
+    assert [round(float(n), 2) for n in square['/Rect']] == [306.0, 198.0, 459.0, 396.0]
+
+
+def test_annotated_pdf_follows_page_rotation():
+    writer = PdfWriter()
+    writer.add_blank_page(width=600, height=800)
+    page = writer.pages[0]
+    rect = {'x': 0, 'y': 0, 'w': .5, 'h': .25}
+    assert notebook.page_box(page, rect) == (0, 600, 300, 800)
+    # Turned a quarter clockwise, the top left of the view is the bottom left of the page.
+    page.rotate(90)
+    assert notebook.page_box(page, rect) == (0, 0, 150, 400)
+    page.rotate(90)
+    assert notebook.page_box(page, rect) == (300, 0, 600, 200)
 
 
 def test_history_restores_only_requested_claim_or_note_and_rechecks_quotes(client):

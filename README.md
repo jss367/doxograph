@@ -264,7 +264,7 @@ by Accept; Discard just clears the proposal.
 ## Research without AI
 
 All of these tools work with **Enable AI analysis** turned off. Your workspace
-notes, boards, connections, reading progress, highlights, and saved searches
+notes, boards, connections, reading progress, marks, and saved searches
 belong to the selected workspace and are stored in `notebook.json`. They are
 never sent to a model.
 Long-form research notes and their images are also private to the workspace,
@@ -284,11 +284,21 @@ to a model.
   save. Quotes receive the same local verification as ordinary manual claims.
   Your unfinished claim and its source page stay intact while you scroll or zoom.
   Pages with no selectable text can still be read and transcribed by hand.
-- **Highlights**, in the same reader, mark a selected passage on the page in
-  yellow, green, blue, or pink. Each highlight takes a note of your own, can be
-  turned into a claim with **Capture as claim**, and stays in place at any zoom.
-  The panel lists the page's highlights and links to other highlighted pages.
-  Highlights are stored in the workspace's `notebook.json`; the PDF is not changed.
+- **Marks**, in the same reader, annotate a paper without creating a claim.
+  **Highlight selected passage** marks text on the page; **Mark a figure** lets
+  you drag a box around a figure, table, or any other region. Marks come in
+  yellow, green, blue, or pink and stay in place at any zoom. Each takes a note
+  of your own, and ticking **Open question** turns that note into a question to
+  come back to. A highlighted passage can still become a claim with **Capture as
+  claim**. The panel lists the page's marks and links to other marked pages.
+- **Marks and questions** lists every mark in the workspace by paper, or only
+  the open questions. **Open page** returns to the mark in the reader, and
+  **Mark answered** clears the question but keeps the note.
+- **Export annotated PDF**, in the reader or the Marks list, downloads a copy of
+  the paper with its marks written in as standard PDF highlight and rectangle
+  annotations, carrying your notes and questions, so other PDF readers show
+  them. Marks are stored in the workspace's `notebook.json`; the
+  stored PDF is never changed.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
   reload in the same browser tab. Compare sources, quotes, evidence, and notes
