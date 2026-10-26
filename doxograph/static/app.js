@@ -1129,6 +1129,7 @@ async function pull() {
 // its own handler, which consumes the change and commits its ETag, so the
 // next poll is told nothing happened.
 function corpusChanged() {
+  window.FocusedReview?.sync();
   rerunTextSearch();     // a paper imported since holds the query's words too
   closeSimilar();        // and the claims it was compared against have moved
   // A PDF that arrived while the map is open cites what it cites; the papers
@@ -2569,7 +2570,7 @@ function showView(view) {
   if (view !== 'agreements') V.agreementFocus = null;
 }
 
-function editForm(row) {
+function editForm(row, tagListId = 'taglist') {
   const options = (values, current) => values.map((v) =>
     `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join('');
   const linkRow = (link, i) => `<div class="linkrow" data-link="${i}">
@@ -2591,7 +2592,7 @@ function editForm(row) {
         <div><label>Strength</label><select name="strength">${options(S.strengths, row.strength)}</select></div>
         <div><label>Locator</label><input name="locator" value="${esc(row.locator || '')}" size="12"></div>
         <div><label>Topics (space separated)</label>
-          <input name="tags" value="${esc((row.tags || []).join(' '))}" list="taglist" size="34"></div>
+          <input name="tags" value="${esc((row.tags || []).join(' '))}" list="${esc(tagListId)}" size="34"></div>
       </div>
       <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
       <div><label>Quote (verbatim from the paper)</label>
@@ -2606,7 +2607,7 @@ function editForm(row) {
         <button type="submit" class="primary">Save</button>
       </div>
     </form>
-    <datalist id="taglist">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
+    <datalist id="${esc(tagListId)}">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
   </div>`;
 }
 

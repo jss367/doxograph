@@ -864,6 +864,11 @@ def research_tools_css() -> FileResponse:
     return FileResponse(STATIC / "research-tools.css", media_type="text/css")
 
 
+@app.get("/focused-review.js")
+def focused_review_js() -> FileResponse:
+    return FileResponse(STATIC / "focused-review.js", media_type="text/javascript")
+
+
 @app.get("/favicon.png")
 def favicon() -> FileResponse:
     return FileResponse(STATIC / "favicon.png", media_type="image/png")
