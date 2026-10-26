@@ -2903,26 +2903,74 @@ function mark(passage) {
   return parts.map((part) => (part.mark ? `<mark>${esc(part.text)}</mark>` : esc(part.text))).join('');
 }
 
+const pendingJobActions = new Set();
+
+function openPaper(paper) {
+  captureOpenEditor();
+  closeEditorsNotBelongingTo(paper);
+  showView('claims');
+  // Papers opened from another view may be outside the current label filter.
+  keepLabelFor(paper);
+  V.paper = paper; V.tag = null; V.selectedId = null;
+  syncHash(true);
+  renderAll();
+}
+
 function renderJobs() {
-  const active = (S.jobs || []).filter((j) => j.state !== 'done' || j.detail);
-  $('jobs').innerHTML = active.slice(0, 6).map((j) => `
+  const expanded = new Set([...$('jobs').querySelectorAll('.job-details[open]')]
+    .map((details) => details.dataset.jobId));
+  const active = (S.jobs || []).filter((j) => j.state !== 'done' || j.detail || j.kind === 'import');
+  // Successful imports remain available to open without crowding out failures.
+  active.sort((a, b) => Number(a.state === 'done') - Number(b.state === 'done'));
+  const importStates = { queued: 'Waiting to import…', fetching: 'Importing…', reading: 'Analyzing…',
+                         done: 'Imported', error: 'Import failed' };
+  $('jobs').innerHTML = active.slice(0, 6).map((j) => {
+    const disabled = pendingJobActions.has(`${currentWorkspaceId}:${j.id}`) ? 'disabled' : '';
+    const explained = j.state === 'error' && j.explanation;
+    const status = j.kind === 'import' ? (importStates[j.state] || j.state) : j.state;
+    return `
     <div class="job ${j.state === 'error' ? 'error' : ''}">
-      <span class="lbl">${esc(j.label)}</span>
-      <span class="st">${esc(j.state)}${j.detail ? ': ' + esc(j.detail) : ''}</span>
-      ${['done', 'error'].includes(j.state) ? `<button type="button" class="dismiss-job" data-job-id="${j.id}" aria-label="Dismiss notification for ${esc(j.label)}" title="Dismiss notification">×</button>` : ''}
-    </div>`).join('');
+      <span class="lbl" title="${esc(j.label)}">${esc(j.label)}</span>
+      <span class="st">${esc(status)}${j.detail && !explained ? ': ' + esc(j.detail) : ''}</span>
+      ${explained ? `<p class="job-explanation">${esc(j.explanation)}</p>
+        <details class="job-details" data-job-id="${j.id}" ${expanded.has(String(j.id)) ? 'open' : ''}>
+          <summary>Technical details</summary>${esc(j.detail)}</details>` : ''}
+      ${j.state === 'error' && j.retryable ? `<div class="job-actions">
+        <button type="button" class="retry-job" data-job-id="${j.id}" ${disabled}>Retry</button></div>` : ''}
+      ${j.state === 'done' && j.kind === 'import' && j.key ? `<div class="job-actions">
+        <button type="button" class="open-job" data-job-id="${j.id}" data-paper="${esc(j.key)}" ${disabled}>Open paper</button></div>` : ''}
+      ${['done', 'error'].includes(j.state) ? `<button type="button" class="dismiss-job" data-job-id="${j.id}"
+        aria-label="Dismiss notification for ${esc(j.label)}" title="Dismiss notification" ${disabled}>×</button>` : ''}
+    </div>`;
+  }).join('');
 }
 
 $('jobs').addEventListener('click', async (event) => {
-  const button = event.target.closest('.dismiss-job');
+  const button = event.target.closest('.dismiss-job, .retry-job, .open-job');
   if (!button || button.disabled) return;
+  const workspace = currentWorkspaceId;
+  const actionKey = `${workspace}:${button.dataset.jobId}`;
+  if (pendingJobActions.has(actionKey)) return;
+  pendingJobActions.add(actionKey);
   button.disabled = true;
+  const retry = button.classList.contains('retry-job');
+  const open = button.classList.contains('open-job');
   try {
-    await api(`/api/jobs/${button.dataset.jobId}`, { method: 'DELETE' });
+    if (!open) {
+      await api(`/api/jobs/${button.dataset.jobId}${retry ? '/retry' : ''}`, {
+        method: retry ? 'POST' : 'DELETE', headers: { 'X-Doxograph-Workspace': workspace },
+      });
+    }
     await refresh();
+    if (open && workspace === currentWorkspaceId) {
+      if (S.papers.some((paper) => paper.key === button.dataset.paper)) openPaper(button.dataset.paper);
+      else toast('This paper is no longer in this workspace.', { tone: 'warn' });
+    }
   } catch (error) {
-    button.disabled = false;
-    toast(`Could not dismiss notification: ${error.message}`, { tone: 'warn' });
+    toast(`Could not ${open ? 'open paper' : retry ? 'retry import' : 'dismiss notification'}: ${error.message}`, { tone: 'warn' });
+  } finally {
+    pendingJobActions.delete(actionKey);
+    if (workspace === currentWorkspaceId) renderJobs();
   }
 });
 
@@ -4371,16 +4419,7 @@ $('content').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'open-paper') {
-      captureOpenEditor();
-      closeEditorsNotBelongingTo(paper);
-      showView('claims');
-      // A citation opens a paper from the tensions, agreements and synthesis
-      // views, none of which the label filter narrows, so the paper it lands
-      // on may be one the filter excludes.
-      keepLabelFor(paper);
-      V.paper = paper; V.tag = null; V.selectedId = null;
-      syncHash(true);
-      renderAll();
+      openPaper(paper);
       return;
     }
     if (act === 'tension-focus') {

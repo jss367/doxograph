@@ -116,6 +116,12 @@ for the web app. A
 paper that arrives without its PDF counts as a failure and says so; running
 `add` on it again retries the download and then reads it.
 
+In the web app, failed imports explain what went wrong and offer **Retry**
+directly in the notification when trying again can help. Files that are not
+PDFs must be replaced with a valid PDF. Retry reuses the original reference or
+uploaded PDF for the current server session. Successful imports offer **Open paper**;
+dismiss a notification with **×** when you are done with it.
+
 A paper you already have is recognized from the reference itself, before any
 lookup goes out: re-pasting an arXiv ID, a DOI or a PDF link answers at once
 with the key it is already filed under, rather than querying arXiv or Crossref
