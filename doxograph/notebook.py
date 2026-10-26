@@ -75,6 +75,7 @@ class Connection(Model):
 
 class Notebook(Model):
     revision: int = Field(default=0, ge=0)
+    notes: str = ""
     boards: list[Board] = Field(default_factory=list)
     searches: list[SavedSearch] = Field(default_factory=list)
     reading: list[Reading] = Field(default_factory=list)
@@ -91,6 +92,28 @@ def load() -> dict:
 @router.get("")
 def read_notebook() -> dict:
     return load()
+
+
+class NotesUpdate(Model):
+    notes: str
+    previous: str
+
+
+@router.put("/notes")
+def save_notes(body: NotesUpdate) -> dict:
+    # Autosave changes only notes, preserving concurrent board/queue edits.
+    # Compare the last saved text so another note writer cannot be overwritten.
+    with _lock, store._reentrant_file_lock("notebook", config.locks_dir() / "notebook.lock"):
+        data = load()
+        if data["notes"] == body.notes:
+            # Retrying after a lost response is safe if the text reached disk.
+            return data
+        if data["notes"] != body.previous:
+            raise HTTPException(409, "Workspace notes changed in another window. Copy your text before reloading the saved version.")
+        data["notes"] = body.notes
+        data["revision"] += 1
+        store.write_json(config.data_dir() / "notebook.json", data)
+        return data
 
 
 def references(data: dict):

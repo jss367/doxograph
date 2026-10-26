@@ -16,6 +16,8 @@
 .research-sheet label { display: block; font-size: .85rem; color: var(--muted); margin: .5rem 0; }
 .research-sheet label input:not([type=checkbox]), .research-sheet label textarea, .research-sheet label select { display: block; margin-top: .3rem; max-width: 100%; }
 .research-sheet textarea { width: 100%; min-height: 5rem; resize: vertical; }
+.workspace-notes { max-width: 850px; margin: 0 auto; }
+.workspace-notes #workspace-notes { min-height: 45vh; line-height: 1.7; padding: 1rem; }
 .research-sheet fieldset { border: 1px solid var(--line); border-radius: 6px; padding: .75rem; margin: 1rem 0; }
 .research-sheet blockquote { white-space: pre-wrap; margin: .7rem 0; padding: .6rem .8rem; border-left: 3px solid var(--accent); background: var(--panel); font-size: .9rem; }
 .research-sheet h3 { font-size: 1rem; line-height: 1.5; }
