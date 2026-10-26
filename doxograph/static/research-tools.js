@@ -834,8 +834,12 @@ const ResearchTools = (() => {
     if (name === 'reader') {
       if (el('research-tools').open) {
         if (!await discardDrafts()) return;
+        // close() refuses while busy, so busy is let go for it and taken up
+        // again: the notebook request and the navigation below are still
+        // this operation, and a workspace switch must wait for them.
         setBusy(false); await close();
         if (el('research-tools').open) return;
+        setBusy(true);
       }
       const paper = data.paper, ws = currentWorkspaceId;
       const saved = await mutateNotebook(ws, n => {
@@ -1171,8 +1175,11 @@ const ResearchTools = (() => {
     // the switch would hide its editor and the next edit would overwrite it.
     if (highlightDrafting()) {
       if (!await confirmDialog('Discard the highlight note you are writing before switching workspaces?', {ok:'Discard note'})) return false;
-      highlightEditing = null; highlightDraft = '';
     }
+    // An editor open on a mark of the workspace being left, changed or not,
+    // would otherwise point at a mark the next workspace does not have and
+    // read as an unsaved note from then on.
+    highlightEditing = null; highlightDraft = '';
     return true;
   }
   return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds,markDraftOn,dropMarkDraft,

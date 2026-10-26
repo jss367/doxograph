@@ -378,6 +378,40 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#papers li[data-paper="elsewhere"]').wait_for()
                 assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
                 await page.locator('#workspace').select_option('default')
+                await page.locator('#papers li[data-paper="paper"]').wait_for()
+                # An editor opened and left unchanged is closed by the switch
+                # rather than left pointing at a mark the other workspace lacks,
+                # which would read as an unsaved note from then on.
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await rail.get_by_role('button', name='Edit note', exact=True).click()
+                await rail.locator('[data-highlight-note]').wait_for()
+                await page.locator('#workspace').select_option(other['id'])
+                await page.locator('#papers li[data-paper="elsewhere"]').wait_for()
+                assert await page.locator('#ask').is_hidden()
+                await page.locator('#workspace').select_option('default')
+                await page.locator('#papers li[data-paper="paper"]').wait_for()
+                assert await page.locator('#ask').is_hidden()
+                # Resume from the open Reading queue is one operation through
+                # its notebook request: a workspace switch in that time waits.
+                await page.locator('#papers li[data-paper="paper"]').click()
+                held, release = [], asyncio.Event()
+                async def hold_get(route):
+                    if route.request.method == 'GET' and not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await ready(page)
+                await page.route('**/api/notebook', hold_get)
+                await dialog.get_by_role('button', name='Resume at page 2', exact=True).click()
+                await dialog.wait_for(state='hidden', timeout=5000)
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held
+                await page.locator('#workspace').select_option(other['id'])
+                await page.locator('#toasts .toast', has_text='Finish the current operation').wait_for()
+                assert await page.locator('#workspace').input_value() == 'default'
+                release.set()
+                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '2'")
+                await page.unroute('**/api/notebook')
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#panes.reading').wait_for()
                 assert await rail.locator('[data-highlight-note]').count() == 0
