@@ -205,3 +205,29 @@ def test_subscription_overrides_saved_local_provider(provider, monkeypatch):
     assert seen == [config.model()]
     assert seen[0] != 'local-model'
     assert result['extraction']['provider'] == provider
+
+
+@pytest.mark.parametrize('access,api_provider', [('api', 'ollama'), ('claude_code', 'anthropic')])
+def test_queued_work_captures_both_selections_from_one_snapshot(monkeypatch, access, api_provider):
+    from concurrent.futures import ThreadPoolExecutor
+
+    original = {'ai_provider': access, 'provider': api_provider}
+    changed = {'ai_provider': 'codex', 'provider': 'openai'}
+    reads = []
+
+    def settings():
+        result = changed if reads else original
+        reads.append(result)
+        return result.copy()
+
+    monkeypatch.setattr(config, '_settings', settings)
+    seen = []
+    job = {'ai_provider': 'stale-selection'}
+
+    def work(job):
+        seen.append((config.ai_provider(), config.analysis_config().provider, job['ai_provider']))
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(server, '_pool', pool)
+        server._submit_job(work, job).result(timeout=5)
+    assert seen == [(access, api_provider, access)]

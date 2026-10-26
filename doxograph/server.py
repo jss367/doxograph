@@ -545,11 +545,13 @@ def _prune_jobs() -> None:
         _forget_import(job)
 
 
-def _submit_job(function, *args):
+def _submit_job(function, job: dict, *args):
     """Capture accepted settings before a job waits in the outer worker pool."""
-    with config.use_analysis():
+    with config.use_model_access():
+        # Queue submission is the acceptance point for both selections.
+        _set(job, ai_provider=config.ai_provider())
         context = contextvars.copy_context()
-    return _pool.submit(functools.partial(context.run, function), *args)
+    return _pool.submit(functools.partial(context.run, function), job, *args)
 
 
 def _workspace_job(function):

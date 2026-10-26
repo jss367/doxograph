@@ -73,10 +73,10 @@ class AnalysisConfig:
 _analysis: contextvars.ContextVar[AnalysisConfig | None] = contextvars.ContextVar("analysis", default=None)
 
 
-def analysis_config() -> AnalysisConfig:
+def analysis_config(settings: dict | None = None) -> AnalysisConfig:
     if current := _analysis.get():
         return current
-    settings = _settings()
+    settings = _settings() if settings is None else settings
     provider = settings.get("provider", os.environ.get("DOXOGRAPH_PROVIDER", "anthropic"))
     if provider not in PROVIDERS:
         raise ValueError(f"Unsupported AI provider: {provider}")
@@ -226,10 +226,7 @@ def ai_provider() -> str:
     bound = _analysis_provider.get()
     if bound is not None:
         return bound
-    try:
-        settings = json.loads((base_data_dir() / "settings.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return "api"
+    settings = _settings()
     provider = settings.get("ai_provider") if isinstance(settings, dict) else None
     return provider if provider in ("claude_code", "codex") else "api"
 
@@ -244,9 +241,27 @@ def bind_model_access(work):
     """Keep a running operation on the provider it started with."""
     @functools.wraps(work)
     def bound(*args, **kwargs):
-        with use_ai_provider(ai_provider()), use_analysis():
+        with use_model_access():
             return work(*args, **kwargs)
     return bound
+
+
+@contextlib.contextmanager
+def use_model_access():
+    """Capture access mode and API/local profile from one saved settings read."""
+    settings = _settings()
+    access = _analysis_provider.get()
+    if access is None:
+        saved = settings.get("ai_provider")
+        access = saved if saved in ("claude_code", "codex") else "api"
+    selected = analysis_config(settings)
+    access_token = _analysis_provider.set(access)
+    analysis_token = _analysis.set(selected)
+    try:
+        yield
+    finally:
+        _analysis.reset(analysis_token)
+        _analysis_provider.reset(access_token)
 
 
 @contextlib.contextmanager

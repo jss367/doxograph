@@ -222,3 +222,42 @@ def test_delete_keeps_model_access_through_cleanup(monkeypatch, provider, switch
     other_client.assert_not_called()
     assert real_provider() == 'api'
     assert config.analysis_config().provider == 'openai'
+
+
+@pytest.mark.parametrize('initial_access,initial_api,next_access,next_api', [
+    ('api', 'ollama', 'claude_code', 'anthropic'),
+    ('claude_code', 'anthropic', 'api', 'ollama'),
+])
+def test_deletion_captures_access_and_profile_from_one_read(
+        monkeypatch, initial_access, initial_api, next_access, next_api):
+    paper = store.new_paper('paper')
+    paper['pdf_upload'] = {'file_id': 'file_original'}
+    store.save_paper(paper)
+    original = {'ai_provider': initial_access, 'provider': initial_api}
+    changed = {'ai_provider': next_access, 'provider': next_api}
+    reads = []
+
+    def settings():
+        result = changed if reads else original
+        reads.append(result)
+        return result.copy()
+
+    monkeypatch.setattr(config, '_settings', settings)
+    deletions, clients = [], []
+    fake = SimpleNamespace(files=SimpleNamespace(delete=deletions.append))
+
+    def cleanup_client():
+        clients.append((config.ai_provider(), config.analysis_config().provider))
+        return fake
+
+    monkeypatch.setattr(extract, 'api_client', cleanup_client)
+    other = Mock(side_effect=AssertionError('must not choose a mixed provider'))
+    monkeypatch.setattr(extract, 'client', other)
+    metadata_delete = Mock()
+    monkeypatch.setattr(store, 'delete_paper', metadata_delete)
+    extract.delete_paper('paper')
+
+    assert clients == ([] if initial_access == 'api' else [(initial_access, initial_api)])
+    assert deletions == ([] if initial_access == 'api' else ['file_original'])
+    metadata_delete.assert_called_once_with('paper')
+    other.assert_not_called()
