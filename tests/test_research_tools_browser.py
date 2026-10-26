@@ -1334,3 +1334,88 @@ def test_a_mount_overtaken_while_the_last_reader_is_torn_down_does_not_open(engi
                 assert 'The second paper' in await page.locator('#reader .textLayer').inner_text()
                 assert not errors
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(engine):
+    """A mark note agreed to be discarded for a workspace switch is kept when a
+    later guard refuses the switch; a mark removed in another window takes its
+    editor away and says what was being written; a resume that lands after the
+    reader has moved to another paper does not move them back."""
+    from test_browser import _poll
+    config.set_ai_enabled(False)
+    other = config.create_workspace('Elsewhere')
+    with config.use_workspace(other['id']):
+        store.save_paper(store.new_paper('elsewhere', title='Elsewhere paper'))
+    store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['Recovery depends on conditions.','Second page findings.']))
+    store.save_paper(store.new_paper('second',title='A second paper',authors=['Bo Writer'],year=2025))
+    rect = {'x':.1,'y':.08,'w':.3,'h':.02}
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                data = httpx.get(url+'/api/notebook').json()
+                data['reading'] = [{'paper':'paper','status':'reading','page':2,'bookmarks':[]}]
+                data['highlights'] = [{'id':'one','paper':'paper','page':1,'rects':[rect],'text':'Recovery depends on conditions.','color':'yellow','note':'Saved note'}]
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                rail = page.locator('#content')
+                await rail.locator('.highlight-entry[data-highlight="one"]').wait_for()
+                # A mark note being changed and a claim being written: the
+                # switch asks about the note, then about the claim; declining
+                # the second keeps the workspace, and the note.
+                await rail.locator('.highlight-entry[data-highlight="one"]').get_by_role('button', name='Edit note', exact=True).click()
+                await rail.locator('[data-highlight-note]').fill('Changed note')
+                await page.get_by_role('button', name='Add claim by hand', exact=True).click()
+                await page.locator('form[data-form] [name="text"]').fill('A claim in progress')
+                await page.locator('#workspace').select_option(other['id'])
+                ask = page.locator('#ask')
+                await ask.get_by_role('button', name='Discard note', exact=True).click()
+                # The next question opens in the same dialog straight away.
+                await ask.locator('#ask-title', has_text='discard unsaved edits').wait_for()
+                await ask.get_by_role('button', name='Cancel', exact=True).click()
+                await ask.wait_for(state='hidden')
+                assert await page.locator('#workspace').input_value() == 'default'
+                assert await rail.locator('[data-highlight-note]').input_value() == 'Changed note'
+                assert await page.locator('form[data-form] [name="text"]').input_value() == 'A claim in progress'
+                await page.get_by_role('button', name='Cancel', exact=True).first.click()
+                # The mark is removed in another window while its note is open.
+                data = httpx.get(url+'/api/notebook').json()
+                data['highlights'] = []
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await _poll(page)
+                await rail.locator('[data-highlight-note]').wait_for(state='detached')
+                await page.locator('#toasts .toast', has_text='removed in another window').wait_for()
+                assert 'Changed note' in await page.locator('#toasts .toast', has_text='removed in another window').inner_text()
+                # No phantom draft stands in the way of a switch now.
+                await page.locator('#workspace').select_option(other['id'])
+                await page.locator('#papers li[data-paper="elsewhere"]').wait_for()
+                assert await page.locator('#ask').is_hidden()
+                await page.locator('#workspace').select_option('default')
+                await page.locator('#papers li[data-paper="paper"]').wait_for()
+                # Resume from the Continue card with its notebook request held;
+                # another paper chosen meanwhile is the paper that stands.
+                held, release = [], asyncio.Event()
+                async def hold_get(route):
+                    if route.request.method == 'GET' and not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_get)
+                await page.locator('#continue-reading').get_by_role('button', name='Resume at page 2', exact=True).click()
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held
+                await page.locator('#papers li[data-paper="second"]').click()
+                await page.locator('.paperhead h2', has_text='A second paper').wait_for()
+                release.set()
+                await page.wait_for_timeout(1000)
+                assert 'A second paper' in await page.locator('.paperhead h2').inner_text()
+                assert await page.locator('#reader').is_hidden()
+                await page.unroute('**/api/notebook')
+                assert not errors
+    run_browser(scenario())

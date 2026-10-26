@@ -41,11 +41,23 @@ const ResearchTools = (() => {
   function sync() {
     if (workspace !== currentWorkspaceId) {
       workspace = currentWorkspaceId;
+      // The switch has happened: an editor open on a mark of the workspace
+      // left is closed here and not before, since a later guard can still
+      // refuse the switch after this module has agreed to it.
+      highlightEditing = null; highlightDraft = '';
       claims = new Set(); papers = new Set();
       try {
         const data = JSON.parse(sessionStorage.getItem(`doxograph-selection:${workspace}`) || '{}');
         claims = new Set(data.claims || []); papers = new Set(data.papers || []);
       } catch (_) { /* no saved selection */ }
+    }
+    // A mark removed in another window takes its editor off the rail with
+    // the next poll; the note being written for it is said out loud rather
+    // than kept as an unsaved draft nothing can reach.
+    if (highlightEditing && S.notebook && !(S.notebook.highlights || []).some(h => h.id === highlightEditing)) {
+      const text = highlightDraft.trim();
+      highlightEditing = null; highlightDraft = '';
+      toast(text ? `The mark you were writing a note on was removed in another window. Your note: “${text.length > 160 ? text.slice(0, 160) + '…' : text}”` : 'The mark whose note you had open was removed in another window.', {tone:'warn', timeout:0});
     }
     const available = new Set(S.claims.map(refKey));
     claims = new Set([...claims].filter(k => available.has(k)));
@@ -842,12 +854,15 @@ const ResearchTools = (() => {
         setBusy(true);
       }
       const paper = data.paper, ws = currentWorkspaceId;
+      const from = {paper:V.paper, view:V.view};
       const saved = await mutateNotebook(ws, n => {
         const entry = n.reading.find(r => r.paper === paper);
         if (!entry) { n.reading.push({paper, status:'reading', page:1, bookmarks:[]}); return; }
         if (entry.status !== 'queued') return false;
         entry.status = 'reading';
       });
+      // Moved on while the request was out: the paper chosen since stands.
+      if (V.paper !== from.paper || V.view !== from.view) return;
       const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
       if (reader?.paper === paper && reader.workspace === ws && !V.pdfHidden) { await goToPage(page, data.mark || null); return; }
       askPage(paper, ws, page, data.mark || null);
@@ -1176,10 +1191,9 @@ const ResearchTools = (() => {
     if (highlightDrafting()) {
       if (!await confirmDialog('Discard the highlight note you are writing before switching workspaces?', {ok:'Discard note'})) return false;
     }
-    // An editor open on a mark of the workspace being left, changed or not,
-    // would otherwise point at a mark the next workspace does not have and
-    // read as an unsaved note from then on.
-    highlightEditing = null; highlightDraft = '';
+    // Agreed to, not yet done: the editor is closed by sync() once the
+    // workspace has actually changed, so a guard after this one refusing the
+    // switch leaves the note where it was.
     return true;
   }
   return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds,markDraftOn,dropMarkDraft,
