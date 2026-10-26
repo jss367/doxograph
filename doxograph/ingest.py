@@ -28,6 +28,11 @@ import httpx
 
 from . import config, fingerprint, posts, search, store
 
+
+class InvalidPDFUpload(ValueError):
+    """The uploaded bytes lack a PDF header and cannot recover on retry."""
+
+
 class PaperRemoved(RuntimeError):
     """The paper was deleted while it was being ingested.
 
@@ -1252,7 +1257,7 @@ def ingest_staged_pdf(staging: Path, filename: str) -> tuple[str, bool]:
     try:
         with staging.open("rb") as fh:
             if fh.read(5) != b"%PDF-":
-                raise ValueError(f"{filename} is not a PDF")
+                raise InvalidPDFUpload(f"{filename} is not a PDF")
         # The same file again is the same paper, whatever it says inside, so
         # answer before parsing it or asking Crossref about it.
         digest = pdf_digest(staging)
