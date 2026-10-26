@@ -539,7 +539,10 @@ $('ask-form').addEventListener('submit', (event) => {
 });
 $('ask-cancel').addEventListener('click', () => settleAsk(null));
 $('ask').addEventListener('cancel', () => settleAsk(null));   // Escape
-$('ask').addEventListener('close', () => settleAsk(null));
+// The close event is queued, not sent as the dialog closes, so a second
+// question asked straight after an answer can be open by the time it lands;
+// settling then would close the new question with the old one's answer.
+$('ask').addEventListener('close', () => { if (!$('ask').open) settleAsk(null); });
 
 const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
   askDialog({ title, note, ok }).then((answer) => answer === true);

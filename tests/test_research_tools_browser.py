@@ -125,6 +125,18 @@ async def saved_page(url, number, timeout=6.0):
     raise AssertionError(f'page {number} was not saved; queue reads {reading}')
 
 
+async def queue_status(url, status, timeout=6.0):
+    """Wait for the reading queue's first entry to reach `status`: the dialog
+    closes before the queue is written."""
+    deadline = time.monotonic() + timeout
+    reading = []
+    while time.monotonic() < deadline:
+        reading = httpx.get(url+'/api/notebook').json()['reading']
+        if reading and reading[0]['status'] == status: return
+        await asyncio.sleep(.1)
+    raise AssertionError(f'the queue did not reach {status}; it reads {reading}')
+
+
 async def select_first_line(page, number=1):
     """Drag across the first line of text on page `number` of the open paper."""
     span = page.locator(f'#reader .pdf-page[data-page="{number}"] .textLayer span').first
@@ -149,6 +161,8 @@ def test_paper_reads_beside_its_notes(engine):
     store.add_claim('paper', {'text':'Findings continue.', 'tags':[], 'quote':'Second page findings.', 'locator':'p. 2'})
     store.pdf_path('paper').write_bytes(minimal_pdf(['Recovery depends on conditions.\nWe measured several tasks.','Second page findings.','Third page.']))
     store.save_paper(store.new_paper('plain',title='A paper without a PDF',authors=['Bo Writer'],year=2025))
+    store.save_paper(store.new_paper('second',title='A second paper',authors=['Cy Author'],year=2024))
+    store.pdf_path('second').write_bytes(minimal_pdf(['Another first page.','Another second page.']))
     other = config.create_workspace('Elsewhere')
     with config.use_workspace(other['id']):
         store.save_paper(store.new_paper('elsewhere',title='A paper elsewhere'))
@@ -267,6 +281,29 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.get_by_role('button', name='Previous page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
                 await saved_page(url, 2)
+                # A save held long enough for a move away and back: the page the
+                # reader is on is saved after it, not left at the page it had left.
+                held, release, pages = [], asyncio.Event(), []
+                async def hold_first(route):
+                    if route.request.method == 'PUT':
+                        pages.append(next(r['page'] for r in route.request.post_data_json['reading'] if r['paper'] == 'paper'))
+                        if not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_first)
+                await page.get_by_role('button', name='Next page', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held and pages == [3]
+                await page.get_by_role('button', name='Previous page', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                await page.wait_for_timeout(300)
+                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 2
+                release.set()
+                await saved_page(url, 2)
+                await page.wait_for_timeout(300)
+                assert pages == [3, 2] and httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 2
+                await page.unroute('**/api/notebook')
                 # A highlight note being written survives a redraw and is a draft
                 # until saved; Cancel keeps the note on file.
                 await rail.get_by_role('button', name='Edit note', exact=True).click()
@@ -275,6 +312,15 @@ def test_paper_reads_beside_its_notes(engine):
                 await ready(page)
                 assert await rail.locator('[data-highlight-note]').input_value() == 'An unsaved thought'
                 assert await page.evaluate("ResearchTools.holds()")
+                # Capturing a claim from it takes the note as it is being written.
+                await rail.get_by_role('button', name='Capture as claim', exact=True).click()
+                form = page.locator('form[data-form]')
+                await form.wait_for()
+                assert await form.locator('[name="note"]').input_value() == 'An unsaved thought'
+                assert await form.locator('[name="quote"]').input_value() == 'Recovery depends on conditions.'
+                await form.get_by_role('button', name='Cancel', exact=True).click()
+                await form.wait_for(state='hidden')
+                assert await rail.locator('[data-highlight-note]').input_value() == 'An unsaved thought'
                 await rail.get_by_role('button', name='Cancel', exact=True).click()
                 assert await rail.locator('[data-highlight-note]').count() == 0
                 assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
@@ -308,7 +354,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await dialog.wait_for(state='hidden', timeout=5000)
                 await ready(page)   # the dialog closes before the queue is written
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
-                assert httpx.get(url+'/api/notebook').json()['reading'][0]['status'] == 'reading'
+                await queue_status(url, 'reading')
                 await page.get_by_role('button', name='Reading queue', exact=True).click()
                 await ready(page)
                 await dialog.locator('[data-reading-status]').first.select_option('finished')
@@ -316,7 +362,25 @@ def test_paper_reads_beside_its_notes(engine):
                 await dialog.get_by_role('button', name='Resume at page 2', exact=True).click()
                 await dialog.wait_for(state='hidden', timeout=5000)
                 await ready(page)
+                await page.wait_for_timeout(300)
                 assert httpx.get(url+'/api/notebook').json()['reading'][0]['status'] == 'finished'
+                # Switching workspaces with a highlight note being written asks
+                # first; declining keeps the editor and the workspace.
+                await rail.get_by_role('button', name='Edit note', exact=True).click()
+                await rail.locator('[data-highlight-note]').fill('Not yet saved')
+                await page.locator('#workspace').select_option(other['id'])
+                await _answer(page, 'Cancel')
+                assert await page.locator('#workspace').input_value() == 'default'
+                assert await rail.locator('[data-highlight-note]').input_value() == 'Not yet saved'
+                await page.locator('#workspace').select_option(other['id'])
+                await _answer(page, 'Discard note')
+                await page.locator('#papers li[data-paper="elsewhere"]').wait_for()
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                await page.locator('#workspace').select_option('default')
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#panes.reading').wait_for()
+                assert await rail.locator('[data-highlight-note]').count() == 0
+                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '2'")
                 # Leaving the workspace before a page is saved drops the save.
                 await page.get_by_role('button', name='Next page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
@@ -328,6 +392,34 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#workspace').select_option('default')
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#panes.reading').wait_for()
+                # A page asked for one paper belongs to it: resuming this paper
+                # and then opening another before its PDF arrives leaves the
+                # other on its own first page.
+                await page.locator('#papers li[data-paper="second"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                pdf_held, pdf_release = [], asyncio.Event()
+                async def hold_pdf(route):
+                    pdf_held.append(route); await pdf_release.wait(); await route.continue_()
+                await page.route('**/pdf/paper?*', hold_pdf)
+                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await ready(page)
+                await dialog.get_by_role('button', name='Resume at page 2', exact=True).click()
+                await dialog.wait_for(state='hidden', timeout=5000)
+                await page.locator('.paperhead h2', has_text='A study of recovery').wait_for()
+                deadline = time.monotonic() + 6
+                while not pdf_held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert pdf_held
+                await page.locator('#papers li[data-paper="second"]').click()
+                await page.locator('.paperhead h2', has_text='A second paper').wait_for()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                pdf_release.set()
+                await page.wait_for_timeout(500)
+                assert await page.locator('#reader-page').input_value() == '1'
+                assert await page.locator('#reader-total').inner_text() == 'of 2'
+                await page.unroute('**/pdf/paper?*')
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#panes.reading').wait_for()
+                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '2'")
                 # Removing the highlight asks, because it carries a note.
                 await rail.get_by_role('button', name='Remove', exact=True).click()
                 await _answer(page, 'Remove highlight')
