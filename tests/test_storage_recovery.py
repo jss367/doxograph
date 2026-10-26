@@ -21,7 +21,9 @@ def corpus():
         store.save_paper(store.new_paper(key, title=key))
         store.add_claim(key, {"text": key, "tags": ["old"], "note": "My note"})
     rows = {row["id"]: row for row in store.claim_rows()}
-    ids = list(rows)
+    # Claim rows come newest paper first, and `added` has one-second resolution:
+    # order by paper so that ids[0] is always the first paper's claim.
+    ids = sorted(rows, key=lambda claim_id: rows[claim_id]["paper"])
     store.record_tensions("old", [{"claims": ids, "kind": "tension", "note": "Why"}], rows)
     store.record_agreements("old", [{"claims": ids, "note": "Agreement"}], rows)
     store.record_synthesis("old", "A synthesis", rows)
