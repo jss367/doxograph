@@ -4,8 +4,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 
+from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
 from test_browser import _answer, _server
@@ -36,8 +37,7 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
     excluded = store.add_claim('excluded', {'text': 'Leave this alone.', 'reviewed': False})
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
             errors, external = [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -100,8 +100,8 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
                 assert all(c['reviewed'] for c in data if c['id'] in {first['id'], second['id']})
                 assert next(c for c in data if c['id'] == excluded['id'])['reviewed'] is False
                 assert not errors and not external
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -114,8 +114,7 @@ def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engi
         'quote': 'The source eventually arrives.', 'reviewed': False})
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -148,8 +147,8 @@ def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engi
                     await dialog.get_by_role('button', name='Cancel', exact=True).click()
                 await dialog.get_by_role('button', name='Exit review', exact=True).click()
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -166,8 +165,7 @@ def test_focused_review_ignores_late_passages_and_failed_review_stays_put(engine
     second = store.add_claim('b', {'text': 'The second claim.', 'reviewed': False})
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -213,8 +211,8 @@ def test_focused_review_ignores_late_passages_and_failed_review_stays_put(engine
                 await expect(page.locator('#focus-passage')).to_contain_text(first['quote'])
                 await dialog.get_by_role('button', name='Exit review', exact=True).click()
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -230,8 +228,7 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
         second = store.add_claim('paper', {'text': 'A second claim.', 'reviewed': False})
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1100, 'height': 850})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -303,5 +300,5 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
                 await expect(dialog.locator('.focus-claim h3')).to_have_text('Keep the default unchanged.')
                 await dialog.get_by_role('button', name='Exit review', exact=True).click()
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())

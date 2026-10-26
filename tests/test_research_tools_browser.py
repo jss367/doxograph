@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright
+from browser_support import browser_session, run_browser
 
 from doxograph import config, store
 from pdfs import minimal_pdf
@@ -28,8 +28,7 @@ def test_research_tools_workflow(engine, uuid_available):
     store.add_tag('methods')
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             if not uuid_available:
                 await page.add_init_script("Object.defineProperty(crypto, 'randomUUID', {value: undefined})")
@@ -110,8 +109,8 @@ def test_research_tools_workflow(engine, uuid_available):
                 if not uuid_available:
                     assert all(len(value) == 32 and int(value, 16) >= 0 for value in identifiers)
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 async def saved_page(url, number, timeout=6.0):
@@ -168,8 +167,7 @@ def test_paper_reads_beside_its_notes(engine):
         store.save_paper(store.new_paper('elsewhere',title='A paper elsewhere'))
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             errors, external = [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -434,8 +432,8 @@ def test_paper_reads_beside_its_notes(engine):
                 await rail.locator('.highlight-entry').wait_for(state='hidden')
                 assert not httpx.get(url+'/api/notebook').json()['highlights']
                 assert not errors and not external
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -453,8 +451,7 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
     rect = {'x':.1,'y':.1,'w':.3,'h':.02}
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             errors, external = [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -551,8 +548,8 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                 await page.locator('.paperhead h2', has_text='The other paper').wait_for()
                 await saved_page(url, 22)
                 assert not errors and not external
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -563,8 +560,7 @@ def test_history_restore_and_notebook_conflict(engine):
     claim = store.add_claim('paper', {'text':'Recovery is conditional.', 'tags':[], 'quote':'Recovery depends on conditions.', 'locator':'p. 1', 'note':'Check the task differences.'})
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             errors, external = [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -616,8 +612,8 @@ def test_history_restore_and_notebook_conflict(engine):
                 await ready(page)
                 assert await page.locator('#board-title').input_value() == 'Another window title'
                 assert not errors and not external
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -632,8 +628,7 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
     store.pdf_path('paper').write_bytes(original)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000}, accept_downloads=True)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -718,8 +713,8 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
                 await page.get_by_role('button', name='Mark a figure', exact=True).wait_for()
                 assert len(httpx.get(url+'/api/notebook').json()['highlights']) == 1
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -744,8 +739,7 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
         writer.write(stream)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -816,8 +810,8 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
                 assert failures
                 await page.unroute('**/api/notebook')
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -843,8 +837,7 @@ def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(eng
         writer.write(stream)
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -921,8 +914,8 @@ def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(eng
                 assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 3
                 await page.unroute('**/api/notebook')
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -943,8 +936,7 @@ def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(eng
     rect = {'x':.1,'y':.08,'w':.3,'h':.02}
 
     async def scenario():
-        async with async_playwright() as p:
-            browser = await getattr(p, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440,'height':1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -1010,5 +1002,5 @@ def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(eng
                 await rail.locator('[data-highlight-note]').wait_for()
                 assert await ask.count() == 0 or not await ask.is_visible()
                 assert not errors
-            await browser.close()
-    asyncio.run(scenario())
+
+    run_browser(scenario())
