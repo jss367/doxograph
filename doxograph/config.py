@@ -81,10 +81,13 @@ def analysis_config() -> AnalysisConfig:
         raise ValueError(f"Unsupported AI provider: {provider}")
     profile = settings.get("providers", {}).get(provider, {})
     default = PROVIDERS[provider]
+    base_url = "" if provider == "anthropic" else _validated_base_url(
+        profile.get("base_url", os.environ.get("DOXOGRAPH_BASE_URL", default["base_url"]))
+    )
     return AnalysisConfig(
         provider,
         profile.get("model", os.environ.get("DOXOGRAPH_MODEL", MODEL if provider == "anthropic" else default["model"])),
-        profile.get("base_url", os.environ.get("DOXOGRAPH_BASE_URL", default["base_url"])),
+        base_url,
     )
 
 
@@ -112,6 +115,23 @@ def analysis_session(operation):
     return run
 
 
+def _validated_base_url(base_url: str) -> str:
+    """Validate every configuration source before URLs reach state or storage."""
+    message = "Enter an HTTP or HTTPS base URL without credentials, query, or fragment"
+    base_url = base_url.strip().rstrip("/")
+    try:
+        parsed = urlsplit(base_url)
+        valid = (parsed.scheme in ("http", "https") and parsed.hostname
+                 and parsed.username is None and parsed.password is None
+                 and not parsed.query and not parsed.fragment)
+        parsed.port  # Reject malformed ports with the same secret-free message.
+    except ValueError:
+        raise ValueError(message) from None
+    if not valid:
+        raise ValueError(message)
+    return base_url
+
+
 def save_analysis_settings(provider: str, model: str, base_url: str) -> None:
     if provider not in PROVIDERS:
         raise ValueError("Choose a supported AI provider")
@@ -121,10 +141,7 @@ def save_analysis_settings(provider: str, model: str, base_url: str) -> None:
     if provider == "anthropic":
         base_url = ""
     else:
-        parsed = urlsplit(base_url)
-        if (parsed.scheme not in ("http", "https") or not parsed.hostname
-                or parsed.username or parsed.password or parsed.query or parsed.fragment):
-            raise ValueError("Enter an HTTP or HTTPS base URL without credentials, query, or fragment")
+        base_url = _validated_base_url(base_url)
         if provider == "openai" and base_url != PROVIDERS["openai"]["base_url"]:
             raise ValueError("Use OpenAI-compatible for a custom endpoint")
     with _settings_lock:

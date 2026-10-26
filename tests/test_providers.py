@@ -313,3 +313,35 @@ def test_queued_batch_items_keep_the_original_provider(monkeypatch, entry):
     assert all(json.loads(request.content)["model"] == "local-model" for request in requests)
     # The batch's context does not leak back into the next operation.
     assert config.analysis_config().provider == "openai-compatible"
+
+
+@pytest.mark.parametrize("provider", ["ollama", "openai", "openai-compatible"])
+@pytest.mark.parametrize("endpoint", [
+    "http://user:private-secret@localhost:11434",
+    "http://localhost:11434?key=private-secret",
+    "http://localhost:11434#private-secret",
+])
+def test_environment_endpoint_secrets_are_rejected_before_exposure(monkeypatch, provider, endpoint):
+    monkeypatch.setenv("DOXOGRAPH_PROVIDER", provider)
+    monkeypatch.setenv("DOXOGRAPH_MODEL", "model")
+    monkeypatch.setenv("DOXOGRAPH_BASE_URL", endpoint)
+    requests = transport(monkeypatch, payload())
+    key = paper()
+    for operation in (config.analysis_config, config.analysis_settings, lambda: extract.extract_paper(key)):
+        with pytest.raises(ValueError, match="without credentials, query, or fragment") as caught:
+            operation()
+        assert "private-secret" not in str(caught.value)
+    with TestClient(server.app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False) as c:
+        response = c.get("/api/state")
+        assert response.status_code == 500
+        assert "private-secret" not in response.text
+    assert not requests
+    assert store.load_paper(key)["extraction"] is None
+    assert "private-secret" not in store.paper_path(key).read_text()
+
+
+def test_anthropic_ignores_unused_environment_endpoint(monkeypatch):
+    monkeypatch.setenv("DOXOGRAPH_BASE_URL", "https://user:private-secret@example.com?key=private-secret")
+    settings = config.analysis_settings()
+    assert settings["base_url"] == ""
+    assert "private-secret" not in json.dumps(settings)
