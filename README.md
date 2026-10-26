@@ -170,6 +170,8 @@ separate. The existing corpus is the Default workspace; creating a workspace
 makes an empty, independent corpus with its own papers, topics, research
 context, ledger, tensions, syntheses, and exports. The last selected workspace
 is restored when the page is reopened, unless the address names another one.
+Use **Rename** beside the picker to change any workspace's name, including the
+Default workspace. Its papers, claims, notes, and exports stay in place.
 Papers dropped on the Mac app's Dock icon go to the workspace currently shown
 in its window.
 
@@ -354,7 +356,8 @@ downloaded PDFs and in-progress notes.
 
 For compatibility, the Default workspace uses the data-directory root shown
 below. Named workspaces repeat that same structure under
-`workspaces/<workspace-id>/`; `workspaces.json` records their display names.
+`workspaces/<workspace-id>/`; `workspaces.json` records workspace display names,
+including a custom name for the Default workspace when one is set.
 Command-line commands operate on the Default workspace.
 
 ```text
