@@ -91,6 +91,29 @@ def test_writes_refuse_unreadable_documents(filename, method, route, body):
     assert path.read_text() == "{broken"
 
 
+@pytest.mark.parametrize("filename", ["tensions.json", "agreements.json", "syntheses.json"])
+@pytest.mark.parametrize("method", ["patch", "delete"])
+def test_topic_changes_report_storage_damage_without_changing_saved_work(filename, method):
+    corpus()
+    path = config.data_dir() / filename
+    original = path.read_bytes()
+    path.write_text("{broken")
+    saved_paths = [store.paper_path("first"), store.paper_path("second"),
+                   config.data_dir() / "tags.yaml",
+                   *(config.data_dir() / name for name, _ in SECTIONS if name != "notebook.json")]
+    before = {saved: saved.read_bytes() for saved in saved_paths}
+    with client() as c:
+        kwargs = {"json": {"name": "new"}} if method == "patch" else {}
+        response = getattr(c, method)("/api/tags/old", **kwargs)
+        assert response.status_code == 503
+        assert str(path) in response.json()["detail"]
+        assert {saved: saved.read_bytes() for saved in saved_paths} == before
+        assert not store.tag_change_path().exists()
+        path.write_bytes(original)
+        assert getattr(c, method)("/api/tags/old", **kwargs).status_code == 200
+    assert store.tag_names() == (["new"] if method == "patch" else [])
+
+
 def test_permission_repair_is_retried_without_a_file_change(monkeypatch):
     corpus()
     path = store.tensions_path()

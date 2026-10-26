@@ -1677,6 +1677,8 @@ def create_tag(body: TagBody) -> dict:
 def patch_tag(name: str, body: RenameBody) -> dict:
     try:
         store.rename_tag(name, body.name)
+    except storage.StorageReadError:
+        raise
     except store.PaperReadError:
         raise
     except ValueError as exc:
