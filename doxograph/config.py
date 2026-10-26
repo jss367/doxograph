@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import functools
 import json
 import os
 import re
@@ -11,8 +12,10 @@ import tempfile
 import threading
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # The corpus lives outside the repository by default: it holds downloaded PDFs
 # and in-progress extractions, neither of which belongs in version control.
@@ -39,6 +42,125 @@ except ImportError:
     msvcrt = None
 
 MODEL = os.environ.get("DOXOGRAPH_MODEL", "claude-opus-5")
+
+PROVIDERS = {
+    "anthropic": {"label": "Anthropic", "model": "claude-opus-5", "base_url": ""},
+    "openai": {"label": "OpenAI", "model": "", "base_url": "https://api.openai.com/v1"},
+    "ollama": {"label": "Ollama (local)", "model": "", "base_url": "http://localhost:11434"},
+    "openai-compatible": {"label": "OpenAI-compatible", "model": "", "base_url": "http://localhost:1234/v1"},
+}
+_settings_lock = threading.RLock()
+
+
+def _settings() -> dict:
+    try:
+        value = json.loads((base_data_dir() / "settings.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return {"ai_enabled": False}
+    return value if isinstance(value, dict) else {"ai_enabled": False}
+
+
+@dataclass(frozen=True)
+class AnalysisConfig:
+    provider: str
+    model: str
+    base_url: str
+
+
+_analysis: contextvars.ContextVar[AnalysisConfig | None] = contextvars.ContextVar("analysis", default=None)
+
+
+def analysis_config() -> AnalysisConfig:
+    if current := _analysis.get():
+        return current
+    settings = _settings()
+    provider = settings.get("provider", os.environ.get("DOXOGRAPH_PROVIDER", "anthropic"))
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unsupported AI provider: {provider}")
+    profile = settings.get("providers", {}).get(provider, {})
+    default = PROVIDERS[provider]
+    base_url = "" if provider == "anthropic" else _validated_base_url(
+        profile.get("base_url", os.environ.get("DOXOGRAPH_BASE_URL", default["base_url"]))
+    )
+    return AnalysisConfig(
+        provider,
+        profile.get("model", os.environ.get("DOXOGRAPH_MODEL", MODEL if provider == "anthropic" else default["model"])),
+        base_url,
+    )
+
+
+def analysis_identity() -> list[str]:
+    selected = analysis_config()
+    return [selected.provider, selected.model, selected.base_url]
+
+
+@contextlib.contextmanager
+def use_analysis():
+    """Bind one provider for an operation and its copied worker contexts."""
+    token = _analysis.set(analysis_config())
+    try:
+        yield
+    finally:
+        _analysis.reset(token)
+
+
+def analysis_session(operation):
+    """Keep requests and provenance on one provider even if Settings changes."""
+    @functools.wraps(operation)
+    def run(*args, **kwargs):
+        with use_analysis():
+            return operation(*args, **kwargs)
+    return run
+
+
+def _validated_base_url(base_url: str) -> str:
+    """Validate every configuration source before URLs reach state or storage."""
+    message = "Enter an HTTP or HTTPS base URL without credentials, query, or fragment"
+    base_url = base_url.strip().rstrip("/")
+    try:
+        parsed = urlsplit(base_url)
+        valid = (parsed.scheme in ("http", "https") and parsed.hostname
+                 and parsed.username is None and parsed.password is None
+                 and not parsed.query and not parsed.fragment)
+        parsed.port  # Reject malformed ports with the same secret-free message.
+    except ValueError:
+        raise ValueError(message) from None
+    if not valid:
+        raise ValueError(message)
+    return base_url
+
+
+def save_analysis_settings(provider: str, model: str, base_url: str) -> None:
+    if provider not in PROVIDERS:
+        raise ValueError("Choose a supported AI provider")
+    model, base_url = model.strip(), base_url.strip().rstrip("/")
+    if not model or len(model) > 200:
+        raise ValueError("Enter a model name (at most 200 characters)")
+    if provider == "anthropic":
+        base_url = ""
+    else:
+        base_url = _validated_base_url(base_url)
+        if provider == "openai" and base_url != PROVIDERS["openai"]["base_url"]:
+            raise ValueError("Use OpenAI-compatible for a custom endpoint")
+    with _settings_lock:
+        settings = _settings()
+        settings.setdefault("ai_enabled", True)
+        settings["provider"] = provider
+        settings.setdefault("providers", {})[provider] = {"model": model, "base_url": base_url}
+        _write_json(base_data_dir() / "settings.json", settings)
+
+
+def analysis_settings() -> dict:
+    selected = analysis_config()
+    profiles = _settings().get("providers", {})
+    choices = {name: {**defaults, **profiles.get(name, {})} for name, defaults in PROVIDERS.items()}
+    choices[selected.provider].update(model=selected.model, base_url=selected.base_url)
+    return {"provider": selected.provider, "model": selected.model, "base_url": selected.base_url,
+            "providers": choices,
+            "has_key": api_key(selected.provider) is not None}
+
 
 # How many model calls a per-topic or per-paper pass keeps in flight. The
 # passes are independent per item and the merges tolerate any interleaving,
@@ -79,7 +201,10 @@ def ai_enabled() -> bool:
 
 
 def set_ai_enabled(enabled: bool) -> None:
-    _write_json(base_data_dir() / "settings.json", {"ai_enabled": enabled})
+    with _settings_lock:
+        settings = _settings()
+        settings["ai_enabled"] = enabled
+        _write_json(base_data_dir() / "settings.json", settings)
 
 
 def require_ai_enabled() -> None:
@@ -334,21 +459,25 @@ def ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-def api_key() -> str | None:
-    """Resolve an Anthropic API key.
+def api_key(provider: str = "anthropic") -> str | None:
+    """Resolve only the selected provider's key from the environment or file.
 
     Falls back to a shell-style credentials file so the server can start from a
     launcher that does not inherit an exported key. The SDK's own resolution
-    (env var, then `ant auth login` profile) still applies when this returns
-    None, so a missing key here is not necessarily an error.
+    (env var, then `ant auth login` profile) still applies to Anthropic when
+    this returns None. Local endpoints can operate without a key.
     """
-    key = os.environ.get("ANTHROPIC_API_KEY")
+    variable = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+                "openai-compatible": "DOXOGRAPH_API_KEY"}.get(provider)
+    if variable is None:
+        return None
+    key = os.environ.get(variable)
     if key:
         return key
     cred = Path(os.environ.get("DOXOGRAPH_CREDENTIALS_FILE", Path.home() / ".credentials")).expanduser()
     if cred.is_file():
         match = re.search(
-            r"^\s*(?:export\s+)?ANTHROPIC_API_KEY\s*=\s*[\"']?([^\"'\s]+)",
+            rf"^\s*(?:export\s+)?{variable}\s*=\s*[\"']?([^\"'\s]+)",
             cred.read_text(encoding="utf-8", errors="replace"),
             re.MULTILINE,
         )

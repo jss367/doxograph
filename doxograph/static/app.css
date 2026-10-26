@@ -40,6 +40,11 @@ header .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap
   border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .2); }
 .settings-menu[hidden] { display: none; }
+#ai-provider-form { display: grid; gap: .35rem; margin-top: .65rem; }
+#ai-provider-form label { font-size: .82rem; }
+#ai-provider-form input, #ai-provider-form select { width: 100%; box-sizing: border-box; }
+#ai-endpoint-row label { display: block; margin-bottom: .35rem; }
+#ai-provider-save { justify-self: start; }
 .settings-head { display: flex; align-items: center; justify-content: space-between;
   margin-bottom: .65rem; }
 .settings-head h2 { margin: 0; font-size: .95rem; }

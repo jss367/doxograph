@@ -382,8 +382,20 @@ const ResearchTools = (() => {
     page.el.style.width = `${Math.floor(page.base.w * reader.scale)}px`;
     page.el.style.height = `${Math.floor(page.base.h * reader.scale)}px`;
   }
+  // A page scrolled far away gives back its canvas and the caches PDF.js keeps
+  // behind it (operator lists, decoded images), so a long paper costs what is
+  // near the viewport. A page with a selection on it stays: the passage being
+  // highlighted must not vanish under the pointer.
+  function pageSelected(page) {
+    const selection = window.getSelection();
+    return Boolean(selection?.rangeCount) && selection.containsNode(page.el, true);
+  }
   function clearPage(page) {
+    if (page.rendering || pageSelected(page)) return;
+    for (const canvas of page.el.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
     page.el.innerHTML = ''; page.el.classList.add('pending'); page.renderedAt = 0;
+    page.text = null;
+    page.pdfPage?.cleanup();
   }
   function pageNear(page) {
     const scroller = el('pdf-scroll');

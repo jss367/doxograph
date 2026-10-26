@@ -25,7 +25,7 @@ from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from . import (__version__, bib, cites, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook)
+               search, store, notebook, research_notes)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -60,6 +60,7 @@ async def _lifespan(_: FastAPI):
 
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
+app.include_router(research_notes.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
 
 
@@ -492,13 +493,16 @@ def _import_failed(job: dict, exc: Exception) -> None:
     elif isinstance(exc, (httpx.RequestError, anthropic.APIConnectionError)):
         explanation = "The service could not be reached. Check your connection, then retry."
     elif isinstance(exc, anthropic.AuthenticationError):
-        explanation = "AI analysis could not sign in. Check your Anthropic credentials, then retry."
+        explanation = "AI analysis could not sign in. Check the selected provider's credentials, then retry."
     elif isinstance(exc, (httpx.HTTPStatusError, anthropic.APIStatusError)):
         status = exc.response.status_code
         if status == 429:
             explanation = "The service is receiving too many requests. Wait a moment, then retry."
         elif status in (401, 403):
-            explanation = "The service refused access. You may need to download and upload the PDF yourself."
+            if job["state"] == "reading":
+                explanation = "AI analysis could not sign in. Check the selected provider's credentials, then retry."
+            else:
+                explanation = "The service refused access. You may need to download and upload the PDF yourself."
         elif status == 404:
             explanation = "The paper could not be found at this address. Check the reference, then retry."
         else:
@@ -535,9 +539,17 @@ def _prune_jobs() -> None:
         _forget_import(job)
 
 
+def _submit_job(function, *args):
+    """Capture accepted settings before a job waits in the outer worker pool."""
+    with config.use_analysis():
+        context = contextvars.copy_context()
+    return _pool.submit(functools.partial(context.run, function), *args)
+
+
 def _workspace_job(function):
     """Keep a queued job in the corpus from which it was submitted."""
     @functools.wraps(function)
+    @config.analysis_session
     def wrapped(job: dict, *args, **kwargs):
         with config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)):
             return function(job, *args, **kwargs)
@@ -737,7 +749,11 @@ def _run_retag(job: dict, keys: list[str]) -> None:
 # --- request bodies -------------------------------------------------------
 
 class SettingsBody(BaseModel):
-    ai_enabled: bool
+    model_config = {"extra": "forbid"}
+    ai_enabled: bool | None = None
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
 
 
 class IngestBody(BaseModel):
@@ -953,6 +969,16 @@ def research_tools_css() -> FileResponse:
     return FileResponse(STATIC / "research-tools.css", media_type="text/css")
 
 
+@app.get("/research-notes.js")
+def research_notes_js() -> FileResponse:
+    return FileResponse(STATIC / "research-notes.js", media_type="text/javascript")
+
+
+@app.get("/research-notes.css")
+def research_notes_css() -> FileResponse:
+    return FileResponse(STATIC / "research-notes.css", media_type="text/css")
+
+
 @app.get("/focused-review.js")
 def focused_review_js() -> FileResponse:
     return FileResponse(STATIC / "focused-review.js", media_type="text/javascript")
@@ -1090,8 +1116,7 @@ def _build_state() -> dict:
         "strengths": config.CLAIM_STRENGTHS,
         "relations": config.LEDGER_RELATIONS,
         "data_dir": str(config.data_dir()),
-        "model": config.MODEL,
-        "has_key": config.api_key() is not None,
+        **config.analysis_settings(),
         "ai_enabled": config.ai_enabled(),
     }
 
@@ -1115,9 +1140,10 @@ def state(request: Request) -> Response:
     # Credentials and installation settings live outside the corpus, but
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
+    settings_signature = hashlib.sha256(json.dumps(config.analysis_settings(), sort_keys=True).encode()).hexdigest()
     workspace_record = config.get_workspace()
     name_signature = hashlib.sha1(workspace_record["name"].encode()).hexdigest()
-    signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}-{int(ai_enabled)}-{name_signature}"
+    signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}-{name_signature}"
     with _state_cache_lock:
         cached = _state_cache.get(workspace)
     # Retry unreadable files even when their stat is unchanged: a temporary
@@ -1144,7 +1170,23 @@ def state(request: Request) -> Response:
 
 @app.put("/api/settings")
 def update_settings(body: SettingsBody) -> dict:
-    config.set_ai_enabled(body.ai_enabled)
+    changing_provider = any(value is not None for value in (body.provider, body.model, body.base_url))
+    if changing_provider:
+        current = config.analysis_config()
+        provider = body.provider if body.provider is not None else current.provider
+        defaults = config.analysis_settings()["providers"].get(provider, {})
+        try:
+            config.save_analysis_settings(
+                provider,
+                body.model if body.model is not None else defaults.get("model", ""),
+                body.base_url if body.base_url is not None else defaults.get("base_url", ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if body.ai_enabled is not None:
+        config.set_ai_enabled(body.ai_enabled)
+    if changing_provider:
+        return {"ai_enabled": config.ai_enabled(), **config.analysis_settings()}
     return {"ai_enabled": config.ai_enabled()}
 
 
@@ -1183,9 +1225,9 @@ def retry_import(job_id: int) -> dict:
         job.update(state="queued", detail="", explanation="", started=store.now())
     try:
         if "ref" in source:
-            _pool.submit(_run_ingest, job, source["ref"], source["extract"])
+            _submit_job(_run_ingest, job, source["ref"], source["extract"])
         else:
-            _pool.submit(_run_upload, job, source["staged"], source["filename"], source["extract"])
+            _submit_job(_run_upload, job, source["staged"], source["filename"], source["extract"])
     except Exception:
         _set(job, state="error", **previous)
         raise HTTPException(503, "The retry could not start. Please try again.")
@@ -1258,7 +1300,7 @@ def api_ingest(body: IngestBody) -> dict:
             known.append({"ref": ref.raw, "key": settled})
             continue
         job = _new_import_job(ref.value, do_extract, ref=ref)
-        _pool.submit(_run_ingest, job, ref, do_extract)
+        _submit_job(_run_ingest, job, ref, do_extract)
         queued += 1
     return {"queued": queued, "known": known, "unknown": unknown}
 
@@ -1295,7 +1337,7 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
             continue
         job = _new_import_job(name, do_extract, staged=staged, filename=name)
         try:
-            _pool.submit(_run_upload, job, staged, name, do_extract)
+            _submit_job(_run_upload, job, staged, name, do_extract)
         except BaseException:
             with _jobs_lock:
                 _jobs.pop(job["id"], None)
@@ -1340,7 +1382,7 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
     if not store.paper_path(key).exists():
         raise HTTPException(404, f"no paper {key}")
     job = _new_job(key)
-    _pool.submit(_run_extract, job, key, keep_reviewed)
+    _submit_job(_run_extract, job, key, keep_reviewed)
     return {"queued": job["id"]}
 
 
@@ -1452,7 +1494,7 @@ def retag(body: RetagBody) -> dict:
     if not keys:
         return {"queued": 0}
     job = _new_job(f"retag {len(keys)} papers")
-    _pool.submit(_run_retag, job, keys)
+    _submit_job(_run_retag, job, keys)
     return {"queued": len(keys)}
 
 
@@ -1545,7 +1587,7 @@ def find_tensions(body: TensionsBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"tensions in {len(topics)} topics")
-    _pool.submit(_run_tensions, job, topics, body.force)
+    _submit_job(_run_tensions, job, topics, body.force)
     return {"queued": len(topics)}
 
 
@@ -1578,7 +1620,7 @@ def find_agreements(body: AgreementsBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"agreements in {len(topics)} topics")
-    _pool.submit(_run_agreements, job, topics, body.force)
+    _submit_job(_run_agreements, job, topics, body.force)
     return {"queued": len(topics)}
 
 
@@ -1618,7 +1660,7 @@ def synthesize(body: SynthesesBody) -> dict:
     if not topics:
         return {"queued": 0}
     job = _new_job(f"synthesis of {len(topics)} topics")
-    _pool.submit(_run_syntheses, job, topics, body.force)
+    _submit_job(_run_syntheses, job, topics, body.force)
     return {"queued": len(topics)}
 
 

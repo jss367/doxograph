@@ -1410,6 +1410,7 @@ let switchSeq = 0;
 
 async function switchWorkspace(workspaceId) {
   if (workspaceId === currentWorkspaceId && !workspaceSwitch) return;
+  if (!await ResearchNotes.beforeWorkspaceSwitch()) { renderWorkspacePicker(); return; }
   if (!await ResearchTools.beforeWorkspaceSwitch()) { renderWorkspacePicker(); return; }
   const seq = ++switchSeq;
   // The picker is a native select, so the browser has already moved it to the
@@ -1879,7 +1880,7 @@ function renderStats() {
   const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
   if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
   if (S.ai_enabled === false) bits.push('AI analysis off');
-  else if (!S.has_key) bits.push('no API key found');
+  else if (!S.has_key && !['ollama', 'openai-compatible'].includes(S.provider)) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
 }
 
@@ -3836,8 +3837,11 @@ function graphFit() {
   const main = $('main');
   // Fill what is left of the pane below the header, so the map is on screen
   // whole rather than scrolling; never so short that it is useless.
-  const top = wrap.getBoundingClientRect().top - main.getBoundingClientRect().top;
-  const height = Math.max(288, main.clientHeight - top - 16);
+  const mainRect = main.getBoundingClientRect();
+  const top = wrap.getBoundingClientRect().top - mainRect.top + main.scrollTop;
+  // A wrapped header can put the pane's CSS bottom below the actual viewport.
+  const visibleHeight = Math.min(main.clientHeight, window.innerHeight - mainRect.top);
+  const height = Math.max(288, visibleHeight - top - 16);
   wrap.style.height = `${height}px`;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(wrap.clientWidth * dpr);
@@ -3932,6 +3936,7 @@ function renderGraph() {
     // wrapper's box as it was, which would never fire an observer on it.
     GRAPH.observer = new ResizeObserver(() => graphFit());
     GRAPH.observer.observe($('main'));
+    GRAPH.observer.observe(document.querySelector('header'));
     GRAPH.autofit = true;
     graphFit();
     graphHeat(1);
@@ -5134,6 +5139,53 @@ $('ai-enabled').addEventListener('change', async () => {
   }
 });
 
+let providerDrafts = {};
+
+function showProviderFields() {
+  const provider = $('ai-provider').value;
+  const profile = providerDrafts[provider] || S.providers?.[provider] || {};
+  $('ai-model').value = profile.model || '';
+  $('ai-base-url').value = profile.base_url || '';
+  $('ai-endpoint-row').hidden = ['anthropic', 'openai'].includes(provider);
+  $('ai-base-url').required = !['anthropic', 'openai'].includes(provider);
+  const help = {
+    anthropic: 'Uses ANTHROPIC_API_KEY from your environment or ~/.credentials. Sends PDFs to Anthropic.',
+    openai: 'Uses OPENAI_API_KEY from your environment or ~/.credentials. Sends paper text to OpenAI. Choose a model that supports structured output.',
+    ollama: 'Start Ollama and download a model first. Paper text goes only to this endpoint. Use a localhost URL and a locally downloaded model to keep analysis on your Mac. Long papers may exceed the local context limit.',
+    'openai-compatible': 'For LM Studio or another endpoint supporting chat completions with JSON Schema. Include /v1 in the URL when required. Uses DOXOGRAPH_API_KEY if set; local servers can run without a key. Paper text goes to this endpoint.',
+  };
+  $('ai-provider-help').textContent = help[provider] || '';
+}
+
+let editingProvider = 'anthropic';
+$('ai-provider').addEventListener('change', () => {
+  providerDrafts[editingProvider] = { model: $('ai-model').value, base_url: $('ai-base-url').value };
+  editingProvider = $('ai-provider').value;
+  showProviderFields();
+});
+$('ai-provider-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('ai-provider-save');
+  button.disabled = true;
+  $('ai-settings-status').textContent = 'Saving…';
+  try {
+    const settings = await api('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: $('ai-provider').value, model: $('ai-model').value,
+        base_url: $('ai-base-url').value }),
+    });
+    Object.assign(S, settings);
+    stateEtag = null;
+    providerDrafts = {};
+    $('ai-settings-status').textContent = 'Provider saved. New analysis uses this selection.';
+    renderStats();
+  } catch (error) {
+    $('ai-settings-status').textContent = `Could not save: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 function syncThemeControls() {
   const appearance = document.querySelector(`input[name="appearance"][value="${themeSettings.appearance}"]`);
   const colors = document.querySelector(`input[name="color-theme"][value="${themeSettings.colors}"]`);
@@ -5151,6 +5203,10 @@ function openSettings() {
   closePaperMenu();
   syncThemeControls();
   syncAnalysisControls();
+  providerDrafts = {};
+  editingProvider = S.provider || 'anthropic';
+  $('ai-provider').value = editingProvider;
+  showProviderFields();
   $('settings-menu').hidden = false;
   $('btn-settings').setAttribute('aria-expanded', 'true');
 }
@@ -5884,6 +5940,8 @@ async function boot() {
   // URL naming Research — a bookmark, or a reload of the page while on it —
   // with an active nav entry and a blank main pane. Draw it once here.
   if (V.view === 'research') renderContent();
+  const noteId = new URLSearchParams(location.search).get('note');
+  if (noteId) await ResearchNotes.open(noteId);
   setInterval(async () => {
     if (document.hidden || polling) return;
     polling = true;
