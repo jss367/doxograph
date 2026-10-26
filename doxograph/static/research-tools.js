@@ -314,10 +314,12 @@ const ResearchTools = (() => {
     reader.page = Math.max(1, Math.min(reader.page, doc.numPages));
     el('reader-total').textContent = `of ${doc.numPages}`;
     el('reader-page').max = doc.numPages;
-    // Reserve every page's real dimensions so lazy rendering never shifts the document.
-    const active = reader;
-    active.pages = await Promise.all(Array.from({length:doc.numPages}, (_, i) => doc.getPage(i + 1)));
+    // Show the requested page before obtaining metadata for the rest of the PDF.
+    const active = reader, page = await doc.getPage(reader.page);
     if (reader !== active) return;
+    const viewport = page.getViewport({scale:1});
+    active.defaultSize = {width:viewport.width, height:viewport.height, unit:page.userUnit || 1};
+    active.sizes = new Map([[active.page, active.defaultSize]]);
     await layoutReader();
     rememberContinuation(reader.paper);
     renderContinuation();
@@ -377,19 +379,54 @@ const ResearchTools = (() => {
       scheduleReaderProgress();
     }
   }
-  async function renderReaderPage(active, view) {
-    if (view.rendering || view.rendered) return;
+  function renderReaderPage(active, view) {
+    if (view.rendered) return Promise.resolve();
+    if (!view.renderPromise) {
+      view.renderPromise = renderReaderView(active, view).finally(() => { view.renderPromise = null; });
+    }
+    return view.renderPromise;
+  }
+  function sizeReaderPage(view, size, scale) {
+    view.container.style.width = `${size.width * scale}px`;
+    view.container.style.height = `${size.height * scale}px`;
+    view.container.style.setProperty('--total-scale-factor', scale * size.unit);
+    view.container.style.setProperty('--scale-round-x', '1px');
+    view.container.style.setProperty('--scale-round-y', '1px');
+  }
+  function measureReaderPage(active, view, page) {
+    const viewport = page.getViewport({scale:1});
+    const size = {width:viewport.width, height:viewport.height, unit:page.userUnit || 1};
+    active.sizes.set(view.number, size);
+    const scroll = view.container.parentElement.parentElement;
+    const anchor = active.views[active.page - 1].container;
+    const before = anchor.getBoundingClientRect().top;
+    const maxOffset = scroll.scrollHeight - scroll.clientHeight;
+    const atEnd = !active.navigation && active.page === active.views.length && maxOffset > 2 && scroll.scrollTop >= maxOffset - 2;
+    const pinned = active.navigation && Math.abs(scroll.scrollTop - active.navigation.top) < 2;
+    sizeReaderPage(view, size, active.scale);
+    // Refining an offscreen estimate must not move the passage being read.
+    if (atEnd) scroll.scrollTop = scroll.scrollHeight;
+    else scroll.scrollTop += anchor.getBoundingClientRect().top - before;
+    if (pinned) active.navigation.top = scroll.scrollTop;
+  }
+  async function renderReaderView(active, view) {
     view.rendering = true;
-    const {container, viewport, page} = view;
-    const canvas = document.createElement('canvas');
-    const layer = document.createElement('div'); layer.className = 'textLayer';
-    const highlights = document.createElement('div'); highlights.className = 'highlightLayer';
-    container.replaceChildren(canvas, highlights, layer);
-    renderHighlightLayer(view);
-    const ratio = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
-    canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
+    const {container} = view;
     try {
+      const page = await active.document.getPage(view.number);
+      if (reader !== active || !container.isConnected) return;
+      measureReaderPage(active, view, page);
+      if (!view.nearby && active.page !== view.number) return;
+      view.page = page;
+      const viewport = page.getViewport({scale:active.scale});
+      const canvas = document.createElement('canvas');
+      const layer = document.createElement('div'); layer.className = 'textLayer';
+      const highlights = document.createElement('div'); highlights.className = 'highlightLayer';
+      container.replaceChildren(canvas, highlights, layer);
+      renderHighlightLayer(view);
+      const ratio = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
+      canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
       view.renderTask = page.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio,0,0,ratio,0,0]});
       await view.renderTask.promise;
       const content = await page.getTextContent();
@@ -398,10 +435,10 @@ const ResearchTools = (() => {
       await view.textLayer.render();
       view.hasText = content.items.some(item => item.str?.trim());
       view.rendered = true;
-      if (active.page === page.pageNumber) updateReaderControls();
+      if (active.page === view.number) updateReaderControls();
     } catch (error) {
       if (reader === active && container.isConnected && error.name !== 'RenderingCancelledException' && error.name !== 'AbortException') {
-        message(`Could not display page ${page.pageNumber}: ${error.message}`, true);
+        message(`Could not display page ${view.number}: ${error.message}`, true);
       }
     } finally {
       view.rendering = false;
@@ -423,21 +460,20 @@ const ResearchTools = (() => {
     view.page.cleanup();
     view.renderTask = null;
     view.textLayer = null;
+    view.page = null;
   }
   async function layoutReader() {
     const active = reader;
     stopReaderViews();
-    const scale = Number(el('reader-zoom').value);
+    active.scale = Number(el('reader-zoom').value);
     const pages = el('pdf-pages'), scroll = pages.parentElement;
-    active.views = active.pages.map(page => {
-      const viewport = page.getViewport({scale});
-      const container = document.createElement('div');
-      container.className = 'pdf-page'; container.dataset.page = page.pageNumber;
-      container.setAttribute('role', 'group'); container.setAttribute('aria-label', `Page ${page.pageNumber}`);
-      container.style.width = `${viewport.width}px`; container.style.height = `${viewport.height}px`;
-      container.style.setProperty('--total-scale-factor', viewport.scale * (page.userUnit || 1));
-      container.style.setProperty('--scale-round-x', '1px'); container.style.setProperty('--scale-round-y', '1px');
-      return {page, viewport, container};
+    active.views = Array.from({length:active.document.numPages}, (_, i) => {
+      const number = i + 1, container = document.createElement('div');
+      container.className = 'pdf-page'; container.dataset.page = number;
+      container.setAttribute('role', 'group'); container.setAttribute('aria-label', `Page ${number}`);
+      const view = {number, container};
+      sizeReaderPage(view, active.sizes.get(number) || active.defaultSize, active.scale);
+      return view;
     });
     pages.replaceChildren(...active.views.map(view => view.container));
     const views = active.views;
@@ -465,8 +501,8 @@ const ResearchTools = (() => {
         const atEnd = scroll.scrollTop >= maxOffset - 2;
         const view = keepTarget ? active.views[navigation.page - 1] : atEnd ? active.views.at(-1)
           : active.views.find(view => view.container.getBoundingClientRect().bottom > readingLine) || active.views.at(-1);
-        if (active.page !== view.page.pageNumber) {
-          active.page = view.page.pageNumber;
+        if (active.page !== view.number) {
+          active.page = view.number;
           updateReaderControls();
         }
       });
@@ -495,7 +531,7 @@ const ResearchTools = (() => {
   function renderHighlightLayer(view) {
     const layer = view.container.querySelector('.highlightLayer');
     if (!layer) return;
-    const here = notebook.highlights.filter(h => h.paper === reader.paper && h.page === view.page.pageNumber);
+    const here = notebook.highlights.filter(h => h.paper === reader.paper && h.page === view.number);
     const percent = value => `${(value * 100).toFixed(3)}%`;
     layer.innerHTML = here.flatMap(h => h.rects.map(r =>
       `<div class="highlight-${html(h.color)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');

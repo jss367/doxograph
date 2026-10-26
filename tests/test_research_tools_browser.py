@@ -589,3 +589,75 @@ def test_short_final_pages_preserve_scroll_and_navigation_targets(engine, fits):
                 assert not errors
             await browser.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_large_pdf_opens_before_offscreen_metadata_and_preserves_position(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('large', title='Large document'))
+    writer = PdfWriter()
+    writer.add_page(PdfReader(io.BytesIO(minimal_pdf('The requested page is readable.'))).pages[0])
+    for number in range(2, 501):
+        writer.add_blank_page(width=612, height=1000 if number == 2 else 792)
+    with store.pdf_path('large').open('wb') as stream:
+        writer.write(stream)
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.evaluate('''async () => {
+                    const pdfjs = await import('/vendor/pdf.min.mjs');
+                    pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
+                    const doc = await pdfjs.getDocument({url:'/pdf/large?inline=1', isEvalSupported:false}).promise;
+                    const prototype = Object.getPrototypeOf(doc), getPage = prototype.getPage;
+                    await doc.loadingTask.destroy();
+                    window.pdfMetadataProbe = {calls:[], released:false};
+                    prototype.getPage = function(number) {
+                        const probe = window.pdfMetadataProbe;
+                        probe.calls.push(number);
+                        if (number === 2 && !probe.released) {
+                            return new Promise(resolve => {
+                                probe.release = () => { probe.released = true; resolve(getPage.call(this, number)); };
+                            });
+                        }
+                        return getPage.call(this, number);
+                    };
+                }''')
+                await page.locator('#papers li[data-paper="large"]').click()
+                await page.get_by_role('button', name='Read & capture', exact=True).click()
+                await expect(page.locator('.pdf-page[data-page="1"] .textLayer span').first).to_have_text('The requested page is readable.')
+                await ready(page)
+                await page.wait_for_function("typeof window.pdfMetadataProbe.release === 'function'")
+                calls = await page.evaluate('window.pdfMetadataProbe.calls')
+                assert len(calls) < 10 and 500 not in calls
+                await expect(page.locator('.pdf-page')).to_have_count(500)
+
+                await page.locator('#reader-page').fill('500')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await ready(page)
+                await expect(page.locator('#reader-page')).to_have_value('500')
+                assert len(await page.evaluate('window.pdfMetadataProbe.calls')) < 15
+                last = page.locator('.pdf-page[data-page="500"]')
+                before = await last.evaluate('node => node.getBoundingClientRect().top')
+                await page.evaluate('window.pdfMetadataProbe.release()')
+                await page.wait_for_function("document.querySelector('.pdf-page[data-page=\"2\"]').style.height === '1300px'")
+                after = await last.evaluate('node => node.getBoundingClientRect().top')
+                assert abs(after - before) < 2
+                await expect(page.locator('#reader-page')).to_have_value('500')
+                await page.wait_for_function("async () => (await (await fetch('/api/notebook')).json()).reading[0].page === 500")
+                await page.get_by_role('button', name='Close research tools').click()
+                await page.locator('#research-tools').wait_for(state='hidden')
+                start = len(await page.evaluate('window.pdfMetadataProbe.calls'))
+                await page.get_by_role('button', name='Read & capture', exact=True).click()
+                await ready(page)
+                await expect(page.locator('#reader-page')).to_have_value('500')
+                assert (await page.evaluate('window.pdfMetadataProbe.calls'))[start] == 500
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())
