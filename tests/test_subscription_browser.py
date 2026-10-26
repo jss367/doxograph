@@ -68,3 +68,45 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
 
     with _server() as url:
         asyncio.run(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('answer,turns', [('x' * 30000, 3), ('Short answer', 20), ('x' * 32001, 1)],
+                         ids=['total-characters', 'message-count', 'single-answer-length'])
+def test_long_chat_keeps_draft_and_explains_how_to_start_over(answer, turns):
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            requests = []
+
+            async def respond(route):
+                requests.append(route.request.post_data_json['messages'])
+                await route.fulfill(content_type='application/json', body=json.dumps({
+                    'answer': answer, 'model': 'test', 'assistant': 'Claude'}))
+
+            await page.route('**/api/papers/study/chat', respond)
+            await page.goto(url)
+            await page.locator('#papers [data-paper="study"]').click()
+            await page.get_by_role('button', name='Chat about paper', exact=True).click()
+            for _ in range(turns):
+                await page.locator('#chat-question').fill('Question')
+                await page.locator('#chat-send').click()
+                await page.locator('#chat-question:enabled').wait_for()
+            await page.locator('#chat-question').fill('Keep this question')
+            await page.locator('#chat-send').click()
+            await page.get_by_text('Start a new conversation; this one is too long.', exact=True).wait_for()
+            assert len(requests) == turns
+            assert await page.locator('#chat-question').input_value() == 'Keep this question'
+            await page.locator('#chat-clear').click()
+            await page.locator('#chat-question').fill('New question')
+            await page.locator('#chat-send').click()
+            await page.locator('#chat-question:enabled').wait_for()
+            assert requests[-1] == [{'role': 'user', 'content': 'New question'}]
+            await browser.close()
+
+    with _server() as url:
+        asyncio.run(check(url))

@@ -5056,6 +5056,13 @@ $('chat-form').addEventListener('submit', async (event) => {
   if (!chat || chat.busy || S.ai_enabled !== true || !chat.draft.trim()) return;
   const question = chat.draft.trim();
   const messages = [...chat.messages, { role: 'user', content: question }];
+  const lengths = messages.map((message) => Array.from(message.content).length);
+  if (messages.length > 40 || lengths.some((length) => length > 32000)
+      || lengths.reduce((total, length) => total + length, 0) > 80000) {
+    chat.error = 'Start a new conversation; this one is too long.';
+    renderPaperChat();
+    return;
+  }
   chat.busy = true; chat.error = '';
   renderPaperChat();
   try {
