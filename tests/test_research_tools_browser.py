@@ -187,7 +187,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await rail.locator('textarea[data-note="paper"]').fill('Read this for the task differences.')
                 await rail.get_by_role('button', name='Save', exact=True).click()
                 await rail.locator('.note p', has_text='task differences').wait_for()
-                assert httpx.get(url+'/api/state').json()['papers'][0]['notes'] == 'Read this for the task differences.'
+                assert next(p for p in httpx.get(url+'/api/state').json()['papers'] if p['key'] == 'paper')['notes'] == 'Read this for the task differences.'
                 # A selected passage becomes a new claim, quote and page filled in.
                 bounds = await select_first_line(page)
                 await page.get_by_role('button', name='Capture as claim', exact=True).click()
@@ -306,6 +306,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await ready(page)
                 await dialog.get_by_role('button', name='Bookmark: page 2', exact=True).click()
                 await dialog.wait_for(state='hidden', timeout=5000)
+                await ready(page)   # the dialog closes before the queue is written
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
                 assert httpx.get(url+'/api/notebook').json()['reading'][0]['status'] == 'reading'
                 await page.get_by_role('button', name='Reading queue', exact=True).click()
@@ -314,6 +315,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await ready(page)
                 await dialog.get_by_role('button', name='Resume at page 2', exact=True).click()
                 await dialog.wait_for(state='hidden', timeout=5000)
+                await ready(page)
                 assert httpx.get(url+'/api/notebook').json()['reading'][0]['status'] == 'finished'
                 # Leaving the workspace before a page is saved drops the save.
                 await page.get_by_role('button', name='Next page', exact=True).click()

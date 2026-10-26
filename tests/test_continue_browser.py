@@ -46,6 +46,7 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
                 await ready(page)
                 await page.locator('#research-body').get_by_role('button', name='Resume at page 2').click()
                 await page.locator('#research-tools').wait_for(state='hidden')
+                await ready(page)
                 await expect(page.locator('.paperhead h2')).to_have_text('A study of recovery')
                 await expect(page.locator('#reader-page')).to_have_value('2')
                 await page.reload()
