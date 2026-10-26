@@ -376,6 +376,11 @@ const ResearchTools = (() => {
     if (!gone) return;
     gone.observer?.disconnect(); gone.resizer?.disconnect();
     clearTimeout(gone.progressTimer); clearTimeout(gone.resizeTimer);
+    // A page reached within the debounce is still the page the reading
+    // stopped on: save it now, for the paper and workspace this reader had,
+    // behind any save of its already in flight. Not awaited: the next paper
+    // must not wait on it.
+    if (gone.wantedPage !== null && gone.wantedPage !== gone.savedPage) queueProgressSave(gone);
     if (gone.document) await gone.document.loadingTask.destroy();
   }
   function sizePage(page) {
@@ -435,8 +440,12 @@ const ResearchTools = (() => {
     })().catch(error => { if (reader?.generation === generation) el('reader-hint').textContent = `Could not draw page ${page.number}: ${error.message}`; })
       .finally(() => {
         page.rendering = null;
+        if (reader?.generation !== generation) return;
         // The zoom changed under this render: draw it again at the new scale.
-        if (reader?.generation === generation && page.renderedAt !== reader.scale && pageNear(page)) renderPage(page);
+        if (page.renderedAt !== reader.scale && pageNear(page)) renderPage(page);
+        // Scrolled out of reach while drawing: the observer's leave came too
+        // early to release it, so it is released here.
+        else if (page.renderedAt && !pageNear(page)) clearPage(page);
       });
     return page.rendering;
   }
@@ -484,8 +493,8 @@ const ResearchTools = (() => {
     if (!progress) return;
     reader.wantedPage = page.number;
     if (reader.savedPage !== page.number) {
-      const {generation} = reader;
-      reader.progressTimer = setTimeout(() => { if (reader?.generation === generation) queueProgressSave(generation); }, 1500);
+      const active = reader;
+      reader.progressTimer = setTimeout(() => { if (reader === active) queueProgressSave(active); }, 1500);
     }
   }
   // One save after another: two in flight would race for the revision. Each
@@ -493,20 +502,22 @@ const ResearchTools = (() => {
   // may have moved on — a save held long enough for a move away and back
   // would otherwise leave the queue on a page nobody is reading — so the
   // wanted page is compared again and another save follows if they differ.
-  function queueProgressSave(generation) {
-    const {paper, workspace:ws} = reader;
-    reader.progressSave = reader.progressSave.then(async () => {
-      if (reader?.generation !== generation) return;
-      const number = reader.wantedPage;
-      if (number === null || number === reader.savedPage) return;
+  // Works on the reader it is given rather than the one mounted, so a reader
+  // being torn down can still save the page it reached.
+  function queueProgressSave(active) {
+    const {paper, workspace:ws} = active;
+    active.progressSave = active.progressSave.then(async () => {
+      const number = active.wantedPage;
+      if (number === null || number === active.savedPage) return;
       await mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === number) return false; r.page = number; }, {refresh:false});
-      if (reader?.generation !== generation) return;
-      reader.savedPage = number;
+      active.savedPage = number;
       // What the queue and the Continue card show until the next poll.
-      const local = (S.notebook?.reading || []).find(r => r.paper === paper);
-      if (local) local.page = number;
-      renderContinuation();
-      if (reader.wantedPage !== reader.savedPage) queueProgressSave(generation);
+      if (ws === currentWorkspaceId) {
+        const local = (S.notebook?.reading || []).find(r => r.paper === paper);
+        if (local) local.page = number;
+        renderContinuation();
+      }
+      if (active.wantedPage !== active.savedPage) queueProgressSave(active);
     }).catch(() => { /* a later scroll tries again */ });
   }
   async function goToPage(number, highlight = null) {
@@ -690,7 +701,13 @@ const ResearchTools = (() => {
     const id = target.closest('[data-highlight]')?.dataset.highlight;
     const highlight = paperHighlights(V.paper).find(h => h.id === id);
     if (!highlight) throw new Error('This highlight is no longer here. It may have been removed in another window.');
-    if (name === 'edit-highlight') { highlightEditing = id; highlightDraft = highlight.note; renderContent(); document.querySelector('[data-highlight-note]')?.focus(); return; }
+    if (name === 'edit-highlight') {
+      // One note is written at a time; the one half-written is not dropped for
+      // another without asking.
+      if (highlightEditing !== id && highlightDrafting()
+        && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
+      highlightEditing = id; highlightDraft = highlight.note; renderContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
+    }
     if (name === 'cancel-highlight') { highlightEditing = null; highlightDraft = ''; renderContent(); return; }
     if (name === 'capture-highlight') {
       // The note as it is being written, when its editor is open: what is on
@@ -699,9 +716,17 @@ const ResearchTools = (() => {
       startClaimFromPassage(highlight.paper, {quote:highlight.text, locator:`p. ${highlight.page}`, note}); return;
     }
     if (name === 'save-highlight') {
+      // The rail is outside the modal, so `setBusy` leaves its editor open
+      // while the save runs: what is typed meanwhile goes into the draft, and
+      // the editor closes only if the draft is still what was saved.
       const note = highlightDraft;
-      await mutateNotebook(currentWorkspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This highlight was removed in another window.'); h.note = note; });
-      if (highlightEditing === id) { highlightEditing = null; highlightDraft = ''; }
+      target.disabled = true;
+      try {
+        await mutateNotebook(currentWorkspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This highlight was removed in another window.'); h.note = note; });
+      } finally { target.disabled = false; }
+      if (highlightEditing !== id) return;
+      if (highlightDraft !== note) { toast('Saved the note as it was when you clicked Save. What you typed since is still in the editor.'); return; }
+      highlightEditing = null; highlightDraft = '';
       renderContent(); return;
     }
     if (name === 'remove-highlight') {

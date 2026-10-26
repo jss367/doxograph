@@ -336,13 +336,15 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#reader').wait_for(state='hidden')
                 assert await page.locator('#panes.reading').count() == 0
                 assert await rail.locator('.highlight-entry').count() == 1
+                # Put away within the debounce, the page just reached is still saved.
+                await saved_page(url, 1)
                 await page.reload()
                 await page.locator('.paperhead h2', has_text='A study of recovery').wait_for()
                 assert await page.locator('#reader').is_hidden()
                 await page.get_by_role('button', name='Show PDF', exact=True).click()
                 await page.locator('#panes.reading').wait_for()
                 # Reopened, the paper resumes where the reading queue left it.
-                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '2'")
+                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '1'")
                 # The reading queue's own button opens a page of the paper, and a
                 # paper only queued is being read once it is resumed.
                 await page.get_by_role('button', name='Reading queue', exact=True).click()
@@ -355,6 +357,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await ready(page)   # the dialog closes before the queue is written
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
                 await queue_status(url, 'reading')
+                await saved_page(url, 2)
                 await page.get_by_role('button', name='Reading queue', exact=True).click()
                 await ready(page)
                 await dialog.locator('[data-reading-status]').first.select_option('finished')
@@ -381,17 +384,21 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#panes.reading').wait_for()
                 assert await rail.locator('[data-highlight-note]').count() == 0
                 await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '2'")
-                # Leaving the workspace before a page is saved drops the save.
+                # Leaving the workspace before a page is saved saves it on the
+                # way out, to the workspace the paper is in, not the new one.
                 await page.get_by_role('button', name='Next page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
                 await page.locator('#workspace').select_option(other['id'])
                 await page.locator('#papers li[data-paper="elsewhere"]').wait_for()
-                await page.wait_for_timeout(2200)
-                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 2
+                await saved_page(url, 3)
                 assert not httpx.get(url+'/api/notebook', headers={'X-Doxograph-Workspace': other['id']}).json()['reading']
                 await page.locator('#workspace').select_option('default')
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#panes.reading').wait_for()
+                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '3'")
+                await page.get_by_role('button', name='Previous page', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                await saved_page(url, 2)
                 # A page asked for one paper belongs to it: resuming this paper
                 # and then opening another before its PDF arrives leaves the
                 # other on its own first page.
@@ -426,6 +433,123 @@ def test_paper_reads_beside_its_notes(engine):
                 await ready(page)
                 await rail.locator('.highlight-entry').wait_for(state='hidden')
                 assert not httpx.get(url+'/api/notebook').json()['highlights']
+                assert not errors and not external
+            await browser.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
+    """What happens at the edges: a page drawn after it was scrolled out of
+    reach is released; a half-written highlight note is not dropped for
+    another without asking, nor by a slow or failed save; and a page reached
+    just before the reader is put away is still saved."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('long',title='A long paper',authors=['Ada Researcher'],year=2026))
+    store.pdf_path('long').write_bytes(minimal_pdf([f'Page {n} of the long paper.' for n in range(1, 25)]))
+    store.save_paper(store.new_paper('other',title='The other paper',authors=['Bo Writer'],year=2025))
+    store.pdf_path('other').write_bytes(minimal_pdf(['The other paper.']))
+    rect = {'x':.1,'y':.1,'w':.3,'h':.02}
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors, external = [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.on('request', lambda request: external.append(request.url) if not request.url.startswith(('http://127.0.0.1:', 'blob:')) else None)
+            with _server() as url:
+                data = httpx.get(url+'/api/notebook').json()
+                data['reading'] = [{'paper':'long','status':'reading','page':1,'bookmarks':[]}]
+                data['highlights'] = [
+                    {'id':'first','paper':'long','page':1,'rects':[rect],'text':'Page 1 of the long paper.','color':'yellow','note':'Note A'},
+                    {'id':'second','paper':'long','page':2,'rects':[rect],'text':'Page 2 of the long paper.','color':'green','note':''}]
+                assert httpx.put(url+'/api/notebook', json=data).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="long"]').click()
+                # Scrolled to the end as soon as the pages are laid out, while the
+                # first ones are still being drawn: once the end is drawn, the
+                # start has been released rather than kept because its drawing
+                # finished after it had left reach.
+                await page.wait_for_function("document.querySelectorAll('#reader .pdf-page').length === 24")
+                await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: document.querySelector('#pdf-scroll').scrollHeight})")
+                await page.locator('#reader .pdf-page[data-page="24"] .textLayer span').first.wait_for()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '24'")
+                await page.wait_for_function("""(() => {
+                    const first = document.querySelector('#reader .pdf-page[data-page="1"]');
+                    return first.classList.contains('pending') && !first.querySelector('canvas');
+                })()""")
+                drawn = await page.evaluate("[...document.querySelectorAll('#reader .pdf-page:not(.pending)')].map(p => Number(p.dataset.page))")
+                assert drawn and all(n >= 18 for n in drawn), drawn
+                await saved_page(url, 24)
+                rail = page.locator('#content')
+                # Editing another highlight's note while one is being written asks
+                # first; Cancel keeps the first editor and its text.
+                await rail.locator('[data-highlight="first"]').get_by_role('button', name='Edit note', exact=True).click()
+                await rail.locator('[data-highlight-note="first"]').fill('Note A, revised')
+                await rail.locator('[data-highlight="second"]').get_by_role('button', name='Add note', exact=True).click()
+                await _answer(page, 'Cancel')
+                assert await rail.locator('[data-highlight-note="first"]').input_value() == 'Note A, revised'
+                assert await rail.locator('[data-highlight-note="second"]').count() == 0
+                await rail.locator('[data-highlight="second"]').get_by_role('button', name='Add note', exact=True).click()
+                await _answer(page, 'Discard note')
+                await rail.locator('[data-highlight-note="second"]').wait_for()
+                assert await rail.locator('[data-highlight-note="first"]').count() == 0
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Note A'
+                # Typing while a slow save runs is kept: the save lands what was
+                # there when Save was clicked, and the editor stays open with the rest.
+                held, release = [], asyncio.Event()
+                async def hold_first(route):
+                    if route.request.method == 'PUT' and not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_first)
+                await rail.locator('[data-highlight-note="second"]').fill('Note B')
+                await rail.get_by_role('button', name='Save note', exact=True).click()
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held
+                assert await rail.get_by_role('button', name='Save note', exact=True).is_disabled()
+                await rail.locator('[data-highlight-note="second"]').press('End')
+                await rail.locator('[data-highlight-note="second"]').type(', continued')
+                release.set()
+                await ready(page)
+                await page.locator('#toasts .toast', has_text='still in the editor').wait_for()
+                assert await rail.locator('[data-highlight-note="second"]').input_value() == 'Note B, continued'
+                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B'
+                await page.unroute('**/api/notebook')
+                # A save that fails keeps the editor and its text.
+                failures = []
+                async def fail_once(route):
+                    if route.request.method == 'PUT' and not failures:
+                        failures.append(route.request.url); await route.fulfill(status=503, content_type='application/json', body='{"detail": "The notebook is down."}')
+                    else: await route.continue_()
+                await page.route('**/api/notebook', fail_once)
+                await rail.get_by_role('button', name='Save note', exact=True).click()
+                await ready(page)
+                await page.locator('#toasts .toast', has_text='The notebook is down.').wait_for()
+                assert failures
+                assert await rail.locator('[data-highlight-note="second"]').input_value() == 'Note B, continued'
+                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B'
+                await rail.get_by_role('button', name='Save note', exact=True).click()
+                await ready(page)
+                await rail.locator('[data-highlight-note="second"]').wait_for(state='detached')
+                assert httpx.get(url+'/api/notebook').json()['highlights'][1]['note'] == 'Note B, continued'
+                await page.unroute('**/api/notebook')
+                # A page reached just before the PDF is put away, or another
+                # paper opened, is saved on the way out.
+                await page.get_by_role('button', name='Previous page', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '23'")
+                await page.get_by_role('button', name='Hide PDF', exact=True).click()
+                await page.locator('#reader').wait_for(state='hidden')
+                await saved_page(url, 23)
+                await page.get_by_role('button', name='Show PDF', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '23'")
+                await page.get_by_role('button', name='Previous page', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '22'")
+                await page.locator('#papers li[data-paper="other"]').click()
+                await page.locator('.paperhead h2', has_text='The other paper').wait_for()
+                await saved_page(url, 22)
                 assert not errors and not external
             await browser.close()
     asyncio.run(scenario())
