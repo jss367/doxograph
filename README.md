@@ -16,7 +16,7 @@ without either leaving empty cells behind.
 ## What it does
 
 Paste an arXiv ID or drop a PDF. Doxograph fetches the paper and its metadata,
-reads it with Claude, and records:
+reads it with your selected AI provider or a local model, and records:
 
 - a paragraph on what the paper does and a line on why it is in your pile
 - each claim it makes, as a standalone sentence in the paper's own scope
@@ -69,17 +69,20 @@ if needed, substitute its versioned command, such as `python3.14`.
 python3 -m venv .venv && .venv/bin/pip install -e .
 ```
 
-Doxograph needs an Anthropic API key. It reads `ANTHROPIC_API_KEY`, then falls
-back to an `ANTHROPIC_API_KEY=` line in `~/.credentials`, then to whatever the
-Anthropic SDK resolves on its own (including an `ant auth login` profile).
+Choose a provider and model in **Settings → AI analysis**. Anthropic is the
+default; OpenAI, Ollama, and OpenAI-compatible endpoints are also supported.
+Ollama and local OpenAI-compatible servers can run without an API key.
+See [Model](#model) for setup and the differences in PDF handling.
 
 To turn off model use, open **Settings** and uncheck **Enable AI analysis**.
 The preference survives restarts and applies to every workspace and the CLI
 using the same data directory. While off, imports skip extraction, and
 extraction, retagging, agreements, tensions, and synthesis cannot start new
 model calls or upload PDFs for analysis. Requests already sent may finish.
-Browsing, manual editing, quote checks, and exports remain available. Removing
-a paper still deletes any previously uploaded copy from Anthropic.
+Browsing, manual editing, quote checks, and exports remain available. With
+Anthropic selected, removing a paper still deletes its previously uploaded
+copies. With another provider selected, deletion stays local; any earlier
+Anthropic uploads must be removed from your Anthropic account separately.
 
 ## Use
 
@@ -645,16 +648,62 @@ is kept either way: `--replace-reviewed` asks for your review decisions to be
 thrown out, not your writing, and a note is the one thing on a claim a re-read
 cannot produce again. Delete the claim to be rid of it.
 
-The PDF is sent with a cache breakpoint on it, so a second read of the same
+With Anthropic, the PDF is sent with a cache breakpoint on it, so a second read of the same
 paper within the hour hits the prompt cache. On a 77k-token paper that is the
 difference between paying for 77k input tokens and paying for about a tenth of
 that.
 
 ## Model
 
-`claude-opus-5` by default; set `DOXOGRAPH_MODEL` to change it. Extraction uses
-adaptive thinking at high effort and a JSON schema, so the response is validated
-structurally before it reaches the store.
+Open **Settings → AI analysis**, choose a provider, enter its exact model name,
+and click **Save provider**. The selection survives restarts and applies to all
+workspaces and the CLI. Each provider remembers its model and endpoint. Changes
+apply to new operations; running operations finish with their original provider.
+
+| Provider | Setup | Paper input |
+| --- | --- | --- |
+| Anthropic (default) | `ANTHROPIC_API_KEY`; defaults to `claude-opus-5` | Native PDF upload and prompt caching |
+| OpenAI | `OPENAI_API_KEY`; enter a model supporting JSON Schema output | Page-numbered text extracted locally |
+| Ollama (local) | Start Ollama, download a model, enter its name; defaults to `http://localhost:11434` | Page-numbered text extracted locally |
+| OpenAI-compatible | Start a server such as LM Studio; enter model and API base URL, typically `http://localhost:1234/v1`; optional `DOXOGRAPH_API_KEY` | Page-numbered text extracted locally |
+
+Keys come from the environment or matching `NAME=value` lines in
+`~/.credentials` (override with `DOXOGRAPH_CREDENTIALS_FILE`). Anthropic also
+supports the SDK's own authentication resolution. Keys are never included in
+browser state or saved provider settings.
+
+For local analysis, use a localhost endpoint and a downloaded local model.
+Analysis sends paper text, research context, vocabulary, ledger claims, and
+relevant extracted claims only to the selected endpoint. It never falls back
+to a cloud provider. Importing a remote reference still downloads the paper;
+use a local PDF when working offline. No model is bundled or downloaded by
+Doxograph.
+
+Text-based providers cannot read scanned PDFs without OCR, figures, or layout
+that the PDF text extractor misses. Ollama uses a 65,536-token context budget
+and rejects prompts that conservatively exceed it rather than sending a
+partial paper. Local models need enough memory for that context. Other
+endpoints must support the supplied JSON Schema and enough context for the
+whole paper; unsupported requests fail without changing the paper's analysis.
+Malformed, refused, and truncated responses are rejected before saving.
+Model quality varies; extracted claims and quotes still need review.
+
+For CLI-only setup, set `DOXOGRAPH_PROVIDER` (`anthropic`, `openai`, `ollama`,
+or `openai-compatible`), `DOXOGRAPH_MODEL`, and optionally `DOXOGRAPH_BASE_URL`.
+Saved settings take precedence over these defaults. For example, before saving
+provider settings:
+
+```bash
+DOXOGRAPH_PROVIDER=ollama DOXOGRAPH_MODEL=your-downloaded-model doxograph extract
+```
+
+All five operations—extraction, retagging, agreements, tensions, and synthesis—
+use the selected provider. Changing provider, endpoint, or model invalidates
+cached topic passes. Extraction records its provider, endpoint, and model;
+existing reviewed claims and manual edits retain their usual protections.
+
+The adapters follow the [OpenAI chat completion API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+and [Ollama structured output API](https://docs.ollama.com/capabilities/structured-outputs).
 
 ## Tuning
 

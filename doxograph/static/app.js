@@ -1836,7 +1836,7 @@ function renderStats() {
   const staleSyntheses = (S.syntheses || []).filter((s) => s.stale).length;
   if (staleSyntheses) bits.push(`${staleSyntheses} stale syntheses`);
   if (S.ai_enabled === false) bits.push('AI analysis off');
-  else if (!S.has_key) bits.push('no API key found');
+  else if (!S.has_key && !['ollama', 'openai-compatible'].includes(S.provider)) bits.push('no API key found');
   $('stats').textContent = bits.join(' · ');
 }
 
@@ -5061,6 +5061,53 @@ $('ai-enabled').addEventListener('change', async () => {
   }
 });
 
+let providerDrafts = {};
+
+function showProviderFields() {
+  const provider = $('ai-provider').value;
+  const profile = providerDrafts[provider] || S.providers?.[provider] || {};
+  $('ai-model').value = profile.model || '';
+  $('ai-base-url').value = profile.base_url || '';
+  $('ai-endpoint-row').hidden = ['anthropic', 'openai'].includes(provider);
+  $('ai-base-url').required = !['anthropic', 'openai'].includes(provider);
+  const help = {
+    anthropic: 'Uses ANTHROPIC_API_KEY from your environment or ~/.credentials. Sends PDFs to Anthropic.',
+    openai: 'Uses OPENAI_API_KEY from your environment or ~/.credentials. Sends paper text to OpenAI. Choose a model that supports structured output.',
+    ollama: 'Start Ollama and download a model first. Paper text goes only to this endpoint. Use a localhost URL and a locally downloaded model to keep analysis on your Mac. Long papers may exceed the local context limit.',
+    'openai-compatible': 'For LM Studio or another endpoint supporting chat completions with JSON Schema. Include /v1 in the URL when required. Uses DOXOGRAPH_API_KEY if set; local servers can run without a key. Paper text goes to this endpoint.',
+  };
+  $('ai-provider-help').textContent = help[provider] || '';
+}
+
+let editingProvider = 'anthropic';
+$('ai-provider').addEventListener('change', () => {
+  providerDrafts[editingProvider] = { model: $('ai-model').value, base_url: $('ai-base-url').value };
+  editingProvider = $('ai-provider').value;
+  showProviderFields();
+});
+$('ai-provider-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('ai-provider-save');
+  button.disabled = true;
+  $('ai-settings-status').textContent = 'Saving…';
+  try {
+    const settings = await api('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: $('ai-provider').value, model: $('ai-model').value,
+        base_url: $('ai-base-url').value }),
+    });
+    Object.assign(S, settings);
+    stateEtag = null;
+    providerDrafts = {};
+    $('ai-settings-status').textContent = 'Provider saved. New analysis uses this selection.';
+    renderStats();
+  } catch (error) {
+    $('ai-settings-status').textContent = `Could not save: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 function syncThemeControls() {
   const appearance = document.querySelector(`input[name="appearance"][value="${themeSettings.appearance}"]`);
   const colors = document.querySelector(`input[name="color-theme"][value="${themeSettings.colors}"]`);
@@ -5078,6 +5125,10 @@ function openSettings() {
   closePaperMenu();
   syncThemeControls();
   syncAnalysisControls();
+  providerDrafts = {};
+  editingProvider = S.provider || 'anthropic';
+  $('ai-provider').value = editingProvider;
+  showProviderFields();
   $('settings-menu').hidden = false;
   $('btn-settings').setAttribute('aria-expanded', 'true');
 }
