@@ -16,6 +16,12 @@ const ResearchTools = (() => {
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   };
   const promptDialog = (title, value, {ok}) => askDialog({title, input:{value}, ok});
+  // A highlight note being written in the rail is a draft until Save note. It
+  // counts as unsaved once it differs from the note on file, so leaving the
+  // page asks first, as it does for a board or a connection being edited.
+  const highlightDrafting = () => Boolean(highlightEditing)
+    && highlightDraft !== (S.notebook?.highlights || []).find(h => h.id === highlightEditing)?.note;
+  const unsaved = () => dirty || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
   const resolve = ref => S.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
@@ -85,7 +91,7 @@ const ResearchTools = (() => {
     dirty = false; connectionDraft = false;
     el('research-tools').close();
   }
-  async function open(next = 'compare') {
+  async function open(next = 'compare', requestedBoard = null) {
     sync();
     modalWorkspace = workspace;
     tab = next;
@@ -93,6 +99,10 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
     message('');
     notebook = await request();
+    if (requestedBoard !== null) {
+      boardId = requestedBoard;
+      if (!currentBoard()) throw new Error('That board no longer exists.');
+    }
     dirty = false;
     render();
   }
@@ -246,9 +256,9 @@ const ResearchTools = (() => {
     if (!paper || reader) return;
     const generation = ++readerEpoch;
     const zoom = savedZoom();
-    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null};
-    el('reader').innerHTML = `<div class="reader-toolbar">${button('previous-page', 'Previous', 'title="Previous page"')}
-      <label>Page<input id="reader-page" type="number" min="1" value="1" aria-label="Page number"></label><span id="reader-total"></span>${button('go-page', 'Go')}${button('next-page', 'Next', 'title="Next page"')}
+    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, progressSave:Promise.resolve()};
+    el('reader').innerHTML = `<div class="reader-toolbar">${button('previous-page', 'Previous page')}
+      <label>Page<input id="reader-page" type="number" min="1" value="1" aria-label="Page number"></label><span id="reader-total"></span>${button('go-page', 'Go')}${button('next-page', 'Next page')}
       <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
       ${button('bookmark', 'Bookmark this page')}<span class="reader-status" id="reader-status"></span></div>
       <div class="pdf-scroll" id="pdf-scroll"><div class="passage-tools" id="passage-tools" hidden>
@@ -297,6 +307,7 @@ const ResearchTools = (() => {
         reader.scrollTick = requestAnimationFrame(() => { reader.scrollTick = null; trackCurrentPage(); });
       }, {passive:true});
       const progress = (S.notebook?.reading || []).find(r => r.paper === paper);
+      reader.savedPage = progress?.page ?? null;
       const wanted = pendingPage || progress?.page || 1;
       pendingPage = null;
       goToPage(wanted);
@@ -401,14 +412,28 @@ const ResearchTools = (() => {
     if (bookmark) bookmark.textContent = marked ? 'Remove bookmark' : 'Bookmark this page';
     readerHint();
     // Where the reading stopped, for the queue: only for a paper that is on it.
+    // Compared against the page this reader last saved, not the notebook in
+    // `S`: that is refreshed by the poll, and between polls it would still say
+    // the page the paper opened on, so going back to it would never be saved.
     clearTimeout(reader.progressTimer);
-    if (progress && progress.page !== page.number) {
-      const {generation, paper, workspace:ws} = reader;
+    if (progress && reader.savedPage !== page.number) {
+      const {generation, paper, workspace:ws} = reader, number = page.number;
       reader.progressTimer = setTimeout(() => {
         if (reader?.generation !== generation) return;
-        mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === page.number) return false; r.page = page.number; }, {refresh:false}).catch(() => { /* a later scroll tries again */ });
+        // One save after another: two in flight would race for the revision.
+        reader.progressSave = reader.progressSave.then(() => saveProgress(generation, ws, paper, number)).catch(() => { /* a later scroll tries again */ });
       }, 1500);
     }
+  }
+  async function saveProgress(generation, ws, paper, number) {
+    if (reader?.generation !== generation) return;
+    await mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === number) return false; r.page = number; }, {refresh:false});
+    if (reader?.generation !== generation) return;
+    reader.savedPage = number;
+    // What the queue and the Continue card show until the next poll.
+    const local = (S.notebook?.reading || []).find(r => r.paper === paper);
+    if (local) local.page = number;
+    renderContinuation();
   }
   async function goToPage(number, highlight = null) {
     if (!reader?.pages.length) { pendingPage = number; return; }
@@ -518,7 +543,7 @@ const ResearchTools = (() => {
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
-  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'highlight-selection', 'capture-selection',
+  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
     'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight']);
   async function readerAction(name, target) {
     const data = target.dataset;
@@ -546,7 +571,32 @@ const ResearchTools = (() => {
         progress.page = current;
         progress.bookmarks = progress.bookmarks.includes(current) ? progress.bookmarks.filter(p => p !== current) : [...progress.bookmarks, current];
       });
+      reader.savedPage = current;
       reader.tracked = false; trackCurrentPage(); return;
+    }
+    // Resuming a paper from the queue or the Continue card: it opens in the
+    // main pane at that page. Resuming is reading, so a paper not on the queue
+    // joins it and a queued one is marked as being read; a finished one is
+    // left as it is.
+    if (name === 'reader') {
+      if (el('research-tools').open) {
+        if (!await discardDrafts()) return;
+        setBusy(false); await close();
+        if (el('research-tools').open) return;
+      }
+      const paper = data.paper, ws = currentWorkspaceId;
+      const saved = await mutateNotebook(ws, n => {
+        const entry = n.reading.find(r => r.paper === paper);
+        if (!entry) { n.reading.push({paper, status:'reading', page:1, bookmarks:[]}); return; }
+        if (entry.status !== 'queued') return false;
+        entry.status = 'reading';
+      });
+      const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
+      if (reader?.paper === paper && reader.workspace === ws && !V.pdfHidden) { await goToPage(page); return; }
+      pendingPage = page;
+      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
+      if (V.paper === paper && V.view === 'claims') renderContent(); else goToPaper(paper);
+      return;
     }
     if (name === 'highlight-selection') {
       const passage = reader?.selection;
@@ -603,17 +653,6 @@ const ResearchTools = (() => {
       if (!await discardDrafts()) return;
       setBusy(false); await close();
       goToPaper(data.paper, data.claim || null); return;
-    }
-    // A page of a queued paper: the paper opens in the main pane at that page,
-    // or scrolls to it if it is already open.
-    if (name === 'reader') {
-      if (!await discardDrafts()) return;
-      setBusy(false); await close();
-      const page = Number(data.page) || notebook.reading.find(r => r.paper === data.paper)?.page || 1;
-      if (reader?.paper === data.paper && !V.pdfHidden) { await goToPage(page); return; }
-      pendingPage = page;
-      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
-      goToPaper(data.paper); return;
     }
     if (name === 'bulk') {
       const values = el('bulk-values').value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -778,12 +817,13 @@ const ResearchTools = (() => {
   document.addEventListener('DOMContentLoaded', () => {
     el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
   });
-  window.addEventListener('beforeunload', event => { if (dirty || connectionDraft) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
     if (!el('research-tools').open) return true;
     if (busy) { message('Finish the current operation before switching workspaces.', true); return false; }
     await close();
     return !el('research-tools').open;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds};
+  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds,
+    openBoard: id => run(() => open('boards', id))};
 })();

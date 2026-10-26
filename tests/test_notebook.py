@@ -80,6 +80,9 @@ def test_highlights_validate_their_paper_and_page_geometry(client):
     store.delete_paper('one')
     data['highlights'] = [dict(highlight, note='Still mine')]
     assert client.put('/api/notebook', json=data).status_code == 200
+    data = client.get('/api/notebook').json()
+    data['highlights'].append(dict(highlight, id='late'))
+    assert client.put('/api/notebook', json=data).status_code == 404
 
 
 def test_history_restores_only_requested_claim_or_note_and_rechecks_quotes(client):

@@ -18,6 +18,8 @@
   </span>
   <span class="stats" id="stats"></span>
   <div class="actions">
+    <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
+      aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-retag" data-ai-action disabled title="Reassign tags on every paper against the current vocabulary">Retag all</button>
     <button type="button" id="btn-bib">BibTeX</button>
     <button type="button" id="btn-export" class="primary">Export HTML</button>
@@ -89,6 +91,36 @@
               <input type="radio" name="color-theme" value="graphite">
               <span class="theme-preview graphite" aria-hidden="true"><i></i><i></i><i></i></span>
               <span>Graphite</span>
+            </label>
+            <label class="theme-choice" title="Golden accents on warm cream and bronze">
+              <input type="radio" name="color-theme" value="amber">
+              <span class="theme-preview amber" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Amber</span>
+            </label>
+            <label class="theme-choice" title="Soft violet surfaces and lavender accents">
+              <input type="radio" name="color-theme" value="lavender">
+              <span class="theme-preview lavender" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Lavender</span>
+            </label>
+            <label class="theme-choice" title="Electric pink, deep purple, and turquoise">
+              <input type="radio" name="color-theme" value="synthwave">
+              <span class="theme-preview synthwave" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Synthwave</span>
+            </label>
+            <label class="theme-choice" title="Retro green phosphor inspired by old terminals">
+              <input type="radio" name="color-theme" value="terminal">
+              <span class="theme-preview terminal" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Terminal</span>
+            </label>
+            <label class="theme-choice" title="Candy pink surfaces with bold orchid accents">
+              <input type="radio" name="color-theme" value="bubblegum">
+              <span class="theme-preview bubblegum" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Bubblegum</span>
+            </label>
+            <label class="theme-choice" title="Acid lime surfaces with ultraviolet accents">
+              <input type="radio" name="color-theme" value="radioactive">
+              <span class="theme-preview radioactive" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Radioactive</span>
             </label>
           </div>
         </fieldset>
@@ -182,6 +214,7 @@
 
   <section id="main">
     <aside id="storage-warning" class="storage-warning" role="status" hidden></aside>
+    <section id="continue-reading" class="continue-reading" aria-labelledby="continue-title" hidden></section>
     <div class="filters">
       <input type="search" id="q" placeholder="Filter claims, quotes, papers">
       <select id="kind"><option value="">every kind</option></select>
@@ -194,6 +227,7 @@
       <button type="button" data-tool="select-visible">Select visible claims</button>
       <button type="button" data-tool="compare">Compare & organize</button>
       <button type="button" data-tool="save-search">Save this search</button>
+      <button type="button" id="btn-focus-review" title="Review the claims matching your current filters beside their source PDFs">Focused review</button>
       <button type="button" data-tool="clear-selection">Clear selection</button>
     </div>
     <div id="panes">
@@ -208,12 +242,26 @@
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <ul class="ctxmenu" id="ctxmenu" hidden></ul>
 
+<dialog id="command-palette" class="sheet command-palette" aria-labelledby="command-palette-title">
+  <div class="sheet-head">
+    <h2 id="command-palette-title">Jump to…</h2>
+    <button type="button" class="icon-button" id="btn-close-command-palette" aria-label="Close command palette">×</button>
+  </div>
+  <input id="command-query" role="combobox" aria-label="Search papers, topics, boards, and actions"
+    aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" autocomplete="off"
+    placeholder="Search papers, topics, boards, or actions…">
+  <p id="command-status" class="hint" role="status"></p>
+  <ul id="command-results" role="listbox" aria-label="Destinations and actions"></ul>
+  <p class="hint command-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> to move · <kbd>Enter</kbd> to open</span><span><kbd>Esc</kbd> to close</span></p>
+</dialog>
+
 <dialog id="help" class="sheet" aria-labelledby="help-title">
   <div class="sheet-head">
     <h2 id="help-title">Keyboard shortcuts</h2>
     <button type="button" class="icon-button" id="btn-close-help" aria-label="Close shortcuts">×</button>
   </div>
   <dl class="keys">
+    <dt><kbd>⌘K</kbd> / <kbd>Ctrl K</kbd></dt><dd>jump to a paper, topic, board, or action</dd>
     <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>move down and up the claims</dd>
     <dt><kbd>r</kbd></dt><dd>mark the claim reviewed and move to the next one</dd>
     <dt><kbd>n</kbd></dt><dd>jump to the next claim nobody has reviewed</dd>
@@ -245,7 +293,16 @@
   <p id="research-message" role="status"></p>
   <div id="research-body"></div>
 </dialog>
+<dialog id="focused-review" aria-labelledby="focused-review-title">
+  <div class="focus-heading">
+    <div><h2 id="focused-review-title">Focused review</h2>
+      <p class="hint">Claims matching your filters when you started this session.</p></div>
+    <button type="button" data-focus="close">Exit review</button>
+  </div>
+  <div id="focus-body"></div>
+</dialog>
 <script src="/research-tools.js"></script>
 <script src="/app.js"></script>
+<script src="/focused-review.js"></script>
 </body>
 </html>
