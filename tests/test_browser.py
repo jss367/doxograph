@@ -139,6 +139,56 @@ def _paper_with_proposal(key: str, title: str, proposal: str, updated: str) -> N
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("named", [False, True], ids=["default", "named"])
+def test_workspace_rename_persists_and_reaches_another_window_with_a_draft(named):
+    from doxograph import config
+    from playwright.async_api import expect
+
+    workspace = config.create_workspace("Research") if named else config.get_workspace("default")
+    with config.use_workspace(workspace["id"]):
+        _paper("mind", "Consciousness", "awareness")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            observer = await browser.new_page()
+            with _server() as url:
+                address = f"{url}/#ws={workspace['id']}"
+                await page.goto(address)
+                await observer.goto(address)
+                await observer.locator('[data-act="edit"][data-claim="mind-c1"]').click()
+                draft = observer.locator('form[data-form="mind-c1"] textarea[name="text"]')
+                await draft.fill("My unsaved revision.")
+
+                rename = page.get_by_role("button", name="Rename workspace", exact=True)
+                await rename.click()
+                assert await page.locator("#ask-input").input_value() == workspace["name"]
+                await _answer(page, "Cancel", "Canceled name")
+                await expect(page.locator("#workspace option:checked")).to_have_text(workspace["name"])
+
+                await rename.click()
+                await _answer(page, "Rename", "Consciousness research")
+                await expect(page.locator("#workspace option:checked")).to_have_text("Consciousness research")
+                await expect(page).to_have_title("Consciousness research — Doxograph")
+                assert await page.locator("#workspace").input_value() == workspace["id"]
+                await expect(page.locator('.claim[data-claim="mind-c1"]')).to_be_visible()
+
+                # The observer keeps its editor while learning the new name.
+                await observer.evaluate("pollOnce()")
+                await expect(observer).to_have_title("Consciousness research — Doxograph")
+                await expect(observer.locator("#workspace option:checked")).to_have_text("Consciousness research")
+                assert await draft.input_value() == "My unsaved revision."
+
+                await page.reload()
+                await expect(page.locator("#workspace option:checked")).to_have_text("Consciousness research")
+                await expect(page.locator('.claim[data-claim="mind-c1"]')).to_be_visible()
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
 def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
     async def scenario():
         async with async_playwright() as playwright:

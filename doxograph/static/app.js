@@ -1138,6 +1138,11 @@ async function pull() {
   if (next) {
     S = { ...next.state, jobs };
     stateEtag = next.etag;
+    if (S.workspace && currentWorkspace()?.name !== S.workspace.name) {
+      workspaces = workspaces.map((workspace) =>
+        workspace.id === S.workspace.id ? S.workspace : workspace);
+      renderWorkspacePicker();
+    }
   } else {
     S.jobs = jobs;
   }
@@ -1221,6 +1226,7 @@ function renderWorkspacePicker() {
     `<option value="${esc(workspace.id)}">${esc(workspace.name)}</option>`).join('');
   $('workspace').value = currentWorkspaceId || 'default';
   const selected = currentWorkspace();
+  $('btn-workspace-rename').disabled = !selected;
   document.title = selected ? `${selected.name} — Doxograph` : 'Doxograph';
   window.doxographWorkspaceId = currentWorkspaceId || 'default';
 }
@@ -4972,6 +4978,28 @@ $('tags').addEventListener('click', (event) => {
 });
 
 $('workspace').addEventListener('change', (event) => switchWorkspace(event.target.value));
+
+$('btn-workspace-rename').addEventListener('click', async () => {
+  const workspace = currentWorkspace();
+  if (!workspace) return;
+  const name = await askDialog({
+    title: 'Rename workspace',
+    note: 'Your papers, claims, and notes stay in this workspace.',
+    input: { value: workspace.name }, ok: 'Rename',
+  });
+  if (name === null || name === workspace.name) return;
+  try {
+    const result = await api(`/api/workspaces/${encodeURIComponent(workspace.id)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    workspaces = result.workspaces;
+    renderWorkspacePicker();
+    await refresh();
+  } catch (error) {
+    toast(`Could not rename workspace: ${error.message}`, { tone: 'warn' });
+  }
+});
 
 $('btn-workspace-add').addEventListener('click', async () => {
   const name = await askText('Name this workspace', {
