@@ -492,13 +492,16 @@ def _import_failed(job: dict, exc: Exception) -> None:
     elif isinstance(exc, (httpx.RequestError, anthropic.APIConnectionError)):
         explanation = "The service could not be reached. Check your connection, then retry."
     elif isinstance(exc, anthropic.AuthenticationError):
-        explanation = "AI analysis could not sign in. Check your Anthropic credentials, then retry."
+        explanation = "AI analysis could not sign in. Check the selected provider's credentials, then retry."
     elif isinstance(exc, (httpx.HTTPStatusError, anthropic.APIStatusError)):
         status = exc.response.status_code
         if status == 429:
             explanation = "The service is receiving too many requests. Wait a moment, then retry."
         elif status in (401, 403):
-            explanation = "The service refused access. You may need to download and upload the PDF yourself."
+            if job["state"] == "reading":
+                explanation = "AI analysis could not sign in. Check the selected provider's credentials, then retry."
+            else:
+                explanation = "The service refused access. You may need to download and upload the PDF yourself."
         elif status == 404:
             explanation = "The paper could not be found at this address. Check the reference, then retry."
         else:
@@ -737,7 +740,11 @@ def _run_retag(job: dict, keys: list[str]) -> None:
 # --- request bodies -------------------------------------------------------
 
 class SettingsBody(BaseModel):
-    ai_enabled: bool
+    model_config = {"extra": "forbid"}
+    ai_enabled: bool | None = None
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
 
 
 class IngestBody(BaseModel):
@@ -1090,8 +1097,7 @@ def _build_state() -> dict:
         "strengths": config.CLAIM_STRENGTHS,
         "relations": config.LEDGER_RELATIONS,
         "data_dir": str(config.data_dir()),
-        "model": config.MODEL,
-        "has_key": config.api_key() is not None,
+        **config.analysis_settings(),
         "ai_enabled": config.ai_enabled(),
     }
 
@@ -1115,7 +1121,8 @@ def state(request: Request) -> Response:
     # Credentials and installation settings live outside the corpus, but
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
-    signature = f"{store.corpus_signature()}-{int(config.api_key() is not None)}-{int(ai_enabled)}"
+    settings_signature = hashlib.sha256(json.dumps(config.analysis_settings(), sort_keys=True).encode()).hexdigest()
+    signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}"
     with _state_cache_lock:
         cached = _state_cache.get(workspace)
     # Retry unreadable files even when their stat is unchanged: a temporary
@@ -1141,7 +1148,23 @@ def state(request: Request) -> Response:
 
 @app.put("/api/settings")
 def update_settings(body: SettingsBody) -> dict:
-    config.set_ai_enabled(body.ai_enabled)
+    changing_provider = any(value is not None for value in (body.provider, body.model, body.base_url))
+    if changing_provider:
+        current = config.analysis_config()
+        provider = body.provider if body.provider is not None else current.provider
+        defaults = config.analysis_settings()["providers"].get(provider, {})
+        try:
+            config.save_analysis_settings(
+                provider,
+                body.model if body.model is not None else defaults.get("model", ""),
+                body.base_url if body.base_url is not None else defaults.get("base_url", ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if body.ai_enabled is not None:
+        config.set_ai_enabled(body.ai_enabled)
+    if changing_provider:
+        return {"ai_enabled": config.ai_enabled(), **config.analysis_settings()}
     return {"ai_enabled": config.ai_enabled()}
 
 

@@ -36,7 +36,24 @@
         <fieldset>
           <legend>AI analysis</legend>
           <label><input type="checkbox" id="ai-enabled" disabled aria-describedby="ai-help"> Enable AI analysis</label>
-          <p class="hint" id="ai-help">Allow Claude to read papers and analyze claims. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+          <p class="hint" id="ai-help">Allow the selected model to read papers and analyze claims. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+          <form id="ai-provider-form">
+            <label for="ai-provider">Provider</label>
+            <select id="ai-provider">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="ollama">Ollama (local)</option>
+              <option value="openai-compatible">OpenAI-compatible</option>
+            </select>
+            <label for="ai-model">Model</label>
+            <input id="ai-model" type="text" required maxlength="200" placeholder="Exact model name">
+            <div id="ai-endpoint-row">
+              <label for="ai-base-url">Base URL</label>
+              <input id="ai-base-url" type="url" placeholder="http://localhost:11434">
+            </div>
+            <p class="hint" id="ai-provider-help"></p>
+            <button type="submit" id="ai-provider-save">Save provider</button>
+          </form>
           <p class="hint">Saved for all workspaces on this installation.</p>
           <p class="hint" id="ai-settings-status" role="status"></p>
         </fieldset>
