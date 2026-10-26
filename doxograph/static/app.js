@@ -539,10 +539,11 @@ $('ask-form').addEventListener('submit', (event) => {
 });
 $('ask-cancel').addEventListener('click', () => settleAsk(null));
 $('ask').addEventListener('cancel', () => settleAsk(null));   // Escape
-// The close event is queued, not sent as the dialog closes, so a second
-// question asked straight after an answer can be open by the time it lands;
-// settling then would close the new question with the old one's answer.
-$('ask').addEventListener('close', () => { if (!$('ask').open) settleAsk(null); });
+$('ask').addEventListener('close', () => {
+  // close() queues this event. An answer can open the next question before
+  // it arrives, so only cancel a question whose dialog is still closed.
+  if (!$('ask').open) settleAsk(null);
+});
 
 const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
   askDialog({ title, note, ok }).then((answer) => answer === true);
@@ -5634,8 +5635,8 @@ const CommandPalette = (() => {
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
-    ['boards', 'reading', 'searches', 'connections', 'compare'].forEach(tool => {
-      const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', searches: 'Open saved searches',
+    ['boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
+      const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
         connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
       add(`tool:${tool}`, 'Action', titles[tool], '', () => document.querySelector(`[data-tool="${tool}"]`).click());
     });

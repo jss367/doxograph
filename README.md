@@ -264,7 +264,7 @@ by Accept; Discard just clears the proposal.
 ## Research without AI
 
 All of these tools work with **Enable AI analysis** turned off. Your workspace
-notes, boards, connections, reading progress, highlights, and saved searches
+notes, boards, connections, reading progress, marks, and saved searches
 belong to the selected workspace and are stored in `notebook.json`. They are
 never sent to a model.
 Long-form research notes and their images are also private to the workspace,
@@ -291,8 +291,20 @@ to a model.
   claim editor with the quote and page filled in; write the claim in your own
   words and save. Quotes receive the same local verification as ordinary manual
   claims. Pages with no selectable text can still be read and transcribed by
-  hand. Highlights are stored in the workspace's `notebook.json`; the PDF is
-  not changed. Clicking a highlight in the rail scrolls the paper to it.
+  hand. Clicking a mark in the rail scrolls the paper to it.
+- **Figures and questions.** **Mark a figure** in the reader's toolbar lets you
+  drag a box around a figure, table, or any other region of the page, then
+  pick its color. A figure mark takes a note like a passage does but cannot
+  become a claim. Ticking **Open question** on any mark turns its note into a
+  question to come back to. Marks are stored in the workspace's
+  `notebook.json`; the PDF is not changed.
+- **Marks and questions**, in the sidebar, lists every mark in the workspace by
+  paper, or only the open questions. **Open page** returns to the mark in the
+  paper, and **Mark answered** clears the question but keeps the note.
+- **Export annotated PDF**, in the rail's Marks heading or the Marks list,
+  downloads a copy of the paper with its marks written in as standard PDF
+  highlight and rectangle annotations, carrying your notes and questions, so
+  other PDF readers show them. The stored PDF is never changed.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
   reload in the same browser tab. Compare sources, quotes, evidence, and notes

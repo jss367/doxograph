@@ -11,7 +11,7 @@ import threading
 import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Path
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -85,10 +85,15 @@ class Highlight(Model):
     id: str
     paper: PaperKey
     page: int = Field(ge=1, le=100000)
+    # A passage is one rectangle per line of selected text; a figure is the one
+    # region dragged out on the page, with no text of its own.
+    kind: Literal["passage", "figure"] = "passage"
     rects: list[Rect] = Field(min_length=1, max_length=500)
     text: str = Field(default="", max_length=20000)
     color: Literal["yellow", "green", "blue", "pink"] = "yellow"
     note: str = Field(default="", max_length=20000)
+    # An open question stays listed under Marks until it is marked answered.
+    question: bool = False
 
 
 class Notebook(Model):
@@ -198,6 +203,8 @@ def save_notebook(body: Notebook) -> dict:
                     raise HTTPException(404, "Paper no longer exists")
         # Like reading entries, highlights outlive their paper rather than vanish,
         # but a new highlight needs a paper that still exists.
+        if any(h["kind"] == "figure" and len(h["rects"]) != 1 for h in data["highlights"]):
+            raise HTTPException(422, "A figure mark is a single region of the page")
         old_highlights = {(h["id"], h["paper"]) for h in previous["highlights"]}
         for paper in {h["paper"] for h in data["highlights"] if (h["id"], h["paper"]) not in old_highlights}:
             try:
@@ -426,3 +433,82 @@ def export_selection(body: Selection) -> Response:
     return Response(output.getvalue() if is_csv else "\n".join(lines),
                     media_type="text/csv" if is_csv else "text/markdown",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+MARK_COLORS = {"yellow": "ffe200", "green": "46d264", "blue": "50a0ff", "pink": "ff64aa"}
+
+
+def page_box(page, rect: dict) -> tuple[float, float, float, float]:
+    """A rectangle in fractions of the page as the reader drew it, in PDF user space.
+
+    The reader draws what PDF.js shows: the crop box, clipped to the media box,
+    turned by the page's rotation. The fractions are undone in that order.
+    """
+    crop, media = page.cropbox, page.mediabox
+    left, right = max(float(crop.left), float(media.left)), min(float(crop.right), float(media.right))
+    bottom, top = max(float(crop.bottom), float(media.bottom)), min(float(crop.top), float(media.top))
+    corners = []
+    for u, v in ((rect["x"], rect["y"]), (rect["x"] + rect["w"], rect["y"] + rect["h"])):
+        # (a, b) run rightward and downward across the unrotated page.
+        a, b = {0: (u, v), 90: (v, 1 - u), 180: (1 - u, 1 - v), 270: (1 - v, u)}[page.rotation % 360]
+        corners.append((left + a * (right - left), top - b * (top - bottom)))
+    (x1, y1), (x2, y2) = corners
+    return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+
+
+@router.get("/annotated/{key}")
+def annotated_pdf(key: Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$", max_length=250)]) -> Response:
+    """A copy of the paper's PDF carrying its marks as ordinary PDF annotations.
+
+    Passages become highlights and figures become rectangles; notes and questions
+    travel as each annotation's text. The stored PDF is never changed.
+    """
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.annotations import Highlight as HighlightAnnotation, Rectangle
+    from pypdf.constants import AnnotationFlag
+    from pypdf.errors import PdfReadError
+    from pypdf.generic import ArrayObject, FloatObject, NameObject, TextStringObject
+
+    # Beside the import, as in ingest: pypdf may first load here, after an upgrade.
+    # The module is imported here because `fingerprint` below names a paper's digest.
+    from . import fingerprint
+    fingerprint.snapshot()
+
+    path = store.pdf_path(key)
+    if not path.exists():
+        raise HTTPException(404, "This paper has no PDF")
+    marks = [h for h in load()["highlights"] if h["paper"] == key]
+    if not marks:
+        raise HTTPException(404, "This paper has no marks to export")
+    try:
+        writer = PdfWriter(clone_from=PdfReader(path))
+    except (PdfReadError, ValueError, OSError):
+        raise HTTPException(422, "This PDF could not be read to add annotations")
+    skipped = 0
+    for mark in sorted(marks, key=lambda h: (h["page"], h["rects"][0]["y"], h["rects"][0]["x"])):
+        if mark["page"] > len(writer.pages):
+            skipped += 1
+            continue
+        page = writer.pages[mark["page"] - 1]
+        boxes = [page_box(page, r) for r in mark["rects"]]
+        bounds = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+        color = MARK_COLORS[mark["color"]]
+        if mark["kind"] == "figure":
+            annotation = Rectangle(bounds)
+            annotation.flags = AnnotationFlag.PRINT
+            annotation[NameObject("/C")] = ArrayObject(FloatObject(int(color[i:i + 2], 16) / 255) for i in (0, 2, 4))
+        else:
+            quads = ArrayObject(FloatObject(n) for x1, y1, x2, y2 in boxes for n in (x1, y2, x2, y2, x1, y1, x2, y1))
+            annotation = HighlightAnnotation(rect=bounds, quad_points=quads, highlight_color=color, printing=True)
+        contents = ("Question: " if mark["question"] else "") + mark["note"]
+        if contents:
+            annotation[NameObject("/Contents")] = TextStringObject(contents)
+        annotation[NameObject("/T")] = TextStringObject("Doxograph")
+        writer.add_annotation(page_number=mark["page"] - 1, annotation=annotation)
+    output = io.BytesIO()
+    writer.write(output)
+    headers = {"Content-Disposition": f'attachment; filename="{key}-annotated.pdf"'}
+    if skipped:
+        # A mark past the last page belongs to a PDF that has since been replaced.
+        headers["X-Doxograph-Skipped-Marks"] = str(skipped)
+    return Response(output.getvalue(), media_type="application/pdf", headers=headers)

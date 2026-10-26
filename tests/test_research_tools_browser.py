@@ -618,3 +618,105 @@ def test_history_restore_and_notebook_conflict(engine):
                 assert not errors and not external
             await browser.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_figure_marks_questions_and_annotated_pdf(engine):
+    """A box dragged on the page is a figure mark with a color of its own; a
+    mark's note can be an open question; the Marks list opens the paper on the
+    mark and answers the question; the annotated export leaves the PDF alone."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
+    original = minimal_pdf(['Recovery depends on conditions.','Second page findings.'])
+    store.pdf_path('paper').write_bytes(original)
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440,'height':1000}, accept_downloads=True)
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                await page.get_by_role('button', name='Next page', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                second = page.locator('#reader .pdf-page[data-page="2"]')
+                await second.locator('.textLayer span').first.wait_for()
+                # Drag a box over the page; the text under it is not selected.
+                await page.get_by_role('button', name='Mark a figure', exact=True).click()
+                await page.get_by_role('button', name='Cancel figure mark', exact=True).wait_for()
+                box, pane = await second.bounding_box(), await page.locator('#pdf-scroll').bounding_box()
+                top = max(box['y'], pane['y']) + 20
+                start, end = (box['x'] + box['width'] * .2, top), (box['x'] + box['width'] * .6, top + 150)
+                await page.mouse.move(*start)
+                await page.mouse.down()
+                await page.mouse.move(*end, steps=8)
+                await page.mouse.up()
+                await page.locator('#passage-tools.for-figure').wait_for(state='visible')
+                assert not await page.get_by_role('button', name='Capture as claim', exact=True).is_visible()
+                await page.get_by_role('button', name='Highlight in blue', exact=True).click()
+                await ready(page)
+                await second.locator('.highlightLayer .figure').wait_for()
+                [figure] = httpx.get(url+'/api/notebook').json()['highlights']
+                assert figure['kind'] == 'figure' and figure['page'] == 2 and figure['color'] == 'blue' and figure['text'] == ''
+                [rect] = figure['rects']
+                assert abs(rect['x'] - .2) < .01 and abs(rect['w'] - .4) < .01
+                assert abs(rect['y'] - (top - box['y']) / box['height']) < .01 and abs(rect['h'] - 150 / box['height']) < .01
+                assert await page.get_by_role('button', name='Mark a figure', exact=True).is_visible()
+                rail = page.locator('#content')
+                entry = rail.locator('.highlight-entry')
+                assert await entry.count() == 1
+                assert 'Figure or region' in await entry.inner_text()
+                assert await entry.get_by_role('button', name='Capture as claim').count() == 0
+                # A note that is an open question.
+                await entry.get_by_role('button', name='Add note', exact=True).click()
+                await rail.locator('[data-highlight-note]').fill('Why does recovery dip here?')
+                await entry.get_by_role('button', name='Save note', exact=True).click()
+                await ready(page)
+                await entry.locator('.note p', has_text='Why does recovery dip here?').wait_for()
+                await entry.get_by_label('Open question').check()
+                await ready(page)
+                await page.wait_for_function("document.querySelector('.highlight-entry.question') !== null")
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['question'] is True
+                Path('.context').mkdir(exist_ok=True)
+                await page.screenshot(path='.context/figure-mark.png')
+                # The export is a copy; the stored PDF is unchanged.
+                async with page.expect_download() as download:
+                    await rail.get_by_role('button', name='Export annotated PDF', exact=True).click()
+                assert (await download.value).suggested_filename == 'paper-annotated.pdf'
+                assert store.pdf_path('paper').read_bytes() == original
+                # Marks lists open questions and returns to the page the mark is on.
+                await page.get_by_role('button', name='Previous page', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
+                await page.get_by_role('button', name='Marks and questions', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#research-tools')
+                await page.locator('#marks-filter').select_option('questions')
+                assert 'Why does recovery dip here?' in await dialog.locator('.marks-paper').inner_text()
+                await dialog.get_by_role('button', name='Open page 2', exact=True).click()
+                await dialog.wait_for(state='hidden', timeout=5000)
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                await second.locator('.highlightLayer .figure.focused').wait_for()
+                assert await rail.locator('.highlight-entry.focused').count() == 1
+                await page.get_by_role('button', name='Marks and questions', exact=True).click()
+                await ready(page)
+                await page.locator('#marks-filter').select_option('questions')
+                await dialog.get_by_role('button', name='Mark answered', exact=True).click()
+                await ready(page)
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['question'] is False
+                assert await dialog.locator('.empty').count() == 1
+                await page.locator('#marks-filter').select_option('all')
+                assert await dialog.locator('.marks-paper .highlight-entry').count() == 1
+                await dialog.get_by_role('button', name='Close research tools').click()
+                await dialog.wait_for(state='hidden', timeout=5000)
+                # Escape leaves figure mode without a mark.
+                await page.get_by_role('button', name='Mark a figure', exact=True).click()
+                await page.keyboard.press('Escape')
+                await page.get_by_role('button', name='Mark a figure', exact=True).wait_for()
+                assert len(httpx.get(url+'/api/notebook').json()['highlights']) == 1
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())

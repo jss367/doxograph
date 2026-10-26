@@ -2,16 +2,16 @@
 const ResearchTools = (() => {
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
-  let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null;
+  let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
   let epoch = 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
   // it stays up while the research tools are opened and closed over it.
   let reader = null, readerEpoch = 0, highlightEditing = null, highlightDraft = '';
-  // A page asked for before its paper's reader is up: {paper, workspace, page}.
-  // Named, so a reader mounted for another paper meanwhile discards it rather
-  // than opening on a page that was meant for somewhere else.
+  // A page asked for before its paper's reader is up: {paper, workspace, page,
+  // mark}. Named, so a reader mounted for another paper meanwhile discards it
+  // rather than opening on a page that was meant for somewhere else.
   let pendingPage = null;
-  const askPage = (paper, workspace, page) => { pendingPage = {paper, workspace, page}; };
+  const askPage = (paper, workspace, page, mark = null) => { pendingPage = {paper, workspace, page, mark}; };
   const COLORS = ['yellow', 'green', 'blue', 'pink'];
   let notes = null, notesTimer = null, notesSaving = null;
   const el = (id) => document.getElementById(id);
@@ -159,7 +159,7 @@ const ResearchTools = (() => {
       ${button('source', 'Open source', `data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}`;
   }
   function render() {
-    const labels = {notes:'Workspace notes', compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', searches:'Saved searches'};
+    const labels = {notes:'Workspace notes', compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
     el('research-tools-title').textContent = tab === 'notes' ? 'Workspace notes' : tab === 'history' ? 'Edit history' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
       + button('reload', 'Reload saved version');
@@ -168,6 +168,7 @@ const ResearchTools = (() => {
     if (tab === 'boards') renderBoards();
     if (tab === 'connections') renderConnections();
     if (tab === 'reading') renderReading();
+    if (tab === 'marks') renderMarks();
     if (tab === 'searches') renderSearches();
     if (tab === 'history') renderHistory();
   }
@@ -244,6 +245,24 @@ const ResearchTools = (() => {
           <div class="tool-actions">${r.bookmarks.map(page => button('reader',`Bookmark: page ${page}`,`data-paper="${html(r.paper)}" data-page="${page}"`)).join('')}</div></article>`;
       }).join('')}${notebook.reading.length ? '' : '<p class="empty">Add a paper from its header, or queue a selection of papers.</p>'}`;
   }
+  function markQuote(h) {
+    return `<blockquote class="highlight-${html(h.color)}">${h.kind === 'figure' ? '<em>Figure or region</em>' : html(h.text)}</blockquote>`;
+  }
+  function renderMarks() {
+    const marks = notebook.highlights.filter(h => marksFilter === 'all' || h.question);
+    const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:S.papers.find(p => p.key === key)}))
+      .sort((a, b) => (a.paper?.title || a.key).localeCompare(b.paper?.title || b.key));
+    el('research-body').innerHTML = `<p class="hint">Passages and figures you marked while reading, with your notes and questions. Open a mark to return to its page.</p>
+      <div class="tool-actions"><label>Show<select id="marks-filter">${[['all','All marks'],['questions','Open questions']].map(([value, label]) => `<option value="${value}" ${marksFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
+      ${papers.map(({key, paper}) => `<section class="marks-paper"><h3>${html(paper?.title || 'Removed paper: '+key)}</h3>
+        ${paper?.has_pdf ? `<div class="tool-actions">${button('export-annotated','Export annotated PDF',`data-paper="${html(key)}"`)}</div>` : ''}
+        ${marks.filter(h => h.paper === key).sort((a, b) => a.page - b.page || a.rects[0].y - b.rects[0].y).map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
+          <p class="hint">Page ${h.page} · ${h.kind === 'figure' ? 'figure' : 'passage'}${h.question ? ' · <strong>open question</strong>' : ''}</p>
+          ${markQuote(h)}${h.note ? `<p>${html(h.note)}</p>` : ''}
+          <div class="tool-actions">${paper?.has_pdf ? button('reader',`Open page ${h.page}`,`data-paper="${html(key)}" data-page="${h.page}" data-mark="${html(h.id)}"`) : '<span class="hint">No PDF available</span>'}
+          ${h.question ? button('answer-question','Mark answered') : ''}</div></article>`).join('')}</section>`).join('')}
+      ${marks.length ? '' : `<p class="empty">${marksFilter === 'all' ? 'Highlight a passage or mark a figure while reading a paper.' : 'No open questions. Tick “Open question” on a mark to list it here.'}</p>`}`;
+  }
   function renderSearches() {
     el('research-body').innerHTML = `<p class="hint">Saved searches remember filters, not a fixed list of results. New matching claims appear automatically.</p>
       ${button('save-search','Save current library filters')}
@@ -261,11 +280,21 @@ const ResearchTools = (() => {
     if (!board && !claims.size && !papers.size) throw new Error('Select claims or papers to export first.');
     const response = await fetch('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
       body:JSON.stringify({format,board,claims:refs(),papers:[...papers]})});
+    await saveFile(response, `selected-research.${format === 'csv' ? 'csv' : 'md'}`);
+  }
+  async function saveFile(response, fallback) {
     if (!response.ok) { const body = await response.json(); throw new Error(body.detail || 'Export failed'); }
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement('a'); link.href = url;
-    link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '')?.[1] || `selected-research.${format === 'csv' ? 'csv' : 'md'}`;
+    link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '')?.[1] || fallback;
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function downloadAnnotated(paper, ws = modalWorkspace) {
+    const response = await fetch(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':ws}});
+    if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || 'Export failed'); }
+    await saveFile(response, `${paper}-annotated.pdf`);
+    const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
+    (el('research-tools').open ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
   }
   async function showHistory(paper, claim = null) {
     historyPaper = paper; historyClaim = claim;
@@ -309,11 +338,11 @@ const ResearchTools = (() => {
     if (!paper || reader) return;
     const generation = ++readerEpoch;
     const zoom = savedZoom();
-    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, wantedPage:null, progressSave:Promise.resolve()};
+    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, figureMode:false, drag:null, figure:null, focus:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, wantedPage:null, progressSave:Promise.resolve()};
     el('reader').innerHTML = `<div class="reader-toolbar">${button('previous-page', 'Previous page')}
       <label>Page<input id="reader-page" type="number" min="1" value="1" aria-label="Page number"></label><span id="reader-total"></span>${button('go-page', 'Go')}${button('next-page', 'Next page')}
       <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
-      ${button('bookmark', 'Bookmark this page')}<span class="reader-status" id="reader-status"></span></div>
+      ${button('bookmark', 'Bookmark this page')}${button('figure-mode', 'Mark a figure', 'aria-pressed="false" title="Drag a box around a figure, table, or any region of the page"')}<span class="reader-status" id="reader-status"></span></div>
       <div class="pdf-scroll" id="pdf-scroll"><div class="passage-tools" id="passage-tools" hidden>
         ${COLORS.map(c => button('highlight-selection', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Highlight in ${c}" title="Highlight in ${c}"`)).join('')}
         ${button('capture-selection', 'Capture as claim')}</div></div>
@@ -361,9 +390,9 @@ const ResearchTools = (() => {
       }, {passive:true});
       const progress = (S.notebook?.reading || []).find(r => r.paper === paper);
       reader.savedPage = progress?.page ?? null;
-      const asked = pendingPage && pendingPage.paper === paper && pendingPage.workspace === ws ? pendingPage.page : null;
+      const asked = pendingPage && pendingPage.paper === paper && pendingPage.workspace === ws ? pendingPage : null;
       pendingPage = null;
-      goToPage(asked || progress?.page || 1);
+      goToPage(asked?.page || progress?.page || 1, asked?.mark || null);
       trackCurrentPage();
     } catch (error) {
       if (reader?.generation === generation) el('reader-hint').textContent = `Could not open the PDF: ${error.message}`;
@@ -457,7 +486,36 @@ const ResearchTools = (() => {
     if (!layer) return;
     const percent = value => `${(value * 100).toFixed(3)}%`;
     layer.innerHTML = paperHighlights(reader.paper).filter(h => h.page === page.number).flatMap(h => h.rects.map(r =>
-      `<div class="highlight-${html(h.color)}" data-highlight="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+      `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}${h.id === reader.focus ? ' focused' : ''}" data-highlight="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+  }
+  // A figure is the box dragged out on the page, in the same fractions as a passage's lines.
+  function figureRect(drag, event) {
+    const clamp = value => Math.min(1, Math.max(0, value));
+    const round = value => Math.round(value * 1e5) / 1e5;
+    const [x1, x2] = [drag.x, event.clientX].map(x => clamp((x - drag.box.left) / drag.box.width)).sort((a, b) => a - b);
+    const [y1, y2] = [drag.y, event.clientY].map(y => clamp((y - drag.box.top) / drag.box.height)).sort((a, b) => a - b);
+    return {x:round(x1), y:round(y1), w:round(x2 - x1), h:round(y2 - y1)};
+  }
+  function setFigureMode(on) {
+    if (!reader) return;
+    reader.figureMode = on;
+    if (!on) { reader.drag = null; el('reader').querySelector('.figure-draft')?.remove(); }
+    el('pdf-scroll')?.classList.toggle('drawing', on);
+    const toggle = el('reader').querySelector('[data-tool="figure-mode"]');
+    if (toggle) { toggle.textContent = on ? 'Cancel figure mark' : 'Mark a figure'; toggle.setAttribute('aria-pressed', String(on)); }
+    if (on) { window.getSelection()?.removeAllRanges(); hidePassageTools(); }
+    readerHint();
+  }
+  // The box just drawn waits for a color: the passage toolbar, under the box,
+  // offers the same swatches it offers a selected passage.
+  function offerFigure(page, rect, pageEl) {
+    reader.figure = {page, rect};
+    const tools = el('passage-tools'), scroller = el('pdf-scroll');
+    const box = scroller.getBoundingClientRect(), at = pageEl.getBoundingClientRect();
+    tools.classList.add('for-figure');
+    tools.hidden = false;
+    tools.style.top = `${at.top + (rect.y + rect.h) * at.height - box.top + scroller.scrollTop + 6}px`;
+    tools.style.left = `${Math.max(4, Math.min(at.left + rect.x * at.width - box.left + scroller.scrollLeft, scroller.clientWidth - tools.offsetWidth - 4))}px`;
   }
   function redrawHighlights() {
     if (!reader) return;
@@ -467,9 +525,10 @@ const ResearchTools = (() => {
     const hint = el('reader-hint');
     if (!hint || !reader) return;
     const page = reader.pages[reader.current - 1];
-    hint.textContent = page?.renderedAt && !page.hasText
+    hint.textContent = reader.figureMode ? 'Drag a box around the figure on the page, then pick a color.'
+      : page?.renderedAt && !page.hasText
       ? 'This page has no selectable text. You can transcribe a quote and add a claim by hand.'
-      : 'Select a passage to highlight it or capture it as a claim.';
+      : 'Select a passage to highlight it or capture it as a claim, or mark a figure.';
   }
   function trackCurrentPage() {
     if (!reader?.pages.length) return;
@@ -478,6 +537,10 @@ const ResearchTools = (() => {
     const page = reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages[reader.pages.length - 1];
     if (page.number === reader.current && reader.tracked) return;
     reader.current = page.number; reader.tracked = true;
+    // The mark opened from the Marks list stays outlined until the reader moves to another page.
+    if (reader.focus && paperHighlights(reader.paper).find(h => h.id === reader.focus)?.page !== page.number) {
+      reader.focus = null; redrawHighlights(); focusRailEntry(null);
+    }
     const field = el('reader-page');
     if (field && document.activeElement !== field) field.value = page.number;
     const progress = (S.notebook?.reading || []).find(r => r.paper === reader.paper);
@@ -526,10 +589,20 @@ const ResearchTools = (() => {
     el('pdf-scroll').scrollTo({top:Math.max(0, page.el.offsetTop - 8)});
     trackCurrentPage();
     if (!highlight) return;
+    reader.focus = highlight;
     await renderPage(page);
+    drawPageHighlights(page);
     page.el.querySelectorAll(`.highlightLayer [data-highlight="${CSS.escape(highlight)}"]`).forEach(mark => {
       mark.classList.add('flash'); setTimeout(() => mark.classList.remove('flash'), 1600);
     });
+    focusRailEntry(highlight);
+  }
+  // The rail is drawn by app.js, so the outline follows the mark by hand: on
+  // the entry of the mark asked for, and off again when the reader moves on.
+  function focusRailEntry(id) {
+    document.querySelectorAll('.highlight-entry.focused').forEach(entry => entry.classList.remove('focused'));
+    const entry = id && document.querySelector(`.highlight-entry[data-highlight="${CSS.escape(id)}"]`);
+    if (entry) { entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'}); }
   }
   async function setZoom(zoom) {
     if (!reader?.pages.length || !ZOOMS.includes(zoom)) return;
@@ -565,12 +638,12 @@ const ResearchTools = (() => {
       w:round((r.right - r.left) / box.width), h:round((r.bottom - r.top) / box.height)})).filter(r => r.w > 0 && r.h > 0);
   }
   function hidePassageTools() {
-    if (reader) reader.selection = null;
+    if (reader) { reader.selection = null; reader.figure = null; }
     const tools = el('passage-tools');
-    if (tools) tools.hidden = true;
+    if (tools) { tools.hidden = true; tools.classList.remove('for-figure'); }
   }
   function trackSelection() {
-    if (!reader) return;
+    if (!reader || reader.figureMode || reader.figure) return;
     const selection = window.getSelection();
     const layerOf = node => (node && (node.nodeType === 1 ? node : node.parentElement))?.closest('#reader .textLayer') || null;
     const layer = selection && !selection.isCollapsed && selection.rangeCount ? layerOf(selection.anchorNode) : null;
@@ -581,6 +654,7 @@ const ResearchTools = (() => {
     if (!text || !rects.length) { hidePassageTools(); return; }
     reader.selection = {page:Number(pageEl.dataset.page), text, rects};
     const tools = el('passage-tools'), scroller = el('pdf-scroll');
+    tools.classList.remove('for-figure');
     const box = scroller.getBoundingClientRect(), lines = range.getClientRects();
     const last = lines[lines.length - 1] || pageEl.getBoundingClientRect();
     tools.hidden = false;
@@ -602,16 +676,20 @@ const ResearchTools = (() => {
   // a redraw rebuilds the editor from it.
   function highlightsHtml(paper) {
     const mine = paperHighlights(paper).slice().sort((a, b) => a.page - b.page);
-    const empty = '<p class="hint">Select a passage in the paper to highlight it, with a note of your own, or to capture it as a claim.</p>';
-    return `<section class="highlights"><h3>Highlights${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}</h3>${mine.length ? mine.map(h => {
-      const editing = highlightEditing === h.id;
-      return `<article class="highlight-entry" data-highlight="${html(h.id)}">
-        <blockquote class="highlight-${html(h.color)}" data-tool="highlight-page" data-page="${h.page}" title="Show this passage in the paper">${html(h.text)}</blockquote>
-        ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="Your note on this passage" aria-label="Note on this highlight">${html(highlightDraft)}</textarea>`
-          : h.note.trim() ? noteHtml(h.note, 'my note') : ''}
-        <div class="hmeta"><span>p. ${h.page}</span><span class="cact">
+    const empty = '<p class="hint">Select a passage in the paper to highlight it, with a note or a question of your own, or to capture it as a claim. Mark a figure by dragging a box around it.</p>';
+    const hasPdf = S.papers.find(p => p.key === paper)?.has_pdf;
+    return `<section class="highlights"><h3>Marks${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}
+      ${mine.length && hasPdf ? `<span class="cact">${button('export-annotated', 'Export annotated PDF', `data-paper="${html(paper)}" title="A copy of the PDF with these marks written in as annotations"`)}</span>` : ''}</h3>${mine.length ? mine.map(h => {
+      const editing = highlightEditing === h.id, figure = h.kind === 'figure';
+      return `<article class="highlight-entry${h.id === reader?.focus ? ' focused' : ''}${h.question ? ' question' : ''}" data-highlight="${html(h.id)}">
+        <blockquote class="highlight-${html(h.color)}" data-tool="highlight-page" data-page="${h.page}" title="${figure ? 'Show this figure in the paper' : 'Show this passage in the paper'}">${figure ? '<em>Figure or region</em>' : html(h.text)}</blockquote>
+        ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="${figure ? 'Your note or question on this figure' : 'Your note or question on this passage'}" aria-label="Note on this mark">${html(highlightDraft)}</textarea>`
+          : h.note.trim() ? noteHtml(h.note, h.question ? 'my question' : 'my note') : ''}
+        <div class="hmeta"><span>p. ${h.page}</span>
+          <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
+          <span class="cact">
           ${editing ? button('save-highlight', 'Save note') + button('cancel-highlight', 'Cancel') : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
-          ${button('capture-highlight', 'Capture as claim')}${button('remove-highlight', 'Remove')}</span></div>
+          ${figure ? '' : button('capture-highlight', 'Capture as claim')}${button('remove-highlight', 'Remove')}</span></div>
       </article>`;
     }).join('') : empty}</section>`;
   }
@@ -629,7 +707,7 @@ const ResearchTools = (() => {
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
-    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight']);
+    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated']);
   async function readerAction(name, target) {
     const data = target.dataset;
     if (['previous-page', 'next-page', 'go-page'].includes(name)) {
@@ -677,18 +755,28 @@ const ResearchTools = (() => {
         entry.status = 'reading';
       });
       const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
-      if (reader?.paper === paper && reader.workspace === ws && !V.pdfHidden) { await goToPage(page); return; }
-      askPage(paper, ws, page);
+      if (reader?.paper === paper && reader.workspace === ws && !V.pdfHidden) { await goToPage(page, data.mark || null); return; }
+      askPage(paper, ws, page, data.mark || null);
       if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
       if (V.paper === paper && V.view === 'claims') renderContent(); else goToPaper(paper);
       return;
     }
+    if (name === 'figure-mode') { setFigureMode(!reader?.figureMode); return; }
+    if (name === 'export-annotated') { await downloadAnnotated(data.paper, currentWorkspaceId); return; }
     if (name === 'highlight-selection') {
+      const color = COLORS.includes(data.color) ? data.color : 'yellow';
+      const figure = reader?.figure;
+      if (figure) {
+        const {paper, workspace:ws} = reader;
+        hidePassageTools(); setFigureMode(false);
+        await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:figure.page, kind:'figure', rects:[figure.rect], text:'', color, note:'', question:false}); });
+        redrawHighlights(); return;
+      }
       const passage = reader?.selection;
       if (!passage) throw new Error('Select a passage in the paper first.');
-      const {paper, workspace:ws} = reader, color = COLORS.includes(data.color) ? data.color : 'yellow';
+      const {paper, workspace:ws} = reader;
       window.getSelection()?.removeAllRanges(); hidePassageTools();
-      await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:passage.page, rects:passage.rects, text:passage.text, color, note:''}); });
+      await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:passage.page, kind:'passage', rects:passage.rects, text:passage.text, color, note:'', question:false}); });
       redrawHighlights(); return;
     }
     if (name === 'capture-selection') {
@@ -730,7 +818,8 @@ const ResearchTools = (() => {
       renderContent(); return;
     }
     if (name === 'remove-highlight') {
-      if (highlight.note && !await confirmDialog('Remove this highlight and its note?', {ok:'Remove highlight'})) return;
+      const label = highlight.kind === 'figure' ? 'mark' : 'highlight';
+      if (highlight.note && !await confirmDialog(`Remove this ${label} and its note?`, {ok:`Remove ${label}`})) return;
       await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); });
       if (highlightEditing === id) { highlightEditing = null; highlightDraft = ''; }
       redrawHighlights(); return;
@@ -852,6 +941,10 @@ const ResearchTools = (() => {
       } else notebook.searches = notebook.searches.filter(s=>s.id !== id);
       await save(); renderSearches(); return;
     }
+    if (name === 'answer-question') {
+      notebook.highlights.find(h => h.id === target.closest('[data-highlight]').dataset.highlight).question = false;
+      await save(); renderMarks(); message('Question marked answered. The mark and its note remain.'); return;
+    }
     if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper,data.claim); return; }
     if (name === 'restore') {
       const entry = historyData.entries.find(e => e.id === data.revision);
@@ -870,6 +963,31 @@ const ResearchTools = (() => {
     finally { setBusy(false); }
   }
   document.addEventListener('selectionchange', trackSelection);
+  document.addEventListener('pointerdown', event => {
+    const container = event.target.closest?.('#reader .pdf-page');
+    if (!reader?.figureMode || busy || event.button !== 0 || !container || !container.querySelector('.highlightLayer')) return;
+    event.preventDefault();
+    hidePassageTools();
+    container.setPointerCapture(event.pointerId);
+    reader.drag = {page:Number(container.dataset.page), container, box:container.getBoundingClientRect(), x:event.clientX, y:event.clientY};
+    container.querySelector('.highlightLayer').insertAdjacentHTML('beforeend', '<div class="figure-draft"></div>');
+  });
+  document.addEventListener('pointermove', event => {
+    if (!reader?.drag) return;
+    const r = figureRect(reader.drag, event), box = reader.drag.container.querySelector('.figure-draft');
+    if (box) Object.assign(box.style, {left:`${r.x * 100}%`, top:`${r.y * 100}%`, width:`${r.w * 100}%`, height:`${r.h * 100}%`});
+  });
+  document.addEventListener('pointerup', event => {
+    if (!reader?.drag) return;
+    const {page, container} = reader.drag, rect = figureRect(reader.drag, event);
+    reader.drag = null;
+    // A click without a drag is not a figure; stay in figure mode for another try.
+    if (rect.w < .01 || rect.h < .01) { container.querySelector('.figure-draft')?.remove(); return; }
+    offerFigure(page, rect, container);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && reader?.figureMode && !document.querySelector('dialog[open]')) { hidePassageTools(); setFigureMode(false); }
+  });
   document.addEventListener('click', event => {
     // The label too: its text reaching the card would redraw the box away before it ticks.
     if (event.target.closest('[data-select-claim], [data-select-paper], .claim-selection label')) { event.stopPropagation(); return; }
@@ -889,8 +1007,8 @@ const ResearchTools = (() => {
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       if (!el('research-tools').open) {
-        await open(['notes','boards','reading','searches','connections','compare'].includes(name) ? name : 'compare');
-        if (['notes','boards','reading','searches','connections','compare'].includes(name)) return;
+        await open(['notes','boards','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare');
+        if (['notes','boards','reading','marks','searches','connections','compare'].includes(name)) return;
       }
       await action(name,target);
     });
@@ -913,6 +1031,15 @@ const ResearchTools = (() => {
       await save();
     });
     if (target.id === 'reader-zoom') run(() => setZoom(target.value));
+    if (target.id === 'marks-filter') { marksFilter = target.value; renderMarks(); }
+    if (target.matches('[data-highlight-question]')) run(async () => {
+      const id = target.dataset.highlightQuestion, question = target.checked;
+      if (el('research-tools').open) {
+        notebook.highlights.find(h => h.id === id).question = question;
+        await save(); return;
+      }
+      await mutateNotebook(currentWorkspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This mark was removed in another window.'); h.question = question; });
+    });
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Enter' && event.target.id === 'reader-page') { event.preventDefault(); run(() => readerAction('go-page', event.target)); }
