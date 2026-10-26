@@ -201,3 +201,43 @@ def test_failed_upload_cleanup_releases_retained_bytes(client, immediate_worker,
             server._set(server._new_job("Finished"), state="done")
         server._prune_jobs()
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
+
+
+def test_shutdown_releases_failed_uploads_in_every_workspace(monkeypatch, immediate_worker):
+    monkeypatch.setattr(server, "_jobs", {})
+    other = config.create_workspace("Other research")
+    retained = []
+    store.save_paper(store.new_paper("existing"))
+    body = minimal_pdf("An existing paper")
+    store.pdf_path("existing").write_bytes(body)
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        for workspace in (config.DEFAULT_WORKSPACE_ID, other["id"]):
+            response = client.post("/api/upload?extract_now=false",
+                headers={"X-Doxograph-Workspace": workspace},
+                files={"files": ("broken.pdf", b"not a PDF", "application/pdf")})
+            assert response.status_code == 200
+            with config.use_workspace(workspace):
+                [staged] = config.pdfs_dir().glob(".incoming-*")
+                retained.append(staged)
+        assert all(path.exists() for path in retained)
+
+    assert all(not path.exists() for path in retained)
+    assert store.pdf_path("existing").read_bytes() == body
+    assert store.load_paper("existing")["key"] == "existing"
+
+
+def test_worker_finishing_after_shutdown_releases_its_retry_input(monkeypatch):
+    monkeypatch.setattr(server, "_jobs", {})
+    submitted = []
+    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        client.post("/api/upload?extract_now=false",
+                    files={"files": ("broken.pdf", b"not a PDF", "application/pdf")})
+        [staged] = config.pdfs_dir().glob(".incoming-*")
+
+    # Shutdown must not delete the input out from under a queued worker.
+    assert staged.exists()
+    function, *args = submitted[0]
+    function(*args)
+    assert args[0]["state"] == "error"
+    assert list(config.pdfs_dir().glob(".incoming-*")) == []

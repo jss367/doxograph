@@ -52,7 +52,10 @@ async def _lifespan(_: FastAPI):
     never calls `serve()` at all.
     """
     fingerprint.snapshot()
-    yield
+    try:
+        yield
+    finally:
+        _close_import_session()
 
 
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
@@ -468,6 +471,21 @@ def _forget_import(job: dict) -> None:
         staged.unlink(missing_ok=True)
 
 
+def _close_import_session() -> None:
+    """Release retry inputs now, or when an in-flight worker finishes.
+
+    Background workers can outlive the ASGI lifespan. Their input must stay
+    available until they finish, but no retry will be possible after shutdown.
+    """
+    with _jobs_lock:
+        retained = [job for job in _jobs.values() if job.get("_import")]
+        for job in retained:
+            job["_discard_import"] = True
+        finished = [job for job in retained if job["state"] in ("done", "error")]
+    for job in finished:
+        _forget_import(job)
+
+
 def _import_failed(job: dict, exc: Exception) -> None:
     if isinstance(exc, (httpx.TimeoutException, anthropic.APITimeoutError)):
         explanation = "The service took too long to respond. Retry to try again."
@@ -545,6 +563,8 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
         _import_failed(job, exc)
         traceback.print_exc()
     finally:
+        if job.get("_discard_import"):
+            _forget_import(job)
         _prune_jobs()
 
 
@@ -570,6 +590,8 @@ def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> Non
     finally:
         if attempt != staged:
             attempt.unlink(missing_ok=True)
+        if job.get("_discard_import"):
+            _forget_import(job)
         _prune_jobs()
 
 
