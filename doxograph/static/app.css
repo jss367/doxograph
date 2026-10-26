@@ -36,6 +36,7 @@ header .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap
 .settings-wrap { position: relative; }
 .settings-menu { position: absolute; z-index: 40; top: calc(100% + .45rem); right: 0;
   width: min(22rem, calc(100vw - 1rem)); padding: .75rem; background: var(--bg);
+  max-height: calc(100dvh - 6rem); overflow-y: auto;
   border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .2); }
 .settings-menu[hidden] { display: none; }
@@ -86,6 +87,24 @@ header .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap
 .theme-preview.graphite i:nth-child(1) { background: #f4f4f5; }
 .theme-preview.graphite i:nth-child(2) { background: #9a5f10; }
 .theme-preview.graphite i:nth-child(3) { background: #1c1c1e; }
+.theme-preview.amber i:nth-child(1) { background: #f8efd9; }
+.theme-preview.amber i:nth-child(2) { background: #945800; }
+.theme-preview.amber i:nth-child(3) { background: #302414; }
+.theme-preview.lavender i:nth-child(1) { background: #f1ecf9; }
+.theme-preview.lavender i:nth-child(2) { background: #7150a2; }
+.theme-preview.lavender i:nth-child(3) { background: #29223b; }
+.theme-preview.synthwave i:nth-child(1) { background: #26133a; }
+.theme-preview.synthwave i:nth-child(2) { background: #ff73d5; }
+.theme-preview.synthwave i:nth-child(3) { background: #52e0d1; }
+.theme-preview.terminal i:nth-child(1) { background: #12200e; }
+.theme-preview.terminal i:nth-child(2) { background: #83f052; }
+.theme-preview.terminal i:nth-child(3) { background: #bafa9b; }
+.theme-preview.bubblegum i:nth-child(1) { background: #ffe0f1; }
+.theme-preview.bubblegum i:nth-child(2) { background: #9a288e; }
+.theme-preview.bubblegum i:nth-child(3) { background: #f6cae9; }
+.theme-preview.radioactive i:nth-child(1) { background: #e8f6b5; }
+.theme-preview.radioactive i:nth-child(2) { background: #7038a3; }
+.theme-preview.radioactive i:nth-child(3) { background: #b0f047; }
 .settings-foot { display: flex; align-items: center; justify-content: space-between;
   border-top: 1px solid var(--line); margin-top: .75rem; padding-top: .65rem; }
 

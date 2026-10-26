@@ -49,6 +49,36 @@ const THEME_PALETTES = {
     dim: { ink: '#e6e6e8', muted: '#a6a6ab', line: '#4a4a4f', bg: '#28282b', panel: '#303034', accent: '#e0b060', warn: '#d9a267', ok: '#8fc79b', sel: '#3d3830', 'accent-ink': '#1e1608' },
     dark: { ink: '#e8e8ea', muted: '#9b9ba0', line: '#38383d', bg: '#161618', panel: '#1f1f22', accent: '#d8a852', warn: '#d9a267', ok: '#7fc79b', sel: '#332d22', 'accent-ink': '#1b1405' },
   },
+  amber: {
+    light: { ink: '#302414', muted: '#746044', line: '#e5d5b8', bg: '#fffaf0', panel: '#f8efd9', accent: '#945800', warn: '#94501c', ok: '#486a32', sel: '#f4e3bd', 'accent-ink': '#ffffff' },
+    dim: { ink: '#f4e7cd', muted: '#c4af8c', line: '#62503a', bg: '#30291f', panel: '#3b3225', accent: '#f2bc60', warn: '#f0a477', ok: '#adcd85', sel: '#514027', 'accent-ink': '#30200a' },
+    dark: { ink: '#f9e8c9', muted: '#bca581', line: '#4e3e28', bg: '#1d170f', panel: '#292014', accent: '#efb34e', warn: '#eba070', ok: '#a6c87b', sel: '#402f17', 'accent-ink': '#271a07' },
+  },
+  lavender: {
+    light: { ink: '#29223b', muted: '#6c607e', line: '#dfd7eb', bg: '#fcfaff', panel: '#f1ecf9', accent: '#7150a2', warn: '#8c5a29', ok: '#356b50', sel: '#e9def8', 'accent-ink': '#ffffff' },
+    dim: { ink: '#eee7f8', muted: '#b9accd', line: '#564a6b', bg: '#2c2637', panel: '#362e44', accent: '#c5a9f0', warn: '#dfb17b', ok: '#8fd0ae', sel: '#49395f', 'accent-ink': '#251536' },
+    dark: { ink: '#f0e9fa', muted: '#b0a1c6', line: '#443751', bg: '#19131f', panel: '#241c2f', accent: '#bfa0ed', warn: '#dcaa70', ok: '#84caa4', sel: '#382746', 'accent-ink': '#21112f' },
+  },
+  synthwave: {
+    light: { ink: '#291044', muted: '#735080', line: '#dfc4ed', bg: '#fff5ff', panel: '#f6e6ff', accent: '#ac167d', warn: '#8d4710', ok: '#176b60', sel: '#ebd4ff', 'accent-ink': '#ffffff' },
+    dim: { ink: '#f8e6ff', muted: '#c7a4d6', line: '#704285', bg: '#30203f', panel: '#3c284f', accent: '#ff85de', warn: '#ffbc76', ok: '#61e1d3', sel: '#56315f', 'accent-ink': '#340b2a' },
+    dark: { ink: '#f9eaff', muted: '#bd9bd0', line: '#57336d', bg: '#180d28', panel: '#26133a', accent: '#ff73d5', warn: '#ffb86c', ok: '#52e0d1', sel: '#42204f', 'accent-ink': '#300822' },
+  },
+  terminal: {
+    light: { ink: '#12351c', muted: '#446649', line: '#bcd7b8', bg: '#f1f9e9', panel: '#e4f1da', accent: '#246336', warn: '#84581d', ok: '#246336', sel: '#d0e6c3', 'accent-ink': '#ffffff' },
+    dim: { ink: '#c8efb8', muted: '#99bc8f', line: '#46653e', bg: '#202d1c', panel: '#293922', accent: '#a4ed7c', warn: '#eac077', ok: '#a4ed7c', sel: '#324627', 'accent-ink': '#14240b' },
+    dark: { ink: '#bafa9b', muted: '#89b879', line: '#33552b', bg: '#091207', panel: '#12200e', accent: '#83f052', warn: '#e9c46a', ok: '#83f052', sel: '#20371a', 'accent-ink': '#0e2007' },
+  },
+  bubblegum: {
+    light: { ink: '#461c43', muted: '#815674', line: '#edc3df', bg: '#fff2fa', panel: '#ffe0f1', accent: '#9a288e', warn: '#8a481b', ok: '#20624f', sel: '#f9d7ef', 'accent-ink': '#ffffff' },
+    dim: { ink: '#ffe5f5', muted: '#d5a5c4', line: '#794d6c', bg: '#3b2535', panel: '#492e42', accent: '#ff9de1', warn: '#ffc285', ok: '#89dfc0', sel: '#58334e', 'accent-ink': '#3b1230' },
+    dark: { ink: '#ffe7f6', muted: '#ce9cbe', line: '#643c57', bg: '#250e20', panel: '#35172d', accent: '#ff8bd8', warn: '#ffb879', ok: '#79d9b6', sel: '#4e2544', 'accent-ink': '#330d29' },
+  },
+  radioactive: {
+    light: { ink: '#283214', muted: '#5c6838', line: '#cbd994', bg: '#f6ffdb', panel: '#e8f6b5', accent: '#7038a3', warn: '#8a5118', ok: '#3a6b22', sel: '#daeaa1', 'accent-ink': '#ffffff' },
+    dim: { ink: '#ecffb4', muted: '#b3c785', line: '#56663b', bg: '#28301d', panel: '#333d25', accent: '#d7a0ff', warn: '#ffc477', ok: '#b6ed5b', sel: '#3d472c', 'accent-ink': '#2b103e' },
+    dark: { ink: '#e5ffa0', muted: '#a8c177', line: '#45552b', bg: '#121a08', panel: '#1e2910', accent: '#d69aff', warn: '#ffbd69', ok: '#b0f047', sel: '#303e1c', 'accent-ink': '#260d39' },
+  },
 };
 const appearanceQuery = window.matchMedia('(prefers-color-scheme: dark)');
 let themeSettings = readThemeSettings();
