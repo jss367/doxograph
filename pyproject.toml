@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2",
     "uvicorn>=0.27",
     "httpx>=0.26",
+    "jsonschema>=4.0",
     "python-multipart>=0.0.9",
     "PyYAML>=6.0",
     "pypdf>=4.0",
@@ -33,7 +34,7 @@ doxograph = "doxograph.__main__:main"
 packages = ["doxograph"]
 
 [tool.setuptools.package-data]
-doxograph = ["static/*", "static/vendor/*", "static/vendor/cmaps/*", "static/vendor/standard_fonts/*", "static/vendor/wasm/*"]
+doxograph = ["static/*", "static/vendor/*", "static/vendor/fonts/*", "static/vendor/cmaps/*", "static/vendor/standard_fonts/*", "static/vendor/wasm/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["tests"]

@@ -4,7 +4,7 @@ import json
 
 import anthropic
 
-from . import codex_cli, config, extract, store
+from . import codex_cli, config, extract, providers, store
 
 SYSTEM = """Answer questions about the attached research paper. Use the paper as
 your source and cite PDF page numbers for specific claims. Distinguish what the
@@ -28,7 +28,7 @@ def answer(key: str, messages: list[dict]) -> dict:
 
     def ask(document):
         return extract._create(api, model=config.model(), max_tokens=6000, system=SYSTEM,
-            output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
+            schema=SCHEMA, effort="medium",
             messages=[{"role": "user", "content": [document, {"type": "text", "text": prompt}]}])
 
     try:
@@ -41,5 +41,7 @@ def answer(key: str, messages: list[dict]) -> dict:
     payload = extract._answer(response, "paper chat", key)
     if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
         raise RuntimeError("The model returned no answer. Please retry.")
-    return {"answer": payload["answer"], "model": config.model(),
-            "assistant": "ChatGPT" if isinstance(api, codex_cli.Client) else "Claude"}
+    assistant = "ChatGPT" if isinstance(api, codex_cli.Client) else "Claude"
+    if isinstance(api, providers.TextClient):
+        assistant = config.PROVIDERS[api.selected.provider]["label"]
+    return {"answer": payload["answer"], "model": config.model(), "assistant": assistant}

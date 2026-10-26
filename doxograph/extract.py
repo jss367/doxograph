@@ -1,11 +1,11 @@
-"""Read a paper with Claude and return its claims.
+"""Read a paper with the selected AI provider and return its claims.
 
-The PDF is uploaded once through the Files API and referenced by id, so the
+With Anthropic, the PDF is uploaded once through the Files API and referenced by id, so the
 request body stays small no matter how large the paper is (an inlined base64
 PDF over about 24 MB exceeds the 32 MB request limit). It goes in first with a
 cache breakpoint on it, so re-running extraction against a changed field list
 or a grown tag vocabulary re-reads the paper from cache rather than paying for
-it again.
+it again. Other providers receive page-numbered text extracted locally.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import anthropic
 
-from . import claude_code, codex_cli, config, quotes, store
+from . import claude_code, codex_cli, config, providers, quotes, store
 
 SYSTEM = """\
 You are building a doxography: a record of what each paper claims, arranged so \
@@ -170,7 +170,7 @@ def client() -> anthropic.Anthropic | claude_code.Client | codex_cli.Client:
         return codex_cli.Client()
     if config.ai_provider() == "claude_code":
         return claude_code.Client()
-    return api_client()
+    return providers.client()
 
 
 def api_client() -> anthropic.Anthropic:
@@ -185,10 +185,12 @@ def api_client() -> anthropic.Anthropic:
 _pass_slots = threading.BoundedSemaphore(config.PASS_WORKERS)
 
 
-def _create(api: anthropic.Anthropic, **kwargs):
+def _create(api, **kwargs):
     """One model call, inside the process-wide cap."""
     with _pass_slots:
         config.require_ai_enabled()
+        if "schema" in kwargs:
+            return providers.create(api, **kwargs)
         return api.messages.create(**kwargs)
 
 
@@ -229,7 +231,7 @@ def run_concurrently(items: list, work, workers: int | None = None):
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
         # Bind once before copying contexts, including work that waits for a
         # worker. Release it before yielding so the caller's context stays free.
-        with config.use_ai_provider(config.ai_provider()):
+        with config.use_ai_provider(config.ai_provider()), config.use_analysis():
             futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
         for future in as_completed(futures):
             item = futures[future]
@@ -345,6 +347,7 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     return uploaded.id
 
 
+@config.analysis_session
 def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
     """Delete a paper's remote uploads before removing its local metadata."""
     with store.extraction_lock(key), store.paper_lock(key):
@@ -358,6 +361,10 @@ def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
             *upload.get("superseded_file_ids", []),
             *([upload["file_id"]] if upload.get("file_id") else []),
         ]))
+        # Local analysis must never contact a cloud provider for cleanup.
+        # Keep the historical Anthropic cleanup when that provider is selected.
+        if file_ids and config.ai_provider() == "api" and config.analysis_config().provider != "anthropic" and api is None:
+            file_ids = []
         if file_ids:
             api = api or (api_client() if config.ai_provider() != "api" else client())
         for file_id in file_ids:
@@ -369,6 +376,15 @@ def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
 
 
 def _pdf_block(key: str, force_upload: bool = False) -> dict:
+    if config.analysis_config().provider != "anthropic":
+        pdf = store.pdf_path(key)
+        if not pdf.exists():
+            raise FileNotFoundError(f"no PDF stored for {key}; add one before extracting")
+        text = quotes.paper_text(pdf, config.text_dir() / f"{key}.txt", guard=lambda: store.paper_lock(key))
+        if text is None:
+            raise ValueError("This PDF has no readable text. Use an OCR-processed PDF or select Anthropic for PDF analysis.")
+        pages = "\n\n".join(f"[Page {n}]\n{page}" for n, page in enumerate(text.raw.split(quotes.PAGE_BREAK), 1))
+        return {"type": "text", "text": "Paper text (page numbers refer to PDF pages):\n\n" + pages}
     return {
         "type": "document",
         "source": {"type": "file", "file_id": upload_pdf(key, force=force_upload)},
@@ -463,11 +479,8 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
                 model=config.model(),
                 max_tokens=16000,
                 system=SYSTEM,
-                thinking={"type": "adaptive"},
-                output_config={
-                    "effort": "high",
-                    "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA},
-                },
+                schema=EXTRACTION_SCHEMA,
+                effort="high",
                 messages=[{"role": "user", "content": [pdf_block, instructions]}],
             )
 
@@ -577,6 +590,8 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
     usage = getattr(response, "usage", None) if response is not None else None
     paper["extraction"] = {
         "model": config.model(),
+        "provider": config.analysis_identity()[0],
+        "base_url": config.analysis_identity()[2],
         "at": store.now(),
         "schema_version": config.SCHEMA_VERSION,
         "usage": {
@@ -628,11 +643,8 @@ def retag_paper(key: str) -> dict:
             "You assign topic tags to research claims. Use only tags from the supplied "
             "vocabulary. Assign every tag that genuinely applies and no others."
         ),
-        thinking={"type": "adaptive"},
-        output_config={
-            "effort": "medium",
-            "format": {"type": "json_schema", "schema": RETAG_SCHEMA},
-        },
+        schema=RETAG_SCHEMA,
+        effort="medium",
         messages=[{
             "role": "user",
             "content": (
@@ -766,7 +778,7 @@ def _pass_extra(topic: str, description: str, context: str) -> str:
     one more would let a line moved from the end of the description to the
     front of the context read as the same prompt. It is a different prompt,
     and the pass has to be asked again."""
-    return json.dumps([config.PASS_VERSION, config.model(), description, context])
+    return json.dumps([config.PASS_VERSION, config.analysis_identity(), description, context])
 
 
 @config.bind_model_access
@@ -803,11 +815,8 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
         model=config.model(),
         max_tokens=8000,
         system=TENSION_SYSTEM,
-        thinking={"type": "adaptive"},
-        output_config={
-            "effort": "medium",
-            "format": {"type": "json_schema", "schema": TENSION_SCHEMA},
-        },
+        schema=TENSION_SCHEMA,
+        effort="medium",
         messages=[{
             "role": "user",
             "content": (
@@ -937,11 +946,8 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
         model=config.model(),
         max_tokens=8000,
         system=SYNTHESIS_SYSTEM,
-        thinking={"type": "adaptive"},
-        output_config={
-            "effort": "medium",
-            "format": {"type": "json_schema", "schema": SYNTHESIS_SCHEMA},
-        },
+        schema=SYNTHESIS_SCHEMA,
+        effort="medium",
         messages=[{
             "role": "user",
             "content": (
@@ -1032,11 +1038,8 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
         model=config.model(),
         max_tokens=8000,
         system=AGREEMENT_SYSTEM,
-        thinking={"type": "adaptive"},
-        output_config={
-            "effort": "medium",
-            "format": {"type": "json_schema", "schema": AGREEMENT_SCHEMA},
-        },
+        schema=AGREEMENT_SCHEMA,
+        effort="medium",
         messages=[{
             "role": "user",
             "content": (

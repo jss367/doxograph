@@ -180,3 +180,28 @@ def test_cli_import_keeps_subscription_during_downloads(codex, monkeypatch):
     assert __main__.cmd_add(SimpleNamespace(refs=['2602.06941', '2602.01234'], no_extract=False)) == 0
     assert seen == ['codex', 'codex']
     assert config.ai_provider() == 'api'
+
+
+@pytest.mark.parametrize('provider', ['codex', 'claude_code'])
+def test_subscription_overrides_saved_local_provider(provider, monkeypatch):
+    from doxograph import claude_code, providers
+
+    config.save_analysis_settings('ollama', 'local-model', 'http://localhost:11434')
+    config.set_ai_provider(provider)
+    store.save_paper(store.new_paper('paper'))
+    store.pdf_path('paper').write_bytes(b'%PDF')
+    monkeypatch.setattr(quotes, 'paper_text', lambda *a, **kw: quotes.build('Paper text'))
+    monkeypatch.setattr(providers, 'client', Mock(side_effect=AssertionError('must not use API or local provider')))
+    seen = []
+
+    def create(self, **kwargs):
+        seen.append(kwargs['model'])
+        return SimpleNamespace(stop_reason='end_turn', usage=None, content=[SimpleNamespace(type='text',
+            text=json.dumps({'claims': [], 'summary': 'Study', 'relevance': '', 'proposed_tags': []}))])
+
+    client_class = codex_cli.Client if provider == 'codex' else claude_code.Client
+    monkeypatch.setattr(client_class, 'create', create)
+    result = extract.extract_paper('paper')
+    assert seen == [config.model()]
+    assert seen[0] != 'local-model'
+    assert result['extraction']['provider'] == provider

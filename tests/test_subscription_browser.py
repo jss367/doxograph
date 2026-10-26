@@ -13,6 +13,7 @@ from test_browser import _server
 @pytest.mark.browser
 @pytest.mark.parametrize('provider,assistant', [('claude_code', 'Claude'), ('codex', 'ChatGPT')])
 def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(provider, assistant):
+    config.save_analysis_settings('ollama', 'my-local-model', 'http://localhost:11434')
     store.save_paper(store.new_paper('study', title='Memory Study'))
     store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
 
@@ -37,9 +38,10 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
             await page.route('**/api/papers/study/chat', respond)
             await page.goto(url)
             await page.locator('#btn-settings').click()
-            await page.locator('#ai-provider').select_option(provider)
+            await page.locator('#ai-access').select_option(provider)
             await page.get_by_text('Model access saved.', exact=True).wait_for()
             assert config.ai_provider() == provider
+            assert await page.locator('#ai-provider-form').is_hidden()
             await page.locator('#btn-close-settings').click()
             await page.locator('#papers [data-paper="study"]').click()
             await page.get_by_role('button', name='Chat about paper', exact=True).click()
@@ -63,6 +65,12 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
             await page.get_by_text('AI analysis disabled.', exact=True).wait_for()
             await page.locator('#btn-close-settings').click()
             assert await page.get_by_role('button', name='Chat about paper', exact=True).is_disabled()
+            await page.locator('#btn-settings').click()
+            await page.locator('#ai-access').select_option('api')
+            await page.get_by_text('Model access saved.', exact=True).wait_for()
+            assert await page.locator('#ai-provider-form').is_visible()
+            assert await page.locator('#ai-provider').input_value() == 'ollama'
+            assert await page.locator('#ai-model').input_value() == 'my-local-model'
             assert not errors
             await browser.close()
 

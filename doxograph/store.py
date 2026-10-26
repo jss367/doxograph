@@ -1652,7 +1652,7 @@ def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None,
     tags = load_tags() if tags is None else tags
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     context = load_context() if context is None else context
-    return json.dumps([config.PASS_VERSION, config.model(), topic, description, context])
+    return json.dumps([config.PASS_VERSION, config.analysis_identity(), topic, description, context])
 
 
 def synthesis_basis(rows: list[dict]) -> dict[str, str]:
