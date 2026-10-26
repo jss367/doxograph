@@ -1607,6 +1607,7 @@ function render() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  CommandPalette.sync();
 }
 
 // Whether something is being typed into the content pane. A poll redrawing it
@@ -1635,6 +1636,7 @@ function renderAll() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  CommandPalette.sync();
   syncHash();
 }
 
@@ -5217,6 +5219,173 @@ function openHelp() {
   if (!$('help').open) $('help').showModal();
 }
 
+// The palette reads the same workspace snapshot as the sidebar. Opening a
+// destination clears filters so a previous search cannot hide what was chosen.
+const CommandPalette = (() => {
+  const dialog = $('command-palette'), query = $('command-query'), list = $('command-results');
+  let results = [], active = 0, sourceWorkspace = null, signature = '';
+  const normalize = value => String(value || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+  function library(paper = null, tag = null) {
+    captureOpenEditor();
+    parkNewClaimForNavigation(paper);
+    parkSynthEditor();
+    parkNoteEditor();
+    showView('claims');
+    Object.assign(V, {paper, tag, label: null, q: '', kind: '', unreviewed: false,
+      unverified: false, editing: null, selectedId: null});
+    $('q').value = ''; $('kind').value = '';
+    $('only-unreviewed').checked = false; $('only-unverified').checked = false;
+    dropTextSearch();
+    syncHash(true);
+    renderAll();
+    $('main').scrollTop = 0;
+  }
+
+  function catalog() {
+    const entries = [];
+    const add = (id, kind, title, detail, run, keywords = '') => entries.push({id, kind, title, detail, run,
+      search: normalize(`${title} ${detail} ${keywords} ${kind}`), name: normalize(title)});
+    S.papers.forEach(p => add(`paper:${p.key}`, 'Paper', p.title || p.key,
+      [...(p.authors || []), p.year, p.key].filter(Boolean).join(' · '), () => library(p.key)));
+    const topics = new Map(S.tags.map(t => [t.name, t.description || '']));
+    Object.keys(S.tag_counts).forEach(name => { if (!topics.has(name)) topics.set(name, ''); });
+    topics.forEach((description, name) => add(`topic:${name}`, 'Topic', name, description, () => library(null, name)));
+    (S.notebook?.boards || []).forEach(b => add(`board:${b.id}`, 'Board', b.title,
+      `${b.entries.length} entries · Evidence board`, () => ResearchTools.openBoard(b.id)));
+    add('all', 'Action', 'Show all papers', 'Browse every claim in this workspace', () => library(), 'library home');
+    const click = (id, title, keywords = '') => {
+      if (!$(id).disabled) add(id, 'Action', title, '', () => $(id).click(), keywords);
+    };
+    const view = (id, title, next) => add(id, 'Action', title, '', () => {
+      if (V.view === next) return;
+      showView(next); syncHash(true); renderAll();
+      if (next === 'graph') loadCitations();
+    });
+    view('map', 'Open paper map', 'graph');
+    view('tensions', 'Browse tensions', 'tensions');
+    view('agreements', 'Browse agreements', 'agreements');
+    view('research', 'Edit research context and personal claims', 'research');
+    ['boards', 'reading', 'searches', 'connections', 'compare'].forEach(tool => {
+      const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', searches: 'Open saved searches',
+        connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
+      add(`tool:${tool}`, 'Action', titles[tool], '', () => document.querySelector(`[data-tool="${tool}"]`).click());
+    });
+    add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', () => $('refs').focus(), 'import');
+    add('search', 'Action', 'Search claims and PDF text', '', () => {
+      showView('claims'); syncHash(true); renderAll(); $('q').focus(); $('q').select();
+    });
+    click('btn-workspace-add', 'Create workspace');
+    click('btn-export', 'Export HTML');
+    click('btn-bib', 'Export BibTeX');
+    click('btn-settings', 'Open settings', 'appearance theme color AI');
+    click('btn-help', 'Show keyboard shortcuts', 'help');
+    click('btn-retag', 'Retag all papers');
+    click('btn-tensions', 'Find tensions');
+    click('btn-agreements', 'Find agreements');
+    click('btn-synth', 'Synthesize topics');
+    return entries;
+  }
+
+  function score(entry, words, text) {
+    if (!words.every(word => entry.search.includes(word))) return -1;
+    if (entry.name === text) return 0;
+    if (entry.name.startsWith(text)) return 1;
+    if (entry.name.includes(text)) return 2;
+    return 3;
+  }
+
+  function select(index, scroll = true) {
+    active = index;
+    [...list.children].forEach((row, i) => row.setAttribute('aria-selected', String(i === active)));
+    const row = list.children[active];
+    if (row) {
+      query.setAttribute('aria-activedescendant', row.id);
+      if (scroll) row.scrollIntoView({block: 'nearest'});
+    } else query.removeAttribute('aria-activedescendant');
+  }
+
+  function sync(force = false) {
+    if (!dialog.open) return;
+    // A workspace can also change through Back while this modal is open.
+    if (sourceWorkspace !== currentWorkspaceId || workspaceSwitch || S.workspace?.id !== currentWorkspaceId) {
+      dialog.close(); return;
+    }
+    const entries = catalog();
+    const nextSignature = JSON.stringify(entries.map(({id, title, detail}) => [id, title, detail]));
+    if (!force && signature === nextSignature) return;
+    signature = nextSignature;
+    const previous = results[active]?.id;
+    const text = normalize(query.value.trim()), words = text.split(/\s+/).filter(Boolean);
+    const matched = entries.map(entry => ({...entry, score: score(entry, words, text)})).filter(e => e.score >= 0);
+    if (text) matched.sort((a, b) => a.score - b.score || a.title.localeCompare(b.title));
+    const counts = {};
+    results = matched.filter(e => {
+      counts[e.kind] = (counts[e.kind] || 0) + 1;
+      return text || e.kind === 'Action' || counts[e.kind] <= 6;
+    }).slice(0, 60);
+    list.innerHTML = results.map((e, i) => `<li id="command-result-${i}" role="option" data-command="${i}" aria-selected="false">
+      <span class="command-kind">${esc(e.kind)}</span><span class="command-label"><strong>${esc(e.title)}</strong>
+      ${e.detail ? `<small>${esc(e.detail)}</small>` : ''}</span></li>`).join('');
+    $('command-status').textContent = !results.length ? 'No matches. Try a different title, topic, board, or action.'
+      : `${results.length < matched.length ? `${results.length} of ${matched.length}` : results.length} results in ${currentWorkspace()?.name || 'this workspace'}${results.length < matched.length ? ' · Type to narrow your search' : ''}`;
+    select(force ? 0 : Math.max(0, results.findIndex(e => e.id === previous)), false);
+  }
+
+  function open() {
+    if (dialog.open) { query.focus(); return; }
+    if (document.querySelector('dialog[open]')) return;
+    if (workspaceSwitch || S.workspace?.id !== currentWorkspaceId) return;
+    closePaperMenu(); closeSettings();
+    sourceWorkspace = currentWorkspaceId;
+    query.value = ''; signature = '';
+    dialog.showModal(); sync(true); query.focus();
+  }
+
+  async function activate() {
+    const entry = results[active];
+    if (!entry) return;
+    if (sourceWorkspace !== currentWorkspaceId || workspaceSwitch) { dialog.close(); return; }
+    // Recheck the live catalog: a background refresh may have removed a paper,
+    // board, topic, or disabled an AI action since it was highlighted.
+    const live = catalog().find(e => e.id === entry.id);
+    if (!live) { sync(true); return; }
+    dialog.close();
+    try { await live.run(); }
+    catch (error) { toast(`Could not open ${entry.title}: ${error.message}`, {tone: 'warn'}); }
+  }
+
+  $('btn-command-palette').addEventListener('click', open);
+  $('btn-close-command-palette').addEventListener('click', () => dialog.close());
+  query.addEventListener('input', () => sync(true));
+  dialog.addEventListener('click', event => {
+    const row = event.target.closest('[data-command]');
+    if (row) { select(Number(row.dataset.command), false); activate(); }
+    if (event.target === dialog) {
+      const box = dialog.getBoundingClientRect();
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
+    }
+  });
+  list.addEventListener('mousedown', event => event.preventDefault());
+  dialog.addEventListener('keydown', event => {
+    if (event.isComposing) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (results.length) select((active + (event.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length);
+    } else if (event.key === 'Enter' && event.target === query) {
+      event.preventDefault(); activate();
+    }
+  });
+  document.addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
+      if (document.querySelector('dialog[open]') && !dialog.open) return;
+      event.preventDefault();
+      if (!event.repeat) { if (dialog.open) dialog.close(); else open(); }
+    }
+  });
+  return {sync};
+})();
+
 $('btn-help').addEventListener('click', openHelp);
 $('btn-close-help').addEventListener('click', () => $('help').close());
 // A click on the backdrop is the element itself: the sheet is something to
@@ -5382,6 +5551,7 @@ async function pollOnce() {
   if (!editorHolds()) renderContent();
   syncAnalysisControls();
   ResearchTools.sync();
+  CommandPalette.sync();
 }
 
 async function boot() {

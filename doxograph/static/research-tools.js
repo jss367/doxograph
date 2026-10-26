@@ -81,7 +81,7 @@ const ResearchTools = (() => {
     reader = null; dirty = false; connectionDraft = false;
     el('research-tools').close();
   }
-  async function open(next = 'compare') {
+  async function open(next = 'compare', requestedBoard = null) {
     sync();
     modalWorkspace = workspace;
     tab = next;
@@ -89,6 +89,10 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
     message('');
     notebook = await request();
+    if (requestedBoard !== null) {
+      boardId = requestedBoard;
+      if (!currentBoard()) throw new Error('That board no longer exists.');
+    }
     dirty = false;
     render();
   }
@@ -499,5 +503,6 @@ const ResearchTools = (() => {
     await close();
     return !el('research-tools').open;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch};
+  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,
+    openBoard: id => run(() => open('boards', id))};
 })();

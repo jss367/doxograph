@@ -387,6 +387,23 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px;
   background: var(--panel); padding: 0 .3rem; font: .8rem ui-monospace, Menlo, monospace; }
 
+.command-palette { width: min(42rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem);
+  margin: min(12vh, 5rem) auto auto; padding: 1rem; }
+.command-palette #command-query { margin-top: .8rem; padding: .65rem; }
+.command-palette #command-query:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#command-status { font-size: .8rem; }
+#command-results { list-style: none; padding: 0; margin: .65rem 0;
+  max-height: min(50vh, 26rem); overflow-y: auto; overscroll-behavior: contain; }
+#command-results li { display: flex; align-items: center; gap: .8rem; padding: .55rem .65rem;
+  border-radius: 5px; cursor: pointer; }
+#command-results li[aria-selected="true"] { background: var(--sel); outline: 1px solid var(--accent); outline-offset: -1px; }
+.command-kind { color: var(--muted); font-size: .72rem; width: 3.5rem; flex-shrink: 0; }
+.command-label { min-width: 0; overflow-wrap: anywhere; }
+.command-label strong { display: block; font-weight: 500; }
+.command-label small { display: block; color: var(--muted); font-size: .78rem; }
+.command-footer { display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap;
+  border-top: 1px solid var(--line); padding-top: .65rem; font-size: .78rem; }
+
 /* The PDF at the claim's own page, and the quote on the clipboard: the two
    things a reviewer checking a quote against the paper reaches for. */
 .claim .pdflink, .claim .copy { font-size: .78rem; }

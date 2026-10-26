@@ -183,6 +183,13 @@ links below a chosen number of shared claims; it starts at the median so
 a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
 and click a paper to read it. Clicking a topic filters to it.
 
+Press `⌘K` (`Ctrl+K` on Windows or Linux), or click **Jump to…**, to search
+papers by title, author, year, or key; topics; evidence boards; and actions in
+the current workspace. Use the arrow keys and Enter to open a result, or
+Escape to close the palette. Jumping to a paper or topic clears other filters
+so the destination is visible. Common actions include opening the map or reading
+queue, adding papers, exporting, and changing settings.
+
 Review runs from the keyboard. `j` and `k` move between claims, `e` edits the
 selected one, `r` marks it reviewed and moves to the next, and `n` jumps to the
 next claim nobody has reviewed, wrapping round the end. `/` puts the cursor in
