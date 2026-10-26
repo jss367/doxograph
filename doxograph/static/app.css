@@ -113,6 +113,17 @@ header .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap
   height: calc(100vh - 3rem); overflow-y: auto; padding: .8rem; }
 #main { flex: 1; min-width: 0; height: calc(100vh - 3rem); overflow-y: auto; padding: .8rem 1.2rem 6rem; }
 
+.continue-reading { background: var(--sel); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 6px; padding: .85rem 1rem; margin-bottom: 1rem; }
+.continue-reading h2 { font-size: 1rem; margin: 0 0 .65rem; }
+.continue-items { display: flex; flex-wrap: wrap; gap: 1rem 2rem; }
+.continue-item { flex: 1 1 16rem; min-width: 0; }
+.continue-reading p { margin: 0 0 .45rem; }
+.continue-label { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+.continue-text { font-weight: 600; overflow-wrap: anywhere; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.continue-reading .row { flex-wrap: wrap; }
+
 /* The divider between the two panes. It is 8px of grab area straddling the side
    pane's border, pulled back by its own margins so widening it costs the panes
    nothing. The line it paints only appears under the pointer or on focus. */
