@@ -25,6 +25,8 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "playwright>=1.55",
+    "ruff>=0.17",
+    "mypy>=2.4",
 ]
 
 [project.scripts]
@@ -41,3 +43,18 @@ pythonpath = ["tests"]
 markers = [
     "browser: localhost browser smoke tests",
 ]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+# Start with syntax and correctness checks, without restyling the repository.
+select = ["E9", "F"]
+
+[tool.mypy]
+python_version = "3.13"
+# Enforce strict contracts at the shared storage boundary first. Expand this
+# list as the older dictionary-based modules acquire narrower annotations.
+files = ["doxograph/storage.py", "doxograph/records.py"]
+strict = true
+follow_imports = "silent"

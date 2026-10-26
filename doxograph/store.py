@@ -21,13 +21,14 @@ import tempfile
 import threading
 import time
 import unicodedata
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from . import config, quotes
+from . import config, quotes, records, storage
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def _file_lock(path: Path):
 
 
 @contextlib.contextmanager
-def _reentrant_file_lock(name: str, path: Path):
+def _reentrant_file_lock(name: str, path: Path) -> Iterator[None]:
     """Take the file lock once per thread, however deeply the block nests.
 
     `flock` is held per open file description, so a nested acquire from the same
@@ -130,6 +131,11 @@ def _reentrant_file_lock(name: str, path: Path):
             yield
     finally:
         held[name] -= 1
+
+
+def document_lock(name: str) -> contextlib.AbstractContextManager[None]:
+    """Serialize access to a workspace document across threads and processes."""
+    return _reentrant_file_lock(name, config.locks_dir() / f"{name}.lock")
 
 
 # The tag vocabulary is a single shared file, so it gets one lock rather than
@@ -461,7 +467,7 @@ _reported_paper_issues: dict[Path, dict[str, str]] = {}
 _paper_issues_lock = threading.Lock()
 
 
-def _report_paper_issues(issues: list[dict]) -> None:
+def _report_paper_issues(issues: list[records.StorageIssue]) -> None:
     """Log transitions, while callers continue retrying every unreadable file."""
     directory = config.papers_dir().absolute()
     current = {issue["path"]: issue["detail"] for issue in issues}
@@ -478,16 +484,16 @@ def _report_paper_issues(issues: list[dict]) -> None:
             _reported_paper_issues.pop(directory, None)
 
 
-def all_papers(*, issues: list[dict] | None = None) -> list[dict]:
+def all_papers(*, issues: list[records.StorageIssue] | None = None) -> list[dict]:
     papers = []
-    unreadable = []
+    unreadable: list[records.StorageIssue] = []
     for key in paper_keys():
         try:
             papers.append(load_paper(key))
         except (KeyError, FileNotFoundError):
             continue
         except (OSError, PaperReadError) as exc:
-            issue = {"paper": key, "path": str(paper_path(key)), "detail": str(exc)}
+            issue: records.StorageIssue = {"paper": key, "path": str(paper_path(key)), "detail": str(exc)}
             unreadable.append(issue)
     if issues is not None:
         issues.extend(unreadable)
@@ -1262,15 +1268,7 @@ def _read_tensions() -> dict:
     back over the file: every decision gone and ids restarting at t1. Only a
     missing file is an empty ledger. Writes are atomic, so a half-written file
     is never seen; anything unreadable was edited by hand or damaged."""
-    path = tensions_path()
-    if not path.exists():
-        return {"seq": 0, "tensions": []}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
-    if not isinstance(loaded, dict):
-        raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
+    loaded = storage.read_model(tensions_path(), records.Tensions).model_dump(exclude_unset=True)
     loaded.setdefault("seq", 0)
     loaded.setdefault("tensions", [])
     loaded.setdefault("passes", {})
@@ -1607,15 +1605,7 @@ def _read_syntheses() -> dict:
     """Read the file, reporting where it is malformed rather than reading it
     as empty: every writer starts here and would write the empty reading back
     over it. Only a missing file is empty."""
-    path = syntheses_path()
-    if not path.exists():
-        return {"syntheses": {}}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
-    if not isinstance(loaded, dict) or not isinstance(loaded.get("syntheses", {}), dict):
-        raise ValueError(f"{path} should hold an object with a 'syntheses' object")
+    loaded = storage.read_model(syntheses_path(), records.Syntheses).model_dump(exclude_unset=True)
     loaded.setdefault("syntheses", {})
     return loaded
 
@@ -1793,7 +1783,8 @@ def delete_synthesis(topic: str) -> None:
         _save_syntheses(data)
 
 
-def synthesis_rows(rows: list[dict] | None = None) -> list[dict]:
+def synthesis_rows(rows: list[dict] | None = None,
+                   tensions: list[dict] | None = None) -> list[dict]:
     """Every synthesis whose topic still has claims, with `stale` set when a
     claim in the topic was added, removed, or edited since it was written, or
     a tension in it was found, confirmed, dismissed, or deleted. A stale
@@ -1803,7 +1794,7 @@ def synthesis_rows(rows: list[dict] | None = None) -> list[dict]:
     written before tensions were part of the basis has none on file and reads
     as stale while the topic has any: what the model saw is not known."""
     rows = rows if rows is not None else claim_rows()
-    tensions = tension_rows(rows)
+    tensions = tension_rows(rows) if tensions is None else tensions
     out = []
     for topic, record in sorted(load_syntheses().items()):
         live = topic_claims(topic, rows)
@@ -1852,15 +1843,7 @@ def agreements_lock():
 
 
 def _read_agreements() -> dict:
-    path = agreements_path()
-    if not path.exists():
-        return {"seq": 0, "agreements": []}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
-    if not isinstance(loaded, dict):
-        raise ValueError(f"{path} should hold an object, not {type(loaded).__name__}")
+    loaded = storage.read_model(agreements_path(), records.Agreements).model_dump(exclude_unset=True)
     loaded.setdefault("seq", 0)
     loaded.setdefault("agreements", [])
     loaded.setdefault("passes", {})

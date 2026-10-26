@@ -691,6 +691,7 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
                 # Drag a box over the page; the text under it is not selected.
                 await page.locator('#highlight-color').select_option('blue')
                 await dialog.get_by_role('button',name='Mark a figure',exact=True).click()
+                await ready(page)
                 # Drag within the part of the page the scroll pane shows.
                 box, pane = await second.bounding_box(), await page.locator('.pdf-scroll').bounding_box()
                 top = max(box['y'], pane['y']) + 20

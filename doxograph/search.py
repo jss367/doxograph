@@ -20,7 +20,6 @@ import os
 import re
 import threading
 import unicodedata
-from itertools import islice
 from pathlib import Path
 
 from . import config, quotes, store

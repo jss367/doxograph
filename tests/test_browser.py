@@ -5240,7 +5240,7 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
 
     _paper("shared", "Shared paper", "recovery")
     _paper("other", "Other paper", "recovery")
-    animal = config.create_workspace("Animal locomotion")
+    config.create_workspace("Animal locomotion")
 
     async def scenario():
         async with async_playwright() as playwright:

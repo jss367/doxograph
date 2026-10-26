@@ -12,7 +12,6 @@ from doxograph import config, server, store
 
 def test_overlapping_claim_updates_do_not_revert_each_other():
     """Two claims on one paper, reviewed at once: neither flag may be lost."""
-    import threading
 
     store.save_paper(store.new_paper("doe2026study"))
     first = store.add_claim("doe2026study", {"text": "One.", "reviewed": False})
@@ -42,7 +41,6 @@ def test_overlapping_claim_updates_do_not_revert_each_other():
 
 def test_many_overlapping_writes_all_survive():
     """Every claim added concurrently must be present, and the file stay valid."""
-    import threading
 
     store.save_paper(store.new_paper("doe2026study"))
     start = threading.Barrier(8)
@@ -69,7 +67,6 @@ def test_many_overlapping_writes_all_survive():
 
 
 def test_concurrent_writes_leave_no_temporary_files():
-    import threading
 
     store.save_paper(store.new_paper("doe2026study"))
     threads = [threading.Thread(target=store.add_claim,
@@ -84,7 +81,6 @@ def test_concurrent_writes_leave_no_temporary_files():
 
 def test_concurrent_tag_accepts_both_land():
     """Two papers' proposals accepted at once must both reach the vocabulary."""
-    import threading
 
     for key, tag in (("doe2026a", "alpha"), ("doe2026b", "beta")):
         paper = store.new_paper(key)
@@ -114,7 +110,6 @@ def test_concurrent_tag_accepts_both_land():
 
 
 def test_many_concurrent_tag_adds_all_land():
-    import threading
 
     start = threading.Barrier(6)
 
@@ -137,7 +132,6 @@ def test_deleting_a_paper_while_a_merge_is_saving_leaves_no_ghost():
     exactly that moment: without the lock it unlinks both files and the merge's
     save then recreates the JSON, leaving a paper whose PDF is gone.
     """
-    import threading
 
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4\n")
@@ -179,7 +173,6 @@ def test_deleting_a_paper_while_a_merge_is_saving_leaves_no_ghost():
 
 def test_rename_and_accept_do_not_deadlock():
     """Lock order is vocabulary then paper on both paths."""
-    import threading
 
     store.add_tag("old", "to be renamed")
     paper = store.new_paper("doe2026study")
@@ -218,7 +211,6 @@ def test_paper_lock_is_held_across_processes(tmp_path):
     import subprocess
     import sys
     import textwrap
-    import time
 
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
 
@@ -257,7 +249,6 @@ def test_vocabulary_lock_is_held_across_processes(tmp_path):
     import subprocess
     import sys
     import textwrap
-    import time
 
     log = tmp_path / "vocab.log"
     script = textwrap.dedent(f"""
@@ -284,7 +275,6 @@ def test_claim_lock_is_held_across_processes(tmp_path):
     import subprocess
     import sys
     import textwrap
-    import time
 
     log = tmp_path / "claim.log"
     script = textwrap.dedent(f"""
@@ -308,7 +298,6 @@ def test_claim_lock_is_held_across_processes(tmp_path):
 
 def test_the_vocabulary_is_never_observed_half_written():
     """Readers do not take the lock, so the write has to be atomic."""
-    import threading
 
     for n in range(12):
         store.add_tag(f"topic-{n}", f"description number {n}")

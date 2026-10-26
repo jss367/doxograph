@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Path
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ConfigDict
 
-from . import config, store
+from . import config, storage, store
 
 router = APIRouter(prefix="/api/notebook")
 _lock = threading.RLock()
@@ -107,10 +107,7 @@ class Notebook(Model):
 
 
 def load() -> dict:
-    path = config.data_dir() / "notebook.json"
-    if not path.exists():
-        return Notebook().model_dump()
-    return Notebook.model_validate_json(path.read_text(encoding="utf-8")).model_dump()
+    return storage.read_model(config.data_dir() / "notebook.json", Notebook).model_dump()
 
 
 @router.get("")
@@ -127,7 +124,7 @@ class NotesUpdate(Model):
 def save_notes(body: NotesUpdate) -> dict:
     # Autosave changes only notes, preserving concurrent board/queue edits.
     # Compare the last saved text so another note writer cannot be overwritten.
-    with _lock, store._reentrant_file_lock("notebook", config.locks_dir() / "notebook.lock"):
+    with _lock, store.document_lock("notebook"):
         data = load()
         if data["notes"] == body.notes:
             # Retrying after a lost response is safe if the text reached disk.
@@ -165,7 +162,7 @@ def resolve(ref: dict) -> dict:
 def save_notebook(body: Notebook) -> dict:
     # The revision check avoids overwriting another window's work. The browser
     # keeps the unsaved form on conflict and offers an explicit reload.
-    with _lock, store._reentrant_file_lock("notebook", config.locks_dir() / "notebook.lock"):
+    with _lock, store.document_lock("notebook"):
         previous = load()
         if body.revision != previous["revision"]:
             raise HTTPException(409, "Research tools changed in another window. Reload the saved version before trying again.")

@@ -414,25 +414,39 @@ def jobs_pass(*pages):
     return jq("ci_jobs.jq", [{"jobs": list(page)} for page in pages], exit_status=True)
 
 
-def test_a_passing_job_passes():
-    assert jobs_pass([job(1, "success", 1)])
+REQUIRED_JOBS = ["Python and browser tests", "Static quality checks", "Native macOS checks"]
 
 
-def test_a_rerun_that_failed_overrides_an_earlier_success():
-    assert not jobs_pass([job(1, "success", 1), job(2, "failure", 2)])
+def passing_jobs():
+    return [job(1, "success", n, name=name) for n, name in enumerate(REQUIRED_JOBS)]
 
 
-def test_a_rerun_that_passed_overrides_an_earlier_failure():
-    assert jobs_pass([job(1, "failure", 1)], [job(2, "success", 2)])
+def test_all_required_jobs_pass():
+    assert jobs_pass(passing_jobs())
 
 
-def test_a_rerun_still_in_progress_blocks():
-    assert not jobs_pass([job(1, "success", 1), job(2, None, 2, status="in_progress")])
+@pytest.mark.parametrize("name", REQUIRED_JOBS)
+def test_a_rerun_that_failed_overrides_an_earlier_success(name):
+    assert not jobs_pass(passing_jobs(), [job(2, "failure", 100, name=name)])
 
 
-def test_a_skipped_job_blocks():
-    assert not jobs_pass([job(1, "skipped", 1)])
+@pytest.mark.parametrize("name", REQUIRED_JOBS)
+def test_a_rerun_that_passed_overrides_an_earlier_failure(name):
+    initial = passing_jobs()
+    next(j for j in initial if j["name"] == name)["conclusion"] = "failure"
+    assert jobs_pass(initial, [job(2, "success", 100, name=name)])
 
 
-def test_a_missing_job_blocks():
-    assert not jobs_pass([job(1, "success", 1, name="lint")])
+@pytest.mark.parametrize("name", REQUIRED_JOBS)
+def test_a_rerun_still_in_progress_blocks(name):
+    assert not jobs_pass(passing_jobs(), [job(2, None, 100, name=name, status="in_progress")])
+
+
+@pytest.mark.parametrize("name", REQUIRED_JOBS)
+def test_a_skipped_job_blocks(name):
+    assert not jobs_pass(passing_jobs(), [job(2, "skipped", 100, name=name)])
+
+
+@pytest.mark.parametrize("name", REQUIRED_JOBS)
+def test_a_missing_job_blocks(name):
+    assert not jobs_pass([j for j in passing_jobs() if j["name"] != name])

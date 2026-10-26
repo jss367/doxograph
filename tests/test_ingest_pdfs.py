@@ -19,7 +19,6 @@ from doxograph import __main__, config, extract, ingest, server, store
 def test_concurrent_uploads_of_the_same_filename_keep_their_own_pdfs(monkeypatch):
     """Two uploads sharing a basename must not stage to the same path."""
     import threading
-    import time
 
     def fake_guess(path, client, display_name=None):
         # Read, pause, read again: a shared staging path shows up as a mismatch.
@@ -64,7 +63,6 @@ def test_concurrent_uploads_of_the_same_filename_keep_their_own_pdfs(monkeypatch
 def test_concurrent_uploads_that_share_a_citekey_get_separate_papers(monkeypatch):
     """Two different papers can produce the same coarse key at the same moment."""
     import threading
-    import time
 
     barrier = threading.Barrier(2)
 
@@ -115,7 +113,6 @@ def test_reservation_is_visible_to_deduplication_immediately():
 def test_concurrent_ingests_of_one_paper_make_one_paper(monkeypatch):
     """Two requests for the same arXiv ID must not race past each other."""
     import threading
-    import time
 
     barrier = threading.Barrier(2)
     meta = {
@@ -419,7 +416,6 @@ def test_two_processes_ingesting_one_paper_make_one_paper(tmp_path):
     import subprocess
     import sys
     import textwrap
-    import time
 
     start_at = time.time() + 3.0
     script = textwrap.dedent(f"""
@@ -700,7 +696,6 @@ def test_a_long_upload_name_still_stages(filename):
 
 def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
     """A large drop must not stop the page from polling or saving."""
-    import asyncio
 
     where = {}
     real_stage = ingest.stage_upload

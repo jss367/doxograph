@@ -12,6 +12,7 @@ import os
 import threading
 import traceback
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -25,7 +26,7 @@ from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from . import (__version__, bib, cites, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook, research_notes)
+               search, store, notebook, records, research_notes, storage)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -77,6 +78,11 @@ async def paper_read_error(request: Request, exc: store.PaperReadError):
 @app.exception_handler(store.TopicConflictError)
 async def topic_conflict_error(request: Request, exc: store.TopicConflictError):
     return JSONResponse({"detail": str(exc)}, status_code=409)
+
+
+@app.exception_handler(storage.StorageReadError)
+async def storage_read_error(request: Request, exc: storage.StorageReadError):
+    return JSONResponse({"detail": str(exc)}, status_code=503)
 
 
 _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
@@ -384,7 +390,8 @@ class SelectWorkspace:
         # must be able to reach health and load the app shell even when a broken
         # registry needs to be reported in the UI.
         if scope.get("path") in {
-            "/", "/app.css", "/app.js", "/favicon.png", "/api/health", "/api/code",
+            "/", "/app.css", "/app.js", "/appearance.js", "/paper-map.js",
+            "/favicon.png", "/api/health", "/api/code",
             "/api/workspaces",
         }:
             return await self.app(scope, receive, send)
@@ -984,6 +991,16 @@ def focused_review_js() -> FileResponse:
     return FileResponse(STATIC / "focused-review.js", media_type="text/javascript")
 
 
+@app.get("/appearance.js")
+def appearance_js() -> FileResponse:
+    return FileResponse(STATIC / "appearance.js", media_type="text/javascript")
+
+
+@app.get("/paper-map.js")
+def paper_map_js() -> FileResponse:
+    return FileResponse(STATIC / "paper-map.js", media_type="text/javascript")
+
+
 @app.get("/favicon.png")
 def favicon() -> FileResponse:
     return FileResponse(STATIC / "favicon.png", media_type="image/png")
@@ -1092,13 +1109,32 @@ _state_cache: dict[str, tuple[str, dict]] = {}
 _state_cache_lock = threading.Lock()
 
 
+def _state_section[T](read: Callable[[], T], fallback: T,
+                      issues: list[records.StorageIssue]) -> T:
+    """Keep healthy research visible; strict readers still guard every write."""
+    try:
+        return read()
+    except storage.StorageReadError as exc:
+        issues.append({"path": str(exc.path), "detail": str(exc)})
+        return fallback
+
+
 def _build_state() -> dict:
-    issues = []
+    issues: list[records.StorageIssue] = []
     papers = store.all_papers(issues=issues)
     rows = store.claim_rows(papers)
+    saved_notebook = _state_section(notebook.load, notebook.Notebook().model_dump(), issues)
+    tensions = _state_section(lambda: store.tension_rows(rows), [], issues)
+    agreements = _state_section(lambda: store.agreement_rows(rows), [], issues)
+    syntheses = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
+    if any(issue["path"] == str(store.tensions_path()) for issue in issues):
+        # Their text is still useful, but freshness cannot be established while
+        # the judgments that contributed to it are unavailable.
+        for synthesis in syntheses:
+            synthesis["stale"] = True
     return {
         "workspace": config.get_workspace(),
-        "notebook": notebook.load(),
+        "notebook": saved_notebook,
         "storage_issues": issues,
         "papers": [store.summarize(p) for p in papers],
         "claims": rows,
@@ -1107,9 +1143,9 @@ def _build_state() -> dict:
         "label_counts": store.label_counts(papers),
         "ledger": store.load_ledger(),
         "context": store.load_context(),
-        "tensions": store.tension_rows(rows),
-        "agreements": store.agreement_rows(rows),
-        "syntheses": store.synthesis_rows(rows),
+        "tensions": tensions,
+        "agreements": agreements,
+        "syntheses": syntheses,
         "tension_kinds": store.TENSION_KINDS,
         "tension_statuses": store.TENSION_STATUSES,
         "kinds": config.CLAIM_KINDS,
@@ -1595,6 +1631,8 @@ def find_tensions(body: TensionsBody) -> dict:
 def patch_tension(tension_id: str, body: TensionStatusBody) -> dict:
     try:
         return store.set_tension_status(tension_id, body.status)
+    except storage.StorageReadError:
+        raise
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except KeyError:
@@ -1628,6 +1666,8 @@ def find_agreements(body: AgreementsBody) -> dict:
 def patch_agreement(agreement_id: str, body: AgreementStatusBody) -> dict:
     try:
         return store.set_agreement_status(agreement_id, body.status)
+    except storage.StorageReadError:
+        raise
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except KeyError:
@@ -1668,6 +1708,8 @@ def synthesize(body: SynthesesBody) -> dict:
 def patch_synthesis(topic: str, body: SynthesisTextBody) -> dict:
     try:
         return store.set_synthesis_text(topic, body.text)
+    except storage.StorageReadError:
+        raise
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except KeyError:
