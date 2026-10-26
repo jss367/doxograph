@@ -6,7 +6,7 @@ const ResearchTools = (() => {
   let epoch = 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
   // it stays up while the research tools are opened and closed over it.
-  let reader = null, readerEpoch = 0, highlightEditing = null, highlightDraft = '';
+  let reader = null, readerEpoch = 0, mountSeq = 0, highlightEditing = null, highlightDraft = '';
   // A page asked for before its paper's reader is up: {paper, workspace, page,
   // mark}. Named, so a reader mounted for another paper meanwhile discards it
   // rather than opening on a page that was meant for somewhere else.
@@ -333,7 +333,12 @@ const ResearchTools = (() => {
   }
   async function mountReader(paper) {
     const ws = currentWorkspaceId;
+    // The newest request wins: a mount that waited for the last reader to be
+    // torn down must not go on to open its paper if a later render has asked
+    // for another paper, or for none, meanwhile.
+    const ticket = ++mountSeq;
     if (reader && (!paper || reader.key !== readerKey(paper, ws))) await unmountReader();
+    if (ticket !== mountSeq) return;
     el('reader').hidden = !paper;
     if (!paper || reader) return;
     const generation = ++readerEpoch;
@@ -580,7 +585,11 @@ const ResearchTools = (() => {
       if (Math.abs(scroller.scrollTop - expected) > 2) reader.pinned = null;
     }
     const line = readingLine(scroller);
+    // Scrolled to the very end, the last page is the one being read even
+    // when it is too short to reach the reading line.
+    const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
     const page = reader.pinned ? reader.pages[reader.pinned - 1]
+      : atEnd ? reader.pages[reader.pages.length - 1]
       : reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages[reader.pages.length - 1];
     if (page.number === reader.current && reader.tracked) return;
     reader.current = page.number; reader.tracked = true;

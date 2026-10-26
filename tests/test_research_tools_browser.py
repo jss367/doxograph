@@ -760,7 +760,15 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
                 await page.get_by_role('button', name='Remove bookmark', exact=True).wait_for()
                 reading = httpx.get(url+'/api/notebook').json()['reading'][0]
                 assert reading['bookmarks'] == [3] and reading['page'] == 3
-                # Scrolling away lets the reading line decide again.
+                # Scrolling away lets the reading line decide again; scrolled
+                # to the very end, the short last page is the one being read
+                # even though the reading line never reaches it.
+                await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: 0})")
+                await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
+                await saved_page(url, 1)
+                await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: document.querySelector('#pdf-scroll').scrollHeight})")
+                await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                await saved_page(url, 3)
                 await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: 0})")
                 await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
                 # A box drawn and then canceled is no mark, and selecting text works again.
@@ -1250,5 +1258,45 @@ def test_page_showing_its_end_at_the_top_keeps_the_page_under_the_reading_line(e
                 assert after['fourthHeight'] < after['fifthHeight'] * .4
                 assert abs(after['within'] - before) < .02, (before, after)
                 assert await page.locator('#reader-page').input_value() == '5'
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_a_mount_overtaken_while_the_last_reader_is_torn_down_does_not_open(engine):
+    """Opening a second paper with a PDF and then, before its reader is up, a
+    paper without one: the second paper's mount waits for the first reader
+    to be torn down and must not go on to open over the view of the third."""
+    config.set_ai_enabled(False)
+    for key, title in [('one', 'The first paper'), ('two', 'The second paper')]:
+        store.save_paper(store.new_paper(key, title=title, authors=['Ada Researcher'], year=2026))
+        store.pdf_path(key).write_bytes(minimal_pdf([f'{title}.']))
+    store.save_paper(store.new_paper('plain', title='A paper without a PDF', authors=['Bo Writer'], year=2025))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="one"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                # Both clicks in one task: the second lands while the first
+                # paper's reader is still being torn down for the second.
+                await page.evaluate("""(() => {
+                    document.querySelector('#papers li[data-paper="two"]').click();
+                    document.querySelector('#papers li[data-paper="plain"]').click();
+                })()""")
+                await page.locator('.paperhead h2', has_text='A paper without a PDF').wait_for()
+                await page.wait_for_timeout(800)
+                assert await page.locator('#reader').is_hidden()
+                assert await page.locator('#panes.reading').count() == 0
+                assert await page.locator('#reader .pdf-page').count() == 0
+                # The second paper still opens on its own when asked for.
+                await page.locator('#papers li[data-paper="two"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                assert 'The second paper' in await page.locator('#reader .textLayer').inner_text()
                 assert not errors
     run_browser(scenario())
