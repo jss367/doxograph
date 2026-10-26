@@ -364,10 +364,13 @@ const ResearchTools = (() => {
     return selection?.rangeCount > 0 && selection.containsNode(view.container, true);
   }
   function releaseReaderPage(view) {
-    if (view.rendering) return;
+    if (view.rendering || readerPageSelected(view) || !view.container.hasChildNodes()) return;
     for (const canvas of view.container.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
     view.container.replaceChildren();
     view.rendered = false;
+    // PDF.js retains operator lists and decoded images after the canvas is removed.
+    // cleanup() also waits internally if a newer render is using the same proxy.
+    view.page.cleanup();
   }
   async function layoutReader() {
     const active = reader;

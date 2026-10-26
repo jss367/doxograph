@@ -372,3 +372,105 @@ def test_pdf_continuous_scrolling_preserves_capture_and_reading_position(engine)
                 assert not errors
             await browser.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_pdf_eviction_releases_idle_image_page_caches(engine):
+    from fpdf import FPDF
+    from PIL import Image
+
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('images', title='Image-heavy reading'))
+    pdf = FPDF(unit='pt', format=(612, 792))
+    pdf.set_auto_page_break(False)
+    for number in range(12):
+        pdf.add_page()
+        pdf.set_font('Helvetica', size=12)
+        pdf.text(40, 45, f'Image evidence on page {number + 1}.')
+        image = io.BytesIO()
+        Image.new('RGB', (600, 900), (number * 17, 100, 200)).save(image, format='PNG')
+        pdf.image(image, x=40, y=75, w=500, h=650)
+    store.pdf_path('images').write_bytes(bytes(pdf.output()))
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                # Observe the real bundled proxy's lifecycle and cache state, without app hooks.
+                await page.evaluate('''async () => {
+                    const pdfjs = await import('/vendor/pdf.min.mjs');
+                    pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
+                    const doc = await pdfjs.getDocument({url:'/pdf/images?inline=1', isEvalSupported:false}).promise;
+                    const prototype = Object.getPrototypeOf(await doc.getPage(1));
+                    await doc.loadingTask.destroy();
+                    window.pdfCacheProbe = {calls:[], active:new Map()};
+                    const cleanup = prototype.cleanup, render = prototype.render;
+                    prototype.render = function(...args) {
+                        const probe = window.pdfCacheProbe;
+                        probe.active.set(this, (probe.active.get(this) || 0) + 1);
+                        const task = render.apply(this, args);
+                        if (this.pageNumber === 2 && !probe.held) {
+                            probe.held = true;
+                            task.onContinue = resume => {
+                                task.onContinue = null;
+                                probe.resumePage2 = resume;
+                            };
+                        }
+                        const done = () => probe.active.set(this, probe.active.get(this) - 1);
+                        task.promise.then(done, done);
+                        return task;
+                    };
+                    prototype.cleanup = function(...args) {
+                        const probe = window.pdfCacheProbe;
+                        const before = this._intentStates.size;
+                        const active = probe.active.get(this) || 0;
+                        const container = document.querySelector(`.pdf-page[data-page="${this.pageNumber}"]`);
+                        const selection = window.getSelection();
+                        const selected = !!(container && selection.rangeCount && selection.containsNode(container, true));
+                        const result = cleanup.apply(this, args);
+                        probe.calls.push({page:this.pageNumber, before, after:this._intentStates.size, active, selected, result});
+                        return result;
+                    };
+                }''')
+                await page.locator('#papers li[data-paper="images"]').click()
+                await page.get_by_role('button', name='Read & capture', exact=True).click()
+                await ready(page)
+                scroll = page.get_by_role('region', name='PDF pages')
+                first = page.locator('.pdf-page[data-page="1"] .textLayer span').first
+                await first.wait_for()
+                await first.evaluate('''span => {
+                    const range = document.createRange(); range.selectNodeContents(span);
+                    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+                }''')
+                await page.wait_for_function("window.getSelection().toString().includes('Image evidence')")
+                await page.wait_for_function("typeof window.pdfCacheProbe.resumePage2 === 'function'")
+                await scroll.evaluate('node => node.scrollTop = node.scrollHeight')
+                await expect(page.locator('#reader-page')).to_have_value('12')
+                await page.locator('.pdf-page[data-page="12"] .textLayer span').first.wait_for()
+                # A selected page is retained while nearby and in-flight pages remain safe.
+                await expect(first).to_have_text('Image evidence on page 1.')
+                assert not await page.evaluate('window.pdfCacheProbe.calls.some(c => c.page === 1 || c.page === 2)')
+                await page.evaluate('window.pdfCacheProbe.resumePage2()')
+                await page.wait_for_function('window.pdfCacheProbe.calls.some(c => c.page === 2 && c.result && c.after === 0)')
+                await page.evaluate('window.getSelection().removeAllRanges()')
+                await page.wait_for_function('window.pdfCacheProbe.calls.some(c => c.page === 1 && c.before > 0 && c.after === 0 && c.result)')
+                assert not await page.evaluate('window.pdfCacheProbe.calls.some(c => c.active || c.selected)')
+                assert await page.locator('.pdf-page canvas').count() < 6
+                await scroll.evaluate('node => node.scrollTop = 0')
+                await expect(first).to_have_text('Image evidence on page 1.')
+                await page.get_by_role('button', name='Capture selected passage', exact=True).click()
+                await ready(page)
+                await expect(page.locator('#capture-quote')).to_have_value('Image evidence on page 1.')
+                await page.locator('#capture-text').fill('Keep this interpretation while evicting pages.')
+                await scroll.evaluate('node => node.scrollTop = node.scrollHeight')
+                await expect(page.locator('#reader-page')).to_have_value('12')
+                await expect(page.locator('#capture-text')).to_have_value('Keep this interpretation while evicting pages.')
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())
+
