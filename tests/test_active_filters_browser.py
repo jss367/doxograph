@@ -6,10 +6,11 @@ from urllib.parse import urlencode
 
 import httpx
 import pytest
-from playwright.async_api import async_playwright, expect
+from playwright.async_api import expect
 
+from browser_support import browser_session, run_browser
 from doxograph import config, store
-from test_browser import _paper, _polled, _server
+from test_browser import _paper, _poll, _server
 
 
 @pytest.mark.browser
@@ -24,8 +25,7 @@ def test_clear_active_filters(engine):
     store.set_labels("one", ["reading-list"])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={"width": 1280, "height": 900})
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
@@ -46,7 +46,7 @@ def test_clear_active_filters(engine):
                 # Remove just one filter with the keyboard, keeping every other one.
                 remove_unreviewed = chips.get_by_role("button", name="Remove filter: Unreviewed", exact=True)
                 await remove_unreviewed.focus()
-                await _polled(page, rounds=1)
+                await _poll(page)
                 await expect(remove_unreviewed).to_be_focused()
                 await page.keyboard.press("Enter")
                 await expect(chips.locator(".filter-chip")).to_have_count(6)
@@ -92,9 +92,8 @@ def test_clear_active_filters(engine):
                     await expect(chips).to_be_hidden()
                     assert f"view={view}" in page.url
                 assert not errors
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -108,8 +107,7 @@ def test_poll_prunes_only_parked_drafts_for_deleted_papers(engine, action, faile
     other_workspace = config.create_workspace("Another workspace")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#paper=one&group=0")
@@ -132,7 +130,7 @@ def test_poll_prunes_only_parked_drafts_for_deleted_papers(engine, action, faile
 
                 assert await page.evaluate("Object.keys(V.parkedNewClaims).sort()") == ["one", "two"]
                 assert httpx.delete(f"{url}/api/papers/one").status_code == 200
-                await _polled(page)
+                await _poll(page)
                 assert await page.evaluate("Object.keys(V.parkedNewClaims)") == ["two"]
                 await page.locator("#papers [data-paper='two']").click()
                 await page.get_by_role("button", name="Resume", exact=True).click()
@@ -143,9 +141,8 @@ def test_poll_prunes_only_parked_drafts_for_deleted_papers(engine, action, faile
                 await page.locator("#workspace").select_option(other_workspace["id"])
                 await page.wait_for_function("id => currentWorkspaceId === id", arg=other_workspace["id"])
                 await expect(page.locator("#ask")).not_to_be_visible()
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -157,8 +154,7 @@ def test_new_claim_without_text_can_be_resumed_after_clearing_scope(engine, acti
     _paper("one", "Original paper", "alignment")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#paper=one&group=0")
@@ -192,9 +188,8 @@ def test_new_claim_without_text_can_be_resumed_after_clearing_scope(engine, acti
                 claim = httpx.get(f"{url}/api/state").json()["claims"][-1]
                 assert claim["text"] == "The claim drafted after collecting its details."
                 assert claim[field] == value
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -208,8 +203,7 @@ def test_poll_updates_missing_filter_chips_without_replacing_editor(engine, edit
     store.set_labels("one", ["reading-list"])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
                 view = "view=research&" if editor == "research" else ""
@@ -227,16 +221,15 @@ def test_poll_updates_missing_filter_chips_without_replacing_editor(engine, edit
 
                 # A second window removes the filter's paper and its last topic/label.
                 assert httpx.delete(f"{url}/api/papers/one").status_code == 200
-                await _polled(page)
+                await _poll(page)
                 await expect(chips).to_be_hidden()
                 assert await original.evaluate("el => el.isConnected && el === document.activeElement && el.selectionStart === 7 && el.selectionEnd === 7")
                 await expect(field).to_have_value("An unfinished sentence that stays under the cursor.")
                 assert await page.evaluate("V.paper === null && V.tag === null && V.label === null")
                 assert all(f"{key}=" not in page.url for key in ("paper", "tag", "label"))
                 await expect(page.locator("#papers [data-paper='one']")).to_have_count(0)
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -249,8 +242,7 @@ def test_clearing_filters_preserves_pending_research_form(engine, action, fail):
     store.add_tag("alignment")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             started = asyncio.Event()
             release_save = asyncio.Event()
@@ -292,9 +284,8 @@ def test_clearing_filters_preserves_pending_research_form(engine, action, fail):
                     await page.locator("#research-form").get_by_role("button", name="Save", exact=True).click()
                 await expect(page.locator("#research-form")).to_have_count(0)
                 assert httpx.get(f"{url}/api/state").json()["context"] == "The context submitted while filters change."
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -308,8 +299,7 @@ def test_clearing_paper_scope_parks_new_claim(engine, action, draft_state):
     store.add_tag("alignment")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await getattr(playwright, engine).launch()
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             started = asyncio.Event()
             release_failure = asyncio.Event()
@@ -365,6 +355,5 @@ def test_clearing_paper_scope_parks_new_claim(engine, action, draft_state):
                 saved = [claim for claim in claims if claim["text"] == draft_text]
                 assert len(saved) == 1
                 assert saved[0]["paper"] == "one"
-            await browser.close()
 
-    asyncio.run(scenario())
+    run_browser(scenario())

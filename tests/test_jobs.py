@@ -67,6 +67,18 @@ def metadata_timeout(monkeypatch):
     monkeypatch.setattr(ingest, "guess_from_pdf", timeout)
 
 
+def test_explicit_retry_uses_the_current_model_access(client, monkeypatch):
+    config.set_ai_provider("codex")
+    ref = ingest.Ref("url", "https://example.org/paper.pdf", "https://example.org/paper.pdf")
+    job = server._new_import_job("Paper", True, ref=ref)
+    server._set(job, state="error")
+    config.set_ai_provider("claude_code")
+    submitted = []
+    monkeypatch.setattr(server._pool, "submit", lambda fn, queued, *args: submitted.append(queued["ai_provider"]))
+    assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
+    assert submitted == ["claude_code"]
+
+
 @pytest.mark.parametrize("analyze", [False, True])
 def test_retry_recovers_missing_pdf_without_duplicate_paper(client, monkeypatch, immediate_worker, analyze):
     downloads, analyses = [], []

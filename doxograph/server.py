@@ -7,6 +7,7 @@ import contextvars
 import ipaddress
 import hashlib
 import json
+import logging
 import functools
 import os
 import threading
@@ -15,6 +16,7 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 import anthropic
@@ -23,10 +25,13 @@ from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-from . import (__version__, bib, cites, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook, records, research_notes, storage)
+from . import (__version__, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
+               search, store, notebook, records, research_notes, storage, providers)
+from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
+
+logger = logging.getLogger(__name__)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -453,6 +458,7 @@ def _new_job(label: str) -> dict:
         job = {"id": _job_counter, "label": label, "state": "queued",
                "detail": "", "key": None, "started": store.now()}
         job["workspace"] = config.workspace_id()
+        job["ai_provider"] = config.ai_provider()
         _jobs[job["id"]] = job
         return job
 
@@ -546,19 +552,24 @@ def _prune_jobs() -> None:
         _forget_import(job)
 
 
-def _submit_job(function, *args):
+def _submit_job(function, job: dict, *args):
     """Capture accepted settings before a job waits in the outer worker pool."""
-    with config.use_analysis():
+    with config.use_model_access():
+        # Queue submission is the acceptance point for both selections.
+        _set(job, ai_provider=config.ai_provider())
         context = contextvars.copy_context()
-    return _pool.submit(functools.partial(context.run, function), *args)
+    return _pool.submit(functools.partial(context.run, function), job, *args)
 
 
 def _workspace_job(function):
-    """Keep a queued job in the corpus from which it was submitted."""
+    """Keep the workspace and model access selected when the job was queued."""
     @functools.wraps(function)
     @config.analysis_session
     def wrapped(job: dict, *args, **kwargs):
-        with config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)):
+        with (
+            config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)),
+            config.use_ai_provider(job.get("ai_provider", config.ai_provider())),
+        ):
             return function(job, *args, **kwargs)
     return wrapped
 
@@ -761,6 +772,29 @@ class SettingsBody(BaseModel):
     provider: str | None = None
     model: str | None = None
     base_url: str | None = None
+
+
+class ProviderBody(BaseModel):
+    ai_provider: Literal["api", "claude_code", "codex"]
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=32000)
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
+
+    @field_validator("messages")
+    @classmethod
+    def conversation(cls, messages):
+        if any(m.role != ("user" if i % 2 == 0 else "assistant") or not m.content.strip()
+               for i, m in enumerate(messages)) or messages[-1].role != "user":
+            raise ValueError("Send alternating user and assistant messages, ending with a question.")
+        if sum(len(m.content) for m in messages) > 80000:
+            raise ValueError("Start a new conversation; this one is too long.")
+        return messages
 
 
 class IngestBody(BaseModel):
@@ -1153,6 +1187,8 @@ def _build_state() -> dict:
         "relations": config.LEDGER_RELATIONS,
         "data_dir": str(config.data_dir()),
         **config.analysis_settings(),
+        "model": config.model(),
+        "ai_provider": config.ai_provider(),
         "ai_enabled": config.ai_enabled(),
     }
 
@@ -1179,7 +1215,7 @@ def state(request: Request) -> Response:
     settings_signature = hashlib.sha256(json.dumps(config.analysis_settings(), sort_keys=True).encode()).hexdigest()
     workspace_record = config.get_workspace()
     name_signature = hashlib.sha1(workspace_record["name"].encode()).hexdigest()
-    signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}-{name_signature}"
+    signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}-{config.ai_provider()}-{name_signature}"
     with _state_cache_lock:
         cached = _state_cache.get(workspace)
     # Retry unreadable files even when their stat is unchanged: a temporary
@@ -1226,6 +1262,12 @@ def update_settings(body: SettingsBody) -> dict:
     return {"ai_enabled": config.ai_enabled()}
 
 
+@app.put("/api/settings/provider")
+def update_provider(body: ProviderBody) -> dict:
+    config.set_ai_provider(body.ai_provider)
+    return {"ai_provider": config.ai_provider()}
+
+
 def _require_analysis() -> None:
     if not config.ai_enabled():
         raise HTTPException(403, "AI analysis is disabled. Enable it in Settings to run analysis.")
@@ -1257,8 +1299,8 @@ def retry_import(job_id: int) -> dict:
         source = job.get("_import")
         if not source:
             raise HTTPException(409, "This job cannot be retried. Add the paper again.")
-        previous = {field: job.get(field, "") for field in ("detail", "explanation", "started")}
-        job.update(state="queued", detail="", explanation="", started=store.now())
+        previous = {field: job.get(field, "") for field in ("detail", "explanation", "started", "ai_provider")}
+        job.update(state="queued", detail="", explanation="", started=store.now(), ai_provider=config.ai_provider())
     try:
         if "ref" in source:
             _submit_job(_run_ingest, job, source["ref"], source["extract"])
@@ -1420,6 +1462,45 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
     job = _new_job(key)
     _submit_job(_run_extract, job, key, keep_reviewed)
     return {"queued": job["id"]}
+
+
+@app.post("/api/papers/{key}/chat")
+def paper_chat(key: str, body: ChatBody) -> dict:
+    _require_analysis()
+    try:
+        return chat.answer(key, [message.model_dump() for message in body.messages])
+    except KeyError:
+        raise HTTPException(404, f"no paper {key}")
+    except providers.ProviderResponseError as exc:
+        logger.exception("Paper chat received an invalid provider response")
+        raise HTTPException(502, str(exc)[:500])
+    except InputTooLargeError as exc:
+        raise HTTPException(413, str(exc)[:500])
+    except FileNotFoundError:
+        raise HTTPException(400, "This paper's PDF is unavailable. Import it again before chatting.")
+    except ModelInputError as exc:
+        raise HTTPException(400, str(exc)[:500])
+    except ValueError:
+        logger.exception("Paper chat encountered invalid saved data or configuration")
+        raise HTTPException(500, "Paper chat could not read the saved paper or model configuration. Check your library and provider settings.")
+    except ModelSetupError as exc:
+        logger.exception("Paper chat model setup failed")
+        raise HTTPException(502, str(exc)[:500])
+    except (anthropic.APIError, httpx.HTTPError) as exc:
+        logger.exception("Paper chat provider request failed")
+        status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403):
+            detail = "The model service refused access. Check the selected provider's credentials, then retry."
+        elif status == 429:
+            detail = "The model service's usage limit was reached. Wait a moment, then retry."
+        elif isinstance(exc, (httpx.TimeoutException, anthropic.APITimeoutError)):
+            detail = "The model service timed out. Try again."
+        else:
+            detail = "The model service could not be reached or is unavailable. Check your connection and provider settings, then retry."
+        raise HTTPException(502, detail)
+    except RuntimeError:
+        logger.exception("Paper chat model request failed")
+        raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.")
 
 
 @app.post("/api/papers/{key}/review")

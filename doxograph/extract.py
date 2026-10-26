@@ -10,6 +10,7 @@ it again. Other providers receive page-numbered text extracted locally.
 
 from __future__ import annotations
 
+import base64
 import contextvars
 import hashlib
 import json
@@ -19,7 +20,8 @@ from pathlib import Path
 
 import anthropic
 
-from . import config, providers, quotes, store
+from . import claude_code, codex_cli, config, providers, quotes, store
+from .model_errors import InputTooLargeError, ModelInputError
 
 SYSTEM = """\
 You are building a doxography: a record of what each paper claims, arranged so \
@@ -164,8 +166,17 @@ RETAG_SCHEMA = {
 }
 
 
-def client():
+def client() -> anthropic.Anthropic | claude_code.Client | codex_cli.Client:
+    if config.ai_provider() == "codex":
+        return codex_cli.Client()
+    if config.ai_provider() == "claude_code":
+        return claude_code.Client()
     return providers.client()
+
+
+def api_client() -> anthropic.Anthropic:
+    key = config.api_key()
+    return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
 #: Model calls in flight across this process. Sized once, from the setting as
@@ -219,9 +230,9 @@ def run_concurrently(items: list, work, workers: int | None = None):
     # queued together still make PASS_WORKERS calls between them.
     workers = min(workers or config.PASS_WORKERS, len(items))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="doxograph-pass") as pool:
-        # Capture once before submitting any items. Queued workers must not
-        # pick up a provider selected while an earlier item is running.
-        with config.use_analysis():
+        # Bind once before copying contexts, including work that waits for a
+        # worker. Release it before yielding so the caller's context stays free.
+        with config.use_model_access():
             futures = {pool.submit(contextvars.copy_context().run, work, item): item for item in items}
         for future in as_completed(futures):
             item = futures[future]
@@ -307,6 +318,8 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     no longer has the file.
     """
     config.require_ai_enabled()
+    if api is None and config.ai_provider() != "api":
+        raise RuntimeError("PDF uploads require Anthropic API access; subscription analysis uses the selected CLI.")
     pdf = store.pdf_path(key)
     if not pdf.exists():
         raise FileNotFoundError(f"no PDF stored for {key}; add one before extracting")
@@ -335,7 +348,7 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     return uploaded.id
 
 
-@config.analysis_session
+@config.bind_model_access
 def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
     """Delete a paper's remote uploads before removing its local metadata."""
     with store.extraction_lock(key), store.paper_lock(key):
@@ -351,10 +364,10 @@ def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
         ]))
         # Local analysis must never contact a cloud provider for cleanup.
         # Keep the historical Anthropic cleanup when that provider is selected.
-        if file_ids and config.analysis_config().provider != "anthropic" and api is None:
+        if file_ids and config.ai_provider() == "api" and config.analysis_config().provider != "anthropic" and api is None:
             file_ids = []
         if file_ids:
-            api = api or client()
+            api = api or (api_client() if config.ai_provider() != "api" else client())
         for file_id in file_ids:
             try:
                 api.files.delete(file_id)
@@ -370,7 +383,7 @@ def _pdf_block(key: str, force_upload: bool = False) -> dict:
             raise FileNotFoundError(f"no PDF stored for {key}; add one before extracting")
         text = quotes.paper_text(pdf, config.text_dir() / f"{key}.txt", guard=lambda: store.paper_lock(key))
         if text is None:
-            raise ValueError("This PDF has no readable text. Use an OCR-processed PDF or select Anthropic for PDF analysis.")
+            raise ModelInputError("This PDF has no readable text. Use an OCR-processed PDF or select Anthropic for PDF analysis.")
         pages = "\n\n".join(f"[Page {n}]\n{page}" for n, page in enumerate(text.raw.split(quotes.PAGE_BREAK), 1))
         return {"type": "text", "text": "Paper text (page numbers refer to PDF pages):\n\n" + pages}
     return {
@@ -380,6 +393,29 @@ def _pdf_block(key: str, force_upload: bool = False) -> dict:
         # change then re-reads it from cache instead of re-reading the file.
         "cache_control": {"type": "ephemeral", "ttl": "1h"},
     }
+
+
+def inline_pdf(key: str) -> dict:
+    pdf = store.pdf_path(key)
+    if not pdf.exists():
+        raise FileNotFoundError(f"no PDF stored for {key}; add one before asking about it")
+    if pdf.stat().st_size > 7_000_000:
+        raise InputTooLargeError("This PDF exceeds Claude Code's input limit. Use a smaller PDF or Anthropic API.")
+    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+            "data": base64.b64encode(pdf.read_bytes()).decode("ascii")}}
+
+
+def paper_document(key: str, api) -> dict:
+    if isinstance(api, codex_cli.Client):
+        pdf = store.pdf_path(key)
+        if not pdf.exists():
+            raise FileNotFoundError(f"no PDF stored for {key}; add one before asking about it")
+        text = quotes.paper_text(pdf, store.text_path(key), guard=lambda: store.paper_lock(key))
+        if text is None:
+            raise ModelInputError("This PDF has no readable text. Choose Claude subscription or Anthropic API for scanned papers.")
+        pages = [f"[PDF page {i}]\n{page}" for i, page in enumerate(text.raw.split(quotes.PAGE_BREAK), 1)]
+        return {"type": "text", "text": "Paper text (figures and scanned images are unavailable):\n\n" + "\n\n".join(pages)}
+    return inline_pdf(key) if isinstance(api, claude_code.Client) else _pdf_block(key)
 
 
 def _instructions(paper: dict, tags: list[dict] | None = None) -> str:
@@ -416,7 +452,7 @@ def claim_state(claim: dict) -> str:
                       sort_keys=True, default=str)
 
 
-@config.analysis_session
+@config.bind_model_access
 def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
     """Run extraction and merge the result into the stored paper."""
     config.require_ai_enabled()
@@ -441,7 +477,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
 
         def read(pdf_block: dict):
             return _create(api, 
-                model=config.analysis_config().model,
+                model=config.model(),
                 max_tokens=16000,
                 system=SYSTEM,
                 schema=EXTRACTION_SCHEMA,
@@ -449,7 +485,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
                 messages=[{"role": "user", "content": [pdf_block, instructions]}],
             )
 
-        pdf_block = _pdf_block(key)
+        pdf_block = paper_document(key, api)
         try:
             response = read(pdf_block)
         except (anthropic.BadRequestError, anthropic.NotFoundError) as e:
@@ -554,9 +590,9 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
 
     usage = getattr(response, "usage", None) if response is not None else None
     paper["extraction"] = {
-        "model": config.analysis_config().model,
-        "provider": config.analysis_config().provider,
-        "base_url": config.analysis_config().base_url,
+        "model": config.model(),
+        "provider": config.analysis_identity()[0],
+        "base_url": config.analysis_identity()[2],
         "at": store.now(),
         "schema_version": config.SCHEMA_VERSION,
         "usage": {
@@ -571,7 +607,7 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
     return paper
 
 
-@config.analysis_session
+@config.bind_model_access
 def retag_paper(key: str) -> dict:
     """Reassign tags for a paper's existing claims against the current vocabulary.
 
@@ -602,7 +638,7 @@ def retag_paper(key: str) -> dict:
     claims_before = {c["id"]: state_of(c) for c in claims}
     api = client()
     response = _create(api, 
-        model=config.analysis_config().model,
+        model=config.model(),
         max_tokens=8000,
         system=(
             "You assign topic tags to research claims. Use only tags from the supplied "
@@ -746,7 +782,7 @@ def _pass_extra(topic: str, description: str, context: str) -> str:
     return json.dumps([config.PASS_VERSION, config.analysis_identity(), description, context])
 
 
-@config.analysis_session
+@config.bind_model_access
 def find_tensions(topic: str, rows: list[dict] | None = None,
                   tags: list[dict] | None = None, force: bool = False) -> dict:
     """Ask the model which claims in `topic` disagree, and record the answer.
@@ -777,7 +813,7 @@ def find_tensions(topic: str, rows: list[dict] | None = None,
     shown = {r["id"]: r for r in rows}
     api = client()
     response = _create(api, 
-        model=config.analysis_config().model,
+        model=config.model(),
         max_tokens=8000,
         system=TENSION_SYSTEM,
         schema=TENSION_SCHEMA,
@@ -859,7 +895,7 @@ def _tension_block(topic: str, tensions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-@config.analysis_session
+@config.bind_model_access
 def synthesize_topic(topic: str, rows: list[dict] | None = None,
                      tags: list[dict] | None = None, force: bool = False) -> dict:
     """Ask the model what the papers hold on `topic`, and record the answer.
@@ -908,7 +944,7 @@ def synthesize_topic(topic: str, rows: list[dict] | None = None,
     before = store.load_syntheses().get(topic)
     api = client()
     response = _create(api, 
-        model=config.analysis_config().model,
+        model=config.model(),
         max_tokens=8000,
         system=SYNTHESIS_SYSTEM,
         schema=SYNTHESIS_SCHEMA,
@@ -978,7 +1014,7 @@ AGREEMENT_SCHEMA = {
 }
 
 
-@config.analysis_session
+@config.bind_model_access
 def find_agreements(topic: str, rows: list[dict] | None = None,
                     tags: list[dict] | None = None, force: bool = False) -> dict:
     """Ask the model which claims in `topic` assert the same finding, and
@@ -1000,7 +1036,7 @@ def find_agreements(topic: str, rows: list[dict] | None = None,
     shown = {r["id"]: r for r in rows}
     api = client()
     response = _create(api, 
-        model=config.analysis_config().model,
+        model=config.model(),
         max_tokens=8000,
         system=AGREEMENT_SYSTEM,
         schema=AGREEMENT_SCHEMA,

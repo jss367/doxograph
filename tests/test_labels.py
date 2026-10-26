@@ -9,11 +9,11 @@ changed.
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
 
+from browser_support import browser_session, run_browser
 from doxograph import __main__, export, server, store
 
 
@@ -174,14 +174,12 @@ def test_the_export_shows_a_papers_labels_and_searches_on_them():
 @pytest.mark.browser
 def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
     from test_browser import _answer, _paper as _browser_paper, _server
-    from playwright.async_api import async_playwright
 
     _browser_paper("open2026model", "An Open Model", "steering")
     _browser_paper("closed2026model", "A Closed Model", "steering")
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
@@ -207,9 +205,7 @@ def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
                 await page.locator('#labels [data-label="open-source"]').click()
                 await page.locator('#papers [data-paper="closed2026model"]').wait_for()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -217,7 +213,6 @@ def test_taking_the_filtered_label_off_the_open_paper_clears_the_filter():
     # Otherwise the header stands on screen with every one of its claims
     # filtered away, and nothing on the page says why.
     from test_browser import _answer, _paper as _browser_paper, _server
-    from playwright.async_api import async_playwright
 
     _browser_paper("open2026model", "An Open Model", "steering")
     _browser_paper("other2026model", "Another Open Model", "steering")
@@ -228,8 +223,7 @@ def test_taking_the_filtered_label_off_the_open_paper_clears_the_filter():
     store.set_labels("other2026model", ["open-source"])
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}#label=open-source&paper=open2026model")
@@ -245,9 +239,7 @@ def test_taking_the_filtered_label_off_the_open_paper_clears_the_filter():
                 # The label is still on the other paper, so the section stays.
                 await page.locator('#labels [data-label="open-source"]').wait_for()
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
 
 
 @pytest.mark.browser
@@ -256,7 +248,6 @@ def test_a_citation_opens_a_paper_the_label_filter_excludes():
     # it can land on a paper the filter leaves out. Arriving at an empty paper
     # would be the filter outliving the instruction that replaced it.
     from test_browser import _paper as _browser_paper, _server
-    from playwright.async_api import async_playwright
 
     _browser_paper("open2026model", "An Open Model", "recovery", year=2026)
     _browser_paper("shut2026model", "A Shut Model", "recovery", year=2025)
@@ -269,8 +260,7 @@ def test_a_citation_opens_a_paper_the_label_filter_excludes():
     )
 
     async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch()
+        async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}#view=tensions&label=open-source")
@@ -281,6 +271,4 @@ def test_a_citation_opens_a_paper_the_label_filter_excludes():
                 assert await page.locator('.claim').count() == 1
                 assert "label=" not in page.url
 
-            await browser.close()
-
-    asyncio.run(scenario())
+    run_browser(scenario())
