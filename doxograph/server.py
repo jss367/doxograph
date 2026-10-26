@@ -503,17 +503,18 @@ def _import_failed(job: dict, exc: Exception) -> None:
             explanation = "The paper could not be found at this address. Check the reference, then retry."
         else:
             explanation = "The service could not complete the request. Wait a moment, then retry."
+    elif isinstance(exc, ingest.InvalidPDFUpload):
+        explanation = "This file is not a PDF. Upload a valid PDF to import this paper."
     elif isinstance(exc, ValueError):
-        if str(exc).endswith("is not a PDF"):
-            explanation = "This file is not a PDF. Upload a valid PDF to import this paper."
-        else:
-            explanation = "The paper or PDF could not be read. Check the reference or file, then retry."
+        explanation = "The paper or PDF could not be read. Check the reference or file, then retry."
     elif isinstance(exc, ingest.PaperRemoved):
         explanation = "The paper was removed during import. Retry to add it again."
     elif job["state"] == "reading":
         explanation = "The PDF was saved, but AI analysis failed. Retry to try the analysis again."
     else:
         explanation = "The import could not be completed. Retry to try again."
+    if isinstance(exc, ingest.InvalidPDFUpload):
+        _forget_import(job)
     _set(job, state="error", detail=f"{type(exc).__name__}: {exc}", explanation=explanation)
 
 

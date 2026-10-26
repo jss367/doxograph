@@ -153,9 +153,10 @@ def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
                 assert response.status_code == 200
                 await page.goto(url)
                 await page.locator("#jobs .job.error").wait_for()
+                assert await page.get_by_role("button", name="Retry", exact=True).count() == 0
                 dismiss = page.get_by_role("button", name="Dismiss notification for broken.pdf")
 
-                # A failed dismissal must leave the error available to retry.
+                # A failed dismissal must leave the error notification available.
                 async def reject_delete(route):
                     await route.fulfill(status=500, json={"detail": "Try again"})
 

@@ -59,6 +59,14 @@ def immediate_worker(monkeypatch):
     monkeypatch.setattr(server._pool, "submit", lambda fn, *args: fn(*args))
 
 
+@pytest.fixture
+def metadata_timeout(monkeypatch):
+    def timeout(*args, **kwargs):
+        raise httpx.ReadTimeout("metadata timed out")
+
+    monkeypatch.setattr(ingest, "guess_from_pdf", timeout)
+
+
 @pytest.mark.parametrize("analyze", [False, True])
 def test_retry_recovers_missing_pdf_without_duplicate_paper(client, monkeypatch, immediate_worker, analyze):
     downloads, analyses = [], []
@@ -189,9 +197,9 @@ def test_nonretryable_job_is_rejected(client, state):
 
 
 @pytest.mark.parametrize("cleanup", ["dismiss", "prune"])
-def test_failed_upload_cleanup_releases_retained_bytes(client, immediate_worker, cleanup):
+def test_failed_upload_cleanup_releases_retained_bytes(client, immediate_worker, metadata_timeout, cleanup):
     client.post("/api/upload?extract_now=false",
-                files={"files": ("broken.pdf", b"not a PDF", "application/pdf")})
+                files={"files": ("study.pdf", minimal_pdf("A study"), "application/pdf")})
     [job] = client.get("/api/jobs").json()["jobs"]
     assert list(config.pdfs_dir().glob(".incoming-*"))
     if cleanup == "dismiss":
@@ -203,7 +211,7 @@ def test_failed_upload_cleanup_releases_retained_bytes(client, immediate_worker,
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
 
 
-def test_shutdown_releases_failed_uploads_in_every_workspace(monkeypatch, immediate_worker):
+def test_shutdown_releases_failed_uploads_in_every_workspace(monkeypatch, immediate_worker, metadata_timeout):
     monkeypatch.setattr(server, "_jobs", {})
     other = config.create_workspace("Other research")
     retained = []
@@ -214,7 +222,7 @@ def test_shutdown_releases_failed_uploads_in_every_workspace(monkeypatch, immedi
         for workspace in (config.DEFAULT_WORKSPACE_ID, other["id"]):
             response = client.post("/api/upload?extract_now=false",
                 headers={"X-Doxograph-Workspace": workspace},
-                files={"files": ("broken.pdf", b"not a PDF", "application/pdf")})
+                files={"files": ("study.pdf", minimal_pdf("A new study"), "application/pdf")})
             assert response.status_code == 200
             with config.use_workspace(workspace):
                 [staged] = config.pdfs_dir().glob(".incoming-*")
@@ -226,13 +234,13 @@ def test_shutdown_releases_failed_uploads_in_every_workspace(monkeypatch, immedi
     assert store.load_paper("existing")["key"] == "existing"
 
 
-def test_worker_finishing_after_shutdown_releases_its_retry_input(monkeypatch):
+def test_worker_finishing_after_shutdown_releases_its_retry_input(monkeypatch, metadata_timeout):
     monkeypatch.setattr(server, "_jobs", {})
     submitted = []
     monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.post("/api/upload?extract_now=false",
-                    files={"files": ("broken.pdf", b"not a PDF", "application/pdf")})
+                    files={"files": ("study.pdf", minimal_pdf("A study"), "application/pdf")})
         [staged] = config.pdfs_dir().glob(".incoming-*")
 
     # Shutdown must not delete the input out from under a queued worker.
@@ -240,4 +248,15 @@ def test_worker_finishing_after_shutdown_releases_its_retry_input(monkeypatch):
     function, *args = submitted[0]
     function(*args)
     assert args[0]["state"] == "error"
+    assert list(config.pdfs_dir().glob(".incoming-*")) == []
+
+
+def test_non_pdf_upload_cannot_retry_the_same_invalid_bytes(client, immediate_worker):
+    client.post("/api/upload?extract_now=false",
+                files={"files": ("broken.pdf", b"not a PDF", "application/pdf")})
+    [job] = client.get("/api/jobs").json()["jobs"]
+    assert job["state"] == "error"
+    assert job["retryable"] is False
+    assert "Upload a valid PDF" in job["explanation"]
+    assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 409
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
