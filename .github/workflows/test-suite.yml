@@ -1,7 +1,16 @@
 name: Test suite
+# auto-merge.yml finds the run for a PR by this title, which records the base
+# branch the run tested.
+run-name: >-
+  ${{ github.event_name == 'pull_request' &&
+      format('Tests for pull request #{0} against {1}', github.event.pull_request.number, github.event.pull_request.base.ref) ||
+      format('Tests for {0}', github.ref_name) }}
 
 on:
   pull_request:
+    # Base-branch changes arrive as edited events. Auto-merge requires a new run
+    # after retargeting because the PR's tested merge ref has changed.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches:
       - main
