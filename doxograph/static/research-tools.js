@@ -279,7 +279,9 @@ const ResearchTools = (() => {
     reader.observer?.disconnect();
     clearTimeout(reader.progressTimer);
     cancelAnimationFrame(reader.scrollFrame);
-    el('pdf-pages')?.parentElement.removeEventListener('scroll', reader.onScroll);
+    const scroll = el('pdf-pages')?.parentElement;
+    scroll?.removeEventListener('scroll', reader.onScroll);
+    for (const type of ['wheel','touchmove','keydown']) scroll?.removeEventListener(type, reader.onScrollIntent);
     for (const view of reader.views || []) {
       view.renderTask?.cancel();
       view.textLayer?.cancel();
@@ -405,14 +407,28 @@ const ResearchTools = (() => {
         if (reader !== active || active.views !== views) return;
         const bounds = scroll.getBoundingClientRect();
         const readingLine = bounds.top + Math.min(scroll.clientHeight * .35, 200);
-        const view = active.views.find(view => view.container.getBoundingClientRect().bottom > readingLine) || active.views.at(-1);
+        const navigation = active.navigation;
+        const keepTarget = navigation && Math.abs(scroll.scrollTop - navigation.top) < 2;
+        if (!keepTarget) active.navigation = null;
+        const maxOffset = scroll.scrollHeight - scroll.clientHeight;
+        if (maxOffset <= 2) return; // No scrolling: retain the explicitly selected page.
+        const atEnd = scroll.scrollTop >= maxOffset - 2;
+        const view = keepTarget ? active.views[navigation.page - 1] : atEnd ? active.views.at(-1)
+          : active.views.find(view => view.container.getBoundingClientRect().bottom > readingLine) || active.views.at(-1);
         if (active.page !== view.page.pageNumber) {
           active.page = view.page.pageNumber;
           updateReaderControls();
         }
       });
     };
+    active.onScrollIntent = event => {
+      if (event.type === 'wheel' && !event.deltaY) return;
+      if (event.type === 'keydown' && !['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) return;
+      active.navigation = null;
+      active.onScroll();
+    };
     scroll.addEventListener('scroll', active.onScroll, {passive:true});
+    for (const type of ['wheel','touchmove','keydown']) scroll.addEventListener(type, active.onScrollIntent, {passive:true});
     await goToReaderPage(active.page);
   }
   async function goToReaderPage(number) {
@@ -420,6 +436,8 @@ const ResearchTools = (() => {
     active.page = number;
     const scroll = el('pdf-pages').parentElement;
     scroll.scrollTop += view.container.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop - 8;
+    // Preserve an explicit visible target even when its scroll position is clamped.
+    active.navigation = {page:number, top:scroll.scrollTop};
     updateReaderControls();
     view.nearby = true;
     await renderReaderPage(active, view);

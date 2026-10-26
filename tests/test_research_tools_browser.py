@@ -474,3 +474,98 @@ def test_pdf_eviction_releases_idle_image_page_caches(engine):
             await browser.close()
     asyncio.run(scenario())
 
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('fits', [False, True])
+def test_short_final_pages_preserve_scroll_and_navigation_targets(engine, fits):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('slides', title='Short final pages'))
+    writer = PdfWriter()
+    for height in ([120, 120] if fits else [792, 150, 120]):
+        writer.add_blank_page(width=612, height=height)
+    with store.pdf_path('slides').open('wb') as stream:
+        writer.write(stream)
+    last = len(writer.pages)
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="slides"]').click()
+                await page.get_by_role('button', name='Read & capture', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#research-tools')
+                scroll = page.get_by_role('region', name='PDF pages')
+                next_button = dialog.get_by_role('button', name='Next page', exact=True)
+                assert await scroll.evaluate('node => node.scrollHeight > node.clientHeight') is not fits
+                # Even a scroll event at offset zero must not select the final page in a fitting PDF.
+                await scroll.evaluate("node => node.dispatchEvent(new Event('scroll'))")
+                await expect(page.locator('#reader-page')).to_have_value('1')
+                if fits:
+                    await scroll.hover()
+                    await page.mouse.wheel(0, 500)
+                    await page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+                    await expect(page.locator('#reader-page')).to_have_value('1')
+
+                async def jump(number):
+                    await page.locator('#reader-page').fill(str(number))
+                    await dialog.get_by_role('button', name='Go', exact=True).click()
+                    await ready(page)
+                    # A clamped Go can produce no scroll event, or a delayed one.
+                    await scroll.evaluate("node => node.dispatchEvent(new Event('scroll'))")
+                    await page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+                    await expect(page.locator('#reader-page')).to_have_value(str(number))
+
+                await jump(last - 1)
+                await next_button.click()
+                await ready(page)
+                await scroll.evaluate("node => node.dispatchEvent(new Event('scroll'))")
+                await expect(page.locator('#reader-page')).to_have_value(str(last))
+                await expect(next_button).to_be_disabled()
+                await jump(last - 1)
+                await expect(next_button).to_be_enabled()
+                await jump(last)
+                await expect(next_button).to_be_disabled()
+
+                if not fits:
+                    # Both short trailing pages clamp to the same bottom offset.
+                    await jump(last - 1)
+                    await scroll.hover()
+                    await page.mouse.wheel(0, 500)
+                    await expect(page.locator('#reader-page')).to_have_value(str(last))
+                    await jump(1)
+                    await scroll.hover()
+                    await page.mouse.wheel(0, 5000)
+                    await expect(page.locator('#reader-page')).to_have_value(str(last))
+                    # One-sided tolerance accepts fractional offsets and WebKit bounce.
+                    await scroll.evaluate('''node => {
+                        node.scrollTop = node.scrollHeight - node.clientHeight - 1;
+                        node.dispatchEvent(new Event('scroll'));
+                    }''')
+                    await expect(page.locator('#reader-page')).to_have_value(str(last))
+                await dialog.get_by_role('button', name='Bookmark this page', exact=True).click()
+                await ready(page)
+                await expect(dialog.get_by_role('button', name='Remove bookmark', exact=True)).to_be_visible()
+                progress = httpx.get(url+'/api/notebook').json()['reading'][0]
+                assert progress['page'] == last and progress['bookmarks'] == [last]
+                await dialog.get_by_role('button', name='Close research tools').click()
+                await dialog.wait_for(state='hidden')
+                await page.get_by_role('button', name='Read & capture', exact=True).click()
+                await ready(page)
+                await expect(page.locator('#reader-page')).to_have_value(str(last))
+                await expect(next_button).to_be_disabled()
+                await expect(dialog.get_by_role('button', name='Remove bookmark', exact=True)).to_be_visible()
+                await dialog.get_by_role('button', name='Previous page', exact=True).click()
+                await ready(page)
+                await expect(page.locator('#reader-page')).to_have_value(str(last - 1))
+                await dialog.get_by_role('button', name='Close research tools').click()
+                await dialog.wait_for(state='hidden')
+                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == last - 1
+                assert not errors
+            await browser.close()
+    asyncio.run(scenario())
