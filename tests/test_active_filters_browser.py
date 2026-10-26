@@ -99,6 +99,55 @@ def test_clear_active_filters(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("action", ["paper", "all"])
+@pytest.mark.parametrize("field", ["evidence", "kind"])
+def test_new_claim_without_text_can_be_resumed_after_clearing_scope(engine, action, field):
+    config.set_ai_enabled(False)
+    _paper("one", "Original paper", "alignment")
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await getattr(playwright, engine).launch()
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#paper=one&group=0")
+                await page.get_by_role("button", name="Add claim by hand").click()
+                form = page.locator("form[data-form='__new__']")
+                edited = form.locator(f"[name='{field}']")
+                if field == "kind":
+                    value = await edited.locator("option").last.get_attribute("value")
+                    assert value != await edited.input_value()
+                    await edited.select_option(value)
+                else:
+                    value = "Evidence collected before drafting the claim text."
+                    await edited.fill(value)
+
+                # Both Resume and the header's Add claim action must restore details.
+                for resume in ("Resume", "Add claim by hand"):
+                    chips = page.get_by_role("group", name="Active filters", exact=True)
+                    name = "Clear all" if action == "all" else "Remove filter: Paper: Original paper"
+                    await chips.get_by_role("button", name=name, exact=True).click()
+                    await expect(form).to_have_count(0)
+                    await page.locator("#papers [data-paper='one']").click()
+                    await expect(page.locator("#content .proposed")).to_contain_text("claim text is still empty")
+                    await page.get_by_role("button", name=resume, exact=True).click()
+                    await expect(form.locator("[name='text']")).to_have_value("")
+                    await expect(edited).to_have_value(value)
+                    assert await page.evaluate("V.newClaim.paper === 'one'")
+
+                await form.locator("[name='text']").fill("The claim drafted after collecting its details.")
+                await form.get_by_role("button", name="Save", exact=True).click()
+                await expect(form).to_have_count(0)
+                claim = httpx.get(f"{url}/api/state").json()["claims"][-1]
+                assert claim["text"] == "The claim drafted after collecting its details."
+                assert claim[field] == value
+            await browser.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 @pytest.mark.parametrize("editor", ["claim", "research"])
 def test_poll_updates_missing_filter_chips_without_replacing_editor(engine, editor):
     config.set_ai_enabled(False)

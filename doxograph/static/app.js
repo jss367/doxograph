@@ -167,6 +167,14 @@ function blankClaim(paper) {
   };
 }
 
+function newClaimHasEdits(draft) {
+  if (!draft) return false;
+  const blank = blankClaim(draft.paper);
+  return ['text', 'kind', 'strength', 'tags', 'evidence', 'quote', 'locator',
+    'ledger_links', 'note', 'reviewed'].some((field) =>
+    JSON.stringify(draft[field]) !== JSON.stringify(blank[field]));
+}
+
 // Counts the claims the user picks by hand: j/k, n, a click on a card, a jump
 // to a linked one. The `r` key reads it either side of its request, because a
 // claim chosen while the review PATCH is in flight is a newer choice than the
@@ -2833,12 +2841,12 @@ function drawContent() {
   if (V.newClaim && V.editing === NEW_CLAIM_ID) {
     shown.add(NEW_CLAIM_ID);
     html += editForm(V.newClaim);
-  } else if (V.newClaim && (V.newClaim.text || '').trim()) {
+  } else if (newClaimHasEdits(V.newClaim)) {
     // Held but not open — opening another claim's editor moved `V.editing`.
     // Without this the draft is unreachable: Add claim would overwrite it and
     // cancelling the other editor would drop it, losing the text silently.
     html += `<div class="proposed">
-      <span>Unsaved new claim: <em>${esc(V.newClaim.text.slice(0, 80))}${V.newClaim.text.length > 80 ? '…' : ''}</em></span>
+      <span>Unsaved new claim: <em>${esc(V.newClaim.text.slice(0, 80) || 'Details entered; claim text is still empty.')}${V.newClaim.text.length > 80 ? '…' : ''}</em></span>
       <span style="margin-left:auto"></span>
       <button type="button" data-act="resume-new">Resume</button>
       <button type="button" data-act="discard-new">Discard</button>
@@ -3732,7 +3740,7 @@ function parkNewClaimForNavigation(paper, { retainUnsaved = false } = {}) {
   // keeps it, like a failed submission: park it under its original paper so
   // it can be restored without offering a save to a hidden destination.
   if (V.newClaim && V.newClaim.paper !== paper) {
-    if (retainUnsaved || V.newClaim.saveFailed) {
+    if ((retainUnsaved && newClaimHasEdits(V.newClaim)) || V.newClaim.saveFailed) {
       V.parkedNewClaims[V.newClaim.paper] = V.newClaim;
     }
     V.newClaim = null;
@@ -4671,7 +4679,7 @@ $('content').addEventListener('click', async (event) => {
       if (refuseWhileRemoving(paper, 'a new claim')) return;
       captureOpenEditor();
       // Resume a held draft rather than overwriting what was typed into it.
-      if (!V.newClaim || V.newClaim.paper !== paper || !(V.newClaim.text || '').trim()) {
+      if (!V.newClaim || V.newClaim.paper !== paper || !newClaimHasEdits(V.newClaim)) {
         V.newClaim = blankClaim(paper);
       }
       V.editing = NEW_CLAIM_ID;
