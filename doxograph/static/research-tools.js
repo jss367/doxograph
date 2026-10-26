@@ -57,7 +57,8 @@ const ResearchTools = (() => {
     // mark as its saved baseline. Clean editors close; changed text remains
     // editable and copyable until explicitly discarded.
     if (markEditor && S.notebook) {
-      const removed = !(S.notebook.highlights || []).some(h => h.id === markEditor.id && h.paper === markEditor.paper);
+      const removed = !S.papers.some(p => p.key === markEditor.paper)
+        || !(S.notebook.highlights || []).some(h => h.id === markEditor.id && h.paper === markEditor.paper);
       if (removed !== Boolean(markEditor.removed)) {
         if (removed && !highlightDrafting()) markEditor = null;
         else markEditor.removed = removed;
@@ -360,7 +361,7 @@ const ResearchTools = (() => {
     if (!paper || reader) return;
     const generation = ++readerEpoch;
     const zoom = savedZoom();
-    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, figureMode:false, drag:null, figure:null, focus:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, wantedPage:null, progressSave:Promise.resolve()};
+    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, figureMode:false, drag:null, figure:null, focus:null, loadingTask:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, wantedPage:null, progressSave:Promise.resolve()};
     el('reader').innerHTML = `<div class="reader-toolbar">${button('previous-page', 'Previous page')}
       <label>Page<input id="reader-page" type="number" min="1" value="1" aria-label="Page number"></label><span id="reader-total"></span>${button('go-page', 'Go')}${button('next-page', 'Next page')}
       <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
@@ -373,8 +374,11 @@ const ResearchTools = (() => {
     el('passage-tools').addEventListener('mousedown', event => event.preventDefault());
     try {
       const pdfjs = await import('/vendor/pdf.min.mjs');
+      if (reader?.generation !== generation) return;
       pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
-      const doc = await pdfjs.getDocument({url:`/pdf/${encodeURIComponent(paper)}?workspace=${encodeURIComponent(ws)}&inline=1`, isEvalSupported:false, cMapUrl:'/vendor/cmaps/', cMapPacked:true, standardFontDataUrl:'/vendor/standard_fonts/', wasmUrl:'/vendor/wasm/'}).promise;
+      const task = pdfjs.getDocument({url:`/pdf/${encodeURIComponent(paper)}?workspace=${encodeURIComponent(ws)}&inline=1`, isEvalSupported:false, cMapUrl:'/vendor/cmaps/', cMapPacked:true, standardFontDataUrl:'/vendor/standard_fonts/', wasmUrl:'/vendor/wasm/'});
+      reader.loadingTask = task;
+      const doc = await task.promise;
       if (reader?.generation !== generation) { await doc.loadingTask.destroy(); return; }
       reader.document = doc; reader.pdfjs = pdfjs;
       const first = await doc.getPage(1);
@@ -417,7 +421,11 @@ const ResearchTools = (() => {
       goToPage(asked?.page || progress?.page || 1, asked?.mark || null);
       trackCurrentPage();
     } catch (error) {
-      if (reader?.generation === generation) el('reader-hint').textContent = `Could not open the PDF: ${error.message}`;
+      if (reader?.generation === generation) {
+        reader.openFailed = true;
+        el('reader-hint').textContent = `Could not open the PDF: ${error.message} `;
+        el('reader-hint').insertAdjacentHTML('beforeend', button('retry-reader', 'Retry PDF'));
+      }
     }
   }
   async function unmountReader() {
@@ -432,7 +440,8 @@ const ResearchTools = (() => {
     // behind any save of its already in flight. Not awaited: the next paper
     // must not wait on it.
     if (gone.wantedPage !== null && gone.wantedPage !== gone.savedPage) queueProgressSave(gone);
-    if (gone.document) await gone.document.loadingTask.destroy();
+    if (gone.loadingTask?.destroy) await gone.loadingTask.destroy();
+    else if (gone.document) await gone.document.loadingTask.destroy();
   }
   // The scale a page is drawn at: under Fit width each page fits the column
   // on its own, so a landscape page in a portrait paper does not overflow;
@@ -849,9 +858,17 @@ const ResearchTools = (() => {
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
-    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note']);
+    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
   async function readerAction(name, target) {
     const data = target.dataset;
+    if (name === 'retry-reader') {
+      const active = reader, navigation = navigationVersion();
+      if (!active?.openFailed) return;
+      await unmountReader();
+      if (currentWorkspaceId === active.workspace && navigationVersion() === navigation
+        && V.paper === active.paper && V.view === 'claims' && !V.pdfHidden) await mountReader(active.paper);
+      return;
+    }
     if (['previous-page', 'next-page', 'go-page'].includes(name)) {
       if (!reader?.pages.length) return;
       const page = name === 'go-page' ? Number(el('reader-page').value) : reader.current + (name === 'next-page' ? 1 : -1);

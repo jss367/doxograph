@@ -15,7 +15,8 @@ from test_research_tools_browser import ready
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_removed_mark_keeps_the_entire_changed_note_recoverable(engine):
+@pytest.mark.parametrize('removed', ['mark', 'paper'])
+def test_removed_mark_keeps_the_entire_changed_note_recoverable(engine, removed):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('paper', title='A paper with notes'))
     note = 'A long draft with details that must remain recoverable. ' * 12
@@ -33,16 +34,20 @@ def test_removed_mark_keeps_the_entire_changed_note_recoverable(engine):
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 await page.locator('[data-highlight-note]').fill(note)
-                await page.get_by_role('button', name='Add claim by hand', exact=True).click()
-                await page.locator('form[data-form] [name="text"]').fill('A separate unsaved claim')
-                notebook = httpx.get(url + '/api/notebook').json()
-                notebook['highlights'] = []
-                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                if removed == 'mark':
+                    await page.get_by_role('button', name='Add claim by hand', exact=True).click()
+                    await page.locator('form[data-form] [name="text"]').fill('A separate unsaved claim')
+                    notebook = httpx.get(url + '/api/notebook').json()
+                    notebook['highlights'] = []
+                    assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                else:
+                    assert httpx.delete(url + '/api/papers/paper').status_code == 200
                 await _poll(page)
                 field = page.get_by_role('textbox', name='Note on removed mark', exact=True)
                 await field.wait_for()
                 assert await field.input_value() == note
-                assert await page.locator('form[data-form] [name="text"]').input_value() == 'A separate unsaved claim'
+                if removed == 'mark':
+                    assert await page.locator('form[data-form] [name="text"]').input_value() == 'A separate unsaved claim'
                 assert await page.evaluate('ResearchTools.holds()')
                 # A second poll cannot consume or truncate recovery text.
                 await _poll(page)
@@ -149,7 +154,8 @@ def test_explicit_page_target_survives_its_own_delayed_measurement(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_mark_editor_reconciles_clean_removal_and_conflicting_notes(engine):
+@pytest.mark.parametrize('removed', ['mark', 'paper'])
+def test_mark_editor_reconciles_clean_removal_and_conflicting_notes(engine, removed):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('paper', title='A paper with notes'))
 
@@ -184,9 +190,12 @@ def test_mark_editor_reconciles_clean_removal_and_conflicting_notes(engine):
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 # A clean editor closes without a recovery warning or phantom
                 # unsaved state when the mark is subsequently removed.
-                notebook = httpx.get(url + '/api/notebook').json()
-                notebook['highlights'] = []
-                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                if removed == 'mark':
+                    notebook = httpx.get(url + '/api/notebook').json()
+                    notebook['highlights'] = []
+                    assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                else:
+                    assert httpx.delete(url + '/api/papers/paper').status_code == 200
                 await _poll(page)
                 assert await page.locator('[data-highlight-note]').count() == 0
                 assert await page.locator('[data-removed-mark]').count() == 0
@@ -355,5 +364,78 @@ def test_a_persistent_pdf_failure_does_not_retry_without_user_action(engine, sta
                 # The error remains visible; no partial canvas is retained.
                 assert 'Deliberate permanent PDF failure' in await page.locator('#reader-hint').inner_text()
                 assert await page.locator('#reader .pdf-page[data-page="20"] canvas').count() == 0
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('stage', ['document', 'first-page'])
+def test_pdf_open_failure_can_be_retried_and_cannot_replace_a_newer_view(engine, stage):
+    config.set_ai_enabled(False)
+    for key in ['paper', 'second']:
+        store.save_paper(store.new_paper(key, title=key.title()))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A paper that opens after retry.']))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            async def fail_open(route):
+                module = '''
+                    export * from '/vendor/pdf.min.mjs?reader-test-original=1';
+                    import * as real from '/vendor/pdf.min.mjs?reader-test-original=1';
+                    const stage = STAGE;
+                    export function getDocument(options) {
+                        const attempt = window.readerOpenAttempts = (window.readerOpenAttempts || 0) + 1;
+                        const held = window.holdReaderOpen;
+                        function failure() {
+                            if (held) {
+                                window.readerOpenHeld = true;
+                                return new Promise((_, reject) => {
+                                    window.releaseFailedOpen = () => reject(new Error('Delayed PDF open failure'));
+                                });
+                            }
+                            return Promise.reject(new Error('Transient PDF open failure'));
+                        }
+                        if (stage === 'document' && (attempt === 1 || held)) {
+                            return {promise:failure(), destroy:async () => {}};
+                        }
+                        const task = real.getDocument(options);
+                        return {destroy:() => task.destroy(), promise:task.promise.then(doc => {
+                            const getPage = doc.getPage.bind(doc);
+                            doc.getPage = number => number === 1 && stage === 'first-page' && (attempt === 1 || held)
+                                ? failure() : getPage(number);
+                            return doc;
+                        })};
+                    }
+                '''.replace('STAGE', repr(stage))
+                await route.fulfill(body=module, content_type='text/javascript')
+            await page.route('**/vendor/pdf.min.mjs', fail_open)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader-hint', has_text='Transient PDF open failure').wait_for()
+                await _poll(page)
+                assert await page.evaluate('window.readerOpenAttempts') == 1
+                await page.get_by_role('button', name='Retry PDF', exact=True).click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                await ready(page)
+                assert await page.evaluate('window.readerOpenAttempts') == 2
+                assert await page.get_by_role('button', name='Retry PDF', exact=True).count() == 0
+                # A later failed open belongs to the paper left behind. Its
+                # error and retry controls must not appear over the new view.
+                await page.locator('#papers li[data-paper="second"]').click()
+                await page.evaluate('window.holdReaderOpen = true')
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.wait_for_function('window.readerOpenHeld === true')
+                await page.locator('#papers li[data-paper="second"]').click()
+                await page.locator('.paperhead h2', has_text='Second').wait_for()
+                await page.evaluate('window.releaseFailedOpen()')
+                await page.wait_for_timeout(200)
+                assert await page.locator('#reader').is_hidden()
+                assert await page.get_by_role('button', name='Retry PDF', exact=True).count() == 0
+                assert await page.locator('#toasts .toast.warn').count() == 0
                 assert not errors
     run_browser(scenario())
