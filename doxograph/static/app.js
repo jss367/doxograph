@@ -4444,7 +4444,6 @@ async function removePaper(paper) {
     ok: 'Remove',
   });
   if (!go) return;
-  ResearchTools.dropMarkDraft(paper);
   // The question is a wait like any other, and the header and the paper list
   // stay live across it: a second Remove could have been answered first, and
   // this one would ask the server for a paper that is already going.
@@ -4514,7 +4513,17 @@ async function removePaper(paper) {
     // covered by it.
     if (V.newClaim && V.newClaim.paper === paper) frozen.push(NEW_CLAIM_ID);
     frozen.forEach((id) => markSaving(id, true));
-    await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
+    try {
+      await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
+    } catch (error) {
+      // The paper stays, cards and all, so the reader is told rather than left
+      // with a request that failed in silence.
+      toast(`Could not remove the paper: ${error.message}`, { tone: 'warn' });
+      return;
+    }
+    // The note being written on one of its marks goes with the paper, and only
+    // now: a removal refused or failed above leaves the paper, and the note.
+    ResearchTools.dropMarkDraft(paper);
     // Moved on meanwhile: the view belongs to another corpus now, and the drafts
     // and selection this would tidy up went with `resetWorkspaceView`.
     if (currentWorkspaceId !== workspace) {

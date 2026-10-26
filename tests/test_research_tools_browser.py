@@ -990,10 +990,24 @@ def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(eng
                 # on another paper's mark afterwards opens without a question.
                 await rail.locator('.highlight-entry[data-highlight="one"]').get_by_role('button', name='Add note', exact=True).click()
                 await rail.locator('[data-highlight-note]').fill('A thought about recovery')
-                await page.get_by_role('button', name='Remove', exact=True).first.click()
+                # A removal that fails leaves the paper, and the note with it.
+                failed = []
+                async def fail_delete(route):
+                    if route.request.method == 'DELETE' and not failed:
+                        failed.append(route.request.url); await route.fulfill(status=503, body='down'); return
+                    await route.continue_()
+                await page.route('**/api/papers/paper', fail_delete)
                 ask = page.locator('#ask')
+                await page.get_by_role('button', name='Remove', exact=True).first.click()
                 await ask.wait_for(state='visible')
                 assert 'note you are writing' in await ask.inner_text()
+                await ask.get_by_role('button', name='Remove', exact=True).click()
+                await page.locator('#toasts .toast', has_text='Could not').wait_for()
+                assert failed and await page.locator('#papers li[data-paper="paper"]').count() == 1
+                assert await rail.locator('[data-highlight-note]').input_value() == 'A thought about recovery'
+                await page.unroute('**/api/papers/paper')
+                await page.get_by_role('button', name='Remove', exact=True).first.click()
+                await ask.wait_for(state='visible')
                 await ask.get_by_role('button', name='Remove', exact=True).click()
                 await page.locator('#papers li[data-paper="paper"]').wait_for(state='detached')
                 await page.locator('#papers li[data-paper="second"]').click()
