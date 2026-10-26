@@ -3,7 +3,7 @@ const ResearchTools = (() => {
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, reader = null, historyData = null, historyPaper = null, historyClaim = null;
-  let epoch = 0;
+  let epoch = 0, progressSave = null;
   const el = (id) => document.getElementById(id);
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const uid = () => {
@@ -69,13 +69,17 @@ const ResearchTools = (() => {
   async function save() {
     dirty = true;
     notebook = await request('', 'PUT', notebook);
+    // Keep scrolling during a save from restoring an older page from the response.
+    if (reader?.views && tab === 'reader') rememberReaderPage();
     dirty = false;
     await refreshAll();
     message('Saved.');
   }
   async function close() {
     if (busy) return;
+    await flushReaderProgress();
     if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
+    stopReaderViews();
     epoch++;
     if (reader?.document) await reader.document.loadingTask.destroy();
     reader = null; dirty = false; connectionDraft = false;
@@ -220,6 +224,7 @@ const ResearchTools = (() => {
       }).join('')}${entries.length ? '' : '<p class="empty">No earlier versions yet. Future edits will appear here.</p>'}`;
   }
   async function showReader(paper, requestedPage) {
+    stopReaderViews();
     if (reader?.document) await reader.document.loadingTask.destroy();
     if (!notebook.reading.some(r => r.paper === paper)) await queue([paper]);
     const progress = notebook.reading.find(r => r.paper === paper);
@@ -232,7 +237,8 @@ const ResearchTools = (() => {
       <label>Page<input id="reader-page" type="number" min="1" value="${reader.page}"></label><span id="reader-total"></span>
       ${button('go-page','Go')}${button('next-page','Next page')}${button('bookmark','Bookmark this page')}
       <label>Zoom<select id="reader-zoom"><option value="1">100%</option><option value="1.3" selected>130%</option><option value="1.6">160%</option><option value="2">200%</option></select></label></div>
-      <div class="reader-layout"><div class="pdf-scroll"><div id="pdf-page"><canvas></canvas><div class="textLayer"></div></div><p id="reader-hint" class="hint">Loading PDF…</p></div>
+      <p id="reader-hint" class="hint">Loading PDF…</p>
+      <div class="reader-layout"><div class="pdf-scroll" tabindex="0" role="region" aria-label="PDF pages"><div id="pdf-pages"></div></div>
         <form id="capture-form"><h3>Capture a claim</h3><p class="hint">Select text directly on the page, then capture it. Add your interpretation before saving.</p>
           ${button('capture-selection','Capture selected passage')}${area('Verbatim quote','capture-quote')}
           ${input('Page or section','capture-locator')}${area('Claim in your own words','capture-text')}${area('Your note (optional)','capture-note')}
@@ -248,33 +254,155 @@ const ResearchTools = (() => {
     reader.page = Math.max(1, Math.min(reader.page, doc.numPages));
     el('reader-total').textContent = `of ${doc.numPages}`;
     el('reader-page').max = doc.numPages;
-    await renderPage();
+    // Reserve every page's real dimensions so lazy rendering never shifts the document.
+    const active = reader;
+    active.pages = await Promise.all(Array.from({length:doc.numPages}, (_, i) => doc.getPage(i + 1)));
+    if (reader !== active) return;
+    await layoutReader();
   }
-  async function renderPage() {
-    reader.selection = '';
-    const page = await reader.document.getPage(reader.page);
-    const viewport = page.getViewport({scale:Number(el('reader-zoom').value)});
-    const container = el('pdf-page');
-    container.innerHTML = '<canvas></canvas><div class="textLayer"></div>';
-    container.style.width = `${viewport.width}px`;
-    container.style.height = `${viewport.height}px`;
-    container.style.setProperty('--total-scale-factor', viewport.scale * (page.userUnit || 1));
-    container.style.setProperty('--scale-round-x', '1px');
-    container.style.setProperty('--scale-round-y', '1px');
-    const canvas = container.querySelector('canvas');
+  function stopReaderViews() {
+    if (!reader) return;
+    reader.observer?.disconnect();
+    clearTimeout(reader.progressTimer);
+    cancelAnimationFrame(reader.scrollFrame);
+    el('pdf-pages')?.parentElement.removeEventListener('scroll', reader.onScroll);
+    for (const view of reader.views || []) {
+      view.renderTask?.cancel();
+      view.textLayer?.cancel();
+    }
+  }
+  async function flushReaderProgress() {
+    while (progressSave) await progressSave;
+    if (!reader?.progressPending) return;
+    const active = reader;
+    clearTimeout(active.progressTimer);
+    active.progressPending = false;
+    progressSave = save();
+    try { await progressSave; }
+    finally { progressSave = null; }
+  }
+  function scheduleReaderProgress() {
+    const active = reader;
+    clearTimeout(active.progressTimer);
+    active.progressTimer = setTimeout(() => {
+      if (reader !== active || !active.progressPending) return;
+      if (busy) { scheduleReaderProgress(); return; }
+      // Background progress saves leave text selection and claim editing interactive.
+      flushReaderProgress().catch(error => message(error.message, true));
+    }, 250);
+  }
+  function updateReaderControls() {
+    const progress = notebook.reading.find(r => r.paper === reader.paper);
+    el('reader-page').value = reader.page;
+    if (!reader.draft) el('capture-locator').value = `p. ${reader.page}`;
+    el('research-body').querySelector('[data-tool="bookmark"]').textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page';
+    el('research-body').querySelector('[data-tool="previous-page"]').disabled = reader.page === 1;
+    el('research-body').querySelector('[data-tool="next-page"]').disabled = reader.page === reader.document.numPages;
+    const view = reader.views?.[reader.page - 1];
+    el('reader-hint').textContent = view?.hasText === false
+      ? 'This page has no selectable text. You can transcribe a quote and write a claim by hand.'
+      : 'Scroll to read more pages. Select a passage to capture it.';
+    rememberReaderPage();
+  }
+  function rememberReaderPage() {
+    const progress = notebook.reading.find(r => r.paper === reader.paper);
+    if (progress.page !== reader.page) {
+      progress.page = reader.page;
+      reader.progressPending = true;
+      scheduleReaderProgress();
+    }
+  }
+  async function renderReaderPage(active, view) {
+    if (view.rendering || view.rendered) return;
+    view.rendering = true;
+    const {container, viewport, page} = view;
+    const canvas = document.createElement('canvas');
+    const layer = document.createElement('div'); layer.className = 'textLayer';
+    container.replaceChildren(canvas, layer);
     const ratio = Math.min(devicePixelRatio || 1, 2);
     canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
     canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
-    await page.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio,0,0,ratio,0,0]}).promise;
-    const content = await page.getTextContent();
-    await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
-    el('reader-hint').textContent = content.items.some(item => item.str?.trim()) ? 'Select a passage on the page to capture it.' : 'This page has no selectable text. You can transcribe a quote and write a claim by hand.';
-    el('reader-page').value = reader.page;
-    if (!reader.draft) el('capture-locator').value = `p. ${reader.page}`;
-    const progress = notebook.reading.find(r => r.paper === reader.paper);
-    progress.page = reader.page;
-    await save();
-    el('research-body').querySelector('[data-tool="bookmark"]').textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page';
+    try {
+      view.renderTask = page.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio,0,0,ratio,0,0]});
+      await view.renderTask.promise;
+      const content = await page.getTextContent();
+      if (reader !== active || !container.isConnected) return;
+      view.textLayer = new active.pdfjs.TextLayer({textContentSource:content, container:layer, viewport});
+      await view.textLayer.render();
+      view.hasText = content.items.some(item => item.str?.trim());
+      view.rendered = true;
+      if (active.page === page.pageNumber) updateReaderControls();
+    } catch (error) {
+      if (reader === active && container.isConnected && error.name !== 'RenderingCancelledException' && error.name !== 'AbortException') {
+        message(`Could not display page ${page.pageNumber}: ${error.message}`, true);
+      }
+    } finally {
+      view.rendering = false;
+      // Keep canvas memory bounded as the reader moves through a long PDF.
+      if (!view.nearby && !readerPageSelected(view)) releaseReaderPage(view);
+    }
+  }
+  function readerPageSelected(view) {
+    const selection = window.getSelection();
+    return selection?.rangeCount > 0 && selection.containsNode(view.container, true);
+  }
+  function releaseReaderPage(view) {
+    if (view.rendering) return;
+    for (const canvas of view.container.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
+    view.container.replaceChildren();
+    view.rendered = false;
+  }
+  async function layoutReader() {
+    const active = reader;
+    stopReaderViews();
+    const scale = Number(el('reader-zoom').value);
+    const pages = el('pdf-pages'), scroll = pages.parentElement;
+    active.views = active.pages.map(page => {
+      const viewport = page.getViewport({scale});
+      const container = document.createElement('div');
+      container.className = 'pdf-page'; container.dataset.page = page.pageNumber;
+      container.setAttribute('role', 'group'); container.setAttribute('aria-label', `Page ${page.pageNumber}`);
+      container.style.width = `${viewport.width}px`; container.style.height = `${viewport.height}px`;
+      container.style.setProperty('--total-scale-factor', viewport.scale * (page.userUnit || 1));
+      container.style.setProperty('--scale-round-x', '1px'); container.style.setProperty('--scale-round-y', '1px');
+      return {page, viewport, container};
+    });
+    pages.replaceChildren(...active.views.map(view => view.container));
+    const views = active.views;
+    active.observer = new IntersectionObserver(entries => {
+      if (reader !== active || active.views !== views) return;
+      for (const entry of entries) {
+        const view = active.views[Number(entry.target.dataset.page) - 1];
+        view.nearby = entry.isIntersecting;
+        if (view.nearby) renderReaderPage(active, view);
+        else if (!readerPageSelected(view)) releaseReaderPage(view);
+      }
+    }, {root:scroll, rootMargin:'100% 0px'});
+    active.views.forEach(view => active.observer.observe(view.container));
+    active.onScroll = () => {
+      cancelAnimationFrame(active.scrollFrame);
+      active.scrollFrame = requestAnimationFrame(() => {
+        if (reader !== active || active.views !== views) return;
+        const bounds = scroll.getBoundingClientRect();
+        const readingLine = bounds.top + Math.min(scroll.clientHeight * .35, 200);
+        const view = active.views.find(view => view.container.getBoundingClientRect().bottom > readingLine) || active.views.at(-1);
+        if (active.page !== view.page.pageNumber) {
+          active.page = view.page.pageNumber;
+          updateReaderControls();
+        }
+      });
+    };
+    scroll.addEventListener('scroll', active.onScroll, {passive:true});
+    await goToReaderPage(active.page);
+  }
+  async function goToReaderPage(number) {
+    const active = reader, view = active.views[number - 1];
+    active.page = number;
+    const scroll = el('pdf-pages').parentElement;
+    scroll.scrollTop += view.container.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop - 8;
+    updateReaderControls();
+    view.nearby = true;
+    await renderReaderPage(active, view);
   }
   async function discardDrafts() {
     if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
@@ -288,6 +416,7 @@ const ResearchTools = (() => {
     if (name === 'close') { setBusy(false); await close(); return; }
     if (name === 'tab' || name === 'reload') {
       if (!await discardDrafts()) return;
+      stopReaderViews();
       if (reader?.document) await reader.document.loadingTask.destroy();
       reader = null; epoch++;
       notebook = await request();
@@ -402,10 +531,9 @@ const ResearchTools = (() => {
     }
     if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page); return; }
     if (['previous-page','next-page','go-page'].includes(name)) {
-      if (reader.draft && !await confirmDialog('Discard this unsaved claim before changing pages?',{ok:'Discard claim'})) return;
       const page = name === 'go-page' ? Number(el('reader-page').value) : reader.page + (name === 'next-page' ? 1 : -1);
       if (!Number.isInteger(page) || page < 1 || page > reader.document.numPages) throw new Error('Choose a page within this PDF.');
-      reader.page = page; reader.draft = false; el('capture-form').reset(); await renderPage(); return;
+      await goToReaderPage(page); return;
     }
     if (name === 'bookmark') {
       const progress = notebook.reading.find(r=>r.paper === reader.paper);
@@ -414,22 +542,30 @@ const ResearchTools = (() => {
     }
     if (name === 'capture-selection') {
       if (!reader.selection) throw new Error('Select a passage on the PDF page first.');
-      el('capture-quote').value = reader.selection; el('capture-locator').value = `p. ${reader.page}`;
+      el('capture-quote').value = reader.selection; el('capture-locator').value = reader.selectionLocator;
       reader.draft = true; el('capture-text').focus(); return;
     }
   }
   async function run(task) {
     if (busy) return;
     setBusy(true);
-    try { await task(); }
+    try { await flushReaderProgress(); await task(); }
     catch (error) { message(error.message,true); if (!el('research-tools').open) toast(error.message,{tone:'warn'}); }
-    finally { setBusy(false); }
+    finally { setBusy(false); if (reader?.progressPending) scheduleReaderProgress(); }
   }
   document.addEventListener('selectionchange', () => {
     if (!reader || tab !== 'reader') return;
-    const selection = window.getSelection(), layer = el('pdf-page')?.querySelector('.textLayer');
-    if (selection && layer?.contains(selection.anchorNode) && layer.contains(selection.focusNode)) {
+    const selection = window.getSelection();
+    const pageFor = node => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('#pdf-pages .pdf-page');
+    const start = pageFor(selection?.anchorNode), end = pageFor(selection?.focusNode);
+    if (start && end && selection.toString().trim()) {
       reader.selection = selection.toString().trim();
+      const first = Math.min(Number(start.dataset.page), Number(end.dataset.page));
+      const last = Math.max(Number(start.dataset.page), Number(end.dataset.page));
+      reader.selectionLocator = first === last ? `p. ${first}` : `pp. ${first}–${last}`;
+    }
+    for (const view of reader.views || []) {
+      if (view.rendered && !view.nearby && !readerPageSelected(view)) releaseReaderPage(view);
     }
   });
   document.addEventListener('click', event => {
@@ -466,7 +602,7 @@ const ResearchTools = (() => {
       notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;
       await save();
     });
-    if (target.id === 'reader-zoom') run(renderPage);
+    if (target.id === 'reader-zoom') run(layoutReader);
   });
   document.addEventListener('input', event => {
     const target = event.target;

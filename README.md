@@ -236,10 +236,12 @@ All of these tools work with **Enable AI analysis** turned off. Your boards,
 connections, reading progress, and saved searches belong to the selected workspace
 and are stored in `notebook.json`. They are never sent to a model.
 
-- **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
-  passage on the page and choose **Capture selected passage** to fill the quote
-  and page fields. Write the claim in your own words, optionally add a note, and
+- **Read & capture**, in a paper's header, opens an offline PDF reader. Scroll
+  continuously between pages; the page number and saved reading position follow
+  as you read. Select a passage on the page and choose **Capture selected passage**
+  to fill the quote and page fields. Write the claim in your own words, optionally add a note, and
   save. Quotes receive the same local verification as ordinary manual claims.
+  Your unfinished claim and its source page stay intact while you scroll or zoom.
   Pages with no selectable text can still be read and transcribed by hand.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
