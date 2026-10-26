@@ -113,12 +113,163 @@ def test_research_tools_workflow(engine, uuid_available):
     asyncio.run(scenario())
 
 
+async def select_first_line(page, number=1):
+    """Drag across the first line of text on page `number` of the open paper."""
+    span = page.locator(f'#reader .pdf-page[data-page="{number}"] .textLayer span').first
+    await span.wait_for()
+    bounds = await span.bounding_box()
+    await page.mouse.move(bounds['x'] + .5, bounds['y'] + bounds['height'] / 2)
+    await page.mouse.down()
+    await page.mouse.move(bounds['x'] + bounds['width'] - .5, bounds['y'] + bounds['height'] / 2, steps=10)
+    await page.mouse.up()
+    await page.locator('#passage-tools').wait_for(state='visible')
+    return bounds
+
+
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_pdf_selection_capture_bookmarks_history_and_conflict(engine):
+def test_paper_reads_beside_its_notes(engine):
+    """Selecting a paper with a PDF shows the paper itself beside a rail of the
+    reader's own note, highlights, and the claims; passages become highlights
+    or claims from the toolbar under the selection."""
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
-    store.pdf_path('paper').write_bytes(minimal_pdf(['Recovery depends on conditions.\nWe measured several tasks.','Second page findings.']))
+    store.add_claim('paper', {'text':'Findings continue.', 'tags':[], 'quote':'Second page findings.', 'locator':'p. 2'})
+    store.pdf_path('paper').write_bytes(minimal_pdf(['Recovery depends on conditions.\nWe measured several tasks.','Second page findings.','Third page.']))
+    store.save_paper(store.new_paper('plain',title='A paper without a PDF',authors=['Bo Writer'],year=2025))
+
+    async def scenario():
+        async with async_playwright() as p:
+            browser = await getattr(p, engine).launch()
+            page = await browser.new_page(viewport={'width':1440,'height':1000})
+            errors, external = [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.on('request', lambda request: external.append(request.url) if not request.url.startswith(('http://127.0.0.1:', 'blob:')) else None)
+            with _server() as url:
+                await page.goto(url)
+                # The library view has no reader; a paper without a PDF has none either.
+                await page.locator('#content .claim').first.wait_for()
+                assert await page.locator('#reader').is_hidden()
+                await page.locator('#papers li[data-paper="plain"]').click()
+                await page.locator('.paperhead h2', has_text='A paper without a PDF').wait_for()
+                assert await page.locator('#reader').is_hidden()
+                assert await page.locator('#panes.reading').count() == 0
+                # A paper with a PDF opens beside its rail: note first, then highlights, then claims.
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#panes.reading').wait_for()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                assert await page.locator('#reader .pdf-page').count() == 3
+                assert await page.locator('#reader-total').inner_text() == 'of 3'
+                rail = page.locator('#content')
+                assert await rail.locator('.note .who').first.text_content() == 'my note'
+                assert await rail.get_by_role('button', name='Write a note').count() == 1
+                assert await page.locator('.paperhead').get_by_role('button', name='Write a note').count() == 0
+                assert await page.locator('.paperhead').get_by_role('button', name='Read & capture').count() == 0
+                assert await rail.locator('.highlights').count() == 1
+                assert await rail.locator('.claim').count() == 1
+                # The note is written in the rail and stays there.
+                await rail.get_by_role('button', name='Write a note').click()
+                await rail.locator('textarea[data-note="paper"]').fill('Read this for the task differences.')
+                await rail.get_by_role('button', name='Save', exact=True).click()
+                await rail.locator('.note p', has_text='task differences').wait_for()
+                assert httpx.get(url+'/api/state').json()['papers'][0]['notes'] == 'Read this for the task differences.'
+                # A selected passage becomes a new claim, quote and page filled in.
+                bounds = await select_first_line(page)
+                await page.get_by_role('button', name='Capture as claim', exact=True).click()
+                form = page.locator('form[data-form]')
+                await form.wait_for()
+                assert await form.locator('[name="quote"]').input_value() == 'Recovery depends on conditions.'
+                assert await form.locator('[name="locator"]').input_value() == 'p. 1'
+                await form.locator('[name="text"]').fill('Recovery is conditional.')
+                await form.locator('[name="note"]').fill('Check the task differences.')
+                await form.get_by_role('button', name='Save', exact=True).click()
+                await page.locator('#content .claim', has_text='Recovery is conditional.').wait_for()
+                claim = next(c for c in httpx.get(url+'/api/state').json()['claims'] if c['text'] == 'Recovery is conditional.')
+                assert claim['quote_verified'] is True and claim['locator'] == 'p. 1' and claim['note'] == 'Check the task differences.'
+                # A selected passage becomes a highlight in the chosen color, drawn over the text.
+                bounds = await select_first_line(page)
+                await page.get_by_role('button', name='Highlight in green', exact=True).click()
+                await ready(page)
+                await rail.locator('.highlight-entry').wait_for()
+                highlight = httpx.get(url+'/api/notebook').json()['highlights'][0]
+                assert highlight['text'] == 'Recovery depends on conditions.' and highlight['page'] == 1 and highlight['color'] == 'green'
+                assert len(highlight['rects']) == 1
+                mark = page.locator('#reader .pdf-page[data-page="1"] .highlightLayer .highlight-green')
+                await mark.wait_for()
+                box = await mark.bounding_box()
+                assert abs(box['x'] - bounds['x']) < 3 and abs(box['width'] - bounds['width']) < 3
+                assert await page.locator('#passage-tools').is_hidden()
+                # The highlight takes a note of its own, in the rail.
+                await rail.get_by_role('button', name='Add note', exact=True).click()
+                await rail.locator('[data-highlight-note]').fill('Which conditions?')
+                await rail.get_by_role('button', name='Save note', exact=True).click()
+                await ready(page)
+                await rail.locator('.highlight-entry .note p', has_text='Which conditions?').wait_for()
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                # It stays in place at another zoom.
+                await page.locator('#reader-zoom').select_option('2')
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                await ready(page)
+                bounds = await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.bounding_box()
+                box = await page.locator('#reader .pdf-page[data-page="1"] .highlightLayer div').bounding_box()
+                assert abs(box['x'] - bounds['x']) < 4 and abs(box['width'] - bounds['width']) < 4
+                await page.locator('#reader-zoom').select_option('fit')
+                await ready(page)
+                # A claim's PDF link scrolls the paper open beside it rather than opening a tab.
+                await rail.locator('.claim', has_text='Findings continue.').locator('.pdflink').click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                assert len(page.context.pages) == 1
+                # Bookmarking a page puts the paper on the reading queue at that page.
+                await page.get_by_role('button', name='Bookmark this page', exact=True).click()
+                await ready(page)
+                await page.get_by_role('button', name='Remove bookmark', exact=True).wait_for()
+                reading = httpx.get(url+'/api/notebook').json()['reading'][0]
+                assert reading['bookmarks'] == [2] and reading['page'] == 2 and reading['status'] == 'reading'
+                await page.get_by_role('button', name='Next', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                await page.get_by_role('button', name='Previous', exact=True).click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                Path('.context').mkdir(exist_ok=True)
+                await page.screenshot(path='.context/research-reader.png')
+                # The rail's highlight scrolls the paper back to its page.
+                await rail.locator('.highlight-entry blockquote').click()
+                await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
+                # The PDF can be put away, and the choice is remembered in this browser.
+                await page.get_by_role('button', name='Hide PDF', exact=True).click()
+                await page.locator('#reader').wait_for(state='hidden')
+                assert await page.locator('#panes.reading').count() == 0
+                assert await rail.locator('.highlight-entry').count() == 1
+                await page.reload()
+                await page.locator('.paperhead h2', has_text='A study of recovery').wait_for()
+                assert await page.locator('#reader').is_hidden()
+                await page.get_by_role('button', name='Show PDF', exact=True).click()
+                await page.locator('#panes.reading').wait_for()
+                # Reopened, the paper resumes where the reading queue left it.
+                await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '2'")
+                # The reading queue's own button opens a page of the paper.
+                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#research-tools')
+                await dialog.get_by_role('button', name='Bookmark: page 2', exact=True).click()
+                await dialog.wait_for(state='hidden', timeout=5000)
+                await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
+                # Removing the highlight asks, because it carries a note.
+                await rail.get_by_role('button', name='Remove', exact=True).click()
+                await _answer(page, 'Remove highlight')
+                await ready(page)
+                await rail.locator('.highlight-entry').wait_for(state='hidden')
+                assert not httpx.get(url+'/api/notebook').json()['highlights']
+                assert not errors and not external
+            await browser.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_history_restore_and_notebook_conflict(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper',title='A study of recovery',authors=['Ada Researcher'],year=2026))
+    claim = store.add_claim('paper', {'text':'Recovery is conditional.', 'tags':[], 'quote':'Recovery depends on conditions.', 'locator':'p. 1', 'note':'Check the task differences.'})
 
     async def scenario():
         async with async_playwright() as p:
@@ -130,69 +281,8 @@ def test_pdf_selection_capture_bookmarks_history_and_conflict(engine):
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
-                await page.get_by_role('button',name='Read & capture',exact=True).click()
-                await ready(page)
+                await page.locator('.paperhead h2', has_text='A study of recovery').wait_for()
                 dialog = page.locator('#research-tools')
-                await page.locator('#pdf-page .textLayer span').first.wait_for()
-                bounds = await page.locator('#pdf-page .textLayer span').first.bounding_box()
-                await page.mouse.move(bounds['x'] + .5, bounds['y'] + bounds['height'] / 2)
-                await page.mouse.down()
-                await page.mouse.move(bounds['x'] + bounds['width'] - .5, bounds['y'] + bounds['height'] / 2, steps=10)
-                await page.mouse.up()
-                await dialog.get_by_role('button',name='Capture selected passage',exact=True).click()
-                await ready(page)
-                assert await page.locator('#capture-quote').input_value() == 'Recovery depends on conditions.'
-                assert await page.locator('#capture-locator').input_value() == 'p. 1'
-                await page.locator('#capture-text').fill('Recovery is conditional.')
-                await page.locator('#capture-note').fill('Check the task differences.')
-                await dialog.get_by_role('button',name='Save claim',exact=True).click()
-                await ready(page)
-                claim = httpx.get(url+'/api/state').json()['claims'][0]
-                assert claim['quote_verified'] is True and claim['locator'] == 'p. 1'
-                bounds = await page.locator('#pdf-page .textLayer span').first.bounding_box()
-                await page.mouse.move(bounds['x'] + .5, bounds['y'] + bounds['height'] / 2)
-                await page.mouse.down()
-                await page.mouse.move(bounds['x'] + bounds['width'] - .5, bounds['y'] + bounds['height'] / 2, steps=10)
-                await page.mouse.up()
-                await page.locator('#highlight-color').select_option('green')
-                await dialog.get_by_role('button',name='Highlight selected passage',exact=True).click()
-                await ready(page)
-                highlight = httpx.get(url+'/api/notebook').json()['highlights'][0]
-                assert highlight['text'] == 'Recovery depends on conditions.' and highlight['page'] == 1 and highlight['color'] == 'green'
-                assert len(highlight['rects']) == 1
-                mark = await page.locator('#pdf-page .highlightLayer .highlight-green').bounding_box()
-                assert abs(mark['x'] - bounds['x']) < 3 and abs(mark['width'] - bounds['width']) < 3
-                await page.locator('[data-highlight-note]').fill('Which conditions?')
-                await dialog.get_by_role('button',name='Save note',exact=True).click()
-                await ready(page)
-                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
-                await dialog.get_by_role('button',name='Next page',exact=True).click()
-                await ready(page)
-                assert not await page.locator('#pdf-page .highlightLayer div').count()
-                await dialog.get_by_role('button',name='Page 1',exact=True).click()
-                await ready(page)
-                assert await page.locator('#pdf-page .highlightLayer div').count() == 1
-                await page.locator('#reader-zoom').select_option('2')
-                await ready(page)
-                bounds = await page.locator('#pdf-page .textLayer span').first.bounding_box()
-                mark = await page.locator('#pdf-page .highlightLayer div').bounding_box()
-                assert abs(mark['x'] - bounds['x']) < 4 and abs(mark['width'] - bounds['width']) < 4
-                await dialog.get_by_role('button',name='Next page',exact=True).click()
-                await ready(page)
-                await dialog.get_by_role('button',name='Bookmark this page',exact=True).click()
-                await ready(page)
-                assert httpx.get(url+'/api/notebook').json()['reading'][0]['bookmarks'] == [2]
-                assert httpx.get(url+'/api/notebook').json()['reading'][0]['page'] == 2
-                Path('.context').mkdir(exist_ok=True)
-                await page.screenshot(path='.context/research-reader.png')
-                await dialog.get_by_role('button',name='Close research tools').click()
-                await dialog.wait_for(state='hidden', timeout=5000)
-                await page.reload()
-                await page.get_by_role('button',name='Read & capture',exact=True).click()
-                await ready(page)
-                assert await page.locator('#reader-page').input_value() == '2'
-                await dialog.get_by_role('button',name='Close research tools').click()
-                await dialog.wait_for(state='hidden', timeout=5000)
                 httpx.patch(url+f"/api/papers/paper/claims/{claim['id']}",json={'text':'A stronger conclusion.'})
                 await page.get_by_role('button',name='Edit history',exact=True).click()
                 await ready(page)

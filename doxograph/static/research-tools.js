@@ -2,8 +2,12 @@
 const ResearchTools = (() => {
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
-  let modalWorkspace = null, reader = null, historyData = null, historyPaper = null, historyClaim = null;
+  let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null;
   let epoch = 0;
+  // The paper open beside its notes in the main pane. Separate from the modal:
+  // it stays up while the research tools are opened and closed over it.
+  let reader = null, readerEpoch = 0, highlightEditing = null, highlightDraft = '', pendingPage = null;
+  const COLORS = ['yellow', 'green', 'blue', 'pink'];
   const el = (id) => document.getElementById(id);
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const uid = () => {
@@ -38,6 +42,7 @@ const ResearchTools = (() => {
     el('selection-count').textContent = `${claims.size} claims · ${papers.size} papers selected`;
     document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
     document.querySelectorAll('[data-select-paper]').forEach(c => c.checked = papers.has(c.dataset.selectPaper));
+    redrawHighlights();
   }
   function claimCheckbox(row) {
     const key = refKey(row);
@@ -48,8 +53,8 @@ const ResearchTools = (() => {
   function paperCheckbox(p) {
     return `<input type="checkbox" class="paper-selection" aria-label="Select paper: ${html(p.title || p.key)}" data-select-paper="${html(p.key)}" ${papers.has(p.key) ? 'checked' : ''}>`;
   }
-  async function request(path = '', method = 'GET', body) {
-    return api('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':modalWorkspace || workspace},
+  async function request(path = '', method = 'GET', body, ws = modalWorkspace || workspace) {
+    return api('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':ws},
       ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   }
   function message(text, error = false) {
@@ -75,10 +80,9 @@ const ResearchTools = (() => {
   }
   async function close() {
     if (busy) return;
-    if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
+    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
     epoch++;
-    if (reader?.document) await reader.document.loadingTask.destroy();
-    reader = null; dirty = false; connectionDraft = false;
+    dirty = false; connectionDraft = false;
     el('research-tools').close();
   }
   async function open(next = 'compare') {
@@ -107,7 +111,7 @@ const ResearchTools = (() => {
   }
   function render() {
     const labels = {compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', searches:'Saved searches'};
-    el('research-tools-title').textContent = tab === 'reader' ? 'Read & capture' : tab === 'history' ? 'Edit history' : 'Your research tools';
+    el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
       + button('reload', 'Reload saved version');
     if (tab === 'compare') renderCompare();
@@ -131,8 +135,7 @@ const ResearchTools = (() => {
         const p = S.papers.find(p => p.key === key);
         return `<article class="comparison-card"><h3>${html(p.title)}</h3><p class="hint">${html((p.authors || []).join(', '))} · ${html(p.year)}</p>
           <p>${html(p.summary || 'No summary recorded.')}</p><p>${html(p.notes)}</p>
-          ${p.has_pdf ? button('reader', 'Read & capture', `data-paper="${html(key)}"`) : ''}
-          ${button('source', 'Open paper', `data-paper="${html(key)}"`)}${button('unpin-paper', 'Unpin paper', `data-paper="${html(key)}"`)}</article>`;
+          ${button('source', p.has_pdf ? 'Read paper' : 'Open paper', `data-paper="${html(key)}"`)}${button('unpin-paper', 'Unpin paper', `data-paper="${html(key)}"`)}</article>`;
       }).join('')}</div>${!claims.size && !papers.size ? '<p class="empty">Select claims or papers in the library to compare them here.</p>' : ''}`;
   }
   function currentBoard() { return notebook.boards.find(b => b.id === boardId); }
@@ -219,84 +222,223 @@ const ResearchTools = (() => {
           ${button('restore', deleted ? 'Restore deletion' : 'Restore this version',`data-revision="${html(e.id)}" ${fields.length ? '' : 'disabled'}`)}</article>`;
       }).join('')}${entries.length ? '' : '<p class="empty">No earlier versions yet. Future edits will appear here.</p>'}`;
   }
-  async function showReader(paper, requestedPage) {
-    if (reader?.document) await reader.document.loadingTask.destroy();
-    if (!notebook.reading.some(r => r.paper === paper)) await queue([paper]);
-    const progress = notebook.reading.find(r => r.paper === paper);
-    if (progress.status === 'queued') { progress.status = 'reading'; await save(); }
-    tab = 'reader';
-    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false};
-    render();
-    el('research-body').innerHTML = `<h3>${html(S.papers.find(p => p.key === paper)?.title || paper)}</h3>
-      <div class="reader-controls tool-actions">${button('previous-page','Previous page')}
-      <label>Page<input id="reader-page" type="number" min="1" value="${reader.page}"></label><span id="reader-total"></span>
-      ${button('go-page','Go')}${button('next-page','Next page')}${button('bookmark','Bookmark this page')}
-      <label>Zoom<select id="reader-zoom"><option value="1">100%</option><option value="1.3" selected>130%</option><option value="1.6">160%</option><option value="2">200%</option></select></label></div>
-      <div class="reader-layout"><div class="pdf-scroll"><div id="pdf-page"><canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div></div><p id="reader-hint" class="hint">Loading PDF…</p></div>
-        <div class="reader-side"><section id="highlight-panel"><h3>Highlights</h3>
-          <div class="tool-actions"><label>Color<select id="highlight-color">${['yellow','green','blue','pink'].map(c => `<option value="${c}">${c}</option>`).join('')}</select></label>
-          ${button('highlight-selection','Highlight selected passage')}</div><div id="page-highlights"></div></section>
-        <form id="capture-form"><h3>Capture a claim</h3><p class="hint">Select text directly on the page, then capture it. Add your interpretation before saving.</p>
-          ${button('capture-selection','Capture selected passage')}${area('Verbatim quote','capture-quote')}
-          ${input('Page or section','capture-locator')}${area('Claim in your own words','capture-text')}${area('Your note (optional)','capture-note')}
-          <button type="submit" class="primary">Save claim</button><p id="capture-status" role="status"></p>
-        </form></div></div>`;
-    const generation = ++epoch;
-    const pdfjs = await import('/vendor/pdf.min.mjs');
-    pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
-    const doc = await pdfjs.getDocument({url:`/pdf/${encodeURIComponent(paper)}?workspace=${encodeURIComponent(modalWorkspace)}&inline=1`, isEvalSupported:false, cMapUrl:'/vendor/cmaps/', cMapPacked:true, standardFontDataUrl:'/vendor/standard_fonts/', wasmUrl:'/vendor/wasm/'}).promise;
-    if (generation !== epoch || !el('research-tools').open) { await doc.loadingTask.destroy(); return; }
-    reader.document = doc;
-    reader.pdfjs = pdfjs;
-    reader.page = Math.max(1, Math.min(reader.page, doc.numPages));
-    el('reader-total').textContent = `of ${doc.numPages}`;
-    el('reader-page').max = doc.numPages;
-    await renderPage();
+  // --- The paper, read beside its notes -----------------------------------
+  // Mounted by app.js whenever the claims view shows one paper with a PDF.
+  // Pages are laid out as placeholders at their size and drawn only near the
+  // viewport, so a long paper costs what is on screen and not a canvas per page.
+  const readerKey = (paper, ws) => `${ws}\u0000${paper}`;
+  const zoomKey = 'doxograph-reader-zoom', ZOOMS = ['fit', '1', '1.3', '1.6', '2'];
+  function savedZoom() {
+    try { const zoom = localStorage.getItem(zoomKey); return ZOOMS.includes(zoom) ? zoom : 'fit'; }
+    catch (_) { return 'fit'; }
   }
-  async function renderPage() {
-    reader.selection = ''; reader.rects = [];
-    const page = await reader.document.getPage(reader.page);
-    const viewport = page.getViewport({scale:Number(el('reader-zoom').value)});
-    const container = el('pdf-page');
-    container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
-    container.style.width = `${viewport.width}px`;
-    container.style.height = `${viewport.height}px`;
-    container.style.setProperty('--total-scale-factor', viewport.scale * (page.userUnit || 1));
-    container.style.setProperty('--scale-round-x', '1px');
-    container.style.setProperty('--scale-round-y', '1px');
-    const canvas = container.querySelector('canvas');
-    const ratio = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
-    canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
-    await page.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio,0,0,ratio,0,0]}).promise;
-    const content = await page.getTextContent();
-    await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
-    el('reader-hint').textContent = content.items.some(item => item.str?.trim()) ? 'Select a passage on the page to capture it.' : 'This page has no selectable text. You can transcribe a quote and write a claim by hand.';
-    el('reader-page').value = reader.page;
-    if (!reader.draft) el('capture-locator').value = `p. ${reader.page}`;
-    renderHighlights();
-    const progress = notebook.reading.find(r => r.paper === reader.paper);
-    progress.page = reader.page;
-    await save();
-    el('research-body').querySelector('[data-tool="bookmark"]').textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page';
+  // The scale a zoom setting means: 'fit' is whatever fills the column.
+  function scaleFor(zoom, base) {
+    if (zoom !== 'fit') return Number(zoom);
+    const scroller = el('pdf-scroll');
+    const width = (scroller?.clientWidth || 700) - 18;
+    return Math.max(.3, Math.round(width / base.w * 1000) / 1000);
   }
-  function renderHighlights() {
-    const mine = notebook.highlights.filter(h => h.paper === reader.paper);
-    const here = mine.filter(h => h.page === reader.page);
+  async function mountReader(paper) {
+    const ws = currentWorkspaceId;
+    if (reader && (!paper || reader.key !== readerKey(paper, ws))) await unmountReader();
+    el('reader').hidden = !paper;
+    if (!paper || reader) return;
+    const generation = ++readerEpoch;
+    const zoom = savedZoom();
+    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, selection:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null};
+    el('reader').innerHTML = `<div class="reader-toolbar">${button('previous-page', 'Previous', 'title="Previous page"')}
+      <label>Page<input id="reader-page" type="number" min="1" value="1" aria-label="Page number"></label><span id="reader-total"></span>${button('go-page', 'Go')}${button('next-page', 'Next', 'title="Next page"')}
+      <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
+      ${button('bookmark', 'Bookmark this page')}<span class="reader-status" id="reader-status"></span></div>
+      <div class="pdf-scroll" id="pdf-scroll"><div class="passage-tools" id="passage-tools" hidden>
+        ${COLORS.map(c => button('highlight-selection', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Highlight in ${c}" title="Highlight in ${c}"`)).join('')}
+        ${button('capture-selection', 'Capture as claim')}</div></div>
+      <p id="reader-hint" class="hint">Loading PDF…</p>`;
+    // Buttons on the toolbar must not take the selection away before they act on it.
+    el('passage-tools').addEventListener('mousedown', event => event.preventDefault());
+    try {
+      const pdfjs = await import('/vendor/pdf.min.mjs');
+      pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
+      const doc = await pdfjs.getDocument({url:`/pdf/${encodeURIComponent(paper)}?workspace=${encodeURIComponent(ws)}&inline=1`, isEvalSupported:false, cMapUrl:'/vendor/cmaps/', cMapPacked:true, standardFontDataUrl:'/vendor/standard_fonts/', wasmUrl:'/vendor/wasm/'}).promise;
+      if (reader?.generation !== generation) { await doc.loadingTask.destroy(); return; }
+      reader.document = doc; reader.pdfjs = pdfjs;
+      const first = await doc.getPage(1);
+      if (reader?.generation !== generation) return;
+      const base = first.getViewport({scale:1});
+      const scroller = el('pdf-scroll');
+      reader.scale = scaleFor(zoom, {w:base.width, h:base.height});
+      for (let number = 1; number <= doc.numPages; number++) {
+        const page = {number, el:document.createElement('div'), base:{w:base.width, h:base.height}, renderedAt:0, rendering:null, pdfPage:number === 1 ? first : null, text:null};
+        page.el.className = 'pdf-page pending'; page.el.dataset.page = number;
+        sizePage(page);
+        scroller.appendChild(page.el);
+        reader.pages.push(page);
+      }
+      el('reader-total').textContent = `of ${doc.numPages}`;
+      el('reader-page').max = doc.numPages;
+      reader.observer = new IntersectionObserver(entries => {
+        if (reader?.generation !== generation) return;
+        for (const entry of entries) {
+          const page = reader.pages[Number(entry.target.dataset.page) - 1];
+          if (entry.isIntersecting) renderPage(page);
+          else if (page.renderedAt) clearPage(page);
+        }
+      }, {root:scroller, rootMargin:'600px 0px'});
+      reader.pages.forEach(page => reader.observer.observe(page.el));
+      // Fit width follows the column as the window or the side pane is resized.
+      reader.resizer = new ResizeObserver(() => {
+        if (reader?.generation !== generation || reader.zoom !== 'fit' || reader.resizeTimer) return;
+        reader.resizeTimer = setTimeout(() => { reader.resizeTimer = null; if (reader?.generation === generation) run(() => setZoom('fit')); }, 150);
+      });
+      reader.resizer.observe(scroller);
+      scroller.addEventListener('scroll', () => {
+        if (reader?.generation !== generation || reader.scrollTick) return;
+        reader.scrollTick = requestAnimationFrame(() => { reader.scrollTick = null; trackCurrentPage(); });
+      }, {passive:true});
+      const progress = (S.notebook?.reading || []).find(r => r.paper === paper);
+      const wanted = pendingPage || progress?.page || 1;
+      pendingPage = null;
+      goToPage(wanted);
+      trackCurrentPage();
+    } catch (error) {
+      if (reader?.generation === generation) el('reader-hint').textContent = `Could not open the PDF: ${error.message}`;
+    }
+  }
+  async function unmountReader() {
+    const gone = reader;
+    reader = null;
+    el('reader').hidden = true; el('reader').innerHTML = '';
+    if (!gone) return;
+    gone.observer?.disconnect(); gone.resizer?.disconnect();
+    clearTimeout(gone.progressTimer); clearTimeout(gone.resizeTimer);
+    if (gone.document) await gone.document.loadingTask.destroy();
+  }
+  function sizePage(page) {
+    page.el.style.width = `${Math.floor(page.base.w * reader.scale)}px`;
+    page.el.style.height = `${Math.floor(page.base.h * reader.scale)}px`;
+  }
+  function clearPage(page) {
+    page.el.innerHTML = ''; page.el.classList.add('pending'); page.renderedAt = 0;
+  }
+  function pageNear(page) {
+    const scroller = el('pdf-scroll');
+    if (!scroller) return false;
+    const top = page.el.offsetTop, bottom = top + page.el.offsetHeight;
+    return bottom > scroller.scrollTop - 600 && top < scroller.scrollTop + scroller.clientHeight + 600;
+  }
+  function renderPage(page) {
+    if (!reader || page.rendering || page.renderedAt === reader.scale) return page.rendering || Promise.resolve();
+    const generation = reader.generation, scale = reader.scale;
+    page.rendering = (async () => {
+      const pdfPage = page.pdfPage || (page.pdfPage = await reader.document.getPage(page.number));
+      if (reader?.generation !== generation || reader.scale !== scale) return;
+      const viewport = pdfPage.getViewport({scale});
+      page.base = {w:viewport.width / scale, h:viewport.height / scale};
+      const container = page.el;
+      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
+      container.style.width = `${viewport.width}px`;
+      container.style.height = `${viewport.height}px`;
+      container.style.setProperty('--total-scale-factor', viewport.scale * (pdfPage.userUnit || 1));
+      container.style.setProperty('--scale-round-x', '1px');
+      container.style.setProperty('--scale-round-y', '1px');
+      const canvas = container.querySelector('canvas');
+      const ratio = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
+      canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
+      await pdfPage.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0]}).promise;
+      if (reader?.generation !== generation || reader.scale !== scale) return;
+      const content = page.text || (page.text = await pdfPage.getTextContent());
+      if (reader?.generation !== generation || reader.scale !== scale) return;
+      await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
+      page.hasText = content.items.some(item => item.str?.trim());
+      page.renderedAt = scale;
+      container.classList.remove('pending');
+      drawPageHighlights(page);
+      if (page.number === reader.current) readerHint();
+    })().catch(error => { if (reader?.generation === generation) el('reader-hint').textContent = `Could not draw page ${page.number}: ${error.message}`; })
+      .finally(() => {
+        page.rendering = null;
+        // The zoom changed under this render: draw it again at the new scale.
+        if (reader?.generation === generation && page.renderedAt !== reader.scale && pageNear(page)) renderPage(page);
+      });
+    return page.rendering;
+  }
+  function paperHighlights(paper) {
+    return (S.notebook?.highlights || []).filter(h => h.paper === paper);
+  }
+  function drawPageHighlights(page) {
+    const layer = page.el.querySelector('.highlightLayer');
+    if (!layer) return;
     const percent = value => `${(value * 100).toFixed(3)}%`;
-    el('pdf-page').querySelector('.highlightLayer').innerHTML = here.flatMap(h => h.rects.map(r =>
-      `<div class="highlight-${html(h.color)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
-    const others = [...new Set(mine.map(h => h.page))].filter(page => page !== reader.page).sort((a, b) => a - b);
-    el('page-highlights').innerHTML = (here.map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
-        <blockquote class="highlight-${html(h.color)}">${html(h.text)}</blockquote>
-        <label>Your note<textarea data-highlight-note="${html(h.id)}">${html(h.note)}</textarea></label>
-        <div class="tool-actions">${button('save-highlight','Save note')}${button('capture-highlight','Capture as claim')}${button('remove-highlight','Remove highlight')}</div></article>`).join('')
-      || '<p class="hint">Select a passage on the page, then highlight it.</p>')
-      + (others.length ? `<div class="tool-actions"><span class="hint">Other highlighted pages</span>${others.map(page => button('highlight-page',`Page ${page}`,`data-page="${page}"`)).join('')}</div>` : '');
+    layer.innerHTML = paperHighlights(reader.paper).filter(h => h.page === page.number).flatMap(h => h.rects.map(r =>
+      `<div class="highlight-${html(h.color)}" data-highlight="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+  }
+  function redrawHighlights() {
+    if (!reader) return;
+    reader.pages.forEach(page => { if (page.renderedAt) drawPageHighlights(page); });
+  }
+  function readerHint() {
+    const hint = el('reader-hint');
+    if (!hint || !reader) return;
+    const page = reader.pages[reader.current - 1];
+    hint.textContent = page?.renderedAt && !page.hasText
+      ? 'This page has no selectable text. You can transcribe a quote and add a claim by hand.'
+      : 'Select a passage to highlight it or capture it as a claim.';
+  }
+  function trackCurrentPage() {
+    if (!reader?.pages.length) return;
+    const scroller = el('pdf-scroll');
+    const line = scroller.scrollTop + scroller.clientHeight * .35;
+    const page = reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages[reader.pages.length - 1];
+    if (page.number === reader.current && reader.tracked) return;
+    reader.current = page.number; reader.tracked = true;
+    const field = el('reader-page');
+    if (field && document.activeElement !== field) field.value = page.number;
+    const progress = (S.notebook?.reading || []).find(r => r.paper === reader.paper);
+    const marked = Boolean(progress?.bookmarks.includes(page.number));
+    const bookmark = el('reader').querySelector('[data-tool="bookmark"]');
+    if (bookmark) bookmark.textContent = marked ? 'Remove bookmark' : 'Bookmark this page';
+    readerHint();
+    // Where the reading stopped, for the queue: only for a paper that is on it.
+    clearTimeout(reader.progressTimer);
+    if (progress && progress.page !== page.number) {
+      const {generation, paper, workspace:ws} = reader;
+      reader.progressTimer = setTimeout(() => {
+        if (reader?.generation !== generation) return;
+        mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === page.number) return false; r.page = page.number; }, {refresh:false}).catch(() => { /* a later scroll tries again */ });
+      }, 1500);
+    }
+  }
+  async function goToPage(number, highlight = null) {
+    if (!reader?.pages.length) { pendingPage = number; return; }
+    const page = reader.pages[Math.max(1, Math.min(number, reader.pages.length)) - 1];
+    el('pdf-scroll').scrollTo({top:Math.max(0, page.el.offsetTop - 8)});
+    trackCurrentPage();
+    if (!highlight) return;
+    await renderPage(page);
+    page.el.querySelectorAll(`.highlightLayer [data-highlight="${CSS.escape(highlight)}"]`).forEach(mark => {
+      mark.classList.add('flash'); setTimeout(() => mark.classList.remove('flash'), 1600);
+    });
+  }
+  async function setZoom(zoom) {
+    if (!reader?.pages.length || !ZOOMS.includes(zoom)) return;
+    reader.zoom = zoom;
+    try { localStorage.setItem(zoomKey, zoom); } catch (_) { /* preference remains for this page */ }
+    const scale = scaleFor(zoom, reader.pages[0].base);
+    if (scale === reader.scale) return;
+    const scroller = el('pdf-scroll');
+    const ratio = scale / reader.scale;
+    reader.scale = scale;
+    reader.pages.forEach(page => { clearPage(page); sizePage(page); });
+    scroller.scrollTop *= ratio;
+    reader.tracked = false;
+    await Promise.all(reader.pages.filter(pageNear).map(renderPage));
+    trackCurrentPage();
   }
   // Client rectangles of the selection as fractions of the page, one per line of text.
-  function selectionRects(range) {
-    const box = el('pdf-page').getBoundingClientRect();
+  function selectionRects(range, pageEl) {
+    const box = pageEl.getBoundingClientRect();
     const rects = [...range.getClientRects()]
       .map(r => ({left:Math.max(r.left, box.left), right:Math.min(r.right, box.right), top:Math.max(r.top, box.top), bottom:Math.min(r.bottom, box.bottom)}))
       .filter(r => r.right - r.left > .5 && r.bottom - r.top > .5)
@@ -312,10 +454,137 @@ const ResearchTools = (() => {
     return lines.slice(0, 500).map(r => ({x:round((r.left - box.left) / box.width), y:round((r.top - box.top) / box.height),
       w:round((r.right - r.left) / box.width), h:round((r.bottom - r.top) / box.height)})).filter(r => r.w > 0 && r.h > 0);
   }
+  function hidePassageTools() {
+    if (reader) reader.selection = null;
+    const tools = el('passage-tools');
+    if (tools) tools.hidden = true;
+  }
+  function trackSelection() {
+    if (!reader) return;
+    const selection = window.getSelection();
+    const layerOf = node => (node && (node.nodeType === 1 ? node : node.parentElement))?.closest('#reader .textLayer') || null;
+    const layer = selection && !selection.isCollapsed && selection.rangeCount ? layerOf(selection.anchorNode) : null;
+    if (!layer || layerOf(selection.focusNode) !== layer) { hidePassageTools(); return; }
+    const pageEl = layer.closest('.pdf-page');
+    const range = selection.getRangeAt(0);
+    const text = selection.toString().trim(), rects = selectionRects(range, pageEl);
+    if (!text || !rects.length) { hidePassageTools(); return; }
+    reader.selection = {page:Number(pageEl.dataset.page), text, rects};
+    const tools = el('passage-tools'), scroller = el('pdf-scroll');
+    const box = scroller.getBoundingClientRect(), lines = range.getClientRects();
+    const last = lines[lines.length - 1] || pageEl.getBoundingClientRect();
+    tools.hidden = false;
+    tools.style.top = `${last.bottom - box.top + scroller.scrollTop + 6}px`;
+    tools.style.left = `${Math.max(4, Math.min(last.left - box.left + scroller.scrollLeft, scroller.clientWidth - tools.offsetWidth - 4))}px`;
+  }
+  // Read, change, write: the saved notebook rather than a copy held since the
+  // modal last opened, so a highlight made here cannot overwrite a board saved
+  // there. `fn` returns false to leave the notebook as it is.
+  async function mutateNotebook(ws, fn, {refresh = true} = {}) {
+    const latest = await request('', 'GET', undefined, ws);
+    if (fn(latest) === false) return latest;
+    const saved = await request('', 'PUT', latest, ws);
+    if (refresh) await refreshAll();
+    return saved;
+  }
+  // The rail's list of the paper's highlights, in page order, drawn by app.js
+  // under the paper's note. The note being edited is held here, not in the DOM:
+  // a redraw rebuilds the editor from it.
+  function highlightsHtml(paper) {
+    const mine = paperHighlights(paper).slice().sort((a, b) => a.page - b.page);
+    const empty = '<p class="hint">Select a passage in the paper to highlight it, with a note of your own, or to capture it as a claim.</p>';
+    return `<section class="highlights"><h3>Highlights${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}</h3>${mine.length ? mine.map(h => {
+      const editing = highlightEditing === h.id;
+      return `<article class="highlight-entry" data-highlight="${html(h.id)}">
+        <blockquote class="highlight-${html(h.color)}" data-tool="highlight-page" data-page="${h.page}" title="Show this passage in the paper">${html(h.text)}</blockquote>
+        ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="Your note on this passage" aria-label="Note on this highlight">${html(highlightDraft)}</textarea>`
+          : h.note.trim() ? noteHtml(h.note, 'my note') : ''}
+        <div class="hmeta"><span>p. ${h.page}</span><span class="cact">
+          ${editing ? button('save-highlight', 'Save note') + button('cancel-highlight', 'Cancel') : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
+          ${button('capture-highlight', 'Capture as claim')}${button('remove-highlight', 'Remove')}</span></div>
+      </article>`;
+    }).join('') : empty}</section>`;
+  }
+  // Whether a highlight note is being written in the rail, which holds off
+  // background redraws of it the way a claim editor does.
+  function holds() {
+    return Boolean(highlightEditing) && paperHighlights(V.paper).some(h => h.id === highlightEditing);
+  }
+  function goToPaper(paper, claim = null) {
+    captureOpenEditor(); parkNewClaimForNavigation(paper);
+    V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null;
+    V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
+    V.selectedId = claim;
+    el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
+    scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
+  }
+  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'highlight-selection', 'capture-selection',
+    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight']);
+  async function readerAction(name, target) {
+    const data = target.dataset;
+    if (['previous-page', 'next-page', 'go-page'].includes(name)) {
+      if (!reader?.pages.length) return;
+      const page = name === 'go-page' ? Number(el('reader-page').value) : reader.current + (name === 'next-page' ? 1 : -1);
+      if (!Number.isInteger(page) || page < 1 || page > reader.pages.length) throw new Error('Choose a page within this PDF.');
+      await goToPage(page); return;
+    }
+    if (name === 'highlight-page') {
+      const id = target.closest('[data-highlight]')?.dataset.highlight;
+      if (reader) { await goToPage(Number(data.page), id); return; }
+      // The PDF was put away, or this paper has none any more.
+      if (!S.papers.find(p => p.key === V.paper)?.has_pdf) throw new Error('This paper has no PDF to show the passage in.');
+      pendingPage = Number(data.page);
+      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); renderContent(); }
+      return;
+    }
+    if (name === 'bookmark') {
+      if (!reader?.pages.length) return;
+      const {paper, current, workspace:ws} = reader;
+      await mutateNotebook(ws, n => {
+        let progress = n.reading.find(r => r.paper === paper);
+        if (!progress) { progress = {paper, status:'reading', page:current, bookmarks:[]}; n.reading.push(progress); }
+        progress.page = current;
+        progress.bookmarks = progress.bookmarks.includes(current) ? progress.bookmarks.filter(p => p !== current) : [...progress.bookmarks, current];
+      });
+      reader.tracked = false; trackCurrentPage(); return;
+    }
+    if (name === 'highlight-selection') {
+      const passage = reader?.selection;
+      if (!passage) throw new Error('Select a passage in the paper first.');
+      const {paper, workspace:ws} = reader, color = COLORS.includes(data.color) ? data.color : 'yellow';
+      window.getSelection()?.removeAllRanges(); hidePassageTools();
+      await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:passage.page, rects:passage.rects, text:passage.text, color, note:''}); });
+      redrawHighlights(); return;
+    }
+    if (name === 'capture-selection') {
+      const passage = reader?.selection;
+      if (!passage) throw new Error('Select a passage in the paper first.');
+      const paper = reader.paper;
+      window.getSelection()?.removeAllRanges(); hidePassageTools();
+      startClaimFromPassage(paper, {quote:passage.text, locator:`p. ${passage.page}`}); return;
+    }
+    const id = target.closest('[data-highlight]')?.dataset.highlight;
+    const highlight = paperHighlights(V.paper).find(h => h.id === id);
+    if (!highlight) throw new Error('This highlight is no longer here. It may have been removed in another window.');
+    if (name === 'edit-highlight') { highlightEditing = id; highlightDraft = highlight.note; renderContent(); document.querySelector('[data-highlight-note]')?.focus(); return; }
+    if (name === 'cancel-highlight') { highlightEditing = null; highlightDraft = ''; renderContent(); return; }
+    if (name === 'capture-highlight') { startClaimFromPassage(highlight.paper, {quote:highlight.text, locator:`p. ${highlight.page}`, note:highlight.note}); return; }
+    if (name === 'save-highlight') {
+      const note = highlightDraft;
+      await mutateNotebook(currentWorkspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This highlight was removed in another window.'); h.note = note; });
+      if (highlightEditing === id) { highlightEditing = null; highlightDraft = ''; }
+      renderContent(); return;
+    }
+    if (name === 'remove-highlight') {
+      if (highlight.note && !await confirmDialog('Remove this highlight and its note?', {ok:'Remove highlight'})) return;
+      await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); });
+      if (highlightEditing === id) { highlightEditing = null; highlightDraft = ''; }
+      redrawHighlights(); return;
+    }
+  }
   async function discardDrafts() {
-    if ((dirty || reader?.draft || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
+    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
     if (dirty) { notebook = await request(); dirty = false; }
-    if (reader) reader.draft = false;
     connectionDraft = false;
     return true;
   }
@@ -324,22 +593,27 @@ const ResearchTools = (() => {
     if (name === 'close') { setBusy(false); await close(); return; }
     if (name === 'tab' || name === 'reload') {
       if (!await discardDrafts()) return;
-      if (reader?.document) await reader.document.loadingTask.destroy();
-      reader = null; epoch++;
+      epoch++;
       notebook = await request();
-      tab = data.tab || (['reader','history'].includes(tab) ? 'compare' : tab); render(); return;
+      tab = data.tab || (tab === 'history' ? 'compare' : tab); render(); return;
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
     if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
     if (name === 'source') {
       if (!await discardDrafts()) return;
       setBusy(false); await close();
-      captureOpenEditor(); parkNewClaimForNavigation(data.paper);
-      V.paper = data.paper; V.view = 'claims'; V.tag = null; V.label = null;
-      V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
-      V.selectedId = data.claim || null;
-      el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
-      scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected(); return;
+      goToPaper(data.paper, data.claim || null); return;
+    }
+    // A page of a queued paper: the paper opens in the main pane at that page,
+    // or scrolls to it if it is already open.
+    if (name === 'reader') {
+      if (!await discardDrafts()) return;
+      setBusy(false); await close();
+      const page = Number(data.page) || notebook.reading.find(r => r.paper === data.paper)?.page || 1;
+      if (reader?.paper === data.paper && !V.pdfHidden) { await goToPage(page); return; }
+      pendingPage = page;
+      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
+      goToPaper(data.paper); return;
     }
     if (name === 'bulk') {
       const values = el('bulk-values').value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -436,42 +710,6 @@ const ResearchTools = (() => {
       await refreshAll(); await showHistory(historyPaper,historyClaim);
       message(restored.deleted ? 'Claim removed. Its wording remains in history.' : restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
-    if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page); return; }
-    if (['previous-page','next-page','go-page','highlight-page'].includes(name)) {
-      if (reader.draft && !await confirmDialog('Discard this unsaved claim before changing pages?',{ok:'Discard claim'})) return;
-      const page = name === 'go-page' ? Number(el('reader-page').value) : name === 'highlight-page' ? Number(data.page) : reader.page + (name === 'next-page' ? 1 : -1);
-      if (!Number.isInteger(page) || page < 1 || page > reader.document.numPages) throw new Error('Choose a page within this PDF.');
-      reader.page = page; reader.draft = false; el('capture-form').reset(); await renderPage(); return;
-    }
-    if (name === 'bookmark') {
-      const progress = notebook.reading.find(r=>r.paper === reader.paper);
-      progress.bookmarks = progress.bookmarks.includes(reader.page) ? progress.bookmarks.filter(p=>p !== reader.page) : [...progress.bookmarks,reader.page];
-      await save(); target.textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page'; return;
-    }
-    if (name === 'highlight-selection') {
-      if (!reader.selection || !reader.rects?.length) throw new Error('Select a passage on the PDF page first.');
-      notebook.highlights.push({id:uid(),paper:reader.paper,page:reader.page,rects:reader.rects,text:reader.selection,color:el('highlight-color').value,note:''});
-      reader.selection = ''; reader.rects = []; window.getSelection()?.removeAllRanges();
-      await save(); renderHighlights(); return;
-    }
-    if (['save-highlight','capture-highlight','remove-highlight'].includes(name)) {
-      const id = target.closest('[data-highlight]').dataset.highlight, highlight = notebook.highlights.find(h => h.id === id);
-      if (name === 'capture-highlight') {
-        el('capture-quote').value = highlight.text; el('capture-locator').value = `p. ${highlight.page}`;
-        if (!el('capture-note').value) el('capture-note').value = highlight.note;
-        reader.draft = true; el('capture-text').focus(); return;
-      }
-      if (name === 'remove-highlight') {
-        if (highlight.note && !await confirmDialog('Remove this highlight and its note?',{ok:'Remove highlight'})) return;
-        notebook.highlights = notebook.highlights.filter(h => h.id !== id);
-      }
-      await save(); renderHighlights(); return;
-    }
-    if (name === 'capture-selection') {
-      if (!reader.selection) throw new Error('Select a passage on the PDF page first.');
-      el('capture-quote').value = reader.selection; el('capture-locator').value = `p. ${reader.page}`;
-      reader.draft = true; el('capture-text').focus(); return;
-    }
   }
   async function run(task) {
     if (busy) return;
@@ -480,23 +718,24 @@ const ResearchTools = (() => {
     catch (error) { message(error.message,true); if (!el('research-tools').open) toast(error.message,{tone:'warn'}); }
     finally { setBusy(false); }
   }
-  document.addEventListener('selectionchange', () => {
-    if (!reader || tab !== 'reader') return;
-    const selection = window.getSelection(), layer = el('pdf-page')?.querySelector('.textLayer');
-    if (selection && layer?.contains(selection.anchorNode) && layer.contains(selection.focusNode)) {
-      reader.selection = selection.toString().trim();
-      reader.rects = selection.rangeCount ? selectionRects(selection.getRangeAt(0)) : [];
-    }
-  });
+  document.addEventListener('selectionchange', trackSelection);
   document.addEventListener('click', event => {
     // The label too: its text reaching the card would redraw the box away before it ticks.
     if (event.target.closest('[data-select-claim], [data-select-paper], .claim-selection label')) { event.stopPropagation(); return; }
+    // A claim's PDF link scrolls the paper already open beside it rather than
+    // opening a second copy in a new tab.
+    const link = event.target.closest('a.pdflink');
+    if (link && reader && link.dataset.paper === reader.paper) {
+      event.preventDefault(); event.stopPropagation();
+      goToPage(Number(link.dataset.page) || 1); return;
+    }
     const target = event.target.closest('[data-tool]');
     if (!target) return;
     event.preventDefault(); event.stopPropagation();
     const name = target.dataset.tool;
     if (name === 'clear-selection') { claims.clear(); papers.clear(); remember(); sync(); return; }
     if (name === 'select-visible') { visibleClaims().forEach(c=>claims.add(refKey(c))); remember(); sync(); return; }
+    if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       if (!el('research-tools').open) {
         await open(['boards','reading','searches','connections','compare'].includes(name) ? name : 'compare');
@@ -522,39 +761,29 @@ const ResearchTools = (() => {
       notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;
       await save();
     });
-    if (target.id === 'reader-zoom') run(renderPage);
+    if (target.id === 'reader-zoom') run(() => setZoom(target.value));
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target.id === 'reader-page') { event.preventDefault(); run(() => readerAction('go-page', event.target)); }
   });
   document.addEventListener('input', event => {
     const target = event.target;
+    if (target.dataset.highlightNote) { highlightDraft = target.value; return; }
     if (!el('research-tools')?.contains(target)) return;
     if (target.id.startsWith('connection-')) connectionDraft = true;
     if (target.id === 'board-title') { currentBoard().title = target.value; dirty = true; }
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
-    if (target.dataset.highlightNote) { notebook.highlights.find(h=>h.id === target.dataset.highlightNote).note = target.value; dirty = true; }
     if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
-    if (target.closest('#capture-form') && reader) reader.draft = true;
-  });
-  document.addEventListener('submit', event => {
-    if (event.target.id !== 'capture-form') return;
-    event.preventDefault();
-    run(async () => {
-      const text = el('capture-text').value.trim();
-      if (!text) throw new Error('Write the claim in your own words before saving.');
-      const result = await api(`/api/papers/${encodeURIComponent(reader.paper)}/claims`,{method:'POST',headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
-        body:JSON.stringify({text,quote:el('capture-quote').value,locator:el('capture-locator').value,note:el('capture-note').value})});
-      reader.draft = false; event.target.reset(); el('capture-locator').value = `p. ${reader.page}`;
-      await refreshAll(); el('capture-status').textContent = result.quote_verified === false ? 'Claim saved. The quote was not found by the text check; review its wording.' : 'Claim saved with its source.';
-    });
   });
   document.addEventListener('DOMContentLoaded', () => {
     el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
   });
-  window.addEventListener('beforeunload', event => { if (dirty || reader?.draft || connectionDraft) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (dirty || connectionDraft) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
     if (!el('research-tools').open) return true;
     if (busy) { message('Finish the current operation before switching workspaces.', true); return false; }
     await close();
     return !el('research-tools').open;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch};
+  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,holds};
 })();

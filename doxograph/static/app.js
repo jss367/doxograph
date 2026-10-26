@@ -149,13 +149,54 @@ const NEW_CLAIM_ID = '__new__';
 // reader writes on a paper, keyed by paper key. A note is nobody's judgment
 // but the reader's, so unlike a synthesis it is saved without flushing the
 // held deletes: no claim is read to write one.
+const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
 const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, failedNewClaims: {},
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
             graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
-            quoteContext: null, textSearch: null, similar: null };
+            quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
+
+// Whether the paper's PDF is kept out of the claims view. A preference of this
+// browser, like the side pane's width: it is about the screen, not the corpus.
+function readPdfHidden() {
+  try { return localStorage.getItem(PDF_HIDDEN_KEY) === '1'; } catch (error) { return false; }
+}
+function storePdfHidden() {
+  try { localStorage.setItem(PDF_HIDDEN_KEY, V.pdfHidden ? '1' : '0'); } catch (error) { /* preference remains for this page */ }
+}
+
+// The paper whose PDF is shown beside the claims: the one selected, when it
+// has a PDF and the reader has not put it away.
+function readingPaper() {
+  if (V.view !== 'claims' || !V.paper || V.pdfHidden) return null;
+  const paper = S.papers.find((p) => p.key === V.paper);
+  return paper && paper.has_pdf ? V.paper : null;
+}
+
+// Lays the main pane out for reading or not, and mounts or unmounts the PDF.
+// `--reader-top` is the filter bar's height: the reader column sticks just
+// under it while the rail scrolls past.
+function layoutPanes(reading) {
+  $('panes').classList.toggle('reading', Boolean(reading));
+  $('main').style.setProperty('--reader-top', `${$('main').querySelector('.filters').offsetHeight}px`);
+  ResearchTools.mountReader(reading);
+}
+
+// A passage from the paper becomes the quote of a new claim, with its page as
+// the locator. A draft already being written for this paper keeps its text
+// and takes the passage.
+function startClaimFromPassage(paper, passage) {
+  if (refuseWhileRemoving(paper, 'a new claim')) return;
+  captureOpenEditor();
+  const held = V.newClaim && V.newClaim.paper === paper ? V.newClaim : blankClaim(paper);
+  V.newClaim = { ...held, quote: passage.quote, locator: passage.locator, note: passage.note || held.note || '' };
+  V.editing = NEW_CLAIM_ID;
+  renderContent();
+  const field = document.querySelector(`form[data-form="${NEW_CLAIM_ID}"] [name="text"]`);
+  if (field) field.focus();
+}
 
 function blankClaim(paper) {
   return {
@@ -1585,7 +1626,7 @@ function render() {
 // of them, which is how the poll in `boot` came to know about one editor
 // fewer than `render` did.
 function editorHolds() {
-  return Boolean(V.editing || V.synthEditing || V.noteEditing) || V.view === 'research';
+  return Boolean(V.editing || V.synthEditing || V.noteEditing) || V.view === 'research' || ResearchTools.holds();
 }
 
 // `renderAll` is for a view change the user asked for. The draft is captured
@@ -1786,7 +1827,7 @@ function renderTags() {
       </li>`).join('');
 }
 
-function paperHeader(key) {
+function paperHeader(key, reading = false) {
   const p = S.papers.find((x) => x.key === key);
   if (!p) return '';
   const url = (p.source || {}).url;
@@ -1802,18 +1843,19 @@ function paperHeader(key) {
       .map((l) => `<span class="label" data-label="${esc(l)}">${esc(l)}</span>`).join('')}</div>` : ''}
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
-    ${paperNote(key)}
+    ${reading ? '' : paperNote(key)}
     <div class="row">
       <button type="button" data-act="reextract" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Re-read paper</button>
       <button type="button" data-act="retag-one" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Retag claims</button>
       ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
       ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
         title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
-      ${p.has_pdf ? `<button type="button" data-tool="reader" data-paper="${esc(key)}">Read & capture</button>` : ''}
+      ${p.has_pdf ? `<button type="button" data-act="toggle-pdf" data-paper="${esc(key)}"
+        title="${V.pdfHidden ? 'Read the paper beside its claims' : 'Put the PDF away and list the claims full width'}">${V.pdfHidden ? 'Show PDF' : 'Hide PDF'}</button>` : ''}
       <button type="button" data-tool="queue-paper" data-paper="${esc(key)}">Add to reading queue</button>
       <button type="button" data-tool="history" data-paper="${esc(key)}">Edit history</button>
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
-      ${noteOpen(key) ? '' : `<button type="button" data-act="edit-note" data-paper="${esc(key)}">Write a note</button>`}
+      ${noteOpen(key) || reading ? '' : `<button type="button" data-act="edit-note" data-paper="${esc(key)}">Write a note</button>`}
       <button type="button" data-act="labels" data-paper="${esc(key)}"
         title="Mark this paper — open source, has a model on HuggingFace, anything you sort papers by">Labels</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
@@ -1847,7 +1889,7 @@ function noteOpen(key) {
 // The reader's own note on the paper, under the model's summary of it. No
 // pass reads it and no pass writes it, which is the point: it is the place
 // for what you think that no extraction could have told you.
-function paperNote(key) {
+function paperNote(key, rail = false) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper) return '';
   if (V.noteEditing === key) {
@@ -1868,7 +1910,16 @@ function paperNote(key) {
       </div>
     </div>`;
   }
-  if (!(paper.notes || '').trim()) return '';
+  if (!(paper.notes || '').trim()) {
+    // In the rail the empty note is the place for one, not nothing at all.
+    return rail ? `<div class="note">
+      <span class="who">my note</span>
+      <div class="smeta"><span class="hint">What you make of this paper. Nothing sends it to a model.</span>
+        <span class="cact" style="margin-left:auto">
+          <button type="button" data-act="edit-note" data-paper="${esc(key)}">Write a note</button>
+        </span></div>
+    </div>` : '';
+  }
   return noteHtml(paper.notes, 'my note', `<div class="smeta">
     <span class="cact" style="margin-left:auto">
       <button type="button" data-act="edit-note" data-paper="${esc(key)}">edit</button>
@@ -2074,6 +2125,7 @@ function claimPdfLink(row) {
   const page = pdfPage(row.locator);
   const href = `/pdf/${encodeURIComponent(row.paper)}?${workspaceQuery()}&inline=1${page ? `#page=${page}` : ''}`;
   return `<a class="pdflink" href="${esc(href)}" target="_blank" rel="noopener"
+    data-paper="${esc(row.paper)}" data-page="${esc(page || '')}"
     title="${page ? `Open the PDF at page ${page}` : 'Open the PDF'}">PDF${page ? ' p.' + esc(page) : ''}</a>`;
 }
 
@@ -2547,7 +2599,7 @@ async function saveResearch() {
   await refreshAll();
 }
 
-$('content').addEventListener('submit', async (event) => {
+$('panes').addEventListener('submit', async (event) => {
   if (event.target.id !== 'research-form') return;
   event.preventDefault();
   await saveResearch();
@@ -2731,6 +2783,9 @@ function restoreNoteCursor(cursor) {
 }
 
 function drawContent() {
+  const reading = readingPaper();
+  layoutPanes(reading);
+  if (V.view !== 'claims') $('paperhead').innerHTML = '';
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (V.view === 'tensions') { renderTensions(); return; }
@@ -2756,7 +2811,8 @@ function drawContent() {
   // that paper — or the paper being removed — takes it off screen.
   if (V.noteEditing && V.noteEditing !== V.paper) parkNoteEditor();
   if (!rows.some((row) => row.id === V.selectedId)) V.selectedId = rows.length ? rows[0].id : null;
-  let html = V.paper ? paperHeader(V.paper) : '';
+  $('paperhead').innerHTML = V.paper ? paperHeader(V.paper, Boolean(reading)) : '';
+  let html = '';
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
   // Filtered to one topic without grouping, the synthesis heads the list; in
   // grouped mode each topic's sits under its own heading below.
@@ -2776,6 +2832,15 @@ function drawContent() {
       <button type="button" data-act="resume-new">Resume</button>
       <button type="button" data-act="discard-new">Discard</button>
     </div>`;
+  }
+  // Beside the paper, the rail opens with what is yours: the note on the
+  // paper, then its highlights, then the claims. The highlights stay listed
+  // with the PDF put away; clicking one brings it back at that page.
+  if (reading) html += paperNote(V.paper, true);
+  if (V.paper) {
+    const paper = S.papers.find((p) => p.key === V.paper);
+    const marked = (S.notebook?.highlights || []).some((h) => h.paper === V.paper);
+    if (paper && (paper.has_pdf || marked)) html += ResearchTools.highlightsHtml(V.paper);
   }
 
   if (!rows.length) {
@@ -3997,7 +4062,7 @@ function readForm(form) {
   };
 }
 
-$('content').addEventListener('submit', async (event) => {
+$('panes').addEventListener('submit', async (event) => {
   const form = event.target.closest('form[data-form]');
   if (!form) return;
   event.preventDefault();
@@ -4225,7 +4290,7 @@ async function removePaper(paper) {
   }
 }
 
-$('content').addEventListener('click', async (event) => {
+$('panes').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
   if (button) {
     const act = button.dataset.act;
@@ -4608,6 +4673,12 @@ $('content').addEventListener('click', async (event) => {
         V.newClaim = blankClaim(paper);
       }
       V.editing = NEW_CLAIM_ID;
+      renderContent();
+      return;
+    }
+    if (act === 'toggle-pdf') {
+      V.pdfHidden = !V.pdfHidden;
+      storePdfHidden();
       renderContent();
       return;
     }
@@ -5098,18 +5169,18 @@ async function copyText(text, done) {
 
 $('btn-bib').addEventListener('click', () => window.open(`/api/bibtex?${workspaceQuery()}`, '_blank'));
 
-$('content').addEventListener('input', (e) => {
+$('panes').addEventListener('input', (e) => {
   if (e.target.matches('textarea[data-synth]')) V.synthDrafts[e.target.dataset.synth] = e.target.value;
   if (e.target.matches('textarea[data-note]')) V.noteDrafts[e.target.dataset.note] = e.target.value;
 });
 
 // Each filter keeps whatever is typed in an open editor before redrawing.
-$('content').addEventListener('change', (e) => {
+$('panes').addEventListener('change', (e) => {
   if (e.target.matches('[data-graph-opt]')) { graphOption(e.target); return; }
   if (e.target.id === 'tension-status') { V.tensionStatus = e.target.value; renderContent(); }
   if (e.target.id === 'agreement-status') { V.agreementStatus = e.target.value; renderContent(); }
 });
-$('content').addEventListener('input', (e) => {
+$('panes').addEventListener('input', (e) => {
   if (e.target.matches('[data-graph-opt="minShared"]')) graphOption(e.target);
 });
 

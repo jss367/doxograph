@@ -236,16 +236,22 @@ All of these tools work with **Enable AI analysis** turned off. Your boards,
 connections, reading progress, highlights, and saved searches belong to the
 selected workspace and are stored in `notebook.json`. They are never sent to a model.
 
-- **Read & capture**, in a paper's header, opens an offline PDF reader. Select a
-  passage on the page and choose **Capture selected passage** to fill the quote
-  and page fields. Write the claim in your own words, optionally add a note, and
-  save. Quotes receive the same local verification as ordinary manual claims.
-  Pages with no selectable text can still be read and transcribed by hand.
-- **Highlights**, in the same reader, mark a selected passage on the page in
-  yellow, green, blue, or pink. Each highlight takes a note of your own, can be
-  turned into a claim with **Capture as claim**, and stays in place at any zoom.
-  The panel lists the page's highlights and links to other highlighted pages.
-  Highlights are stored in the workspace's `notebook.json`; the PDF is not changed.
+- **Reading a paper.** Selecting a paper that has a PDF opens the paper itself
+  in the middle of the page, scrolling through every page, with a rail on the
+  right for what is yours: your note on the paper, your highlights, and the
+  claims. The reader is offline; the PDF is drawn in the browser and never sent
+  anywhere. Zoom defaults to the width of the column. **Hide PDF** in the
+  paper's header lists the claims full width instead, and the choice is kept in
+  this browser. A claim's **PDF p.N** link scrolls the open paper to that page.
+- **Passages.** Select text on a page and a small toolbar appears under it.
+  A color (yellow, green, blue, or pink) makes a **highlight**, drawn over the
+  text and listed in the rail with its page, where it takes a note of your own
+  and can be captured as a claim or removed. **Capture as claim** opens the
+  claim editor with the quote and page filled in; write the claim in your own
+  words and save. Quotes receive the same local verification as ordinary manual
+  claims. Pages with no selectable text can still be read and transcribed by
+  hand. Highlights are stored in the workspace's `notebook.json`; the PDF is
+  not changed. Clicking a highlight in the rail scrolls the paper to it.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
   reload in the same browser tab. Compare sources, quotes, evidence, and notes
@@ -262,8 +268,10 @@ selected workspace and are stored in `notebook.json`. They are never sent to a m
   review and quote-verification filters, and grouping. Opening one runs those
   filters against the current corpus, so new matching claims appear naturally.
 - **Reading queue** keeps an ordered list of papers with queued, reading, and
-  finished states, independently of claim review. The reader saves your page
-  position; bookmark pages and resume them from the queue.
+  finished states, independently of claim review. **Bookmark this page** in the
+  reader puts the paper on the queue at that page; for a paper on the queue the
+  reader saves your page position as you scroll, and the queue's buttons open
+  the paper where you left it or at a bookmark.
 - **Bulk organization**, under Compare & organize, adds, removes, or replaces
   topics on selected claims and labels on their papers. Explicitly selected
   papers can have topics changed across all their claims. New topics must first
@@ -483,8 +491,9 @@ rerun used to write over it.
 A claim is the machine's sentence about the paper. A note is yours, and it is
 the only thing here no model writes and no model reads.
 
-A paper's note sits under the summary in its header: **Write a note** opens a
-box, Save puts it on the paper, and it is there the next time you open it.
+A paper's note sits under the summary in its header, or at the top of the rail
+beside the paper when its PDF is open: **Write a note** opens a box, Save puts
+it on the paper, and it is there the next time you open it.
 Write what the paper is for, what to read it for, what is wrong with it, what
 to do about it — whatever the extraction could not have told you. A claim's
 note is a field in its editor, under the links to your own claims: press `e`,

@@ -29,42 +29,76 @@
 .history-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); padding: .7rem; }
 .history-diff > div, .connection-pair > div { min-width: 0; }
 .research-sheet.is-busy #research-body, .research-sheet.is-busy #research-tabs { pointer-events: none; opacity: .7; }
-.reader-controls input { width: 5rem; }
-.reader-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 1rem; }
-.pdf-scroll { overflow: auto; max-height: 65vh; padding: .5rem; background: #555; }
-#pdf-page { position: relative; background: white; color: black; }
-.reader-side { min-width: 0; }
-#highlight-panel { border-bottom: 1px solid var(--line); margin-bottom: .75rem; }
-.highlight-entry { border: 1px solid var(--line); border-radius: 6px; margin: .6rem 0; padding: .6rem; }
-.highlight-entry textarea { min-height: 3rem; }
-.research-sheet .highlight-entry blockquote { border-left-width: 6px; color: var(--ink); }
+/* The paper read beside its notes. The reader column sticks under the filter
+   bar and scrolls on its own; the rail of notes, highlights, and claims scrolls
+   with the main pane. `--reader-top` is the filter bar's height, set by app.js. */
+#paperhead:empty { display: none; }
+#reader[hidden], #panes.reading #reader[hidden] { display: none; }
+#panes.reading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(22rem, 38%); gap: 1.2rem; align-items: start; }
+#panes.reading #content { min-width: 0; }
+#panes.reading #paperhead { grid-column: 1 / -1; }
+#panes.reading #reader { position: sticky; top: var(--reader-top, 2.6rem); min-width: 0;
+  height: calc(100vh - 3rem - var(--reader-top, 2.6rem) - 1.4rem); display: flex; flex-direction: column; }
+.reader-toolbar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: 0 0 .5rem; font-size: .85rem; color: var(--muted); }
+.reader-toolbar label { display: flex; align-items: center; gap: .3rem; }
+.reader-toolbar input { width: 4rem; }
+.reader-toolbar .reader-status { margin-left: auto; }
+.pdf-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; padding: .5rem; background: #555; border-radius: 6px; }
+.pdf-page { position: relative; background: white; color: black; margin: 0 auto .5rem; box-shadow: 0 1px 3px rgb(0 0 0 / .4); }
+.pdf-page.pending::after { content: attr(data-page); position: absolute; inset: 0; display: grid; place-items: center; color: #bbb; font-size: 2rem; }
+.pdf-page canvas { display: block; position: absolute; inset: 0; }
+#reader-hint { background: var(--bg); padding: .5rem; margin: 0; border-radius: 0 0 6px 6px; }
+/* The passage toolbar: floats under what was selected on the page. */
+.passage-tools { position: absolute; z-index: 3; display: flex; gap: .3rem; align-items: center; padding: .3rem .4rem;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px rgb(0 0 0 / .25); }
+.passage-tools[hidden] { display: none; }
+.passage-tools .swatch { width: 1.3rem; height: 1.3rem; padding: 0; border-radius: 50%; border: 1px solid rgb(0 0 0 / .25); }
+.passage-tools .swatch:hover { border-color: var(--ink); }
+.swatch.highlight-yellow { background: #f5d000; }
+.swatch.highlight-green { background: #43c463; }
+.swatch.highlight-blue { background: #4a9df0; }
+.swatch.highlight-pink { background: #f06aa8; }
+/* The rail's highlights, in page order. */
+.highlights h3 { font-size: .95rem; margin: 1rem 0 .3rem; }
+.highlight-entry { border: 1px solid var(--line); border-radius: 6px; margin: .5rem 0; padding: .5rem .6rem; }
+.highlight-entry blockquote { white-space: pre-wrap; margin: 0 0 .4rem; padding: .3rem .6rem; border-left: 6px solid var(--accent);
+  background: var(--panel); font-size: .88rem; cursor: pointer; }
+.highlight-entry blockquote:hover { outline: 1px solid var(--accent); }
 .highlight-entry blockquote.highlight-yellow { border-left-color: #f5d000; }
 .highlight-entry blockquote.highlight-green { border-left-color: #43c463; }
 .highlight-entry blockquote.highlight-blue { border-left-color: #4a9df0; }
 .highlight-entry blockquote.highlight-pink { border-left-color: #f06aa8; }
-#pdf-page .highlightLayer { position: absolute; inset: 0; pointer-events: none; }
-#pdf-page .highlightLayer div { position: absolute; mix-blend-mode: multiply; }
-#pdf-page .highlightLayer .highlight-yellow { background: rgb(255 226 0 / .45); }
-#pdf-page .highlightLayer .highlight-green { background: rgb(70 210 100 / .4); }
-#pdf-page .highlightLayer .highlight-blue { background: rgb(80 160 255 / .38); }
-#pdf-page .highlightLayer .highlight-pink { background: rgb(255 100 170 / .38); }
-#capture-form textarea { min-height: 6rem; }
-#reader-hint { background: var(--bg); padding: .5rem; }
+.highlight-entry .hmeta { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; font-size: .78rem; color: var(--muted); }
+.highlight-entry .hmeta .cact { margin-left: auto; display: flex; gap: .3rem; }
+.highlight-entry .hmeta button { font-size: .78rem; padding: .1rem .45rem; }
+.highlight-entry textarea { width: 100%; min-height: 3.5rem; margin: .3rem 0; }
+.highlight-entry.flash { outline: 2px solid var(--accent); }
+.pdf-page .highlightLayer { position: absolute; inset: 0; pointer-events: none; }
+.pdf-page .highlightLayer div { position: absolute; mix-blend-mode: multiply; }
+.pdf-page .highlightLayer .highlight-yellow { background: rgb(255 226 0 / .45); }
+.pdf-page .highlightLayer .highlight-green { background: rgb(70 210 100 / .4); }
+.pdf-page .highlightLayer .highlight-blue { background: rgb(80 160 255 / .38); }
+.pdf-page .highlightLayer .highlight-pink { background: rgb(255 100 170 / .38); }
+.pdf-page .highlightLayer .flash { outline: 2px solid var(--accent); }
 /* Text layer adapted from Mozilla PDF.js 6.3.289 (Apache 2.0; vendor/PDFJS-LICENSE). */
-#pdf-page .textLayer { color-scheme: only light; position: absolute; text-align: initial; inset: 0;
+.pdf-page .textLayer { color-scheme: only light; position: absolute; text-align: initial; inset: 0;
   overflow: clip; opacity: 1; line-height: 1; letter-spacing: normal; word-spacing: normal;
   -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0;
   --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size)); }
-#pdf-page .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre;
+.pdf-page .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre;
   cursor: text; transform-origin: 0% 0%; -webkit-user-select: text; user-select: text; }
-#pdf-page .textLayer > :not(.markedContent), #pdf-page .textLayer .markedContent span:not(.markedContent) {
+.pdf-page .textLayer > :not(.markedContent), .pdf-page .textLayer .markedContent span:not(.markedContent) {
   z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
   --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
-#pdf-page .textLayer .markedContent { display: contents; }
-#pdf-page .textLayer ::selection { background: rgb(30 110 230 / .35); }
+.pdf-page .textLayer .markedContent { display: contents; }
+.pdf-page .textLayer ::selection { background: rgb(30 110 230 / .35); }
+@media (max-width: 60rem) {
+  #panes.reading { display: block; }
+  #panes.reading #reader { position: static; height: 60vh; margin-bottom: 1rem; }
+}
 @media (max-width: 800px) {
-  .reader-layout, .connection-pair, .history-diff { grid-template-columns: 1fr; }
+  .connection-pair, .history-diff { grid-template-columns: 1fr; }
   .comparison-card { flex-basis: 85vw; }
   .research-sheet { padding: .7rem; }
 }
