@@ -2,7 +2,7 @@
 const ResearchTools = (() => {
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
-  let modalWorkspace = null, reader = null, historyData = null, historyPaper = null, historyClaim = null;
+  let modalWorkspace = null, reader = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
   let epoch = 0;
   let notes = null, notesTimer = null, notesSaving = null;
   const el = (id) => document.getElementById(id);
@@ -148,7 +148,7 @@ const ResearchTools = (() => {
       ${button('source', 'Open source', `data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}`;
   }
   function render() {
-    const labels = {notes:'Workspace notes', compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', searches:'Saved searches'};
+    const labels = {notes:'Workspace notes', compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
     el('research-tools-title').textContent = tab === 'notes' ? 'Workspace notes' : tab === 'reader' ? 'Read & capture' : tab === 'history' ? 'Edit history' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
       + button('reload', 'Reload saved version');
@@ -157,6 +157,7 @@ const ResearchTools = (() => {
     if (tab === 'boards') renderBoards();
     if (tab === 'connections') renderConnections();
     if (tab === 'reading') renderReading();
+    if (tab === 'marks') renderMarks();
     if (tab === 'searches') renderSearches();
     if (tab === 'history') renderHistory();
   }
@@ -234,6 +235,24 @@ const ResearchTools = (() => {
           <div class="tool-actions">${r.bookmarks.map(page => button('reader',`Bookmark: page ${page}`,`data-paper="${html(r.paper)}" data-page="${page}"`)).join('')}</div></article>`;
       }).join('')}${notebook.reading.length ? '' : '<p class="empty">Add a paper from its header, or queue a selection of papers.</p>'}`;
   }
+  function markQuote(h) {
+    return `<blockquote class="highlight-${html(h.color)}">${h.kind === 'figure' ? '<em>Figure or region</em>' : html(h.text)}</blockquote>`;
+  }
+  function renderMarks() {
+    const marks = notebook.highlights.filter(h => marksFilter === 'all' || h.question);
+    const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:S.papers.find(p => p.key === key)}))
+      .sort((a, b) => (a.paper?.title || a.key).localeCompare(b.paper?.title || b.key));
+    el('research-body').innerHTML = `<p class="hint">Passages and figures you marked in Read & capture, with your notes and questions. Open a mark to return to its page.</p>
+      <div class="tool-actions"><label>Show<select id="marks-filter">${[['all','All marks'],['questions','Open questions']].map(([value, label]) => `<option value="${value}" ${marksFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
+      ${papers.map(({key, paper}) => `<section class="marks-paper"><h3>${html(paper?.title || 'Removed paper: '+key)}</h3>
+        ${paper?.has_pdf ? `<div class="tool-actions">${button('export-annotated','Export annotated PDF',`data-paper="${html(key)}"`)}</div>` : ''}
+        ${marks.filter(h => h.paper === key).sort((a, b) => a.page - b.page || a.rects[0].y - b.rects[0].y).map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
+          <p class="hint">Page ${h.page} · ${h.kind === 'figure' ? 'figure' : 'passage'}${h.question ? ' · <strong>open question</strong>' : ''}</p>
+          ${markQuote(h)}${h.note ? `<p>${html(h.note)}</p>` : ''}
+          <div class="tool-actions">${paper?.has_pdf ? button('reader',`Open page ${h.page}`,`data-paper="${html(key)}" data-page="${h.page}" data-mark="${html(h.id)}"`) : '<span class="hint">No PDF available</span>'}
+          ${h.question ? button('answer-question','Mark answered') : ''}</div></article>`).join('')}</section>`).join('')}
+      ${marks.length ? '' : `<p class="empty">${marksFilter === 'all' ? 'Highlight a passage or mark a figure while reading a paper.' : 'No open questions. Tick “Open question” on a mark to list it here.'}</p>`}`;
+  }
   function renderSearches() {
     el('research-body').innerHTML = `<p class="hint">Saved searches remember filters, not a fixed list of results. New matching claims appear automatically.</p>
       ${button('save-search','Save current library filters')}
@@ -251,11 +270,20 @@ const ResearchTools = (() => {
     if (!board && !claims.size && !papers.size) throw new Error('Select claims or papers to export first.');
     const response = await fetch('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
       body:JSON.stringify({format,board,claims:refs(),papers:[...papers]})});
+    await saveFile(response, `selected-research.${format === 'csv' ? 'csv' : 'md'}`);
+  }
+  async function saveFile(response, fallback) {
     if (!response.ok) { const body = await response.json(); throw new Error(body.detail || 'Export failed'); }
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement('a'); link.href = url;
-    link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '')?.[1] || `selected-research.${format === 'csv' ? 'csv' : 'md'}`;
+    link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '')?.[1] || fallback;
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function downloadAnnotated(paper) {
+    const response = await fetch(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':modalWorkspace}});
+    await saveFile(response, `${paper}-annotated.pdf`);
+    const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
+    message(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
   }
   async function showHistory(paper, claim = null) {
     historyPaper = paper; historyClaim = claim;
@@ -275,13 +303,13 @@ const ResearchTools = (() => {
           ${button('restore', deleted ? 'Restore deletion' : 'Restore this version',`data-revision="${html(e.id)}" ${fields.length ? '' : 'disabled'}`)}</article>`;
       }).join('')}${entries.length ? '' : '<p class="empty">No earlier versions yet. Future edits will appear here.</p>'}`;
   }
-  async function showReader(paper, requestedPage) {
+  async function showReader(paper, requestedPage, mark = null) {
     if (reader?.document) await reader.document.loadingTask.destroy();
     if (!notebook.reading.some(r => r.paper === paper)) await queue([paper]);
     const progress = notebook.reading.find(r => r.paper === paper);
     if (progress.status === 'queued') { progress.status = 'reading'; await save(); }
     tab = 'reader';
-    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false};
+    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false, figureMode:false, focus:mark};
     render();
     el('research-body').innerHTML = `<h3>${html(S.papers.find(p => p.key === paper)?.title || paper)}</h3>
       <div class="reader-controls tool-actions">${button('previous-page','Previous page')}
@@ -289,9 +317,10 @@ const ResearchTools = (() => {
       ${button('go-page','Go')}${button('next-page','Next page')}${button('bookmark','Bookmark this page')}
       <label>Zoom<select id="reader-zoom"><option value="1">100%</option><option value="1.3" selected>130%</option><option value="1.6">160%</option><option value="2">200%</option></select></label></div>
       <div class="reader-layout"><div class="pdf-scroll"><div id="pdf-page"><canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div></div><p id="reader-hint" class="hint">Loading PDF…</p></div>
-        <div class="reader-side"><section id="highlight-panel"><h3>Highlights</h3>
+        <div class="reader-side"><section id="highlight-panel"><h3>Marks</h3>
           <div class="tool-actions"><label>Color<select id="highlight-color">${['yellow','green','blue','pink'].map(c => `<option value="${c}">${c}</option>`).join('')}</select></label>
-          ${button('highlight-selection','Highlight selected passage')}</div><div id="page-highlights"></div></section>
+          ${button('highlight-selection','Highlight selected passage')}${button('figure-mode','Mark a figure','aria-pressed="false"')}
+          ${button('export-annotated','Export annotated PDF',`data-paper="${html(paper)}"`)}</div><div id="page-highlights"></div></section>
         <form id="capture-form"><h3>Capture a claim</h3><p class="hint">Select text directly on the page, then capture it. Add your interpretation before saving.</p>
           ${button('capture-selection','Capture selected passage')}${area('Verbatim quote','capture-quote')}
           ${input('Page or section','capture-locator')}${area('Claim in your own words','capture-text')}${area('Your note (optional)','capture-note')}
@@ -343,15 +372,35 @@ const ResearchTools = (() => {
     const here = mine.filter(h => h.page === reader.page);
     const percent = value => `${(value * 100).toFixed(3)}%`;
     el('pdf-page').querySelector('.highlightLayer').innerHTML = here.flatMap(h => h.rects.map(r =>
-      `<div class="highlight-${html(h.color)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+      `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}" data-mark="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+    el('pdf-page').classList.toggle('drawing', reader.figureMode);
+    const toggle = el('research-body').querySelector('[data-tool="figure-mode"]');
+    toggle.textContent = reader.figureMode ? 'Cancel figure mark' : 'Mark a figure';
+    toggle.setAttribute('aria-pressed', String(reader.figureMode));
     const drafts = new Map(noteDrafts().map(field => [field.dataset.highlightNote, field.value]));
     const others = [...new Set(mine.map(h => h.page))].filter(page => page !== reader.page).sort((a, b) => a - b);
-    el('page-highlights').innerHTML = (here.map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
-        <blockquote class="highlight-${html(h.color)}">${html(h.text)}</blockquote>
-        <label>Your note<textarea data-highlight-note="${html(h.id)}">${html(drafts.get(h.id) ?? h.note)}</textarea></label>
-        <div class="tool-actions">${button('save-highlight','Save note')}${button('capture-highlight','Capture as claim')}${button('remove-highlight','Remove highlight')}</div></article>`).join('')
-      || '<p class="hint">Select a passage on the page, then highlight it.</p>')
-      + (others.length ? `<div class="tool-actions"><span class="hint">Other highlighted pages</span>${others.map(page => button('highlight-page',`Page ${page}`,`data-page="${page}"`)).join('')}</div>` : '');
+    el('page-highlights').innerHTML = (reader.figureMode ? '<p class="hint">Drag a box around the figure on the page.</p>' : '')
+      + (here.map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
+        ${markQuote(h)}
+        <label>Your note or question<textarea data-highlight-note="${html(h.id)}">${html(drafts.get(h.id) ?? h.note)}</textarea></label>
+        <label><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
+        <div class="tool-actions">${button('save-highlight','Save note')}${h.kind === 'figure' ? '' : button('capture-highlight','Capture as claim')}${button('remove-highlight',h.kind === 'figure' ? 'Remove mark' : 'Remove highlight')}</div></article>`).join('')
+      || '<p class="hint">Select a passage and highlight it, or mark a figure by dragging a box around it.</p>')
+      + (others.length ? `<div class="tool-actions"><span class="hint">Other marked pages</span>${others.map(page => button('highlight-page',`Page ${page}`,`data-page="${page}"`)).join('')}</div>` : '');
+    if (reader.focus && here.some(h => h.id === reader.focus)) {
+      const entry = el('page-highlights').querySelector(`[data-highlight="${CSS.escape(reader.focus)}"]`);
+      entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'});
+      el('pdf-page').querySelector(`[data-mark="${CSS.escape(reader.focus)}"]`).scrollIntoView({block:'center', inline:'nearest'});
+    }
+    reader.focus = null;
+  }
+  // A figure is the box dragged out on the page, in the same fractions as a passage's lines.
+  function figureRect(drag, event) {
+    const clamp = value => Math.min(1, Math.max(0, value));
+    const round = value => Math.round(value * 1e5) / 1e5;
+    const [x1, x2] = [drag.x, event.clientX].map(x => clamp((x - drag.box.left) / drag.box.width)).sort((a, b) => a - b);
+    const [y1, y2] = [drag.y, event.clientY].map(y => clamp((y - drag.box.top) / drag.box.height)).sort((a, b) => a - b);
+    return {x:round(x1), y:round(y1), w:round(x2 - x1), h:round(y2 - y1)};
   }
   // Client rectangles of the selection as fractions of the page, one per line of text.
   function selectionRects(range) {
@@ -503,12 +552,18 @@ const ResearchTools = (() => {
       await refreshAll(); await showHistory(historyPaper,historyClaim);
       message(restored.deleted ? 'Claim removed. Its wording remains in history.' : restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
-    if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page); return; }
+    if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page,data.mark); return; }
+    if (name === 'export-annotated') { await downloadAnnotated(data.paper); return; }
+    if (name === 'answer-question') {
+      notebook.highlights.find(h => h.id === target.closest('[data-highlight]').dataset.highlight).question = false;
+      await save(); renderMarks(); message('Question marked answered. The mark and its note remain.'); return;
+    }
+    if (name === 'figure-mode') { reader.figureMode = !reader.figureMode; renderHighlights(); return; }
     if (['previous-page','next-page','go-page','highlight-page'].includes(name)) {
       if ((reader.draft || noteDrafts().length) && !await confirmDialog('Discard the unsaved claim or note before changing pages?',{ok:'Discard changes'})) return;
       const page = name === 'go-page' ? Number(el('reader-page').value) : name === 'highlight-page' ? Number(data.page) : reader.page + (name === 'next-page' ? 1 : -1);
       if (!Number.isInteger(page) || page < 1 || page > reader.document.numPages) throw new Error('Choose a page within this PDF.');
-      reader.page = page; reader.draft = false; el('capture-form').reset(); await renderPage(); return;
+      reader.page = page; reader.draft = false; reader.figureMode = false; el('capture-form').reset(); await renderPage(); return;
     }
     if (name === 'bookmark') {
       const progress = notebook.reading.find(r=>r.paper === reader.paper);
@@ -531,7 +586,8 @@ const ResearchTools = (() => {
       }
       if (name === 'save-highlight') highlight.note = note;
       if (name === 'remove-highlight') {
-        if ((highlight.note || note) && !await confirmDialog('Remove this highlight and its note?',{ok:'Remove highlight'})) return;
+        const label = highlight.kind === 'figure' ? 'mark' : 'highlight';
+        if ((highlight.note || note) && !await confirmDialog(`Remove this ${label} and its note?`,{ok:`Remove ${label}`})) return;
         notebook.highlights = notebook.highlights.filter(h => h.id !== id);
       }
       await save(); renderHighlights(); return;
@@ -557,6 +613,32 @@ const ResearchTools = (() => {
       reader.rects = selection.rangeCount ? selectionRects(selection.getRangeAt(0)) : [];
     }
   });
+  document.addEventListener('pointerdown', event => {
+    const page = el('pdf-page');
+    if (!reader?.figureMode || busy || event.button !== 0 || !page?.contains(event.target)) return;
+    event.preventDefault();
+    page.setPointerCapture(event.pointerId);
+    reader.drag = {box:page.getBoundingClientRect(), x:event.clientX, y:event.clientY};
+    page.querySelector('.highlightLayer').insertAdjacentHTML('beforeend', '<div class="figure-draft"></div>');
+  });
+  document.addEventListener('pointermove', event => {
+    if (!reader?.drag) return;
+    const r = figureRect(reader.drag, event), box = el('pdf-page').querySelector('.figure-draft');
+    Object.assign(box.style, {left:`${r.x * 100}%`, top:`${r.y * 100}%`, width:`${r.w * 100}%`, height:`${r.h * 100}%`});
+  });
+  document.addEventListener('pointerup', event => {
+    if (!reader?.drag) return;
+    const rect = figureRect(reader.drag, event);
+    reader.drag = null;
+    el('pdf-page').querySelector('.figure-draft')?.remove();
+    // A click without a drag is not a figure; stay in figure mode for another try.
+    if (rect.w < .01 || rect.h < .01) return;
+    run(async () => {
+      notebook.highlights.push({id:uid(),paper:reader.paper,page:reader.page,kind:'figure',rects:[rect],text:'',color:el('highlight-color').value,note:'',question:false});
+      reader.figureMode = false;
+      await save(); renderHighlights();
+    });
+  });
   document.addEventListener('click', event => {
     // The label too: its text reaching the card would redraw the box away before it ticks.
     if (event.target.closest('[data-select-claim], [data-select-paper], .claim-selection label')) { event.stopPropagation(); return; }
@@ -568,8 +650,8 @@ const ResearchTools = (() => {
     if (name === 'select-visible') { visibleClaims().forEach(c=>claims.add(refKey(c))); remember(); sync(); return; }
     run(async () => {
       if (!el('research-tools').open) {
-        await open(['notes','boards','reading','searches','connections','compare'].includes(name) ? name : 'compare');
-        if (['notes','boards','reading','searches','connections','compare'].includes(name)) return;
+        await open(['notes','boards','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare');
+        if (['notes','boards','reading','marks','searches','connections','compare'].includes(name)) return;
       }
       await action(name,target);
     });
@@ -592,6 +674,11 @@ const ResearchTools = (() => {
       await save();
     });
     if (target.id === 'reader-zoom') run(renderPage);
+    if (target.id === 'marks-filter') { marksFilter = target.value; renderMarks(); }
+    if (target.matches('[data-highlight-question]')) run(async () => {
+      notebook.highlights.find(h => h.id === target.dataset.highlightQuestion).question = target.checked;
+      await save(); renderHighlights();
+    });
   });
   document.addEventListener('input', event => {
     const target = event.target;
