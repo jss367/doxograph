@@ -100,9 +100,12 @@ The ChatGPT route sends extracted PDF text with page numbers, up to 600,000
 characters including the conversation. Figures and scanned pages are unavailable;
 a paper without readable text requires one of the Claude options. Codex runs in
 a temporary directory with shell commands, browsing, hooks, plugins, apps, and
-delegation disabled. User configuration and project instructions are excluded,
-and the run is ephemeral. Neither subscription option includes a paid plan
-with Doxograph.
+delegation disabled. User `config.toml` settings and project instructions are
+excluded, and the run is ephemeral. **Codex still loads global instructions**
+from `AGENTS.override.md` or `AGENTS.md` in its home directory and sends that
+guidance along with the paper request. This is disclosed in Settings and paper
+chat. Choose a Claude option if you want requests without global Codex guidance.
+Neither subscription option includes a paid plan with Doxograph.
 
 To turn off model use, open **Settings** and uncheck **Enable AI analysis**.
 The preference survives restarts and applies to every workspace and the CLI
@@ -117,8 +120,10 @@ a paper still deletes any previously uploaded copy from Anthropic.
 Open a paper with a stored PDF and select **Chat about paper**. Ask a question
 and continue with follow-ups. The model receives that paper's PDF (or its
 page-labeled text for ChatGPT) and the
-conversation, and is asked to cite PDF page numbers. Personal notes and other
-papers are not included. Answers can be wrong; check them against the source.
+conversation, and is asked to cite PDF page numbers. Personal Doxograph notes
+and other papers are not included; the ChatGPT option also includes your global
+Codex instructions as described above. Answers can be wrong; check them against
+the source.
 
 Conversations are separate for each paper and workspace, and last until the
 page reloads. **New conversation** clears the current paper's conversation.

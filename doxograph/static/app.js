@@ -4959,11 +4959,11 @@ function syncAnalysisControls() {
   const providerHelp = {
     api: 'Uses your Anthropic API credentials.',
     claude_code: 'Uses your signed-in Claude Code account and its plan limits or credits. Run claude auth login in Terminal first. API billing is never used as a fallback.',
-    codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Reads extracted PDF text; figures and scanned pages are unavailable. API billing is never used as a fallback.',
+    codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Includes your global Codex instructions along with extracted PDF text; figures and scanned pages are unavailable. API billing is never used as a fallback.',
   };
   $('ai-provider-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
   $('chat-access-help').textContent = S.ai_provider === 'codex'
-    ? 'ChatGPT receives page-labeled PDF text. Figures and scanned pages are unavailable.'
+    ? 'ChatGPT receives page-labeled PDF text and your global Codex instructions. Choose Claude to omit that global guidance. Figures and scanned pages are unavailable.'
     : 'Claude receives the PDF, including its page images.';
   $('chat-send').disabled = !enabled || Boolean(activeChat && activeChat.busy);
   $('auto-extract').disabled = !enabled;

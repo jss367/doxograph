@@ -82,6 +82,9 @@ class Client:
             instructions = Path(cwd) / "instructions.txt"
             instructions.write_text(kwargs["system"], encoding="utf-8")
             output = Path(cwd) / "answer.json"
+            # These flags exclude config.toml and project guidance, but Codex
+            # still includes global AGENTS instructions from its home. The
+            # model-access controls and chat dialog disclose that behavior.
             args = [binary, "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                     "--skip-git-repo-check", "--sandbox", "read-only", "--json", "--color", "never",
                     "-c", 'approval_policy="never"', "-c", 'forced_login_method="chatgpt"',

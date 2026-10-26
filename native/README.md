@@ -204,6 +204,8 @@ and select **ChatGPT subscription (Codex)** in the same menu. The app searches
 PATH, common Homebrew and nvm locations, and bundled app locations;
 `DOXOGRAPH_CODEX_PATH` can specify another executable. ChatGPT reads page-labeled
 PDF text; use Claude for figures or scanned pages.
+Codex also includes its global instructions with paper requests. Use a Claude
+option to omit global Codex guidance.
 
 A Dock launch inherits none of your shell environment, so `ANTHROPIC_API_KEY`
 exported in `.zshrc` is invisible to it. Put the key in `~/.credentials` as
