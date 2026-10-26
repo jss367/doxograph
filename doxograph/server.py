@@ -25,7 +25,7 @@ from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 from . import (__version__, bib, cites, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook)
+               search, store, notebook, research_notes)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -60,6 +60,7 @@ async def _lifespan(_: FastAPI):
 
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
+app.include_router(research_notes.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
 
 
@@ -951,6 +952,16 @@ def research_tools_js() -> FileResponse:
 @app.get("/research-tools.css")
 def research_tools_css() -> FileResponse:
     return FileResponse(STATIC / "research-tools.css", media_type="text/css")
+
+
+@app.get("/research-notes.js")
+def research_notes_js() -> FileResponse:
+    return FileResponse(STATIC / "research-notes.js", media_type="text/javascript")
+
+
+@app.get("/research-notes.css")
+def research_notes_css() -> FileResponse:
+    return FileResponse(STATIC / "research-notes.css", media_type="text/css")
 
 
 @app.get("/focused-review.js")
