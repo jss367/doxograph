@@ -34,8 +34,22 @@ def test_reading_layout_and_library_return(engine, width):
                 await expect(page.locator('#reading-claim-tools')).to_be_hidden()
                 await expect(page.locator('[data-act="reextract"]')).to_be_hidden()
                 reader = await page.locator('#pdf-scroll').bounding_box()
-                assert reader['y'] < 300
-                assert reader['height'] > 450
+                pane = await page.locator('#reader').bounding_box()
+                header = await page.locator('#paperhead').bounding_box()
+                toolbar = await page.locator('.reader-toolbar').bounding_box()
+                hint = await page.locator('#reader-hint').bounding_box()
+                # Font metrics and wrapped controls vary by platform. The PDF
+                # must follow its header/toolbar directly and fill the reader,
+                # rather than begin before an arbitrary viewport coordinate.
+                assert abs(pane['y'] - header['y'] - header['height']) <= 2
+                assert abs(reader['y'] - toolbar['y'] - toolbar['height']) <= 2
+                assert abs(reader['y'] + reader['height'] - hint['y']) <= 2
+                assert reader['height'] > 0
+                if width < 800:
+                    assert abs(pane['height'] - page.viewport_size['height'] * .7) <= 2
+                else:
+                    main = await page.locator('#main').bounding_box()
+                    assert abs(pane['y'] + pane['height'] - main['y'] - main['height']) <= 2
                 assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
                 # Background refreshes keep an open menu and its keyboard focus.
@@ -99,5 +113,44 @@ def test_reading_layout_and_library_return(engine, width):
                 await expect(page.locator('textarea[data-note="paper"]')).to_have_count(0)
                 await expect(page.locator('#content > .note')).to_contain_text('Saved from the reader.')
                 assert store.load_paper('paper')['notes'] == 'Saved from the reader.'
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('width', [1440, 390])
+def test_workspace_notes_keep_open_in_reading_layout(engine, width):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Reading with workspace notes'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['The first page.', 'The second page.']))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                editor = page.locator('#workspace-notes')
+                await editor.fill('A question to keep beside the paper.')
+                await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
+                await page.locator('#workspace-notes-keep').check()
+                await page.set_viewport_size({'width': width, 'height': 1000})
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                panel = page.locator('#workspace-notes-reading #workspace-notes-panel')
+                await expect(panel).to_be_visible()
+                assert await page.locator('#workspace-notes').count() == 1
+                await editor.scroll_into_view_if_needed()
+                await expect(editor).to_be_in_viewport()
+                assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                assert await panel.evaluate('(node) => node.scrollWidth <= node.clientWidth')
+                await editor.fill('A revised question, saved while reading.')
+                await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
+                await page.reload()
+                await expect(panel).to_be_visible()
+                await expect(page.locator('#workspace-notes-keep')).to_be_checked()
+                await expect(editor).to_have_value('A revised question, saved while reading.')
                 assert not errors
     run_browser(scenario())
