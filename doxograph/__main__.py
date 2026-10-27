@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import bib, cites, config, export, extract, ingest, search, store
+from . import bib, cites, config, export, extract, ingest, search, storage, store
 
 
 @config.bind_model_access
@@ -483,7 +483,11 @@ def main(argv: list[str] | None = None) -> int:
         except store.StorageRecoveryError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-    return args.func(args)
+    try:
+        return args.func(args)
+    except storage.StorageReadError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ dev = [
     "playwright>=1.55",
     "ruff>=0.17",
     "mypy>=2.4",
+    "types-PyYAML>=6.0",
     "types-jsonschema>=4.0",
 ]
 
@@ -57,7 +58,8 @@ python_version = "3.13"
 # Keep strict contracts at both persistence and provider boundaries. The
 # remaining application modules can be added as their annotations narrow.
 files = [
-    "doxograph/storage.py", "doxograph/records.py", "doxograph/analysis_types.py",
+    "doxograph/storage.py", "doxograph/records.py", "doxograph/workspace_metadata.py",
+    "doxograph/analysis_types.py",
     "doxograph/model_errors.py", "doxograph/providers.py",
     "doxograph/claude_code.py", "doxograph/codex_cli.py",
 ]

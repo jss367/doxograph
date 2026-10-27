@@ -21,7 +21,7 @@ import tempfile
 import threading
 import time
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,7 +29,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from . import config, quotes, records, storage
+from . import config, quotes, records, storage, workspace_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -277,14 +277,7 @@ def retired_keys() -> set[str]:
     incarnation it meant. Retiring the key removes that whole class instead of
     guarding each carrier.
     """
-    path = retired_keys_path()
-    if not path.exists():
-        return set()
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return set()
-    return set(loaded) if isinstance(loaded, list) else set()
+    return set(storage.read_model(retired_keys_path(), workspace_metadata.RetiredKeys).root)
 
 
 def retire_key(key: str) -> None:
@@ -521,11 +514,19 @@ def all_papers(*, issues: list[records.StorageIssue] | None = None) -> list[dict
 
 
 @_locked
-def delete_paper(key: str) -> None:
-    """Remove a paper under its lock, so an in-flight save cannot resurrect it."""
+def delete_paper(key: str, *, before_remove: Callable[[], None] | None = None) -> None:
+    """Retire a key, run optional cleanup, then remove its files under its lock.
+
+    Cleanup may delete remote uploads, so retirement must succeed before it
+    starts. If cleanup fails, keep local metadata for a retry. Retirement is
+    deliberately not repeated after cleanup, when a new failure would strand
+    local metadata referring to uploads that have already been removed.
+    """
     # Retire before unlinking. The other order leaves a window where the key is
     # free but not yet recorded, and a concurrent ingest could take it.
     retire_key(key)
+    if before_remove is not None:
+        before_remove()
     paper_path(key).unlink(missing_ok=True)
     pdf_path(key).unlink(missing_ok=True)
     text_path(key).unlink(missing_ok=True)
@@ -834,43 +835,35 @@ def refresh_status(paper: dict) -> None:
 DEFAULT_TAGS: list[dict] = []
 
 
-def _read_yaml(path: Path) -> dict:
-    """Read a hand-edited YAML file, reporting where it is malformed."""
-    try:
-        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
-        raise ValueError(f"{path} is not valid YAML: {exc}") from exc
+def _vocabulary() -> dict:
+    return storage.read_yaml_model(
+        config.tags_path(), workspace_metadata.Vocabulary,
+    ).model_dump(exclude_unset=True)
 
 
 def load_tags() -> list[dict]:
-    path = config.tags_path()
-    if not path.exists():
-        return list(DEFAULT_TAGS)
-    tags = _read_yaml(path).get("tags") or []
-    return [t for t in tags if isinstance(t, dict) and t.get("name")]
+    return _vocabulary().get("tags") or []
 
 
 def _retired_topics() -> set[str]:
-    path = config.tags_path()
-    if not path.exists():
-        return set()
-    retired = _read_yaml(path).get("retired_topics", [])
-    if not isinstance(retired, list) or any(not isinstance(name, str) for name in retired):
-        raise ValueError(f"{path}: retired_topics must be a list of topic names")
-    return set(retired)
+    return set(_vocabulary().get("retired_topics", []))
 
 
 def save_tags(tags: list[dict], *, retire: str | None = None) -> None:
     """Caller must hold `vocab_lock`; every public mutator below does."""
     ordered = sorted(tags, key=lambda t: t["name"])
-    retired = _retired_topics()
+    payload = _vocabulary()
+    retired = set(payload.get("retired_topics", []))
     if retire is not None:
         retired.add(retire)
     # Explicitly recreating a vocabulary entry makes its name usable again.
     retired.difference_update(t["name"] for t in ordered)
-    payload = {"tags": ordered}
+    payload["tags"] = ordered
     if retired:
         payload["retired_topics"] = sorted(retired)
+    else:
+        payload.pop("retired_topics", None)
+    workspace_metadata.Vocabulary.model_validate(payload, strict=True)
     write_atomic(
         config.tags_path(),
         yaml.safe_dump(payload, sort_keys=False, allow_unicode=True, width=100),
@@ -920,6 +913,9 @@ def _recover_tag_change() -> None:
                 or any(not isinstance(t, dict) or not isinstance(t.get("name"), str)
                        for t in change["tags"])):
             raise ValueError("invalid pending topic change")
+        # A damaged vocabulary must block recovery before any papers move.
+        _vocabulary()
+        workspace_metadata.Vocabulary.model_validate({"tags": change["tags"]}, strict=True)
         _retag_all(change["old"], change["new"])
         # Publish the vocabulary last. Until then, the durable intent explains
         # any partially moved claims and prevents a competing vocabulary edit.
@@ -979,8 +975,9 @@ def rename_tag(old: str, new: str) -> None:
         current = load_tags()
         tags = [t for t in current if t["name"] != old]
         if new not in {t["name"] for t in tags}:
-            description = next((t.get("description", "") for t in current if t["name"] == old), "")
-            tags.append({"name": new, "description": description})
+            renamed = next((dict(t) for t in current if t["name"] == old), {"description": ""})
+            renamed["name"] = new
+            tags.append(renamed)
         _change_tag(old, new, tags)
 
 
@@ -1090,27 +1087,35 @@ def context_path() -> Path:
 
 def load_context() -> str:
     """The free-text description of the research, given to every model pass."""
-    path = context_path()
-    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+    return storage.read_text(context_path()).strip()
 
 
 def save_context(text: str) -> None:
-    write_atomic(context_path(), (text or "").strip() + "\n")
+    with document_lock("context"):
+        load_context()
+        write_atomic(context_path(), (text or "").strip() + "\n")
+
+
+def _ledger() -> dict:
+    return storage.read_yaml_model(
+        config.ledger_path(), workspace_metadata.ResearchLedger,
+    ).model_dump(exclude_unset=True)
 
 
 def load_ledger() -> list[dict]:
-    path = config.ledger_path()
-    if not path.exists():
-        return []
-    claims = _read_yaml(path).get("claims") or []
-    return [c for c in claims if isinstance(c, dict) and c.get("id")]
+    return _ledger().get("claims") or []
 
 
 def save_ledger(claims: list[dict]) -> None:
-    write_atomic(
-        config.ledger_path(),
-        yaml.safe_dump({"claims": claims}, sort_keys=False, allow_unicode=True, width=100),
-    )
+    with document_lock("ledger"):
+        payload = _ledger()
+        existing = {claim["id"]: claim for claim in payload.get("claims") or []}
+        payload["claims"] = [{**existing.get(claim["id"], {}), **claim} for claim in claims]
+        workspace_metadata.ResearchLedger.model_validate(payload, strict=True)
+        write_atomic(
+            config.ledger_path(),
+            yaml.safe_dump(payload, sort_keys=False, allow_unicode=True, width=100),
+        )
 
 
 # --- cross-paper views ----------------------------------------------------
@@ -1123,6 +1128,7 @@ def corpus_signature() -> str:
     costs a good fraction of a second, and the page asks twice a second. The
     writes are all atomic replaces, so a changed file has a new inode and
     mtime; a CLI process writing the corpus is seen the same way as this one.
+    Ctime also detects ACL changes that leave contents and mode bits unchanged.
     """
     parts: list[tuple] = []
     for directory, suffix in ((config.papers_dir(), ".json"), (config.pdfs_dir(), ".pdf")):
@@ -1131,16 +1137,21 @@ def corpus_signature() -> str:
                 for entry in entries:
                     if entry.name.endswith(suffix) and not entry.name.startswith("."):
                         st = entry.stat()
-                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode))
+                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_ctime_ns))
         except FileNotFoundError:
             pass
     for path in (config.tags_path(), config.ledger_path(), tensions_path(), syntheses_path(),
-                 agreements_path(), context_path(), config.data_dir() / "notebook.json", tag_change_path()):
+                 agreements_path(), context_path(), config.data_dir() / "notebook.json",
+                 tag_change_path(), retired_keys_path()):
         try:
             st = path.stat()
-            parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino))
+            parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_ctime_ns))
         except FileNotFoundError:
             parts.append((path.name,))
+        except OSError as exc:
+            # The reader will report the failed path. A failed stat must not
+            # prevent the library from reaching those independent readers.
+            parts.append((path.name, "unreadable", exc.errno, str(exc)))
     parts.sort()
     return hashlib.sha1(repr(parts).encode()).hexdigest()
 

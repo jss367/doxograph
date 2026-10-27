@@ -210,15 +210,14 @@ def test_delete_keeps_model_access_through_cleanup(monkeypatch, provider, switch
     monkeypatch.setattr(extract, 'api_client', cleanup_client)
     other_client = Mock(side_effect=AssertionError('must not choose another provider'))
     monkeypatch.setattr(extract, 'client', other_client)
-    delete_metadata = Mock()
-    monkeypatch.setattr(store, 'delete_paper', delete_metadata)
 
     extract.delete_paper('paper')
 
     assert switched
     assert clients == [(provider, 'ollama')]
     assert deletions == ['file_superseded', 'file_original']
-    delete_metadata.assert_called_once_with('paper')
+    assert not store.paper_path('paper').exists()
+    assert 'paper' in store.retired_keys()
     other_client.assert_not_called()
     assert real_provider() == 'api'
     assert config.analysis_config().provider == 'openai'
@@ -253,11 +252,10 @@ def test_deletion_captures_access_and_profile_from_one_read(
     monkeypatch.setattr(extract, 'api_client', cleanup_client)
     other = Mock(side_effect=AssertionError('must not choose a mixed provider'))
     monkeypatch.setattr(extract, 'client', other)
-    metadata_delete = Mock()
-    monkeypatch.setattr(store, 'delete_paper', metadata_delete)
     extract.delete_paper('paper')
 
     assert clients == ([] if initial_access == 'api' else [(initial_access, initial_api)])
     assert deletions == ([] if initial_access == 'api' else ['file_original'])
-    metadata_delete.assert_called_once_with('paper')
+    assert not store.paper_path('paper').exists()
+    assert 'paper' in store.retired_keys()
     other.assert_not_called()
