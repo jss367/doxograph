@@ -85,13 +85,11 @@ def test_reading_layout_and_library_return(engine, width):
                 await expect(page.locator('#q')).to_be_focused()
                 assert await page.locator('#q').evaluate('(field) => field.selectionStart === 0 && field.selectionEnd === field.value.length')
                 await page.locator('#btn-reader-filters').click()
-                await page.locator('#content [data-act="edit-note"]').click()
                 await page.locator('textarea[data-note="paper"]').fill('My unfinished thought.')
                 await page.locator('#btn-back-library').click()
                 await expect(page.locator('body')).not_to_have_class('reading-paper')
                 await expect(page.locator('#q')).to_have_value('Oversight')
                 await page.locator('#papers li[data-paper="paper"]').click()
-                await page.locator('#content [data-act="edit-note"]').click()
                 await expect(page.locator('textarea[data-note="paper"]')).to_have_value('My unfinished thought.')
 
                 # Escape dismisses the actions without cancelling the note draft.

@@ -189,13 +189,13 @@ def test_paper_reads_beside_its_notes(engine):
                 assert await page.locator('#reader-total').inner_text() == 'of 3'
                 rail = page.locator('#content')
                 assert await rail.locator('.note .who').first.text_content() == 'my note'
-                assert await rail.get_by_role('button', name='Write a note').count() == 1
+                assert await rail.get_by_role('button', name='Write a note').count() == 0
+                assert await rail.get_by_role('textbox', name='my note', exact=True).is_visible()
                 assert await page.locator('.paperhead').get_by_role('button', name='Write a note').count() == 0
                 assert await page.locator('.paperhead').get_by_role('button', name='Read & capture').count() == 0
                 assert await rail.locator('.highlights').count() == 1
                 assert await rail.locator('.claim').count() == 1
                 # The note is written in the rail and stays there.
-                await rail.get_by_role('button', name='Write a note').click()
                 await rail.locator('textarea[data-note="paper"]').fill('Read this for the task differences.')
                 await rail.get_by_role('button', name='Save', exact=True).click()
                 await rail.locator('.note p', has_text='task differences').wait_for()
