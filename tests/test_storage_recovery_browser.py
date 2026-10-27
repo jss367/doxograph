@@ -10,11 +10,13 @@ from test_browser import _paper, _server
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-@pytest.mark.parametrize("document", ["paper", "notebook", "tensions", "agreements", "syntheses"])
+@pytest.mark.parametrize("document", ["paper", "notebook", "tensions", "agreements", "syntheses",
+                                      "tags.yaml", "ledger.yaml", "context.md", "retired-keys.json"])
 def test_storage_warning_survives_navigation_and_clears_after_repair(engine, document):
     _paper("healthy", "Healthy paper", "topic")
-    damaged = store.paper_path("damaged") if document == "paper" else config.data_dir() / f"{document}.json"
-    damaged.write_text("{broken")
+    filename = document if "." in document else f"{document}.json"
+    damaged = store.paper_path("damaged") if document == "paper" else config.data_dir() / filename
+    damaged.write_bytes(b"\xff" if document == "context.md" else b"{broken")
 
     async def scenario():
         async with browser_session(engine) as browser:
@@ -31,8 +33,11 @@ def test_storage_warning_survives_navigation_and_clears_after_repair(engine, doc
                 await expect(warning).to_be_visible()
                 await page.reload()
                 await expect(warning).to_be_visible()
-                store.write_json(damaged, store.new_paper("damaged", title="Recovered paper")
-                                 if document == "paper" else {})
+                if document == "context.md":
+                    damaged.write_text("Recovered context")
+                else:
+                    store.write_json(damaged, store.new_paper("damaged", title="Recovered paper")
+                                     if document == "paper" else [] if document == "retired-keys.json" else {})
                 await expect(warning).to_be_hidden(timeout=15000)
                 await expect(page.locator('#papers [data-paper="healthy"]')).to_be_visible()
                 if document == "paper":

@@ -496,9 +496,10 @@ with the file path, and command-line listings report it on standard error.
 The damaged file is left untouched. Repair it or restore a backup; the warning
 clears when the library next refreshes.
 
-The same protection applies to saved research tools, tensions, agreements, and
-syntheses. If one of those documents cannot be read, the library still shows
-the healthy papers and reports the damaged document's path. Its section stays
+The same protection applies to saved research tools, tensions, agreements,
+syntheses, the topic vocabulary (`tags.yaml`), your claims (`ledger.yaml`), and
+research context (`context.md`). If one of those documents cannot be read, the
+library still shows the healthy papers and reports the damaged document's path. Its section stays
 unavailable until repaired; saves refuse to overwrite it. Syntheses remain
 visible but are marked stale while their supporting tensions cannot be read.
 
@@ -516,6 +517,10 @@ A removed paper's key is retired rather than reused, so a key names one paper fo
 all time. Re-adding a paper you deleted therefore gets a suffixed key. That is
 the point: a slow operation carrying a key — an extraction job, a download, a
 queued edit — never has to work out which paper it meant.
+If `retired-keys.json` cannot be read, the library reports its path and refuses
+new key reservations and paper deletions, including remote upload cleanup.
+Repair the file or restore its history from a backup before retrying; replacing
+it with an empty list would allow previously used keys to be issued again.
 
 ### tags.yaml
 

@@ -352,6 +352,8 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
 def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
     """Delete a paper's remote uploads before removing its local metadata."""
     with store.extraction_lock(key), store.paper_lock(key):
+        # Refuse before remote cleanup when the identity cannot be retired.
+        store.retired_keys()
         try:
             paper = store.load_paper(key)
         except KeyError:

@@ -27,6 +27,7 @@ dev = [
     "playwright>=1.55",
     "ruff>=0.17",
     "mypy>=2.4",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
@@ -55,6 +56,6 @@ select = ["E9", "F"]
 python_version = "3.13"
 # Enforce strict contracts at the shared storage boundary first. Expand this
 # list as the older dictionary-based modules acquire narrower annotations.
-files = ["doxograph/storage.py", "doxograph/records.py"]
+files = ["doxograph/storage.py", "doxograph/records.py", "doxograph/workspace_metadata.py"]
 strict = true
 follow_imports = "silent"

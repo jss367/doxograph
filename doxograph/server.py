@@ -1161,6 +1161,10 @@ def _build_state() -> dict:
     tensions = _state_section(lambda: store.tension_rows(rows), [], issues)
     agreements = _state_section(lambda: store.agreement_rows(rows), [], issues)
     syntheses = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
+    tags = _state_section(store.load_tags, [], issues)
+    ledger = _state_section(store.load_ledger, [], issues)
+    context = _state_section(store.load_context, "", issues)
+    _state_section(store.retired_keys, set(), issues)
     if any(issue["path"] == str(store.tensions_path()) for issue in issues):
         # Their text is still useful, but freshness cannot be established while
         # the judgments that contributed to it are unavailable.
@@ -1172,11 +1176,11 @@ def _build_state() -> dict:
         "storage_issues": issues,
         "papers": [store.summarize(p) for p in papers],
         "claims": rows,
-        "tags": store.load_tags(),
+        "tags": tags,
         "tag_counts": store.tag_counts(rows),
         "label_counts": store.label_counts(papers),
-        "ledger": store.load_ledger(),
-        "context": store.load_context(),
+        "ledger": ledger,
+        "context": context,
         "tensions": tensions,
         "agreements": agreements,
         "syntheses": syntheses,
