@@ -213,6 +213,14 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#content .claim', has_text='Recovery is conditional.').wait_for()
                 claim = next(c for c in httpx.get(url+'/api/state').json()['claims'] if c['text'] == 'Recovery is conditional.')
                 assert claim['quote_verified'] is True and claim['locator'] == 'p. 1' and claim['note'] == 'Check the task differences.'
+                # Capturing a claim leaves its source visibly marked in the PDF.
+                source = page.locator(f'.annotationLayer .claim-passage[data-claim="{claim["id"]}"]')
+                await source.wait_for()
+                source_box = await source.bounding_box()
+                assert abs(source_box['x'] - bounds['x']) < 4 and abs(source_box['width'] - bounds['width']) < 4
+                badge = page.get_by_role('button', name='Show claim: Recovery is conditional. — Check the task differences.', exact=True)
+                await badge.click()
+                assert await page.locator(f'#content .claim[data-claim="{claim["id"]}"]').evaluate("e => e.classList.contains('sel')")
                 # A selected passage becomes a highlight in the chosen color, drawn over the text.
                 bounds = await select_first_line(page)
                 await page.get_by_role('button', name='Highlight in green', exact=True).click()
@@ -233,6 +241,11 @@ def test_paper_reads_beside_its_notes(engine):
                 await ready(page)
                 await rail.locator('.highlight-entry .note p', has_text='Which conditions?').wait_for()
                 assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                # The PDF indicates an attached highlight note and opens that note.
+                note_badge = page.get_by_role('button', name='Show note: Which conditions?', exact=True)
+                await note_badge.click()
+                await ready(page)
+                assert await rail.locator('.highlight-entry').evaluate("e => e === document.activeElement && e.classList.contains('focused')")
                 # It stays in place at another zoom.
                 await page.locator('#reader-zoom').select_option('2')
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()

@@ -469,7 +469,7 @@ const ResearchTools = (() => {
     if (page.rendering || pageSelected(page)) return;
     for (const canvas of page.el.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
     page.el.innerHTML = ''; page.el.classList.add('pending'); page.renderedAt = 0;
-    page.text = null;
+    page.text = null; page.quoteIndex = null; page.quoteRects = null;
     page.pdfPage?.cleanup();
   }
   function pageNear(page) {
@@ -501,7 +501,8 @@ const ResearchTools = (() => {
       if (page.renderedAt === scale) { sizePage(page); return; }
       const viewport = pdfPage.getViewport({scale});
       const container = page.el;
-      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
+      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div><div class="annotationLayer"></div>';
+      page.quoteIndex = null; page.quoteRects = null; page.annotationMarkup = null;
       keepingView(() => {
         container.style.width = `${viewport.width}px`;
         container.style.height = `${viewport.height}px`;
@@ -519,6 +520,7 @@ const ResearchTools = (() => {
       if (reader?.generation !== generation || pageScale(page) !== scale) return;
       await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
       if (reader?.generation !== generation || pageScale(page) !== scale) return;
+      page.quoteRects = new Map();
       page.hasText = content.items.some(item => item.str?.trim());
       page.renderedAt = scale;
       container.classList.remove('pending');
@@ -554,12 +556,84 @@ const ResearchTools = (() => {
   function paperHighlights(paper) {
     return (client.state.notebook?.highlights || []).filter(h => h.paper === paper);
   }
+  const quoteLetters = text => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  // Captured claims already store their quote and page, including captures made
+  // before the reader showed annotations. Match against the rendered text so
+  // their marks follow zoom, line wrapping, and PDF.js's text positioning.
+  function claimRects(page, quote) {
+    const needle = quoteLetters(quote);
+    if (!needle) return [];
+    if (page.quoteRects.has(quote)) return page.quoteRects.get(quote);
+    if (!page.quoteIndex) {
+      let text = '';
+      const points = [], walker = document.createTreeWalker(page.el.querySelector('.textLayer'), NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        let offset = 0;
+        for (const char of node.textContent) {
+          const letters = quoteLetters(char);
+          text += letters;
+          // String indices are UTF-16 offsets, as are DOM Range offsets.
+          for (let i = 0; i < letters.length; i++) points.push({node, start:offset, end:offset + char.length});
+          offset += char.length;
+        }
+      }
+      page.quoteIndex = {text, points};
+    }
+    const {text, points} = page.quoteIndex, start = text.indexOf(needle);
+    let rects = [];
+    // A repeated quote cannot identify which occurrence was selected. Leave
+    // ambiguous passages unmarked rather than point at the wrong sentence.
+    if (start !== -1 && text.indexOf(needle, start + 1) === -1) {
+      const first = points[start], last = points[start + needle.length - 1];
+      const prefix = quote.trim().match(/^[^\p{L}\p{N}]+/u)?.[0] || '';
+      const suffix = quote.trim().match(/[^\p{L}\p{N}]+$/u)?.[0] || '';
+      const from = prefix && first.node.textContent.slice(Math.max(0, first.start - prefix.length), first.start) === prefix
+        ? first.start - prefix.length : first.start;
+      const to = suffix && last.node.textContent.slice(last.end, last.end + suffix.length) === suffix
+        ? last.end + suffix.length : last.end;
+      const range = document.createRange();
+      range.setStart(first.node, from); range.setEnd(last.node, to);
+      rects = selectionRects(range, page.el);
+    }
+    page.quoteRects.set(quote, rects);
+    return rects;
+  }
+  function drawPageAnnotations(page) {
+    const layer = page.el.querySelector('.annotationLayer');
+    if (!layer || !page.quoteRects) return;
+    const percent = value => `${(value * 100).toFixed(3)}%`;
+    const badges = [], passages = [];
+    for (const h of paperHighlights(reader.paper).filter(h => h.page === page.number && h.note.trim())) {
+      badges.push({y:h.rects[0].y, action:`data-tool="show-highlight-note" data-highlight="${html(h.id)}"`, label:'Note', description:`Show note: ${h.note}`});
+    }
+    for (const claim of client.state.claims.filter(c => c.paper === reader.paper && c.quote?.trim() && c.quote_verified !== false)) {
+      const number = claim.quote_page || pdfPage(claim.locator);
+      if (number && number !== page.number) continue;
+      const rects = claimRects(page, claim.quote);
+      if (!rects.length) continue;
+      passages.push(...rects.map(r => `<div class="claim-passage" data-claim="${html(claim.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`));
+      badges.push({y:rects[0].y, action:`data-act="goto-claim" data-claim="${html(claim.id)}" data-paper="${html(reader.paper)}"`, label:claim.note?.trim() ? 'Note' : 'Claim', description:`Show claim: ${claim.text}${claim.note?.trim() ? ` — ${claim.note}` : ''}`});
+    }
+    // Keep nearby badges separate in the page margin, including several claims
+    // on the same passage. The text layer stays selectable beneath the marks.
+    let bottom = 0;
+    const buttons = badges.sort((a, b) => a.y - b.y).map(badge => {
+      const top = Math.max(badge.y * page.el.clientHeight, bottom);
+      bottom = top + 26;
+      return `<button type="button" class="pdf-annotation" ${badge.action} style="top:${top.toFixed(1)}px" title="${html(badge.description)}" aria-label="${html(badge.description)}">${badge.label}</button>`;
+    });
+    const markup = passages.join('') + buttons.join('');
+    // A poll with unchanged annotations must leave a keyboard-focused badge alone.
+    if (page.annotationMarkup !== markup) { layer.innerHTML = markup; page.annotationMarkup = markup; }
+  }
   function drawPageHighlights(page) {
     const layer = page.el.querySelector('.highlightLayer');
     if (!layer) return;
     const percent = value => `${(value * 100).toFixed(3)}%`;
     layer.innerHTML = paperHighlights(reader.paper).filter(h => h.page === page.number).flatMap(h => h.rects.map(r =>
       `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}${h.id === reader.focus ? ' focused' : ''}" data-highlight="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+    drawPageAnnotations(page);
   }
   // A figure is the box dragged out on the page, in the same fractions as a passage's lines.
   function figureRect(drag, event) {
@@ -836,7 +910,7 @@ const ResearchTools = (() => {
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
-    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
+    'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
   async function readerAction(name, target) {
     const data = target.dataset;
     if (name === 'retry-reader') {
@@ -942,6 +1016,13 @@ const ResearchTools = (() => {
     const id = target.closest('[data-highlight]')?.dataset.highlight;
     const highlight = paperHighlights(V.paper).find(h => h.id === id);
     if (!highlight) throw new Error('This highlight is no longer here. It may have been removed in another window.');
+    if (name === 'show-highlight-note') {
+      if (reader) { reader.focus = id; redrawHighlights(); }
+      focusRailEntry(id);
+      const entry = document.querySelector(`.highlight-entry[data-highlight="${CSS.escape(id)}"]`);
+      if (entry) { entry.tabIndex = -1; entry.focus({preventScroll:true}); }
+      return;
+    }
     if (name === 'edit-highlight') {
       // One note is written at a time; the one half-written is not dropped for
       // another without asking.
