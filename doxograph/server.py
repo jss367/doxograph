@@ -28,7 +28,7 @@ from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from . import (__version__, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook, records, research_notes, storage, providers)
+               search, store, notebook, records, research_notes, storage, providers, query)
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,7 @@ async def _lifespan(_: FastAPI):
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.include_router(research_notes.router)
+app.include_router(query.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
 
 

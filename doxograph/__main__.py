@@ -351,6 +351,17 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_mcp(args) -> int:
+    from .mcp_server import run
+
+    try:
+        run(args.url)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
 def _listening_port(value: str) -> int:
     """A `--port` argument, refused here rather than an hour into a session.
 
@@ -387,6 +398,10 @@ def _how_many(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="doxograph", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("mcp", help="read-only stdio MCP server for the running local app")
+    p.add_argument("--url", default="http://127.0.0.1:8765", help="local Doxograph server URL")
+    p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="127.0.0.1",
@@ -474,6 +489,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # The MCP adapter reads only over HTTP. It must not initialize or recover
+    # a separate local corpus, and stdout belongs exclusively to the protocol.
+    if args.func == cmd_mcp:
+        return args.func(args)
     config.ensure_dirs()
     # The server must still start when recovery needs attention, so its library
     # can display the problem. Other commands must not work on a partial rename.
