@@ -1239,6 +1239,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
                                            { ok: 'Discard and switch' });
   },
   beforeLeave: flushTrash,
+  beforeSelect: () => WorkspaceNotes.beforeWorkspaceSwitch(),
   async enter() {
     resetWorkspaceView();
     renderWorkspacePicker();

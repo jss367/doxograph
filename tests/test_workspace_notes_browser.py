@@ -450,3 +450,58 @@ def test_workspace_notes_apply_focused_snapshot_on_blur_and_collapse(engine):
 
     run_browser(scenario())
 
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('save_fails', [False, True])
+def test_workspace_notes_typed_during_delete_drain_are_saved_before_switch(engine, save_fails):
+    config.set_ai_enabled(False)
+    other = config.create_workspace('Other research')
+    store.save_paper(store.new_paper('paper', title='A paper to review'))
+    store.add_claim('paper', {'text': 'A claim to delete.', 'tags': [], 'quote': 'A claim.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                editor = await open_notes(page)
+                await page.locator('.claim [data-act="del"]').first.click()
+                await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
+                deleting, release_delete = asyncio.Event(), asyncio.Event()
+
+                async def delay_delete(route):
+                    deleting.set()
+                    await release_delete.wait()
+                    await route.continue_()
+
+                async def fail_save(route):
+                    await route.fulfill(status=503, content_type='application/json', body='{"detail":"Save failed during navigation"}')
+
+                await page.route('**/api/papers/paper/claims/*', delay_delete)
+                if save_fails:
+                    await page.route('**/api/notebook/notes', fail_save)
+                await page.evaluate('id => { window.drainingNoteSwitch = switchWorkspace(id); }', other['id'])
+                await asyncio.wait_for(deleting.wait(), timeout=10)
+                text = 'Typed while the old workspace was waiting for a delete.'
+                await editor.fill(text)
+                release_delete.set()
+                await page.evaluate('window.drainingNoteSwitch')
+                if save_fails:
+                    assert await page.locator('#workspace').input_value() == 'default'
+                    await expect(editor).to_have_value(text)
+                    await expect(page.locator('#workspace-notes-status')).to_contain_text('Save failed during navigation')
+                    await page.unroute('**/api/notebook/notes', fail_save)
+                    await page.locator('#workspace-notes-retry').click()
+                    await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
+                else:
+                    assert await page.locator('#workspace').input_value() == other['id']
+                    await expect(editor).to_have_value('')
+                assert httpx.get(url + '/api/notebook').json()['notes'] == text
+                headers = {'X-Doxograph-Workspace': other['id']}
+                assert httpx.get(url + '/api/notebook', headers=headers).json()['notes'] == ''
+                assert not errors
+
+    run_browser(scenario())
