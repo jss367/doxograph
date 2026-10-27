@@ -1026,6 +1026,103 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_map_timeline_uses_publication_year_and_keeps_it_when_dragging_or_polling(engine):
+    _paper("early", "Early paper", "recovery", year=2000)
+    _paper("middle", "Middle paper", "recovery", year=2010)
+    _paper("same-year", "Another middle paper", "recovery", year=2010)
+    _paper("late", "Late paper", "recovery", year=2020)
+    _paper("undated", "Undated paper", "recovery")
+    store.save_ledger([{"id": "L1", "text": "My own claim."}])
+    store.update_claim("early", "early-c1", {
+        "ledger_links": [{"claim": "L1", "relation": "supports", "note": ""}],
+    })
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1200, "height": 900})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                axis = page.get_by_label("X axis", exact=True)
+                assert await axis.input_value() == "connections"
+                await axis.select_option("year")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                nodes = {n["id"]: n for n in graph["nodes"]}
+                x = {key: n["x"] for key, n in nodes.items()}
+                assert x["p:early"] < x["p:middle"] < x["p:late"] < x["p:undated"]
+                assert x["p:middle"] == x["p:same-year"]
+                assert x["p:middle"] - x["p:early"] == pytest.approx(x["p:late"] - x["p:middle"])
+                assert x["l:L1"] == x["p:undated"]
+                assert abs(nodes["p:middle"]["y"] - nodes["p:same-year"]["y"]) > 20
+                await page.locator("[data-graph-timeline-hint]").wait_for(state="visible")
+                assert any(e["type"] == "topic" for e in graph["edges"])
+                assert any(e["type"] == "ledger" for e in graph["edges"])
+
+                # Dragging cannot move a paper to a different publication year.
+                box = await page.locator(".graph-wrap canvas").bounding_box()
+                node = nodes["p:middle"]
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                await page.mouse.move(sx, sy)
+                await page.mouse.down()
+                await page.mouse.move(sx + 60, sy + 30, steps=5)
+                dragged = await page.evaluate("window.doxographGraph()")
+                assert next(n for n in dragged["nodes"] if n["id"] == "p:middle")["x"] == x["p:middle"]
+                await page.mouse.up()
+
+                # Metadata arriving through the normal poll moves an undated
+                # paper onto the axis, even though nodes and links are unchanged.
+                paper = store.load_paper("undated")
+                paper["year"] = 2015
+                store.save_paper(paper)
+                await _poll(page)
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                updated = {n["id"]: n for n in graph["nodes"]}
+                assert updated["p:middle"]["x"] < updated["p:undated"]["x"] < updated["p:late"]["x"]
+                assert await axis.input_value() == "year"
+
+                # Navigation retains the choice; returning to the force layout
+                # removes the timeline constraint and its explanation.
+                node = updated["p:early"]
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                await page.mouse.click(sx, sy)
+                await page.locator(".paperhead h2", has_text="Early paper").wait_for()
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                assert await axis.input_value() == "year"
+                await axis.select_option("connections")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                assert (await page.evaluate("window.doxographGraph()"))["timeline"] is None
+                await page.locator("[data-graph-timeline-hint]").wait_for(state="hidden")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("years", [[], [None, None], [2020], [2020, 2020]])
+def test_map_timeline_handles_empty_undated_and_single_year_corpora(years):
+    for i, year in enumerate(years):
+        _paper(f"paper-{i}", f"Paper {i}", year=year)
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.get_by_label("X axis", exact=True).select_option("year")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                assert await page.evaluate("""window.doxographGraph().nodes.every(n =>
+                    Number.isFinite(n.x) && Number.isFinite(n.y) && n.x === 0)""")
+                assert len((await page.evaluate("window.doxographGraph()"))["nodes"]) == len(years)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_the_map_repaints_on_a_theme_change_omits_independent_links_and_clamps_the_threshold():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
