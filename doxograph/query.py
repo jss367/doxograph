@@ -39,7 +39,7 @@ def papers_and_issues() -> tuple[list[dict], list[dict]]:
 def papers(q: QueryText = "", topic: str = "", label: str = "",
            limit: Limit = 20, offset: Offset = 0) -> dict:
     saved, issues = papers_and_issues()
-    rows = [store.summarize(p) for p in saved
+    rows = [{key: value for key, value in store.summarize(p).items() if key != "notes"} for p in saved
             if (not topic or any(topic in c.get("tags", []) for c in p.get("claims", [])))
             and (not label or label in p.get("labels", []))
             and matches(q, p["key"], p.get("title"), p.get("authors"), p.get("year"),

@@ -61,6 +61,22 @@ def test_paper_search_includes_unextracted_papers_and_pages_stably(client, corpu
     assert topics == [{"name": "recovery", "description": "Return to the original task", "n_claims": 2}]
 
 
+def test_paper_listings_omit_personal_notes_but_explicit_reads_keep_them(client):
+    sentinel = "PERSONAL_NOTE_SENTINEL_87"
+    store.save_paper(store.new_paper("private-note", title="Recovery experiments", notes=sentinel))
+
+    for q in ["", "recovery experiments"]:
+        response = client.get("/api/query/papers", params={"q": q})
+        assert response.status_code == 200
+        [paper] = response.json()["items"]
+        assert paper["key"] == "private-note"
+        assert "notes" not in paper and sentinel not in response.text
+
+    assert client.get("/api/query/papers/private-note").json()["paper"]["notes"] == sentinel
+    assert store.summarize(store.load_paper("private-note"))["notes"] == sentinel
+    assert client.get("/api/state").json()["papers"][0]["notes"] == sentinel
+
+
 def test_queries_never_cross_workspaces(client, corpus):
     other = config.create_workspace("Other research")["id"]
     with config.use_workspace(other):
