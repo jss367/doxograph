@@ -11,6 +11,34 @@ from fastapi.testclient import TestClient
 from doxograph import config, ingest, server, store
 
 
+@pytest.mark.parametrize("first,second", [
+    ("https://papers.example/Study.pdf", "https://papers.example/study.pdf"),
+    ("https://papers.example/study.pdf?id=Abc", "https://papers.example/study.pdf?id=abc"),
+])
+def test_pdf_urls_preserve_case_sensitive_identity(first, second):
+    import httpx
+    from pdfs import minimal_pdf
+
+    downloaded = []
+
+    def respond(request):
+        downloaded.append(str(request.url))
+        return httpx.Response(200, content=minimal_pdf(f"Paper {len(downloaded)}"),
+                              headers={"content-type": "application/pdf"})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        first_key, first_created = ingest.ingest_ref(ingest.parse_ref(first), client)
+        second_key, second_created = ingest.ingest_ref(ingest.parse_ref(second), client)
+        # A hostname's spelling still does not create another paper.
+        repeated = ingest.ingest_ref(ingest.parse_ref(first.replace("papers.example", "PAPERS.example")), client)
+
+    assert first_created and second_created
+    assert first_key != second_key
+    assert downloaded == [first, second]
+    assert repeated == (first_key, False)
+    assert len(store.paper_keys()) == 2
+
+
 # --- an advertised PDF link may be relative -------------------------------
 
 class FakePageResponse:

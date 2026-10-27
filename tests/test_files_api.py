@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from types import SimpleNamespace
 
 import anthropic
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import extract, server, store
+from doxograph import chat, extract, server, store
 
 
 # --- The PDF reaches the model through the Files API, not inline -------------
@@ -199,3 +201,61 @@ def test_extracting_without_a_pdf_says_so(monkeypatch):
     monkeypatch.setattr(extract, "client", lambda: FilesClient())
     with pytest.raises(FileNotFoundError):
         extract.extract_paper("doe2026study")
+
+
+@pytest.mark.parametrize("fail_chat", [False, True])
+def test_delete_waits_for_chat_and_removes_its_upload(monkeypatch, paper_with_pdf, fail_chat):
+    uploading, finish_upload, deleting, deleted = (threading.Event() for _ in range(4))
+    api = FilesClient()
+    upload = api.files.upload
+    errors = []
+
+    def slow_upload(**kwargs):
+        uploaded = upload(**kwargs)
+        uploading.set()
+        assert finish_upload.wait(5)
+        return uploaded
+
+    def respond(**kwargs):
+        assert api.files.deletions == [], "The file must remain available during the model call"
+        if fail_chat:
+            raise RuntimeError("Model unavailable")
+        return SimpleNamespace(stop_reason="end_turn", content=[
+            SimpleNamespace(type="text", text='{"answer":"A finding (p. 1)."}')])
+
+    def ask():
+        try:
+            chat.answer(paper_with_pdf, [{"role": "user", "content": "What did it find?"}])
+        except Exception as exc:
+            errors.append(exc)
+
+    def remove():
+        deleting.set()
+        try:
+            extract.delete_paper(paper_with_pdf)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            deleted.set()
+
+    api.files.upload = slow_upload
+    api.create = respond
+    monkeypatch.setattr(extract, "client", lambda: api)
+    asking = threading.Thread(target=ask, daemon=True)
+    removing = threading.Thread(target=remove, daemon=True)
+    asking.start()
+    try:
+        assert uploading.wait(5)
+        removing.start()
+        assert deleting.wait(5)
+        assert not deleted.wait(0.1), "Deletion must wait for the pending upload and answer"
+    finally:
+        finish_upload.set()
+        asking.join(5)
+        if removing.ident is not None:
+            removing.join(5)
+    assert not asking.is_alive() and not removing.is_alive()
+    assert [str(exc) for exc in errors] == (["Model unavailable"] if fail_chat else [])
+    assert api.files.deletions == ["file_1"]
+    assert not store.paper_path(paper_with_pdf).exists()
+    assert not store.pdf_path(paper_with_pdf).exists()

@@ -13,8 +13,10 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     private let status: NSTextField
     private var auxiliaryWindows: [NSWindow] = []
     private var host: String?
+    private let downloads: DownloadController
 
-    override init() {
+    init(downloads: DownloadController = DownloadController()) {
+        self.downloads = downloads
         let configuration = WKWebViewConfiguration()
         webView = WKWebView(frame: .zero, configuration: configuration)
 
@@ -101,6 +103,9 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     // MARK: - Navigation
 
     private func isLocal(_ url: URL) -> Bool {
+        if url.scheme == "blob", let origin = URL(string: String(url.absoluteString.dropFirst(5))) {
+            return isLocal(origin)
+        }
         guard let urlHost = url.host else { return url.scheme == "about" }
         return urlHost == host || urlHost == "127.0.0.1" || urlHost == "localhost"
     }
@@ -118,6 +123,9 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             decisionHandler(.cancel)
             if Uploader.isPDF(url) { onFilesDropped?([url]) }
         } else if isLocal(url) {
+            if navigationAction.shouldPerformDownload {
+                return decisionHandler(.download)
+            }
             // A `target="_blank"` link arrives here first, with no target
             // frame, before `createWebViewWith` has a window for it. Loading
             // the PDF into `webView` at that point puts it in the main window
@@ -135,6 +143,21 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
         }
+    }
+
+    func webView(
+        _ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        downloads.receive(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        downloads.receive(download)
     }
 
     /// The address to open instead, for a PDF that would otherwise arrive as a

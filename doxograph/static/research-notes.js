@@ -270,7 +270,6 @@ const ResearchNotes = (() => {
     if (name === 'bold') return insert('**','**','text');
     if (name === 'equation') return insert('\n\n$$\n', '\n$$\n\n', 'E = mc^2');
     if (name === 'table') return insert('\n\n| Condition | Result |\n| --- | --- |\n| Baseline |  |\n| Intervention |  |\n\n');
-    if (name === 'image') { el('note-image').click(); return; }
     if (name === 'link') return renderLinkPicker();
     if (name === 'insert-link') {
       const {linkKind:kind,linkId:id} = target.dataset;
@@ -298,6 +297,16 @@ const ResearchNotes = (() => {
     if (!target) return;
     event.preventDefault();
     if (target.dataset.notesAction === 'close') { close(); return; }
+    // Open the picker during the click, before run() disables the file input.
+    // The change handler freezes the editor while the selected image uploads.
+    if (target.dataset.notesAction === 'image') {
+      if (!busy) {
+        const picker = el('note-image');
+        picker.value = ''; // Re-selecting the same image must fire change, including after an upload failure.
+        picker.click();
+      }
+      return;
+    }
     run(() => action(target.dataset.notesAction, target));
   });
   el('research-notes').addEventListener('cancel', event => { event.preventDefault(); close(); });
