@@ -296,6 +296,16 @@ const ResearchTools = (() => {
     try { const zoom = localStorage.getItem(zoomKey); return ZOOMS.includes(zoom) ? zoom : 'fit'; }
     catch (_) { return 'fit'; }
   }
+  // A new mark takes the color chosen last, in this browser; a mark's color
+  // is changed from its entry in the rail.
+  const colorKey = 'doxograph-highlight-color';
+  function savedColor() {
+    try { const color = localStorage.getItem(colorKey); return COLORS.includes(color) ? color : 'yellow'; }
+    catch (_) { return 'yellow'; }
+  }
+  function storeColor(color) {
+    try { localStorage.setItem(colorKey, color); } catch (_) { /* preference remains for this page */ }
+  }
   // The scale a zoom setting means: 'fit' is whatever fills the column.
   function scaleFor(zoom, base) {
     if (zoom !== 'fit') return Number(zoom);
@@ -323,8 +333,7 @@ const ResearchTools = (() => {
       <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
       ${button('bookmark', 'Bookmark this page')}${button('figure-mode', 'Mark a figure', 'aria-pressed="false" title="Drag a box around a figure, table, or any region of the page"')}<span class="reader-status" id="reader-status"></span></div>
       <div class="pdf-scroll" id="pdf-scroll"><div class="passage-tools" id="passage-tools" hidden>
-        ${COLORS.map(c => button('highlight-selection', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Highlight in ${c}" title="Highlight in ${c}"`)).join('')}
-        ${button('capture-selection', 'Capture as claim')}</div></div>
+        ${button('highlight-selection', 'Highlight', 'class="passage-only" title="Keep this passage in the rail, with a note of your own"')}${button('highlight-selection', 'Mark this figure', 'class="figure-only" title="Keep this region in the rail, with a note of your own"')}</div></div>
       <p id="reader-hint" class="hint">Loading PDF…</p>`;
     // Buttons on the toolbar must not take the selection away before they act on it.
     el('passage-tools').addEventListener('mousedown', event => event.preventDefault());
@@ -739,8 +748,8 @@ const ResearchTools = (() => {
     if (on) { window.getSelection()?.removeAllRanges(); hidePassageTools(); }
     readerHint();
   }
-  // The box just drawn waits for a color: the passage toolbar, under the box,
-  // offers the same swatches it offers a selected passage.
+  // The box just drawn waits to be kept: the passage toolbar, under the box,
+  // offers the one button it offers a selected passage.
   function offerFigure(page, rect, pageEl) {
     reader.figure = {page, rect};
     const tools = el('passage-tools'), scroller = el('pdf-scroll');
@@ -759,10 +768,10 @@ const ResearchTools = (() => {
     if (!hint || !reader) return;
     const page = reader.pages[reader.current - 1];
     hint.textContent = page?.error ? `Could not draw page ${page.number}: ${page.error}`
-      : reader.figureMode ? 'Drag a box around the figure on the page, then pick a color.'
+      : reader.figureMode ? 'Drag a box around the figure on the page.'
       : page?.renderedAt && !page.hasText
       ? 'This page has no selectable text. You can transcribe a quote and add a claim by hand.'
-      : 'Select a passage to highlight it or capture it as a claim, or mark a figure.';
+      : 'Select a passage to highlight it and write a note, or mark a figure.';
   }
   function trackCurrentPage(asked = null) {
     if (!reader?.pages.length) return;
@@ -941,7 +950,7 @@ const ResearchTools = (() => {
   // a redraw rebuilds the editor from it.
   function highlightsHtml(paper) {
     const mine = paperHighlights(paper).slice().sort((a, b) => a.page - b.page);
-    const empty = '<p class="hint">Select a passage in the paper to highlight it, with a note or a question of your own, or to capture it as a claim. Mark a figure by dragging a box around it.</p>';
+    const empty = '<p class="hint">Select a passage in the paper and click Highlight to keep it here with a note or a question of your own. A highlight can be captured as a claim later. Mark a figure by dragging a box around it.</p>';
     const hasPdf = client.state.papers.find(p => p.key === paper)?.has_pdf;
     return `<section class="highlights"><h3>Marks${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}
       ${mine.length && hasPdf ? `<span class="cact">${button('export-annotated', 'Export annotated PDF', `data-paper="${html(paper)}" title="A copy of the PDF with these marks written in as annotations"`)}</span>` : ''}</h3>${mine.length ? mine.map(h => {
@@ -951,6 +960,7 @@ const ResearchTools = (() => {
         ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="${figure ? 'Your note or question on this figure' : 'Your note or question on this passage'}" aria-label="Note on this mark">${html(markEditor.text)}</textarea>`
           : h.note.trim() ? noteHtml(h.note, h.question ? 'my question' : 'my note') : ''}
         <div class="hmeta"><span>p. ${h.page}</span>
+          <span class="swatches" role="group" aria-label="Color of this mark">${COLORS.map(c => button('recolor-highlight', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Color ${c}" aria-pressed="${c === h.color}" title="Color this mark ${c}"`)).join('')}</span>
           <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
           <span class="cact">
           ${editing ? button('save-highlight', 'Save note') + button('cancel-highlight', 'Cancel') : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
@@ -981,9 +991,18 @@ const ResearchTools = (() => {
     </article></section>`;
   }
   // Polls leave a visible editor alone, including one whose mark disappeared.
+  // Only one that is on screen: an editor held for a paper left and returned
+  // to is not drawn yet, and a redraw rebuilds it from what is held here.
   function holds() {
     return Boolean(markEditor) && markEditor.workspace === client.workspaceId
-      && (markEditor.removed || markEditorOn(V.paper));
+      && (markEditor.removed || markEditorOn(V.paper))
+      && Boolean(document.querySelector('[data-highlight-note]'));
+  }
+  function openMarkNote(highlight) {
+    markEditor = {id:highlight.id, paper:highlight.paper, workspace:client.workspaceId, saved:highlight.note, text:highlight.note, removed:false};
+    redrawContent();
+    document.querySelector('[data-highlight-note]')?.focus();
+    focusRailEntry(highlight.id);
   }
   function markDraftOn(paper) { return markEditorOn(paper) && highlightDrafting(); }
   function dropMarkDraft(paper) { if (markEditorOn(paper)) markEditor = null; }
@@ -995,7 +1014,7 @@ const ResearchTools = (() => {
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
-  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
+  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
     'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
   async function readerAction(name, target) {
     const data = target.dataset;
@@ -1077,27 +1096,21 @@ const ResearchTools = (() => {
     if (name === 'figure-mode') { setFigureMode(!reader?.figureMode); return; }
     if (name === 'export-annotated') { await downloadAnnotated(data.paper, client.workspaceId); return; }
     if (name === 'highlight-selection') {
-      const color = COLORS.includes(data.color) ? data.color : 'yellow';
-      const figure = reader?.figure;
-      if (figure) {
-        const {paper, workspace:ws} = reader;
-        hidePassageTools(); setFigureMode(false);
-        await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:figure.page, kind:'figure', rects:[figure.rect], text:'', color, note:'', question:false}); });
-        redrawHighlights(); return;
-      }
-      const passage = reader?.selection;
-      if (!passage) throw new Error('Select a passage in the paper first.');
-      const {paper, workspace:ws} = reader;
+      // One click keeps the passage or box as a mark in the color chosen last
+      // and opens its note in the rail, unless a note on another mark is
+      // half-written: that one is not dropped, and the new mark waits.
+      const {paper, workspace:ws} = reader || {};
+      const figure = reader?.figure, passage = reader?.selection;
+      if (!figure && !passage) throw new Error('Select a passage in the paper first.');
+      const mark = figure
+        ? {id:uid(), paper, page:figure.page, kind:'figure', rects:[figure.rect], text:'', color:savedColor(), note:'', question:false}
+        : {id:uid(), paper, page:passage.page, kind:'passage', rects:passage.rects, text:passage.text, color:savedColor(), note:'', question:false};
       window.getSelection()?.removeAllRanges(); hidePassageTools();
-      await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:passage.page, kind:'passage', rects:passage.rects, text:passage.text, color, note:'', question:false}); });
-      redrawHighlights(); return;
-    }
-    if (name === 'capture-selection') {
-      const passage = reader?.selection;
-      if (!passage) throw new Error('Select a passage in the paper first.');
-      const paper = reader.paper;
-      window.getSelection()?.removeAllRanges(); hidePassageTools();
-      startClaimFromPassage(paper, {quote:passage.text, locator:`p. ${passage.page}`}); return;
+      if (figure) setFigureMode(false);
+      await mutateNotebook(ws, n => { n.highlights.push(mark); });
+      redrawHighlights();
+      if (client.workspaceId === ws && V.paper === paper && !highlightDrafting()) openMarkNote(mark);
+      return;
     }
     const id = target.closest('[data-highlight]')?.dataset.highlight;
     const highlight = paperHighlights(V.paper).find(h => h.id === id);
@@ -1114,9 +1127,20 @@ const ResearchTools = (() => {
       // another without asking.
       if (markEditor?.id !== id && highlightDrafting()
         && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
-      markEditor = {id, paper:highlight.paper, workspace:client.workspaceId, saved:highlight.note, text:highlight.note, removed:false}; redrawContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
+      openMarkNote(highlight); return;
     }
     if (name === 'cancel-highlight') { markEditor = null; redrawContent(); return; }
+    if (name === 'recolor-highlight') {
+      const color = COLORS.includes(data.color) ? data.color : 'yellow';
+      storeColor(color);
+      if (color === highlight.color) return;
+      await mutateNotebook(client.workspaceId, n => {
+        const h = n.highlights.find(h => h.id === id && h.paper === highlight.paper);
+        if (!h) throw new Error('This highlight was removed in another window.');
+        h.color = color;
+      });
+      redrawHighlights(); return;
+    }
     if (name === 'capture-highlight') {
       // The note as it is being written, when its editor is open: what is on
       // screen, not the saved version the person is in the middle of changing.

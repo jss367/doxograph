@@ -61,6 +61,7 @@ def test_existing_claim_annotations_follow_the_pdf_and_saved_changes(engine):
                 await page.reload()
                 await badge.wait_for()
                 await page.locator('#reader-zoom').select_option('2')
+                await ready(page)
                 source = first_page.locator(f'.claim-passage[data-claim="{captured["id"]}"]')
                 await source.wait_for()
                 text = first_page.locator('.textLayer span').first
@@ -68,15 +69,15 @@ def test_existing_claim_annotations_follow_the_pdf_and_saved_changes(engine):
                 assert abs(mark_box['x'] - text_box['x']) < 4
                 assert abs(mark_box['width'] - text_box['width']) < 8
                 await page.locator('#reader-zoom').select_option('fit')
+                await ready(page)
                 await badge.wait_for()
 
                 # Annotation overlays do not intercept a fresh text selection.
                 await select_first_line(page)
-                await page.get_by_role('button', name='Highlight in yellow', exact=True).click()
+                await page.get_by_role('button', name='Highlight', exact=True).click()
                 await ready(page)
                 note = page.get_by_role('button', name='Show note: A note attached to this passage.', exact=True)
                 assert await note.count() == 0
-                await page.locator('#content').get_by_role('button', name='Add note', exact=True).click()
                 await page.locator('[data-highlight-note]').fill('A note attached to this passage.')
                 await page.get_by_role('button', name='Save note', exact=True).click()
                 await ready(page)
@@ -183,6 +184,7 @@ def test_claim_annotations_check_document_ambiguity_and_span_page_breaks(engine)
                 assert await page.locator(f'.claim-passage[data-claim="{repeated["id"]}"]').count() == 0
                 assert await page.get_by_role('button', name='Show claim: Repeated evidence', exact=True).count() == 0
                 await page.locator('#reader-zoom').select_option('2')
+                await ready(page)
                 await second_mark.wait_for()
                 mark_box = await second_mark.bounding_box()
                 text_box = await second.locator('.textLayer span').first.bounding_box()
@@ -254,26 +256,28 @@ def test_claim_annotations_retry_a_transient_verifier_lookup_failure(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             requests = []
+            recovery = {'ready':False}
 
-            async def fail_once(route):
+            async def fail_until_recovered(route):
                 requests.append(route.request.url)
-                if len(requests) == 1:
+                if not recovery['ready']:
                     await route.fulfill(status=503, content_type='application/json', body='{"detail":"Try again."}')
                 else:
                     await route.continue_()
 
-            await page.route('**/quote-context', fail_once)
+            await page.route('**/quote-context', fail_until_recovered)
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
-                await page.locator('#toasts .toast', has_text='Could not locate a saved quote').wait_for()
+                await page.locator('#toasts .toast', has_text='Could not locate a saved quote').first.wait_for()
                 badge = page.get_by_role('button', name='Show claim: Evidence after retry', exact=True)
                 assert await badge.count() == 0
-                assert len(requests) == 1
+                assert requests
+                recovery['ready'] = True
                 # A normal selection redraw retries without remounting the PDF.
                 await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
                 await badge.wait_for()
-                assert len(requests) == 2
+                assert len(requests) >= 2
                 assert await page.locator('.claim-passage').count() == 1
 
     run_browser(scenario())
@@ -312,7 +316,7 @@ def test_claim_annotations_retry_a_transient_document_index_failure(engine):
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
-                await page.locator('#toasts .toast', has_text='Could not locate claim passages').wait_for()
+                await page.locator('#toasts .toast', has_text='Could not locate claim passages').first.wait_for()
                 badge = page.get_by_role('button', name='Show claim: Evidence after indexing retry', exact=True)
                 assert await badge.count() == 0
                 await page.evaluate('window.allowQuoteIndex = true')

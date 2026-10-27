@@ -355,19 +355,22 @@ writing space are stored locally in `note-images/`.
   **Paper actions → Hide PDF** lists the claims full width instead, and the
   choice is kept in this browser. A claim's **PDF p.N** link scrolls the open
   paper to that page.
-- **Passages.** Select text on a page and a small toolbar appears under it.
-  A color (yellow, green, blue, or pink) makes a **highlight**, drawn over the
-  text and listed in the rail with its page, where it takes a note of your own
-  and can be captured as a claim or removed. **Capture as claim** opens the
-  claim editor with the quote and page filled in; write the claim in your own
-  words and save. Quotes receive the same local verification as ordinary manual
-  claims. Pages with no selectable text can still be read and transcribed by
-  hand. Clicking a mark in the rail scrolls the paper to it.
+- **Passages.** Select text on a page and a **Highlight** button appears under
+  it. One click draws the highlight over the text, lists it in the rail with
+  its page, and opens a note of your own on it, ready to type into. The
+  highlight takes the color used last (yellow to begin with); the swatches on
+  its rail entry change its color, and the color chosen becomes the one for the
+  next mark. A highlight can be captured as a claim later or removed.
+  **Capture as claim** on its entry opens the claim editor with the quote,
+  page, and note filled in; write the claim in your own words and save. Quotes
+  receive the same local verification as ordinary manual claims. Pages with no
+  selectable text can still be read and transcribed by hand. Clicking a mark
+  in the rail scrolls the paper to it.
 - **Figures and questions.** **Mark a figure** in the reader's toolbar lets you
   drag a box around a figure, table, or any other region of the page, then
-  pick its color. A figure mark takes a note like a passage does but cannot
-  become a claim. Ticking **Open question** on any mark turns its note into a
-  question to come back to. Marks are stored in the workspace's
+  click **Mark this figure**. A figure mark takes a note like a passage does
+  but cannot become a claim. Ticking **Open question** on any mark turns its
+  note into a question to come back to. Marks are stored in the workspace's
   `notebook.json`; the PDF is not changed.
 - **Marks and questions**, in the sidebar, lists every mark in the workspace by
   paper, or only the open questions. **Open page** returns to the mark in the
@@ -754,8 +757,8 @@ It supports Markdown, equations, tables, and local images, with Write, Split,
 and Preview views. For multiple named documents, use **Research notes**.
 
 A paper's note sits under the summary in its header, or at the top of the rail
-beside the paper when its PDF is open: **Write a note** opens a box, Save puts
-it on the paper, and it is there the next time you open it.
+beside the paper when its PDF is open. An empty note is ready to type into;
+Save puts it on the paper, and it is there the next time you open it.
 Write what the paper is for, what to read it for, what is wrong with it, what
 to do about it — whatever the extraction could not have told you. A claim's
 note is a field in its editor, under the links to your own claims: press `e`,
