@@ -601,12 +601,15 @@ const ResearchTools = (() => {
       const source = {quote:null};
       active.quoteSources.set(key, source);
       client.request(`/api/papers/${encodeURIComponent(active.paper)}/claims/${encodeURIComponent(claim.id)}/quote-context`,
-        {headers:{'X-Doxograph-Workspace':active.workspace}}).then(context => {
+        {headers:{'X-Doxograph-Workspace':active.workspace}}).then(async context => {
         if (reader !== active) return;
         // An edit may have overtaken this request. This is not a cached miss
         // for the old quote: restoring it must be able to resolve it again.
         if (context.quote !== claim.quote) {
           if (active.quoteSources.get(key) === source) active.quoteSources.delete(key);
+          // Reconcile the saved quote before retrying. A redraw alone could
+          // repeatedly request A while the backend still holds B.
+          await refresh();
           return;
         }
         source.quote = context.found && !context.repeated ? context.matched || null : null;
