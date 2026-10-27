@@ -239,10 +239,10 @@ so it is clear which line of a pasted list is the problem.
 
 The Tensions entry in the sidebar shows where papers disagree; `Escape`
 returns to the claims. The Map entry draws the papers as a graph: each
-paper is a circle sized by its claims and coloured by its most frequent
+paper is a circle sized by its claims and colored by its most frequent
 topic, papers whose claims share a topic are joined, a paper that cites
-another is joined to it by an arrow, tensions are drawn
-in the warning colour, and your own claims appear as squares joined to the
+another is joined to it by a blue arrow, disagreements are drawn
+with bold red lines and labels, and your own claims appear as squares joined to the
 papers that support, contradict, refine, or supply a method for them; a
 link marked independent is not drawn. A slider hides topic
 links below a chosen number of shared claims; it starts at the median so
@@ -589,8 +589,17 @@ into the extraction prompt and is the main lever on the quality of the
 
 ## Which papers cite which
 
-The map draws a citation as an arrow from a paper to the paper it cites. They
-come from the reference lists in the PDFs: the text after the first
+The map draws a citation as a blue curve with a large arrowhead pointing to
+the paper cited. Reciprocal citations curve apart so both directions remain
+visible. Hover over a connection to read the two titles and their relationship;
+hover over a paper to see separate **Cites** and **Cited by** lists for the
+visible citation layer. Shared-topic links stay faint gray, while disagreements
+use bold red lines labeled **contradicts** or **disagrees with**. A paper that
+contradicts one of your own claims gets a red dotted line labeled **contradicts**.
+Arrowheads, line widths, and relationship labels stay the same screen size
+as you zoom.
+
+Citations come from the reference lists in the PDFs: the text after the first
 "References" heading — a paper with a supplement has two, and the article's own
 is the first — is searched for every other paper's arXiv id, DOI, or title, and
 a hit is an edge. Where one title sits inside another, only the longer counts,

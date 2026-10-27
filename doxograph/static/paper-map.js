@@ -6,10 +6,9 @@ function connectPaperMap(client) { mapClient = client; }
 // --- the map: papers as nodes ----------------------------------------------
 
 // A force layout on a canvas, with no library behind it. Nodes are papers;
-// squares are the ledger's own claims. Three kinds of edge: two papers whose
-// claims share a topic, a tension between two papers, and a paper bearing on
-// one of my claims. Everything is computed here from the client snapshot; the server knows
-// nothing about the map.
+// squares are the ledger's own claims. Edges show shared topics, citations,
+// disagreements, and papers bearing on my claims. Citation data comes from
+// the server; the layout and other connections use the client snapshot.
 //
 // Layout state lives outside `V`. Positions are kept across redraws so the
 // poll noticing a change does not reshuffle the map, but they are not a view
@@ -19,7 +18,7 @@ const GRAPH = {
   edges: [],
   alpha: 0,                // simulation temperature; 0 means at rest
   frame: 0,                // requestAnimationFrame handle, 0 when stopped
-  hover: null, drag: null, pan: null, moved: false,
+  hover: null, hoverEdge: null, edgePaths: [], drag: null, pan: null, moved: false,
   zoom: 1, tx: 0, ty: 0,   // world -> screen: centre + (world * zoom) + (tx, ty)
   autofit: true,           // keep everything in view until the user takes over
   canvas: null, ctx: null, observer: null, signature: '', maxShared: 1, minShared: 1,
@@ -30,6 +29,8 @@ function graphReset() {
   graphStop();
   GRAPH.nodes.clear();
   GRAPH.edges = [];
+  GRAPH.edgePaths = [];
+  GRAPH.hoverEdge = null;
   GRAPH.hover = GRAPH.drag = GRAPH.pan = null;
   GRAPH.zoom = 1; GRAPH.tx = GRAPH.ty = 0; GRAPH.autofit = true;
   GRAPH.canvas = GRAPH.ctx = null;
@@ -279,6 +280,12 @@ function graphSync() {
   GRAPH.minShared = minShared;
   graphTimeline();
   if (GRAPH.hover && !GRAPH.nodes.has(GRAPH.hover.id)) GRAPH.hover = null;
+  if (GRAPH.hoverEdge) {
+    const old = GRAPH.hoverEdge;
+    GRAPH.hoverEdge = GRAPH.edges.find((e) => e.type === old.type && e.a === old.a
+      && e.b === old.b && e.relation === old.relation) || null;
+    if (!GRAPH.hoverEdge) graphTip(null);
+  }
   return changed;
 }
 
@@ -348,7 +355,7 @@ function graphColors() {
   const style = getComputedStyle(document.documentElement);
   const read = (name) => style.getPropertyValue(`--${name}`).trim();
   return { ink: read('ink'), muted: read('muted'), line: read('line'), bg: read('bg'), panel: read('panel'),
-           accent: read('accent'), warn: read('warn'), ok: read('ok'),
+           cite: read('map-cite'), conflict: read('map-conflict'), other: read('map-other'), ok: read('ok'),
            dark: document.documentElement.style.colorScheme !== 'light' };
 }
 
@@ -364,9 +371,60 @@ function topicColor(topic, dark) {
 }
 
 function graphRelationColor(relation, colors) {
-  if (relation === 'contradicts') return colors.warn;
+  if (relation === 'contradicts') return colors.conflict;
   if (relation === 'supports') return colors.ok;
-  return colors.accent;
+  return colors.other;
+}
+
+function graphEdgeLabel(edge) {
+  if (edge.type === 'cite') return 'cites';
+  if (edge.type === 'topic') return 'shares a topic with';
+  if (edge.type === 'tension') return edge.kinds.has('contradiction') ? 'contradicts' : 'disagrees with';
+  return { supports: 'supports', contradicts: 'contradicts', refines: 'refines',
+    'method-for': 'supplies a method for' }[edge.relation] || edge.relation;
+}
+
+// Curves separate reciprocal citations and multiple relations between the
+// same nodes. Clip both ends to their nodes; bends stay legible at any zoom.
+function graphEdgePath(edge, bend = 0) {
+  const { source: a, target: b } = edge;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const distance = Math.max(Math.hypot(dx, dy), 1);
+  const offset = bend / GRAPH.zoom;
+  const control = { x: (a.x + b.x) / 2 - dy / distance * offset,
+    y: (a.y + b.y) / 2 + dx / distance * offset };
+  const clip = (node) => {
+    const d = Math.max(Math.hypot(control.x - node.x, control.y - node.y), 1);
+    const r = Math.min(node.r + 4 / GRAPH.zoom, d * 0.8);
+    return { x: node.x + (control.x - node.x) / d * r,
+      y: node.y + (control.y - node.y) / d * r };
+  };
+  return { edge, start: clip(a), control, end: clip(b) };
+}
+
+function graphPathPoint(path, t) {
+  const { start: a, control: c, end: b } = path;
+  return { x: (1 - t) ** 2 * a.x + 2 * (1 - t) * t * c.x + t ** 2 * b.x,
+    y: (1 - t) ** 2 * a.y + 2 * (1 - t) * t * c.y + t ** 2 * b.y };
+}
+
+function graphEdgeBadge(ctx, path, text, color, colors) {
+  const mid = graphPathPoint(path, 0.5);
+  const z = GRAPH.zoom;
+  ctx.save();
+  ctx.translate(mid.x, mid.y);
+  ctx.scale(1 / z, 1 / z);
+  ctx.font = '600 11px system-ui, sans-serif';
+  const width = ctx.measureText(text).width + 14;
+  ctx.fillStyle = colors.bg;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.roundRect(-width / 2, -11, width, 22, 6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
 }
 
 // Zoom and offset that show every node with a margin. Applied on each frame
@@ -411,12 +469,11 @@ function graphDraw() {
   const dim = (n) => n.type === 'paper'
     && ((V.tag && !n.tags.has(V.tag)) || (V.label && !(n.labels || new Set()).has(V.label)));
   const hover = GRAPH.hover;
+  const hoverEdge = GRAPH.hoverEdge;
   const linked = new Set();
   if (hover) GRAPH.edges.forEach((e) => { if (e.source === hover) linked.add(e.target); if (e.target === hover) linked.add(e.source); });
+  if (hoverEdge) { linked.add(hoverEdge.source); linked.add(hoverEdge.target); }
 
-  // Several ledger relations between one paper and one claim would be drawn
-  // along one line, the later hiding the earlier; they are fanned out side by
-  // side. (A topic edge under a tension is dropped in graphData instead.)
   const pairKey = (e) => `${e.a}|${e.b}`;
   const fan = new Map();
   for (const e of GRAPH.edges) {
@@ -425,55 +482,49 @@ function graphDraw() {
     if (!fan.has(key)) fan.set(key, []);
     fan.get(key).push(e);
   }
-  // Two papers can both disagree and cite, and the two lines run between the
-  // same centres: drawn on top of each other the solid arrow fills the
-  // tension's dashes and hides the layer underneath. Moved aside far enough
-  // to read, which only arises for this one pair of types.
-  const alsoTense = new Set(GRAPH.edges
-    .filter((e) => e.type === 'tension')
-    .map((e) => [pairKey(e), `${e.b}|${e.a}`]).flat());
-  for (const e of GRAPH.edges) {
+  GRAPH.edgePaths = [];
+  const badges = [];
+  // Background topic links first; conflicts and hovered connections stay on top.
+  const priority = (e) => e === hoverEdge ? 4 : e.type === 'tension'
+    || e.relation === 'contradicts' ? 3 : e.type === 'topic' ? 0 : 1;
+  const edges = [...GRAPH.edges].sort((a, b) => priority(a) - priority(b));
+  for (const e of edges) {
     const { source: a, target: b } = e;
-    const touching = hover && (a === hover || b === hover);
-    const faded = (hover && !touching) || dim(a) || dim(b);
-    ctx.globalAlpha = faded ? 0.12 : 1;
-    ctx.setLineDash([]);
-    let ox = 0, oy = 0;
+    const touching = (hover && (a === hover || b === hover)) || e === hoverEdge;
+    const faded = ((hover || hoverEdge) && !touching) || dim(a) || dim(b);
+    const conflict = e.type === 'tension' || e.relation === 'contradicts';
+    const color = e.type === 'cite' ? colors.cite : conflict ? colors.conflict
+      : e.type === 'topic' ? colors.muted : graphRelationColor(e.relation, colors);
+    let bend = e.type === 'cite' ? 26 : 0;
     if (e.type === 'ledger') {
       const siblings = fan.get(pairKey(e));
-      if (siblings.length > 1) {
-        const at = siblings.indexOf(e) - (siblings.length - 1) / 2;
-        const d = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
-        ox = (-(b.y - a.y) / d) * 4 * at; oy = ((b.x - a.x) / d) * 4 * at;
-      }
+      bend = (siblings.indexOf(e) - (siblings.length - 1) / 2) * 38;
     }
-    if (e.type === 'cite') {
-      ctx.strokeStyle = colors.accent;
-      ctx.lineWidth = 1.2;
-      let sx = 0, sy = 0;
-      if (alsoTense.has(pairKey(e))) {
-        const d = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
-        sx = (-(b.y - a.y) / d) * 5; sy = ((b.x - a.x) / d) * 5;
-      }
-      ctx.beginPath(); ctx.moveTo(a.x + sx, a.y + sy); ctx.lineTo(b.x + sx, b.y + sy); ctx.stroke();
-      graphArrow(ctx, { x: a.x + sx, y: a.y + sy }, { x: b.x + sx, y: b.y + sy, r: b.r },
-                 colors.accent);
-      continue;
-    }
-    if (e.type === 'topic') {
-      ctx.strokeStyle = colors.muted;
-      ctx.globalAlpha *= 0.25 + 0.09 * Math.min(e.w, 8);
-      ctx.lineWidth = 0.8 + 0.25 * Math.min(e.w, 8);
-    } else if (e.type === 'tension') {
-      ctx.strokeStyle = colors.warn;
-      ctx.lineWidth = 1.6 + 0.4 * Math.min(e.n, 4);
-      if (e.open) ctx.setLineDash([6, 4]);
-    } else {
-      ctx.strokeStyle = graphRelationColor(e.relation, colors);
-      ctx.lineWidth = 1.4;
-      if (e.relation === 'contradicts') ctx.setLineDash([2, 3]);
-    }
-    ctx.beginPath(); ctx.moveTo(a.x + ox, a.y + oy); ctx.lineTo(b.x + ox, b.y + oy); ctx.stroke();
+    const path = graphEdgePath(e, bend);
+    GRAPH.edgePaths.push(path);
+    ctx.globalAlpha = faded ? 0.08 : e.type === 'topic' ? (touching ? 0.6 : 0.2) : 0.9;
+    ctx.strokeStyle = color;
+    // Stroke, dashes, and arrowheads use screen pixels, even when zoomed out.
+    const width = e.type === 'topic' ? 0.7 + 0.1 * Math.min(e.w, 8)
+      : conflict ? 3.2 : e.type === 'cite' ? 2 : 1.8;
+    ctx.lineWidth = (width + (touching ? 0.8 : 0)) / GRAPH.zoom;
+    const dash = e.type === 'tension' && e.open ? [9, 5]
+      : e.relation === 'contradicts' ? [4, 4]
+      : e.type === 'ledger' && !['supports', 'contradicts'].includes(e.relation) ? [8, 4, 2, 4] : [];
+    ctx.setLineDash(dash.map((n) => n / GRAPH.zoom));
+    ctx.beginPath();
+    ctx.moveTo(path.start.x, path.start.y);
+    ctx.quadraticCurveTo(path.control.x, path.control.y, path.end.x, path.end.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (e.type === 'cite') graphArrow(ctx, path.control, path.end, color);
+    if (conflict || touching) badges.push({ path, color, faded });
+  }
+  // Labels get an opaque background so crossing lines cannot obscure the words.
+  for (const { path, color, faded } of badges) {
+    if (faded) continue;
+    ctx.globalAlpha = 1;
+    graphEdgeBadge(ctx, path, graphEdgeLabel(path.edge), color, colors);
   }
   ctx.setLineDash([]);
 
@@ -482,7 +533,7 @@ function graphDraw() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   for (const n of GRAPH.nodes.values()) {
-    const faded = (hover && n !== hover && !linked.has(n)) || dim(n);
+    const faded = ((hover || hoverEdge) && n !== hover && !linked.has(n)) || dim(n);
     ctx.globalAlpha = faded ? 0.25 : 1;
     if (n.type === 'paper') {
       ctx.fillStyle = topicColor(n.topic, colors.dark);
@@ -499,6 +550,9 @@ function graphDraw() {
     if (showLabels || n === hover || linked.has(n)) {
       ctx.fillStyle = faded ? colors.muted : colors.ink;
       const text = n.type === 'paper' ? n.cite : n.key;
+      ctx.strokeStyle = colors.panel; ctx.lineWidth = 3 / GRAPH.zoom;
+      ctx.lineJoin = 'round';
+      ctx.strokeText(text, n.x, n.y + n.r + 3);
       ctx.fillText(text, n.x, n.y + n.r + 3);
     }
   }
@@ -566,11 +620,14 @@ function graphWorld(event) {
   return { x: (sx - rect.width / 2 - GRAPH.tx) / GRAPH.zoom, y: (sy - rect.height / 2 - GRAPH.ty) / GRAPH.zoom, sx, sy };
 }
 
+function graphInPlot(y) {
+  if (!GRAPH.timeline || !GRAPH.canvas) return true;
+  const h = GRAPH.canvas.height / (window.devicePixelRatio || 1);
+  return h / 2 + GRAPH.ty + y * GRAPH.zoom < h - 44;
+}
+
 function graphNodeAt(x, y) {
-  if (GRAPH.timeline && GRAPH.canvas) {
-    const h = GRAPH.canvas.height / (window.devicePixelRatio || 1);
-    if (h / 2 + GRAPH.ty + y * GRAPH.zoom >= h - 44) return null;
-  }
+  if (!graphInPlot(y)) return null;
   let best = null, bestD = Infinity;
   for (const n of GRAPH.nodes.values()) {
     const d = Math.hypot(n.x - x, n.y - y);
@@ -580,16 +637,45 @@ function graphNodeAt(x, y) {
   return best;
 }
 
-function graphTip(node, sx, sy) {
+function graphEdgeAt(x, y) {
+  if (!graphInPlot(y)) return null;
+  let best = null, bestD = 7 / GRAPH.zoom;
+  // Hit-test the same curves that were drawn, including fanned relations.
+  for (const path of [...GRAPH.edgePaths].reverse()) {
+    let a = path.start;
+    for (let i = 1; i <= 24; i += 1) {
+      const b = graphPathPoint(path, i / 24);
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      const d = Math.hypot(x - a.x - t * dx, y - a.y - t * dy);
+      if (d < bestD) { best = path.edge; bestD = d; }
+      a = b;
+    }
+  }
+  return best;
+}
+
+function graphTip(node, sx, sy, edge = null) {
   const tip = $('content').querySelector('.graph-tip');
   if (!tip) return;
-  if (!node) { tip.hidden = true; return; }
-  if (node.type === 'paper') {
+  if (!node && !edge) { tip.hidden = true; return; }
+  if (edge) {
+    const name = (n) => n.type === 'paper' ? n.label : `My claim ${n.key}: ${n.label}`;
+    tip.innerHTML = `<strong>${esc(name(edge.source))}</strong>
+      <div class="graph-tip-relation ${edge.type === 'tension' || edge.relation === 'contradicts' ? 'conflict' : edge.type}">${esc(graphEdgeLabel(edge))}${edge.type === 'cite' ? ' →' : ''}</div>
+      <strong>${esc(name(edge.target))}</strong>`;
+    if (edge.type === 'tension') tip.innerHTML += `<div class="pm">${edge.n} disagreement${edge.n === 1 ? '' : 's'} · ${edge.open ? 'includes unreviewed findings' : 'reviewed'}</div>`;
+    if (edge.type === 'topic') tip.innerHTML += `<div class="pm">${esc(edge.tags.join(', '))}</div>`;
+  } else if (node.type === 'paper') {
     const p = mapClient.state.papers.find((x) => x.key === node.key) || {};
     const topics = [...node.tags].sort().slice(0, 6).map((t) => `#${t}`).join(' ');
     tip.innerHTML = `<div>${esc(node.label)}</div>
       <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')}${p.year ? ' · ' + esc(p.year) : ''}
         · ${node.n} claims${topics ? ' · ' + esc(topics) : ''}</div>`;
+    const outgoing = GRAPH.edges.filter((e) => e.type === 'cite' && e.source === node).map((e) => e.target);
+    const incoming = GRAPH.edges.filter((e) => e.type === 'cite' && e.target === node).map((e) => e.source);
+    const listing = (label, nodes) => nodes.length ? `<div class="graph-tip-citations"><strong>${label} (${nodes.length})</strong>: ${nodes.slice(0, 5).map((n) => esc(n.cite)).join(', ')}${nodes.length > 5 ? `, +${nodes.length - 5} more` : ''}</div>` : '';
+    tip.innerHTML += listing('Cites', outgoing) + listing('Cited by', incoming);
   } else {
     tip.innerHTML = `<div><span class="kind">my claim</span> ${esc(node.label)}</div><div class="pm"><code>${esc(node.key)}</code></div>`;
   }
@@ -628,6 +714,7 @@ function graphBindCanvas(canvas) {
       GRAPH.autofit = false;
     }
     canvas.classList.add('drag');
+    graphTip(null);
     event.preventDefault();
   });
   canvas.addEventListener('mousemove', (event) => {
@@ -649,12 +736,14 @@ function graphBindCanvas(canvas) {
       return;
     }
     const node = graphNodeAt(x, y);
-    if (node !== GRAPH.hover) {
+    const edge = node ? null : graphEdgeAt(x, y);
+    if (node !== GRAPH.hover || edge !== GRAPH.hoverEdge) {
       GRAPH.hover = node;
+      GRAPH.hoverEdge = edge;
       canvas.classList.toggle('hover', !!node);
       graphDraw();
     }
-    graphTip(node, sx, sy);
+    graphTip(node, sx, sy, edge);
   });
   const release = () => {
     if (GRAPH.drag) { GRAPH.drag.node.fixed = false; GRAPH.drag = null; graphHeat(0.1); }
@@ -664,7 +753,9 @@ function graphBindCanvas(canvas) {
   canvas.addEventListener('mouseup', release);
   canvas.addEventListener('mouseleave', () => {
     release();
-    if (GRAPH.hover) { GRAPH.hover = null; canvas.classList.remove('hover'); graphDraw(); }
+    if (GRAPH.hover || GRAPH.hoverEdge) {
+      GRAPH.hover = GRAPH.hoverEdge = null; canvas.classList.remove('hover'); graphDraw();
+    }
     graphTip(null);
   });
   canvas.addEventListener('click', (event) => {
@@ -700,7 +791,9 @@ function graphFit() {
   const top = wrap.getBoundingClientRect().top - mainRect.top + main.scrollTop;
   // A wrapped header can put the pane's CSS bottom below the actual viewport.
   const visibleHeight = Math.min(main.clientHeight, window.innerHeight - mainRect.top);
-  const height = Math.max(288, visibleHeight - top - 16);
+  // A wrapped legend or the timeline hint can leave less than 18rem.
+  // Let the canvas shrink with the available space instead of clipping its bottom.
+  const height = Math.max(160, visibleHeight - top - 16);
   wrap.style.height = `${height}px`;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(wrap.clientWidth * dpr);
@@ -714,15 +807,16 @@ function graphHeader() {
     <h2>How the papers connect</h2>
     <p class="ps">Each circle is a paper, sized by how many claims it makes and colored by the
       topic it speaks to most. Squares are your own claims. Drag a node to move it, scroll to
-      zoom, drag the background to pan, and click a paper to read it.</p>
+      zoom, drag the background to pan, and click a paper to read it.
+      Hover over a paper or connection to see who cites whom.</p>
     <p class="ps" data-graph-timeline-hint ${opts.xAxis === 'year' ? '' : 'hidden'}>Earlier papers are on the left, later papers on the right, using their publication year.
       Papers without a year and your own claims are in the Undated column. Drag vertically to separate items from the same year.</p>
     <div class="graph-legend">
-      <span><i></i>claims share a topic</span>
-      <span><i class="tension"></i>papers disagree (dashed while open)</span>
       <span><i class="cite"></i>cites, arrow to the paper cited</span>
+      <span><i class="tension"></i>papers disagree (dashed while open)</span>
+      <span><i></i>shared topic</span>
       <span><i class="supports"></i>supports my claim</span>
-      <span><i class="contradicts"></i>contradicts it</span>
+      <span class="graph-conflict"><i class="contradicts"></i>contradicts my claim</span>
       <span><i class="other"></i>refines it or supplies a method</span>
       <span>(links marked independent are not drawn)</span>
     </div>
@@ -743,22 +837,17 @@ function graphHeader() {
   </div>`;
 }
 
-// A head on the cited paper's end of a citation, just off its edge, so which
-// way the citation runs is readable without hovering.
+// A filled arrowhead at the cited paper, aligned with the curve's tangent.
 function graphArrow(ctx, from, to, color) {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
+  const dx = to.x - from.x, dy = to.y - from.y;
   const distance = Math.max(Math.hypot(dx, dy), 1);
-  const ux = dx / distance;
-  const uy = dy / distance;
-  const tipX = to.x - ux * (to.r + 1);
-  const tipY = to.y - uy * (to.r + 1);
-  const size = 6;
+  const ux = dx / distance, uy = dy / distance;
+  const size = 13 / GRAPH.zoom;
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.moveTo(tipX, tipY);
-  ctx.lineTo(tipX - ux * size - uy * size * 0.5, tipY - uy * size + ux * size * 0.5);
-  ctx.lineTo(tipX - ux * size + uy * size * 0.5, tipY - uy * size - ux * size * 0.5);
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(to.x - ux * size - uy * size * 0.48, to.y - uy * size + ux * size * 0.48);
+  ctx.lineTo(to.x - ux * size + uy * size * 0.48, to.y - uy * size - ux * size * 0.48);
   ctx.closePath();
   ctx.fill();
 }

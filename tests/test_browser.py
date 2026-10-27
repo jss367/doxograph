@@ -2799,7 +2799,8 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine):
+@pytest.mark.parametrize("x_axis", ["connections", "year"])
+def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine, x_axis):
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
 
@@ -2809,6 +2810,8 @@ def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine)
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                await page.get_by_label("X axis", exact=True).select_option(x_axis)
                 await page.wait_for_function("window.doxographGraph().alpha === 0")
                 # Reproduce a wrapped header regardless of the platform's system font.
                 await page.add_style_tag(content="header { min-height: 180px; }")
@@ -3202,6 +3205,118 @@ def test_the_map_draws_a_citation_from_one_paper_to_another():
                 await page.locator('[data-graph-opt="cites"]').uncheck()
                 await page.wait_for_function(
                     "window.doxographGraph().edges.every((e) => e.type !== 'cite')")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("x_axis", ["connections", "year"])
+def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engine, x_axis):
+    from pdfs import minimal_pdf
+
+    titles = {"paper-a": "A study of model behavior and recovery",
+              "paper-b": "Evaluating the persistence of safeguards"}
+    for key, title in titles.items():
+        _paper(key, title, "recovery", year=2000 if key == "paper-a" else 2020)
+        other = "paper-b" if key == "paper-a" else "paper-a"
+        store.pdf_path(key).write_bytes(minimal_pdf([
+            title, f"References\n[1] {titles[other]}.",
+        ]))
+    store.save_ledger([{"id": "L1", "text": "Safeguards persist after further training."}])
+    store.update_claim("paper-a", "paper-a-c1", {
+        "ledger_links": [{"claim": "L1", "relation": relation, "note": ""}
+                         for relation in ["supports", "contradicts", "method-for", "refines"]],
+    })
+    store.record_tensions("recovery", [
+        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "contradiction", "note": "Opposing findings."},
+    ], {r["id"]: r for r in store.claim_rows()})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1280, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.wait_for_function("""window.doxographGraph().edges.filter(e => e.type === 'cite').length === 2
+                    && window.doxographGraph().alpha === 0""")
+                await page.get_by_label("X axis", exact=True).select_option(x_axis)
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                # Keep the same readable arrangement while exercising real pointer events.
+                await page.evaluate("""() => {
+                    GRAPH.autofit = false; GRAPH.zoom = GRAPH.timeline ? 0.85 : 1.2; GRAPH.tx = GRAPH.ty = 0;
+                    const positions = {'p:paper-a': [-160, -80], 'p:paper-b': [160, -80], 'l:L1': [-160, 110]};
+                    for (const [id, [x, y]] of Object.entries(positions)) {
+                        const n = GRAPH.nodes.get(id);
+                        Object.assign(n, {x: GRAPH.timeline ? n.timelineX : x, y, fixed: true});
+                    }
+                    graphDraw();
+                }""")
+                points = await page.evaluate("""() => {
+                    const rect = GRAPH.canvas.getBoundingClientRect();
+                    const screen = (p) => ({x: rect.x + rect.width / 2 + p.x * GRAPH.zoom,
+                                           y: rect.y + rect.height / 2 + p.y * GRAPH.zoom});
+                    return {nodes: [...GRAPH.nodes.values()].map(n => ({id: n.id, ...screen(n)})),
+                        edges: GRAPH.edgePaths.map(p => ({type: p.edge.type, a: p.edge.a, b: p.edge.b,
+                            relation: p.edge.relation, ...screen(graphPathPoint(p, 0.5))}))};
+                }""")
+                if x_axis == "year":
+                    graph = await page.evaluate("window.doxographGraph()")
+                    nodes = {n["id"]: n for n in graph["nodes"]}
+                    assert nodes["p:paper-a"]["x"] < nodes["p:paper-b"]["x"] < nodes["l:L1"]["x"]
+                    await page.locator('[data-graph-timeline-hint]').wait_for(state="visible")
+                    # Verify both the year labels and conflict labels actually reach the canvas.
+                    labels = await page.evaluate("""() => {
+                        const labels = [];
+                        const original = GRAPH.ctx.fillText;
+                        GRAPH.ctx.fillText = function(text, ...args) {
+                            labels.push(text); return original.call(this, text, ...args);
+                        };
+                        try { graphDraw(); } finally { GRAPH.ctx.fillText = original; }
+                        return labels;
+                    }""")
+                    assert {"2000", "2020", "Undated", "Publication year →", "contradicts"} <= set(labels)
+                tip = page.locator('.graph-tip')
+                for node in points["nodes"]:
+                    if node["id"] != "p:paper-a":
+                        continue
+                    await page.mouse.move(node["x"], node["y"])
+                    await tip.wait_for(state="visible")
+                    assert "Cites (1): paper-b 2020" in await tip.inner_text()
+                    assert "Cited by (1): paper-b 2020" in await tip.inner_text()
+
+                citations = [e for e in points["edges"] if e["type"] == "cite"]
+                assert abs(citations[0]["y"] - citations[1]["y"]) >= 20
+                for edge in points["edges"]:
+                    await page.mouse.move(edge["x"], edge["y"])
+                    await tip.wait_for(state="visible")
+                    source = titles[edge["a"][2:]]
+                    target = titles.get(edge["b"][2:], "My claim L1: Safeguards persist after further training.")
+                    assert await tip.locator(':scope > strong').all_text_contents() == [source, target]
+                    relation = "cites →" if edge["type"] == "cite" else edge.get("relation") or "contradicts"
+                    if relation == "method-for":
+                        relation = "supplies a method for"
+                    assert await tip.locator('.graph-tip-relation').inner_text() == relation
+                    # A background refresh preserves the hovered connection.
+                    await page.evaluate("renderGraph()")
+                    assert await tip.is_visible()
+
+                if x_axis == "year":
+                    # Panning a connection behind the reserved year strip must
+                    # not make an invisible edge intercept its labels.
+                    box = await page.locator('.graph-wrap canvas').bounding_box()
+                    axis_y = box["y"] + box["height"] - 20
+                    await page.evaluate("delta => { GRAPH.ty += delta; graphDraw(); }",
+                                        axis_y - citations[0]["y"])
+                    await page.mouse.move(citations[0]["x"], axis_y)
+                    await tip.wait_for(state="hidden")
+
+                # Removing the hovered layer clears its explanation as well.
+                await page.locator('[data-graph-opt="ledger"]').uncheck()
+                await tip.wait_for(state="hidden")
+                assert not errors
 
     run_browser(scenario())
 
