@@ -12,6 +12,46 @@ from test_research_tools_browser import ready
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('width', [1440, 1024, 390])
+def test_claim_editor_fits_reading_sidebar(engine, width):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Editing claims beside a paper'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    store.save_ledger([{'id': 'L1', 'text': 'Oversight depends on the evaluation conditions.'}])
+    claim = store.add_claim('paper', {
+        'text': 'Oversight depends on the conditions.',
+        'ledger_links': [{'claim': 'L1', 'relation': 'supports', 'note': 'Similar conditions.'}],
+    })
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': width, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await page.locator(f'#content [data-claim="{claim["id"]}"] [data-act="edit"]').click()
+                form = page.locator(f'form[data-form="{claim["id"]}"]')
+                await expect(form).to_be_visible()
+                assert await page.locator('#claim-column').evaluate(
+                    '(pane) => pane.scrollWidth <= pane.clientWidth')
+                # Check the controls themselves, so clipping overflow cannot pass.
+                assert await form.evaluate('''(form) => {
+                    const bounds = form.getBoundingClientRect();
+                    return [...form.querySelectorAll('input, select, textarea, button')].every((field) => {
+                        const rect = field.getBoundingClientRect();
+                        return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1;
+                    });
+                }''')
+                await form.locator('textarea[name="note"]').fill('Edited beside the source.')
+                await form.get_by_role('button', name='Save', exact=True).click()
+                await expect(form).to_have_count(0)
+                assert store.load_paper('paper')['claims'][0]['note'] == 'Edited beside the source.'
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('width', [1440, 390])
 def test_reading_layout_and_library_return(engine, width):
     config.set_ai_enabled(False)
