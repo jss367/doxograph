@@ -494,6 +494,8 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('long',title='A long paper',authors=['Ada Researcher'],year=2026))
     store.pdf_path('long').write_bytes(minimal_pdf([f'Page {n} of the long paper.' for n in range(1, 25)]))
+    # Exercise document-wide quote indexing while the reader releases offscreen pages.
+    store.add_claim('long', {'text':'Evidence on the last page', 'quote':'Page 24 of the long paper.', 'locator':'p. 24'})
     store.save_paper(store.new_paper('other',title='The other paper',authors=['Bo Writer'],year=2025))
     store.pdf_path('other').write_bytes(minimal_pdf(['The other paper.']))
     rect = {'x':.1,'y':.1,'w':.3,'h':.02}
@@ -520,6 +522,7 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                 await page.wait_for_function("document.querySelectorAll('#reader .pdf-page').length === 24")
                 await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: document.querySelector('#pdf-scroll').scrollHeight})")
                 await page.locator('#reader .pdf-page[data-page="24"] .textLayer span').first.wait_for()
+                await page.locator('#reader .pdf-page[data-page="24"]').get_by_role('button', name='Show claim: Evidence on the last page', exact=True).wait_for()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '24'")
                 await page.wait_for_function("""(() => {
                     const first = document.querySelector('#reader .pdf-page[data-page="1"]');

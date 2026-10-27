@@ -556,14 +556,58 @@ const ResearchTools = (() => {
   function paperHighlights(paper) {
     return (client.state.notebook?.highlights || []).filter(h => h.paper === paper);
   }
-  const quoteLetters = text => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  // Match quotes.squash: NFKD decomposition, Unicode case folding, then
+  // letters/numbers only. These are the folds that differ from lowercase
+  // after decomposition; Cherokee folds to uppercase rather than lowercase.
+  const quoteFolds = {'ß':'ss', 'ẞ':'ss', 'ς':'σ', '\u0345':'ι',
+    'ᲀ':'в', 'ᲁ':'д', 'ᲂ':'о', 'ᲃ':'с', 'ᲄ':'т', 'ᲅ':'т', 'ᲆ':'ъ', 'ᲇ':'ѣ', 'ᲈ':'ꙋ'};
+  const quoteLetters = text => Array.from(text.normalize('NFKD'), char =>
+    /[\u13a0-\u13f5\u13f8-\u13fd\uab70-\uabbf]/u.test(char) ? char.toUpperCase() : quoteFolds[char] || char.toLowerCase()
+  ).join('').replace(/[^\p{L}\p{N}]/gu, '');
+  function loadQuoteText() {
+    const active = reader;
+    if (!active || active.quoteText || active.quoteTextTask || active.quoteTextFailed) return;
+    // Text only, one page at a time: global ambiguity and page-break matches
+    // need every page, but offscreen canvases and DOM layers stay unloaded.
+    active.quoteTextTask = (async () => {
+      let text = '';
+      const pages = [];
+      for (const page of active.pages) {
+        const pdfPage = page.pdfPage || await active.document.getPage(page.number);
+        if (reader !== active) return;
+        const content = page.text || await pdfPage.getTextContent();
+        if (reader !== active) return;
+        const normalized = quoteLetters(content.items.map(item => item.str || '').join(''));
+        pages.push({start:text.length, text:normalized});
+        text += normalized;
+        if (page.pdfPage !== pdfPage && !page.rendering) pdfPage.cleanup();
+      }
+      active.quoteText = {text, pages};
+      active.quoteMatches = new Map();
+      redrawHighlights();
+    })().catch(error => {
+      active.quoteTextFailed = true;
+      if (reader === active) toast(`Could not locate claim passages: ${error.message}`, {tone:'warn'});
+    }).finally(() => { active.quoteTextTask = null; });
+  }
   // Captured claims already store their quote and page, including captures made
   // before the reader showed annotations. Match against the rendered text so
   // their marks follow zoom, line wrapping, and PDF.js's text positioning.
   function claimRects(page, quote) {
     const needle = quoteLetters(quote);
-    if (!needle) return [];
+    if (!needle || !reader.quoteText) return [];
     if (page.quoteRects.has(quote)) return page.quoteRects.get(quote);
+    const documentText = reader.quoteText;
+    if (!reader.quoteMatches.has(needle)) {
+      const start = documentText.text.indexOf(needle);
+      reader.quoteMatches.set(needle, start !== -1 && documentText.text.indexOf(needle, start + 1) === -1
+        ? {start, end:start + needle.length} : null);
+    }
+    const match = reader.quoteMatches.get(needle), source = documentText.pages[page.number - 1];
+    if (!match) return [];
+    let start = Math.max(0, match.start - source.start);
+    let end = Math.min(source.text.length, match.end - source.start);
+    if (end <= start) return [];
     if (!page.quoteIndex) {
       let text = '';
       const points = [], walker = document.createTreeWalker(page.el.querySelector('.textLayer'), NodeFilter.SHOW_TEXT);
@@ -580,12 +624,18 @@ const ResearchTools = (() => {
       }
       page.quoteIndex = {text, points};
     }
-    const {text, points} = page.quoteIndex, start = text.indexOf(needle);
+    const {text, points} = page.quoteIndex;
+    if (text !== source.text) {
+      // If PDF.js's DOM text differs from its extracted page text, use only
+      // an unambiguous local match for this page's part of the global quote.
+      const part = source.text.slice(start, end);
+      start = text.indexOf(part);
+      end = start + part.length;
+      if (start === -1 || text.indexOf(part, start + 1) !== -1) return [];
+    }
     let rects = [];
-    // A repeated quote cannot identify which occurrence was selected. Leave
-    // ambiguous passages unmarked rather than point at the wrong sentence.
-    if (start !== -1 && text.indexOf(needle, start + 1) === -1) {
-      const first = points[start], last = points[start + needle.length - 1];
+    if (start < end) {
+      const first = points[start], last = points[end - 1];
       const prefix = quote.trim().match(/^[^\p{L}\p{N}]+/u)?.[0] || '';
       const suffix = quote.trim().match(/[^\p{L}\p{N}]+$/u)?.[0] || '';
       const from = prefix && first.node.textContent.slice(Math.max(0, first.start - prefix.length), first.start) === prefix
@@ -604,12 +654,12 @@ const ResearchTools = (() => {
     if (!layer || !page.quoteRects) return;
     const percent = value => `${(value * 100).toFixed(3)}%`;
     const badges = [], passages = [];
+    const quoted = client.state.claims.filter(c => c.paper === reader.paper && c.quote?.trim() && c.quote_verified !== false);
+    if (quoted.length) loadQuoteText();
     for (const h of paperHighlights(reader.paper).filter(h => h.page === page.number && h.note.trim())) {
       badges.push({y:h.rects[0].y, action:`data-tool="show-highlight-note" data-highlight="${html(h.id)}"`, label:'Note', description:`Show note: ${h.note}`});
     }
-    for (const claim of client.state.claims.filter(c => c.paper === reader.paper && c.quote?.trim() && c.quote_verified !== false)) {
-      const number = claim.quote_page || pdfPage(claim.locator);
-      if (number && number !== page.number) continue;
+    for (const claim of quoted) {
       const rects = claimRects(page, claim.quote);
       if (!rects.length) continue;
       passages.push(...rects.map(r => `<div class="claim-passage" data-claim="${html(claim.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`));
