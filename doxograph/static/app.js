@@ -64,7 +64,7 @@ const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: fa
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
-            graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
+            graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
 // Whether the paper's PDF is kept out of the claims view. A preference of this
@@ -1203,7 +1203,7 @@ function resetWorkspaceView() {
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
-    graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true },
+    graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
@@ -4652,7 +4652,10 @@ $('panes').addEventListener('input', (e) => {
 
 function graphOption(field) {
   const name = field.dataset.graphOpt;
-  if (name === 'minShared') {
+  if (name === 'xAxis') {
+    V.graph.xAxis = field.value;
+    GRAPH.autofit = true;
+  } else if (name === 'minShared') {
     V.graph.minShared = Math.max(1, parseInt(field.value, 10) || 1);
     const label = $('content').querySelector('[data-graph-min]');
     if (label) label.textContent = String(V.graph.minShared);
@@ -4660,6 +4663,7 @@ function graphOption(field) {
     V.graph[name] = field.checked;
   }
   if (V.view === 'graph') renderGraph();
+  if (V.view === 'graph' && name === 'xAxis') graphFit();
 }
 function applyQuery(value) {
   captureOpenEditor();
