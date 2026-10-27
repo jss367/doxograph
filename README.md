@@ -326,10 +326,15 @@ Long-form research notes and their images are also private to the workspace,
 stored separately in `research-notes.json` and `note-images/`, and never sent
 to a model.
 
-- **Workspace notes**, in the sidebar, opens one document for the selected
-  workspace. Write questions, thoughts, and next steps, using headings for
-  structure. Changes save automatically, with a visible saving or saved status.
-  Notes also save when you close the editor or switch tools or workspaces.
+- **Workspace notes** appears above the claims in the main workspace view.
+  Keep your questions, working conclusions, and next steps here; use
+  **Research notes** for longer documents such as arguments, reviews, and plans.
+  Edit in place or collapse to a two-line preview. **Keep open while reading**
+  places the same editor in the paper's notes column, beside its PDF when
+  available. The sidebar's **Workspace notes** button brings the editor into
+  view. Expansion and reading preferences are remembered for each workspace
+  in this browser. Changes save automatically, with a visible saving or saved
+  status. Notes also save when you collapse the editor or switch tools or workspaces.
   If saving fails, your text stays in the editor so you can retry. If another
   window changes the notes, copy your text before reloading the saved version.
 - **Reading a paper.** Selecting a paper that has a PDF opens the paper itself
@@ -637,8 +642,8 @@ rerun used to write over it.
 A claim is the machine's sentence about the paper. A note is yours, and it is
 the only thing here no model writes and no model reads.
 
-For questions and thoughts about the whole workspace, open **Workspace notes**
-in the sidebar. You get one document per workspace, saved automatically.
+For questions and thoughts about the whole workspace, edit **Workspace notes**
+in the main view. You get one document per workspace, saved automatically.
 
 A paper's note sits under the summary in its header, or at the top of the rail
 beside the paper when its PDF is open: **Write a note** opens a box, Save puts

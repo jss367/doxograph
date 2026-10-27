@@ -1220,7 +1220,8 @@ function resetWorkspaceView() {
 
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
-    return await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+    return await WorkspaceNotes.beforeWorkspaceSwitch()
+      && await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave() {
@@ -1589,6 +1590,7 @@ function render() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
 }
 
@@ -1618,6 +1620,7 @@ function renderAll() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   syncHash();
 }
@@ -2746,6 +2749,7 @@ function renderContent() {
   renderActiveFilters();
   restoreNoteCursor(cursor);
   renderContinuation();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   syncHash();
 }
 
@@ -5051,10 +5055,12 @@ async function updateFromPoll() {
   syncHash();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
 }
 
 async function boot() {
+  WorkspaceNotes.connect(workspaceClient);
   ResearchNotes.connect(workspaceClient);
   ResearchTools.connect(workspaceClient);
   window.FocusedReview.connect(workspaceClient);

@@ -173,8 +173,8 @@
 
     <div class="sec research-tools-nav">
       <h2>Your research tools</h2>
-      <button type="button" id="btn-research-notes">Research notes</button>
-      <button type="button" data-tool="notes">Workspace notes</button>
+      <button type="button" data-tool="notes" title="Questions, working conclusions, and next steps for this workspace">Workspace notes</button>
+      <button type="button" id="btn-research-notes" title="Long-form documents for arguments, reviews, and plans">Research notes</button>
       <button type="button" data-tool="boards">Evidence boards</button>
       <button type="button" data-tool="reading">Reading queue</button>
       <button type="button" data-tool="marks">Marks and questions</button>
@@ -245,6 +245,25 @@
 
   <section id="main">
     <aside id="storage-warning" class="storage-warning" role="status" hidden></aside>
+    <div id="workspace-notes-home">
+      <section id="workspace-notes-panel" class="workspace-notes" aria-labelledby="workspace-notes-title" hidden>
+        <div class="workspace-notes-heading">
+          <h2 id="workspace-notes-title">Workspace notes</h2>
+          <button type="button" id="workspace-notes-toggle" aria-expanded="true" aria-controls="workspace-notes-editor">Collapse notes</button>
+        </div>
+        <p class="hint">Your questions, working conclusions, and next steps.</p>
+        <p id="workspace-notes-preview" hidden></p>
+        <div id="workspace-notes-editor">
+          <textarea id="workspace-notes" aria-labelledby="workspace-notes-title" rows="4" placeholder="What are you investigating? Capture questions, thoughts, and next steps. Changes save automatically."></textarea>
+        </div>
+        <div class="workspace-notes-footer">
+          <label><input type="checkbox" id="workspace-notes-keep"> Keep open while reading</label>
+          <span id="workspace-notes-status" class="hint" role="status" aria-live="polite"></span>
+          <button type="button" id="workspace-notes-retry" hidden>Retry save</button>
+          <button type="button" id="workspace-notes-reload" hidden>Reload saved version</button>
+        </div>
+      </section>
+    </div>
     <section id="continue-reading" class="continue-reading" aria-labelledby="continue-title" hidden></section>
     <div class="filters">
       <input type="search" id="q" placeholder="Filter claims, quotes, papers">
@@ -265,7 +284,10 @@
     <div id="panes">
       <div id="paperhead"></div>
       <div id="reader" hidden></div>
-      <div id="content"></div>
+      <div id="claim-column">
+        <div id="workspace-notes-reading"></div>
+        <div id="content"></div>
+      </div>
     </div>
   </section>
 </div>
@@ -344,7 +366,7 @@
 </dialog>
 <dialog id="research-notes" class="notes-sheet" aria-labelledby="notes-heading">
   <div class="sheet-head">
-    <div><h2 id="notes-heading">Research notes</h2><span class="hint">Your writing, connected to your library.</span></div>
+    <div><h2 id="notes-heading">Research notes</h2><span class="hint">Long-form documents for arguments, reviews, and plans, connected to your library.</span></div>
     <button type="button" data-notes-action="close" aria-label="Close research notes">×</button>
   </div>
   <p id="notes-status" class="hint" role="status" aria-live="polite"></p>
@@ -372,6 +394,7 @@
 <script src="/workspace-client.js"></script>
 <script src="/workspace-controller.js"></script>
 <script src="/poller.js"></script>
+<script src="/workspace-notes.js"></script>
 <script src="/research-notes.js"></script>
 <script src="/research-tools.js"></script>
 <script src="/appearance.js"></script>

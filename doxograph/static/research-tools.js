@@ -16,7 +16,6 @@ const ResearchTools = (() => {
   let pendingPage = null;
   const askPage = (paper, workspace, page, mark = null) => { pendingPage = {paper, workspace, page, mark}; };
   const COLORS = ['yellow', 'green', 'blue', 'pink'];
-  let notes = null, notesTimer = null, notesSaving = null;
   const el = (id) => document.getElementById(id);
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const uid = () => {
@@ -109,47 +108,15 @@ const ResearchTools = (() => {
     await refreshAll();
     message('Saved.');
   }
-  function notesChanged() { return notes && notes.text !== notes.saved; }
-  function notesStatus() {
-    if (!notes || !el('workspace-notes-status')) return;
-    el('workspace-notes-status').textContent = notes.error ? `Couldn’t save. ${notes.error}`
-      : notesSaving ? 'Saving…' : notesChanged() ? 'Waiting to save…' : 'Saved';
-    el('workspace-notes-status').className = notes.error ? 'warn' : 'hint';
-    el('workspace-notes-retry').hidden = !notes.error;
-  }
-  async function saveNotes() {
-    clearTimeout(notesTimer);
-    if (notesSaving) return notesSaving;
-    if (!notesChanged()) return true;
-    const draft = notes;
-    draft.error = '';
-    notesSaving = (async () => {
-      // Keep the editor live during saves; send any newer text after this one.
-      while (draft.text !== draft.saved) {
-        const text = draft.text;
-        try {
-          notebook = await request('/notes', 'PUT', {notes:text, previous:draft.saved});
-          draft.saved = text;
-        } catch (error) {
-          draft.error = error.message;
-          return false;
-        }
-      }
-      return true;
-    })().finally(() => { notesSaving = null; notesStatus(); });
-    notesStatus();
-    return notesSaving;
-  }
   async function close({duringOperation = false} = {}) {
     if (busy && !duringOperation) return;
-    if (!await saveNotes()) return;
     if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
     epoch++;
     dirty = false; connectionDraft = false;
-    notes = null;
     el('research-tools').close();
   }
   async function open(next = 'compare', requestedBoard = null) {
+    if (!await WorkspaceNotes.flush()) return false;
     sync();
     modalWorkspace = workspace;
     tab = next;
@@ -163,6 +130,7 @@ const ResearchTools = (() => {
     }
     dirty = false;
     render();
+    return true;
   }
   function citation(row) {
     return `${(row.paper_authors || []).join(', ') || row.paper} · ${row.paper_year || 'year unknown'} · ${row.locator || 'no page recorded'}`;
@@ -178,31 +146,17 @@ const ResearchTools = (() => {
       ${button('source', 'Open source', `data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}`;
   }
   function render() {
-    const labels = {notes:'Workspace notes', compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
-    el('research-tools-title').textContent = tab === 'notes' ? 'Workspace notes' : tab === 'history' ? 'Edit history' : 'Your research tools';
+    const labels = {compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
+    el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
       + button('reload', 'Reload saved version');
     if (tab === 'compare') renderCompare();
-    if (tab === 'notes') renderNotes();
     if (tab === 'boards') renderBoards();
     if (tab === 'connections') renderConnections();
     if (tab === 'reading') renderReading();
     if (tab === 'marks') renderMarks();
     if (tab === 'searches') renderSearches();
     if (tab === 'history') renderHistory();
-  }
-  function renderNotes() {
-    notes = {text:notebook.notes, saved:notebook.notes, error:''};
-    const name = client.workspaces.find(w => w.id === modalWorkspace)?.name || 'this workspace';
-    el('research-body').innerHTML = `<div class="workspace-notes">
-      <p class="hint">Your notes for ${html(name)}. Changes save automatically.</p>
-      <label for="workspace-notes">What are you investigating?</label>
-      <textarea id="workspace-notes" placeholder="Capture questions, thoughts, and next steps. Use headings to organize your notes."></textarea>
-      <div class="tool-actions"><span id="workspace-notes-status" role="status" aria-live="polite"></span>
-        ${button('retry-notes', 'Retry save', 'id="workspace-notes-retry" hidden')}</div></div>`;
-    el('workspace-notes').value = notes.text;
-    notesStatus();
-    el('workspace-notes').focus();
   }
   function renderCompare() {
     el('research-body').innerHTML = `<p class="hint">Selections stay pinned while you browse other papers or topics. Select claims or papers using their checkboxes.</p>
@@ -1034,14 +988,8 @@ const ResearchTools = (() => {
       redrawHighlights(); return;
     }
   }
-  async function discardDrafts({reloadNotes = false} = {}) {
-    clearTimeout(notesTimer);
-    if (reloadNotes) { if (notesSaving) await notesSaving; }
-    else if (!await saveNotes()) return false;
-    if ((dirty || connectionDraft || notesChanged()) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) {
-      if (notesChanged() && !notes.error) notesTimer = setTimeout(saveNotes, 600);
-      return false;
-    }
+  async function discardDrafts() {
+    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
     if (dirty) { notebook = await request(); dirty = false; }
     connectionDraft = false;
     return true;
@@ -1049,12 +997,10 @@ const ResearchTools = (() => {
   async function action(name, target) {
     const data = target.dataset;
     if (name === 'close') { await close({duringOperation:true}); return; }
-    if (name === 'retry-notes') { await saveNotes(); return; }
     if (name === 'tab' || name === 'reload') {
-      if (!await discardDrafts({reloadNotes:name === 'reload'})) return;
+      if (!await discardDrafts()) return;
       epoch++;
       notebook = await request();
-      notes = null;
       tab = data.tab || (tab === 'history' ? 'compare' : tab); render(); return;
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
@@ -1213,11 +1159,12 @@ const ResearchTools = (() => {
     const name = target.dataset.tool;
     if (name === 'clear-selection') { claims.clear(); papers.clear(); remember(); sync(); return; }
     if (name === 'select-visible') { visibleClaims().forEach(c=>claims.add(refKey(c))); remember(); sync(); return; }
+    if (name === 'notes') { WorkspaceNotes.open(); return; }
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       if (!el('research-tools').open) {
-        await open(['notes','boards','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare');
-        if (['notes','boards','reading','marks','searches','connections','compare'].includes(name)) return;
+        if (!await open(['boards','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare')) return;
+        if (['boards','reading','marks','searches','connections','compare'].includes(name)) return;
       }
       await action(name,target);
     });
@@ -1260,13 +1207,6 @@ const ResearchTools = (() => {
       return;
     }
     if (!el('research-tools')?.contains(target)) return;
-    if (target.id === 'workspace-notes') {
-      notes.text = target.value;
-      notesStatus();
-      clearTimeout(notesTimer);
-      notesTimer = setTimeout(saveNotes, 600);
-      return;
-    }
     if (target.id.startsWith('connection-')) connectionDraft = true;
     if (target.id === 'board-title') { currentBoard().title = target.value; dirty = true; }
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
@@ -1275,7 +1215,7 @@ const ResearchTools = (() => {
   document.addEventListener('DOMContentLoaded', () => {
     el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
   });
-  window.addEventListener('beforeunload', event => { if (unsaved() || notesChanged() || notesSaving) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
     // A reader action waiting on the notebook would finish in the workspace
     // it started in and open its paper over the one switched to.
