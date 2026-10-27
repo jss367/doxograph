@@ -16,7 +16,8 @@ const ResearchTools = (() => {
   let pendingPage = null;
   const askPage = (paper, workspace, page, mark = null) => { pendingPage = {paper, workspace, page, mark}; };
   const COLORS = ['yellow', 'green', 'blue', 'pink'];
-  let notes = null, notesTimer = null, notesSaving = null;
+  let notes = null, notesTimer = null, notesSaving = null, notesPreviewTimer = null;
+  let notesMode = 'split';
   const el = (id) => document.getElementById(id);
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const uid = () => {
@@ -192,17 +193,58 @@ const ResearchTools = (() => {
     if (tab === 'history') renderHistory();
   }
   function renderNotes() {
+    clearTimeout(notesPreviewTimer);
     notes = {text:notebook.notes, saved:notebook.notes, error:''};
     const name = client.workspaces.find(w => w.id === modalWorkspace)?.name || 'this workspace';
     el('research-body').innerHTML = `<div class="workspace-notes">
       <p class="hint">Your notes for ${html(name)}. Changes save automatically.</p>
-      <label for="workspace-notes">What are you investigating?</label>
-      <textarea id="workspace-notes" placeholder="Capture questions, thoughts, and next steps. Use headings to organize your notes."></textarea>
+      <div class="note-toolbar" aria-label="Workspace writing tools">
+        ${['heading','bold','equation','table','link'].map(format => button('format-notes', format[0].toUpperCase() + format.slice(1), `data-format="${format}"`)).join('')}
+        ${button('notes-image', 'Image')}
+        <input id="workspace-notes-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <label class="note-view-label">View <select id="workspace-notes-view">${['write','split','preview'].map(mode => `<option value="${mode}" ${notesMode === mode ? 'selected' : ''}>${mode[0].toUpperCase() + mode.slice(1)}</option>`).join('')}</select></label>
+      </div>
+      <div class="note-pages" data-mode="${notesMode}">
+        <div class="note-write"><label for="workspace-notes">What are you investigating? <span class="hint">Markdown</span></label>
+          <textarea id="workspace-notes" spellcheck="true" placeholder="Capture questions, thoughts, and next steps."></textarea></div>
+        <div class="note-read"><span class="hint">Preview</span><article id="workspace-notes-preview" class="note-prose" aria-label="Workspace notes preview"></article></div>
+      </div>
       <div class="tool-actions"><span id="workspace-notes-status" role="status" aria-live="polite"></span>
-        ${button('retry-notes', 'Retry save', 'id="workspace-notes-retry" hidden')}</div></div>`;
+        ${button('retry-notes', 'Retry save', 'id="workspace-notes-retry" hidden')}</div>
+      <details class="note-help"><summary>Formatting guide</summary><p>Use # for headings, **bold**, *italic*, lists, blockquotes, and [text](https://…) for links. Put inline LaTeX between $…$ and display equations between $$…$$. Use the toolbar to insert a table or image. Upload, drop, or paste images to store them locally. Raw HTML is shown as text.</p></details></div>`;
     el('workspace-notes').value = notes.text;
+    notesStatus(); renderNotesPreview();
+    if (notesMode !== 'preview') el('workspace-notes').focus();
+  }
+  function renderNotesPreview() {
+    if (!notes || !el('workspace-notes-preview')) return;
+    el('workspace-notes-preview').replaceChildren(NoteWriting.render(notes.text, modalWorkspace));
+  }
+  function editNotes() {
+    notes.text = el('workspace-notes').value;
     notesStatus();
-    el('workspace-notes').focus();
+    clearTimeout(notesTimer);
+    notesTimer = setTimeout(saveNotes, 600);
+    clearTimeout(notesPreviewTimer);
+    notesPreviewTimer = setTimeout(renderNotesPreview, 180);
+  }
+  function insertNotes(before, after = '', fallback = '') {
+    const field = el('workspace-notes');
+    if (notesMode === 'preview') {
+      notesMode = 'split'; el('workspace-notes-view').value = notesMode;
+      field.closest('.note-pages').dataset.mode = notesMode;
+    }
+    const start = field.selectionStart, end = field.selectionEnd;
+    field.setRangeText(before + (field.value.slice(start, end) || fallback) + after, start, end, 'end');
+    editNotes(); renderNotesPreview(); field.focus();
+  }
+  async function uploadNotesImage(file) {
+    if (file.size > 10 * 1024 * 1024) throw new Error('Choose an image smaller than 10 MB.');
+    message('');
+    const form = new FormData(); form.append('file', file);
+    const result = await client.request('/api/research-notes/images', {method:'POST',
+      headers:{'X-Doxograph-Workspace':modalWorkspace}, body:form});
+    insertNotes(`\n![${(file.name || 'Figure').replace(/[\[\]\\\r\n]/g, '')}](${result.url})\n`);
   }
   function renderCompare() {
     el('research-body').innerHTML = `<p class="hint">Selections stay pinned while you browse other papers or topics. Select claims or papers using their checkboxes.</p>
@@ -1211,6 +1253,17 @@ const ResearchTools = (() => {
     if (!target) return;
     event.preventDefault(); event.stopPropagation();
     const name = target.dataset.tool;
+    if (name === 'format-notes') {
+      if (!busy) insertNotes(...NoteWriting.formats[target.dataset.format]);
+      return;
+    }
+    if (name === 'notes-image') {
+      if (!busy) {
+        const picker = el('workspace-notes-image');
+        picker.value = ''; picker.click();
+      }
+      return;
+    }
     if (name === 'clear-selection') { claims.clear(); papers.clear(); remember(); sync(); return; }
     if (name === 'select-visible') { visibleClaims().forEach(c=>claims.add(refKey(c))); remember(); sync(); return; }
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
@@ -1224,6 +1277,11 @@ const ResearchTools = (() => {
   }, true);
   document.addEventListener('change', event => {
     const target = event.target;
+    if (target.id === 'workspace-notes-view') {
+      notesMode = target.value;
+      el('workspace-notes').closest('.note-pages').dataset.mode = notesMode;
+    }
+    if (target.id === 'workspace-notes-image' && target.files[0]) run(() => uploadNotesImage(target.files[0]));
     if (target.matches('[data-select-claim]')) {
       target.checked ? claims.add(target.dataset.selectClaim) : claims.delete(target.dataset.selectClaim); remember(); sync(); return;
     }
@@ -1252,6 +1310,9 @@ const ResearchTools = (() => {
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Enter' && event.target.id === 'reader-page') { event.preventDefault(); run(() => readerAction('go-page', event.target)); }
+    if (el('research-tools').open && tab === 'notes' && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault(); saveNotes();
+    }
   });
   document.addEventListener('input', event => {
     const target = event.target;
@@ -1261,10 +1322,7 @@ const ResearchTools = (() => {
     }
     if (!el('research-tools')?.contains(target)) return;
     if (target.id === 'workspace-notes') {
-      notes.text = target.value;
-      notesStatus();
-      clearTimeout(notesTimer);
-      notesTimer = setTimeout(saveNotes, 600);
+      editNotes();
       return;
     }
     if (target.id.startsWith('connection-')) connectionDraft = true;
@@ -1274,6 +1332,20 @@ const ResearchTools = (() => {
   });
   document.addEventListener('DOMContentLoaded', () => {
     el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
+    for (const name of ['dragenter','dragover','dragleave','drop']) el('research-tools').addEventListener(name, event => {
+      if (tab !== 'notes') return;
+      event.stopPropagation();
+      if (name === 'drop' || name === 'dragover') event.preventDefault();
+      if (name === 'drop') {
+        const file = [...event.dataTransfer.files].find(file => file.type.startsWith('image/'));
+        if (file) run(() => uploadNotesImage(file));
+      }
+    });
+    el('research-tools').addEventListener('paste', event => {
+      if (tab !== 'notes') return;
+      const file = [...(event.clipboardData?.files || [])].find(file => file.type.startsWith('image/'));
+      if (file) { event.preventDefault(); event.stopPropagation(); run(() => uploadNotesImage(file)); }
+    });
   });
   window.addEventListener('beforeunload', event => { if (unsaved() || notesChanged() || notesSaving) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
