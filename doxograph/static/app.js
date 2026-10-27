@@ -1242,6 +1242,9 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   beforeSelect: () => WorkspaceNotes.beforeWorkspaceSwitch(),
   async enter() {
     resetWorkspaceView();
+    // Selection cleared the client snapshot. Retire the previous workspace's
+    // editor before the destination read can pause or fail.
+    WorkspaceNotes.sync({view:V.view, paper:V.paper});
     renderWorkspacePicker();
     syncHash(true);
     await refresh();

@@ -516,3 +516,55 @@ def test_workspace_notes_typed_during_delete_drain_are_saved_before_switch(engin
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('load_fails', [False, True])
+def test_workspace_notes_old_editor_is_hidden_while_destination_loads(engine, load_fails):
+    config.set_ai_enabled(False)
+    other = config.create_workspace('Other research')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                httpx.put(url + '/api/notebook/notes', json={'notes': 'Original workspace notes', 'previous': ''}).raise_for_status()
+                await page.goto(url)
+                editor = await open_notes(page)
+                loading, release = asyncio.Event(), asyncio.Event()
+
+                async def delay_destination(route):
+                    loading.set()
+                    await release.wait()
+                    if load_fails:
+                        await route.fulfill(status=503, content_type='application/json', body='{"detail":"Destination unavailable"}')
+                    else:
+                        await route.continue_()
+
+                await page.route('**/api/state', delay_destination, times=1)
+                await page.evaluate('id => { window.loadingNoteSwitch = switchWorkspace(id).catch(error => error.message); }', other['id'])
+                await asyncio.wait_for(loading.wait(), timeout=10)
+                assert await page.evaluate('workspaceClient.workspaceId') == other['id']
+                await expect(editor).to_be_hidden()
+                # The sidebar must not reveal the old draft while state is absent.
+                await page.locator('.research-tools-nav').get_by_role('button', name='Workspace notes', exact=True).click()
+                await expect(editor).to_be_hidden()
+                release.set()
+                result = await page.evaluate('window.loadingNoteSwitch')
+                if load_fails:
+                    assert result == 'Destination unavailable'
+                    await expect(editor).to_be_hidden()
+                    await page.evaluate('refresh()')
+                await expect(editor).to_be_visible()
+                await expect(editor).to_have_value('')
+                await editor.fill('Written in the destination')
+                await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
+                assert httpx.get(url + '/api/notebook').json()['notes'] == 'Original workspace notes'
+                headers = {'X-Doxograph-Workspace': other['id']}
+                assert httpx.get(url + '/api/notebook', headers=headers).json()['notes'] == 'Written in the destination'
+                assert not errors
+
+    run_browser(scenario())
