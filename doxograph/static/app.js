@@ -84,13 +84,30 @@ function readingPaper() {
   return paper && paper.has_pdf ? V.paper : null;
 }
 
-// Lays the main pane out for reading or not, and mounts or unmounts the PDF.
-// `--reader-top` is the filter bar's height: the reader column sticks just
-// under it while the rail scrolls past.
+// Reading has its own layout. Library filters remain available on demand and
+// keep their state when the user returns to the library.
 function layoutPanes(reading) {
+  const wasReading = document.body.classList.contains('reading-paper');
+  document.body.classList.toggle('reading-paper', Boolean(reading));
   $('panes').classList.toggle('reading', Boolean(reading));
-  $('main').style.setProperty('--reader-top', `${$('main').querySelector('.filters').offsetHeight}px`);
+  if (Boolean(reading) !== wasReading) {
+    $('main').scrollTop = 0;
+    $('paper-import').open = !reading;
+    document.body.classList.remove('library-collapsed', 'reading-filters-open');
+    const narrow = reading && window.matchMedia('(max-width: 800px)').matches;
+    setReadingLibrary(Boolean(narrow));
+  }
+  const filtersOpen = document.body.classList.contains('reading-filters-open');
+  const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.unreviewed || V.unverified);
+  $('btn-reader-filters').textContent = filtered ? 'Claim filters · active' : 'Claim filters';
+  $('btn-reader-filters').setAttribute('aria-expanded', String(filtersOpen));
   ResearchTools.mountReader(reading);
+}
+
+function setReadingLibrary(collapsed) {
+  document.body.classList.toggle('library-collapsed', collapsed);
+  $('btn-reader-library').textContent = collapsed ? 'Show library' : 'Hide library';
+  $('btn-reader-library').setAttribute('aria-expanded', String(!collapsed));
 }
 
 // A passage from the paper becomes the quote of a new claim, with its page as
@@ -1809,6 +1826,7 @@ function paperHeader(key, reading = false) {
   const url = (p.source || {}).url;
   const title = url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(p.title || key)}</a>`
                     : esc(p.title || key);
+  if (reading) return readingHeader(p, title);
   return `<div class="paperhead">
     <h2>${title}</h2>
     <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')}
@@ -1838,6 +1856,51 @@ function paperHeader(key, reading = false) {
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
     </div>
     ${proposedPanel(key)}
+  </div>`;
+}
+
+// The reader shows identity and the actions used while reading. Maintenance
+// commands stay reachable in a disclosure, with native keyboard navigation.
+function readingHeader(p, title) {
+  const key = esc(p.key);
+  const existing = $('paperhead').querySelector('.paper-actions');
+  const open = existing?.dataset.paper === p.key && existing.open;
+  const about = $('paperhead').querySelector('.paper-about');
+  const aboutOpen = about?.dataset.paper === p.key && about.open;
+  const ai = S.ai_enabled === true ? '' : 'disabled';
+  return `<div class="paperhead reading-head">
+    <div class="reading-title"><h2>${title}</h2>
+      <p class="pm">${esc((p.authors || []).join(', ') || 'Authors unknown')}${p.year ? ` · ${esc(p.year)}` : ''}${p.venue ? ` · ${esc(p.venue)}` : ''}</p></div>
+    <div class="reading-actions">
+      <button type="button" data-act="add-claim" data-paper="${key}">Add claim by hand</button>
+      <details class="paper-actions" data-paper="${key}" ${open ? 'open' : ''}>
+        <summary>Paper actions</summary>
+        <div class="paper-actions-menu">
+          <button type="button" data-paper-chat="${key}" data-ai-action ${ai}>Chat about paper</button>
+          <button type="button" data-tool="queue-paper" data-paper="${key}">Add to reading queue</button>
+          <button type="button" data-act="toggle-pdf" data-paper="${key}">Hide PDF</button>
+          <button type="button" data-act="verify" data-paper="${key}">Check quotes</button>
+          ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${key}">Mark ${p.n_unreviewed} reviewed</button>` : ''}
+          <button type="button" data-act="labels" data-paper="${key}">Labels</button>
+          <button type="button" data-tool="history" data-paper="${key}">Edit history</button>
+          <hr>
+          <button type="button" data-act="reextract" data-paper="${key}" data-ai-action ${ai}>Re-read paper</button>
+          <button type="button" data-act="retag-one" data-paper="${key}" data-ai-action ${ai}>Retag claims</button>
+          <a href="/pdf/${encodeURIComponent(p.key)}?${workspaceQuery()}" target="_blank" rel="noopener">Open original PDF ↗</a>
+          <button type="button" data-reader-command="btn-export">Export HTML</button>
+          <button type="button" data-reader-command="btn-bib">BibTeX</button>
+          <button type="button" data-reader-command="btn-help">Keyboard shortcuts</button>
+          <hr><button type="button" class="danger" data-act="del-paper" data-paper="${key}">Remove paper</button>
+        </div>
+      </details>
+    </div>
+    ${p.summary || p.relevance || (p.labels || []).length ? `<details class="paper-about" data-paper="${key}" ${aboutOpen ? 'open' : ''}>
+      <summary>About this paper</summary>
+      ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
+      ${p.relevance ? `<p class="ps">${esc(p.relevance)}</p>` : ''}
+      ${(p.labels || []).map(l => `<span class="label" data-label="${esc(l)}">${esc(l)}</span>`).join(' ')}
+    </details>` : ''}
+    ${proposedPanel(p.key)}
   </div>`;
 }
 
@@ -2740,13 +2803,32 @@ function renderContent() {
   // before the note was opened. Standing those off would keep answers the
   // reader did ask for off the screen, so the cursor is put back instead.
   const cursor = noteCursor();
+  const actionFocus = paperActionCursor();
   drawContent();
   const recovery = ResearchTools.recoveryHtml();
   if (recovery) $('content').insertAdjacentHTML('afterbegin', recovery);
   renderActiveFilters();
   restoreNoteCursor(cursor);
+  restorePaperActionCursor(actionFocus);
   renderContinuation();
   syncHash();
+}
+
+// Polling can refresh the header while its disclosure is open. Keep keyboard
+// focus on the same command, rather than dropping it back onto the document.
+function paperActionCursor() {
+  const field = document.activeElement;
+  const menu = field?.closest('.paper-actions[open]');
+  if (!menu) return null;
+  const attribute = ['data-act', 'data-tool', 'data-paper-chat', 'data-reader-command', 'href']
+    .find(name => field.hasAttribute(name));
+  return {paper: menu.dataset.paper,
+    selector: attribute ? `[${attribute}="${CSS.escape(field.getAttribute(attribute))}"]` : 'summary'};
+}
+function restorePaperActionCursor(cursor) {
+  if (!cursor) return;
+  const menu = document.querySelector(`.paper-actions[open][data-paper="${CSS.escape(cursor.paper)}"]`);
+  (menu?.querySelector(cursor.selector) || menu?.querySelector('summary'))?.focus({preventScroll: true});
 }
 
 function noteCursor() {
@@ -2827,7 +2909,7 @@ function drawContent() {
   if (!rows.length) {
     if (!V.newClaim) {
       html += S.papers.length
-        ? '<p class="empty">No claims match these filters.</p>'
+        ? `<p class="empty">${reading && !S.claims.some(c => c.paper === V.paper) ? 'Capture a passage from the paper to start collecting claims.' : 'No claims match these filters.'}</p>`
         : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
     }
     $('content').innerHTML = html + textSearchBlock();
@@ -3591,6 +3673,32 @@ async function removePaper(paper) {
     removingPapers.delete(paper);
   }
 }
+
+$('btn-reader-library').addEventListener('click', () => {
+  setReadingLibrary(!document.body.classList.contains('library-collapsed'));
+});
+window.matchMedia('(max-width: 800px)').addEventListener('change', event => {
+  if (readingPaper()) setReadingLibrary(event.matches);
+});
+$('btn-reader-filters').addEventListener('click', () => {
+  const open = document.body.classList.toggle('reading-filters-open');
+  $('btn-reader-filters').setAttribute('aria-expanded', String(open));
+});
+$('btn-back-library').addEventListener('click', () => {
+  // Use the existing navigation path so every editor parks its draft.
+  $('papers').querySelector('[data-paper=""]').click();
+  $('q').focus({preventScroll: true});
+});
+document.addEventListener('click', event => {
+  const command = event.target.closest('[data-reader-command]');
+  if (command) $(command.dataset.readerCommand).click();
+  document.querySelectorAll('.paper-actions[open]').forEach(menu => {
+    if (!menu.contains(event.target) || event.target.closest('button, a')) {
+      menu.open = false;
+      if (menu.contains(document.activeElement)) menu.querySelector('summary').focus();
+    }
+  });
+});
 
 $('panes').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
@@ -4911,6 +5019,15 @@ document.addEventListener('keydown', async (event) => {
   // editor branches would also run `cancelEdit` and drop a draft the user
   // only meant to keep by dismissing the menu.
   if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
+  if (event.key === 'Escape') {
+    const menu = document.querySelector('.paper-actions[open]');
+    if (menu) {
+      menu.open = false;
+      menu.querySelector('summary').focus();
+      event.preventDefault();
+      return;
+    }
+  }
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key !== 'Escape') return;

@@ -269,6 +269,7 @@ def test_delayed_bookmark_does_not_change_a_replacement_reader(engine, destinati
                 await page.get_by_role('button', name='Bookmark this page', exact=True).click()
                 await asyncio.wait_for(held.wait(), timeout=10)
                 if destination == 'hidden':
+                    await page.locator('.paper-actions > summary').click()
                     await page.get_by_role('button', name='Hide PDF', exact=True).click()
                     await page.locator('#reader').wait_for(state='hidden')
                 else:
@@ -485,6 +486,7 @@ def test_bookmark_reconciles_a_reopened_paper_without_overriding_new_navigation(
                 await page.route('**/api/notebook', hold_bookmark)
                 await page.get_by_role('button', name='Bookmark this page', exact=True).click()
                 await asyncio.wait_for(held.wait(), timeout=10)
+                await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Hide PDF', exact=True).click()
                 await page.get_by_role('button', name='Show PDF', exact=True).click()
                 await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()

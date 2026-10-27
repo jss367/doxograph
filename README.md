@@ -336,12 +336,17 @@ writing space are stored locally in `note-images/`.
   If saving fails, your text stays in the editor so you can retry. If another
   window changes the notes, copy your text before reloading the saved version.
 - **Reading a paper.** Selecting a paper that has a PDF opens the paper itself
-  in the middle of the page, scrolling through every page, with a rail on the
-  right for what is yours: your note on the paper, your highlights, and the
-  claims. The reader is offline; the PDF is drawn in the browser and never sent
-  anywhere. Zoom defaults to the width of the column. **Hide PDF** in the
-  paper's header lists the claims full width instead, and the choice is kept in
-  this browser. A claim's **PDF p.N** link scrolls the open paper to that page.
+  in a dedicated reading view, with a rail on the right for your note,
+  highlights, and claims. The PDF and the rail scroll independently. **Hide
+  library** makes more room for the paper; **All papers** returns to the library.
+  **Claim filters** reveals filters and selection tools, with an indicator when
+  a filter is active. Less frequent commands live under **Paper actions**, and
+  summaries and labels appear under **About this paper**. In narrow windows,
+  notes appear below the PDF. The reader is offline; the PDF is drawn in the
+  browser and never sent anywhere. Zoom defaults to the width of the column.
+  **Paper actions → Hide PDF** lists the claims full width instead, and the
+  choice is kept in this browser. A claim's **PDF p.N** link scrolls the open
+  paper to that page.
 - **Passages.** Select text on a page and a small toolbar appears under it.
   A color (yellow, green, blue, or pink) makes a **highlight**, drawn over the
   text and listed in the rail with its page, where it takes a note of your own

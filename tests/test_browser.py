@@ -4612,7 +4612,8 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
                 await form.wait_for()
                 await form.locator('[name="text"]').fill("Typed while it was going.")
 
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await asyncio.wait_for(in_flight.wait(), 10)
 
@@ -4625,6 +4626,7 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
                 await add.click()
                 await page.locator("#toasts .toast",
                                    has_text="That paper is being removed").wait_for()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Check quotes").click()
                 await page.locator(
                     "#toasts .toast",
@@ -4754,7 +4756,8 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
 
                 add = page.get_by_role("button", name="Add claim by hand")
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 # Stopped on the held claim's delete, with the paper's own
                 # request still to come.
@@ -4765,6 +4768,7 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
                                    has_text="That paper is being removed").wait_for()
                 assert await page.locator('form[data-form="__new__"]').count() == 0
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Check quotes").click()
                 await page.locator(
                     "#toasts .toast",
@@ -5763,6 +5767,7 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                         "button", name="Confirm").click()
                 elif action == "verify":
                     await page.locator('#papers [data-paper="paper-a"]').click()
+                    await page.locator('.paper-actions > summary').click()
                     await page.locator('[data-act="verify"]').click()
                 elif action == "find-tensions":
                     await page.locator("#btn-tensions").click()
