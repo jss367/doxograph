@@ -110,6 +110,11 @@ function setReadingLibrary(collapsed) {
   $('btn-reader-library').setAttribute('aria-expanded', String(!collapsed));
 }
 
+function setReadingFilters(open) {
+  document.body.classList.toggle('reading-filters-open', open);
+  $('btn-reader-filters').setAttribute('aria-expanded', String(open));
+}
+
 // A passage from the paper becomes the quote of a new claim, with its page as
 // the locator. A draft already being written for this paper keeps its text
 // and takes the passage.
@@ -3681,8 +3686,7 @@ window.matchMedia('(max-width: 800px)').addEventListener('change', event => {
   if (readingPaper()) setReadingLibrary(event.matches);
 });
 $('btn-reader-filters').addEventListener('click', () => {
-  const open = document.body.classList.toggle('reading-filters-open');
-  $('btn-reader-filters').setAttribute('aria-expanded', String(open));
+  setReadingFilters(!document.body.classList.contains('reading-filters-open'));
 });
 $('btn-back-library').addEventListener('click', () => {
   // Use the existing navigation path so every editor parks its draft.
@@ -5062,6 +5066,7 @@ document.addEventListener('keydown', async (event) => {
     // from the map or the tensions is a way of asking to go back.
     event.preventDefault();
     if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
+    if (readingPaper()) setReadingFilters(true);
     $('q').focus();
     $('q').select();
     return;
