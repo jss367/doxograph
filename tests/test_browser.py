@@ -1026,6 +1026,103 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_map_timeline_uses_publication_year_and_keeps_it_when_dragging_or_polling(engine):
+    _paper("early", "Early paper", "recovery", year=2000)
+    _paper("middle", "Middle paper", "recovery", year=2010)
+    _paper("same-year", "Another middle paper", "recovery", year=2010)
+    _paper("late", "Late paper", "recovery", year=2020)
+    _paper("undated", "Undated paper", "recovery")
+    store.save_ledger([{"id": "L1", "text": "My own claim."}])
+    store.update_claim("early", "early-c1", {
+        "ledger_links": [{"claim": "L1", "relation": "supports", "note": ""}],
+    })
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1200, "height": 900})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                axis = page.get_by_label("X axis", exact=True)
+                assert await axis.input_value() == "connections"
+                await axis.select_option("year")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                nodes = {n["id"]: n for n in graph["nodes"]}
+                x = {key: n["x"] for key, n in nodes.items()}
+                assert x["p:early"] < x["p:middle"] < x["p:late"] < x["p:undated"]
+                assert x["p:middle"] == x["p:same-year"]
+                assert x["p:middle"] - x["p:early"] == pytest.approx(x["p:late"] - x["p:middle"])
+                assert x["l:L1"] == x["p:undated"]
+                assert abs(nodes["p:middle"]["y"] - nodes["p:same-year"]["y"]) > 20
+                await page.locator("[data-graph-timeline-hint]").wait_for(state="visible")
+                assert any(e["type"] == "topic" for e in graph["edges"])
+                assert any(e["type"] == "ledger" for e in graph["edges"])
+
+                # Dragging cannot move a paper to a different publication year.
+                box = await page.locator(".graph-wrap canvas").bounding_box()
+                node = nodes["p:middle"]
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                await page.mouse.move(sx, sy)
+                await page.mouse.down()
+                await page.mouse.move(sx + 60, sy + 30, steps=5)
+                dragged = await page.evaluate("window.doxographGraph()")
+                assert next(n for n in dragged["nodes"] if n["id"] == "p:middle")["x"] == x["p:middle"]
+                await page.mouse.up()
+
+                # Metadata arriving through the normal poll moves an undated
+                # paper onto the axis, even though nodes and links are unchanged.
+                paper = store.load_paper("undated")
+                paper["year"] = 2015
+                store.save_paper(paper)
+                await _poll(page)
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                updated = {n["id"]: n for n in graph["nodes"]}
+                assert updated["p:middle"]["x"] < updated["p:undated"]["x"] < updated["p:late"]["x"]
+                assert await axis.input_value() == "year"
+
+                # Navigation retains the choice; returning to the force layout
+                # removes the timeline constraint and its explanation.
+                node = updated["p:early"]
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                await page.mouse.click(sx, sy)
+                await page.locator(".paperhead h2", has_text="Early paper").wait_for()
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                assert await axis.input_value() == "year"
+                await axis.select_option("connections")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                assert (await page.evaluate("window.doxographGraph()"))["timeline"] is None
+                await page.locator("[data-graph-timeline-hint]").wait_for(state="hidden")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("years", [[], [None, None], [2020], [2020, 2020]])
+def test_map_timeline_handles_empty_undated_and_single_year_corpora(years):
+    for i, year in enumerate(years):
+        _paper(f"paper-{i}", f"Paper {i}", year=year)
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.get_by_label("X axis", exact=True).select_option("year")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                assert await page.evaluate("""window.doxographGraph().nodes.every(n =>
+                    Number.isFinite(n.x) && Number.isFinite(n.y) && n.x === 0)""")
+                assert len((await page.evaluate("window.doxographGraph()"))["nodes"]) == len(years)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_the_map_repaints_on_a_theme_change_omits_independent_links_and_clamps_the_threshold():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
@@ -3111,16 +3208,17 @@ def test_the_map_draws_a_citation_from_one_paper_to_another():
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engine):
+@pytest.mark.parametrize("x_axis", ["connections", "year"])
+def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engine, x_axis):
     from pdfs import minimal_pdf
 
     titles = {"paper-a": "A study of model behavior and recovery",
               "paper-b": "Evaluating the persistence of safeguards"}
     for key, title in titles.items():
-        _paper(key, title, "recovery", year=2026)
+        _paper(key, title, "recovery", year=2000 if key == "paper-a" else 2020)
         other = "paper-b" if key == "paper-a" else "paper-a"
         store.pdf_path(key).write_bytes(minimal_pdf([
-            title, f"References\n[1] {titles[other]}. 2026.",
+            title, f"References\n[1] {titles[other]}.",
         ]))
     store.save_ledger([{"id": "L1", "text": "Safeguards persist after further training."}])
     store.update_claim("paper-a", "paper-a-c1", {
@@ -3141,12 +3239,15 @@ def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engin
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.wait_for_function("""window.doxographGraph().edges.filter(e => e.type === 'cite').length === 2
                     && window.doxographGraph().alpha === 0""")
+                await page.get_by_label("X axis", exact=True).select_option(x_axis)
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
                 # Keep the same readable arrangement while exercising real pointer events.
                 await page.evaluate("""() => {
-                    GRAPH.autofit = false; GRAPH.zoom = 1.2; GRAPH.tx = GRAPH.ty = 0;
+                    GRAPH.autofit = false; GRAPH.zoom = GRAPH.timeline ? 0.85 : 1.2; GRAPH.tx = GRAPH.ty = 0;
                     const positions = {'p:paper-a': [-160, -80], 'p:paper-b': [160, -80], 'l:L1': [-160, 110]};
                     for (const [id, [x, y]] of Object.entries(positions)) {
-                        Object.assign(GRAPH.nodes.get(id), {x, y, fixed: true});
+                        const n = GRAPH.nodes.get(id);
+                        Object.assign(n, {x: GRAPH.timeline ? n.timelineX : x, y, fixed: true});
                     }
                     graphDraw();
                 }""")
@@ -3158,14 +3259,30 @@ def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engin
                         edges: GRAPH.edgePaths.map(p => ({type: p.edge.type, a: p.edge.a, b: p.edge.b,
                             relation: p.edge.relation, ...screen(graphPathPoint(p, 0.5))}))};
                 }""")
+                if x_axis == "year":
+                    graph = await page.evaluate("window.doxographGraph()")
+                    nodes = {n["id"]: n for n in graph["nodes"]}
+                    assert nodes["p:paper-a"]["x"] < nodes["p:paper-b"]["x"] < nodes["l:L1"]["x"]
+                    await page.locator('[data-graph-timeline-hint]').wait_for(state="visible")
+                    # Verify both the year labels and conflict labels actually reach the canvas.
+                    labels = await page.evaluate("""() => {
+                        const labels = [];
+                        const original = GRAPH.ctx.fillText;
+                        GRAPH.ctx.fillText = function(text, ...args) {
+                            labels.push(text); return original.call(this, text, ...args);
+                        };
+                        try { graphDraw(); } finally { GRAPH.ctx.fillText = original; }
+                        return labels;
+                    }""")
+                    assert {"2000", "2020", "Undated", "Publication year →", "contradicts"} <= set(labels)
                 tip = page.locator('.graph-tip')
                 for node in points["nodes"]:
                     if node["id"] != "p:paper-a":
                         continue
                     await page.mouse.move(node["x"], node["y"])
                     await tip.wait_for(state="visible")
-                    assert "Cites (1): paper-b 2026" in await tip.inner_text()
-                    assert "Cited by (1): paper-b 2026" in await tip.inner_text()
+                    assert "Cites (1): paper-b 2020" in await tip.inner_text()
+                    assert "Cited by (1): paper-b 2020" in await tip.inner_text()
 
                 citations = [e for e in points["edges"] if e["type"] == "cite"]
                 assert abs(citations[0]["y"] - citations[1]["y"]) >= 20
@@ -3182,6 +3299,16 @@ def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engin
                     # A background refresh preserves the hovered connection.
                     await page.evaluate("renderGraph()")
                     assert await tip.is_visible()
+
+                if x_axis == "year":
+                    # Panning a connection behind the reserved year strip must
+                    # not make an invisible edge intercept its labels.
+                    box = await page.locator('.graph-wrap canvas').bounding_box()
+                    axis_y = box["y"] + box["height"] - 20
+                    await page.evaluate("delta => { GRAPH.ty += delta; graphDraw(); }",
+                                        axis_y - citations[0]["y"])
+                    await page.mouse.move(citations[0]["x"], axis_y)
+                    await tip.wait_for(state="hidden")
 
                 # Removing the hovered layer clears its explanation as well.
                 await page.locator('[data-graph-opt="ledger"]').uncheck()

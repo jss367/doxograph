@@ -1006,6 +1006,11 @@ def research_tools_js() -> FileResponse:
     return FileResponse(STATIC / "research-tools.js", media_type="text/javascript")
 
 
+@app.get("/workspace-notes.js")
+def workspace_notes_js() -> FileResponse:
+    return FileResponse(STATIC / "workspace-notes.js", media_type="text/javascript")
+
+
 @app.get("/research-tools.css")
 def research_tools_css() -> FileResponse:
     return FileResponse(STATIC / "research-tools.css", media_type="text/css")
