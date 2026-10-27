@@ -8,30 +8,28 @@ from __future__ import annotations
 
 import ipaddress
 import json
-from types import SimpleNamespace
+from typing import cast
 from urllib.parse import urlsplit
 
 import anthropic
 import httpx
-from jsonschema import Draft202012Validator, ValidationError
-
 from . import config
-from .model_errors import InputTooLargeError, ModelInputError
+from .analysis_types import (JSONSchema, Message, MessageClient, ModelResponse, OutputConfig,
+                             TokenUsage, normalize_response, validate_response)
+from .model_errors import InputTooLargeError, ModelInputError, ProviderResponseError
 
 
-class ProviderResponseError(ValueError):
-    """The endpoint returned an unusable response to a valid request."""
-
-
-def anthropic_client():
+def anthropic_client() -> anthropic.Anthropic:
     key = config.api_key("anthropic")
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
-def client():
+def client() -> MessageClient | TextClient:
     selected = config.analysis_config()
     if selected.provider == "anthropic":
-        return anthropic_client()
+        # The SDK has a larger overloaded request signature. Adapt that one
+        # external boundary to the subset shared with the other providers.
+        return cast(MessageClient, anthropic_client())
     if not selected.model.strip():
         raise ModelInputError("Choose a model in Settings before running AI analysis")
     key = config.api_key(selected.provider)
@@ -40,25 +38,28 @@ def client():
     return TextClient(selected, key)
 
 
-def create(api, *, model, max_tokens, system, messages, schema, effort):
+def create(api: MessageClient | TextClient, *, model: str, max_tokens: int, system: str,
+           messages: list[Message], schema: JSONSchema, effort: str) -> ModelResponse:
     """The analysis layer supplies provider-independent request options."""
     if isinstance(api, TextClient):
-        return api.create(max_tokens=max_tokens, system=system, messages=messages, schema=schema)
-    return api.messages.create(
-        model=model, max_tokens=max_tokens, system=system, messages=messages,
-        thinking={"type": "adaptive"},
-        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-    )
+        response = api.create(max_tokens=max_tokens, system=system, messages=messages, schema=schema)
+    else:
+        output: OutputConfig = {"effort": effort, "format": {"type": "json_schema", "schema": schema}}
+        response = normalize_response(api.messages.create(
+            model=model, max_tokens=max_tokens, system=system, messages=messages,
+            thinking={"type": "adaptive"}, output_config=output))
+    return validate_response(response, schema)
 
 
 class TextClient:
     """Translate structured analysis calls to OpenAI chat or Ollama chat."""
 
-    def __init__(self, selected: config.AnalysisConfig, key: str | None):
+    def __init__(self, selected: config.AnalysisConfig, key: str | None) -> None:
         self.selected = selected
         self.key = key
 
-    def create(self, *, max_tokens, system, messages, schema):
+    def create(self, *, max_tokens: int, system: str, messages: list[Message],
+               schema: JSONSchema) -> ModelResponse:
         prompt = system + "\n\nReturn only JSON matching this schema:\n" + json.dumps(schema)
         chat = [{"role": "system", "content": prompt}]
         for message in messages:
@@ -68,7 +69,7 @@ class TextClient:
                     raise ModelInputError("This provider accepts extracted paper text only")
                 content = "\n\n".join(block["text"] for block in content)
             chat.append({"role": message["role"], "content": content})
-        body = {"model": self.selected.model, "messages": chat, "stream": False}
+        body: dict[str, object] = {"model": self.selected.model, "messages": chat, "stream": False}
         ollama = self.selected.provider == "ollama"
         if ollama:
             # A byte is a conservative token bound for the supplied text.
@@ -108,12 +109,15 @@ class TextClient:
                 reason = data.get("done_reason")
                 if data.get("done") is not True:
                     raise RuntimeError("AI analysis returned an incomplete response")
-                usage = SimpleNamespace(input_tokens=data.get("prompt_eval_count"), output_tokens=data.get("eval_count"))
+                usage = TokenUsage.from_provider({"input_tokens": data.get("prompt_eval_count"),
+                                                  "output_tokens": data.get("eval_count")})
             else:
                 choice = data["choices"][0]
                 message, reason = choice["message"], choice["finish_reason"]
-                counts = data.get("usage") or {}
-                usage = SimpleNamespace(input_tokens=counts.get("prompt_tokens"), output_tokens=counts.get("completion_tokens"))
+                counts = data.get("usage")
+                counts = counts if isinstance(counts, dict) else {}
+                usage = TokenUsage.from_provider({"input_tokens": counts.get("prompt_tokens"),
+                                                  "output_tokens": counts.get("completion_tokens")})
             if not isinstance(message, dict):
                 raise TypeError("Expected an assistant message")
         except (KeyError, IndexError, TypeError) as exc:
@@ -124,11 +128,7 @@ class TextClient:
             raise RuntimeError("AI analysis was cut off at the token limit; nothing was saved")
         if reason != "stop":
             raise RuntimeError("AI analysis did not finish normally; nothing was saved")
-        try:
-            payload = json.loads(message.get("content") or "")
-            Draft202012Validator(schema).validate(payload)
-        except (ValueError, TypeError, ValidationError) as exc:
-            raise ProviderResponseError("The selected model returned invalid analysis JSON; nothing was saved. "
-                             "Use a model and endpoint that support structured JSON output.") from exc
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(payload))],
-                               stop_reason="end_turn", usage=usage)
+        text = message.get("content")
+        if not isinstance(text, str):
+            raise ProviderResponseError("AI analysis returned unreadable text; nothing was saved")
+        return ModelResponse.from_text(text, usage)

@@ -810,9 +810,24 @@ or too confidently worded. The retagger has its own, shorter prompt in
 ```
 
 CI runs these checks, JavaScript syntax checks, and macOS Swift type checking
-and quit/relaunch tests. Type checking currently covers the shared storage
-reader and saved analysis models in `storage.py` and `records.py`; the older
-dictionary-based modules can be added as their contracts are narrowed.
+and quit/relaunch tests. Strict type checking covers the shared storage reader,
+saved research models, model request/response contracts, and all API, local,
+and subscription provider adapters. The remaining application modules can be
+added as their dictionary-based interfaces are narrowed.
+
+`analysis_types.py` defines the common request and response contracts. Provider
+responses are normalized into immutable text and usage records, then validated
+against the requested JSON Schema before extraction can change saved research.
+Refusals, incomplete responses, and unexpected stop reasons cannot be merged;
+malformed optional usage counts are treated as unknown. SDK-specific objects
+stay at the adapter boundary.
+
+Saved papers and claims are validated on read and before writing. Older records
+can omit newer optional fields, unknown author lists can remain null, and
+existing note and claim-identifier migrations still apply. Validation preserves
+unknown fields and does not fill unrelated defaults or rewrite files on read.
+Malformed records are reported through the library's storage warnings, and an
+invalid write leaves the saved paper and its history untouched.
 
 `requirements-dev.lock` pins the development and runtime dependencies with
 hashes for Python 3.13 and newer across platforms. To update it after editing

@@ -110,7 +110,7 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Check Python correctness
         run: python -m ruff check doxograph tests
-      - name: Check storage contracts
+      - name: Check storage and provider contracts
         run: python -m mypy
       - name: Check JavaScript syntax
         run: |

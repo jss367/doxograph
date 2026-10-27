@@ -8,9 +8,10 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any, Unpack
 
 from . import config
+from .analysis_types import ModelResponse, ProviderRequest
 from .model_errors import InputTooLargeError, ModelSetupError
 
 
@@ -43,8 +44,8 @@ def environment() -> dict[str, str]:
     return env
 
 
-def _run(args: list[str], *, env: dict, cwd: str, input: str | None = None,
-         timeout: int = 600) -> subprocess.CompletedProcess:
+def _run(args: list[str], *, env: dict[str, str], cwd: str, input: str | None = None,
+         timeout: int = 600) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(args, input=input, capture_output=True, text=True,
                               env=env, cwd=cwd, timeout=timeout)
@@ -55,10 +56,10 @@ def _run(args: list[str], *, env: dict, cwd: str, input: str | None = None,
 
 
 class Client:
-    def __init__(self):
+    def __init__(self) -> None:
         self.messages = self
 
-    def create(self, **kwargs):
+    def create(self, **kwargs: Unpack[ProviderRequest]) -> ModelResponse:
         config.require_ai_enabled()
         binary, env = executable(), environment()
         # No project instructions, hooks, plugins, tools, or MCP connections.
@@ -106,13 +107,18 @@ class Client:
                 raise ValueError("Expected JSON objects")
         except ValueError as exc:
             raise RuntimeError("Claude Code returned an unreadable response. Update Claude Code and retry.") from exc
-        final = next((e for e in reversed(events) if e.get("type") == "result"), {})
+        final: dict[str, Any] = next((e for e in reversed(events) if e.get("type") == "result"), {})
         if result.returncode or final.get("is_error") or not final:
             detail = final.get("result") or "; ".join(final.get("errors") or [])
             raise RuntimeError(f"Claude Code could not complete the request: {detail or result.stderr.strip() or 'no result'}")
         answer = final.get("structured_output") if schema else final.get("result")
-        if (schema and not isinstance(answer, dict)) or (not schema and not isinstance(answer, str)):
-            raise RuntimeError("Claude Code returned no complete answer. Retry the request.")
+        if schema:
+            if not isinstance(answer, dict):
+                raise RuntimeError("Claude Code returned no complete answer. Retry the request.")
+            text = json.dumps(answer)
+        else:
+            if not isinstance(answer, str):
+                raise RuntimeError("Claude Code returned no complete answer. Retry the request.")
+            text = answer
         usage = final.get("usage") or {}
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(answer) if schema else answer)],
-                               stop_reason="end_turn", usage=SimpleNamespace(**usage))
+        return ModelResponse.from_text(text, usage)

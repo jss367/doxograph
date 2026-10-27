@@ -8,9 +8,10 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Unpack
 
 from . import config
+from .analysis_types import ModelResponse, ProviderRequest
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
 
 
@@ -42,8 +43,8 @@ def environment() -> dict[str, str]:
     return env
 
 
-def _run(args: list[str], *, env: dict, cwd: str, input: str | None = None,
-         timeout: int = 600) -> subprocess.CompletedProcess:
+def _run(args: list[str], *, env: dict[str, str], cwd: str, input: str | None = None,
+         timeout: int = 600) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(args, input=input, capture_output=True, text=True,
                               env=env, cwd=cwd, timeout=timeout)
@@ -54,10 +55,10 @@ def _run(args: list[str], *, env: dict, cwd: str, input: str | None = None,
 
 
 class Client:
-    def __init__(self):
+    def __init__(self) -> None:
         self.messages = self
 
-    def create(self, **kwargs):
+    def create(self, **kwargs: Unpack[ProviderRequest]) -> ModelResponse:
         config.require_ai_enabled()
         binary, env = executable(), environment()
         with tempfile.TemporaryDirectory(prefix="doxograph-codex-") as cwd:
@@ -130,5 +131,4 @@ class Client:
             except (OSError, ValueError) as exc:
                 raise RuntimeError("Codex returned no complete answer. Retry the request.") from exc
         usage = complete.get("usage") or {}
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=answer)],
-                               stop_reason="end_turn", usage=SimpleNamespace(**usage))
+        return ModelResponse.from_text(answer, usage)

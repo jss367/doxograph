@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from . import config, quotes, records, storage
 
@@ -413,11 +414,27 @@ def load_paper(key: str) -> dict:
             for c in claims
         ):
             raise ValueError("expected a list of claims with string identifiers and topic lists")
-        return _migrate(paper)
+        paper = _migrate(paper)
+        _validate_paper(paper)
+        return paper
     except FileNotFoundError:
         raise KeyError(key) from None
     except (ValueError, TypeError, AttributeError) as exc:
         raise PaperReadError(f"Cannot read {path}: {exc}") from exc
+
+
+def _validate_paper(paper: dict) -> None:
+    """Validate known fields without filling defaults or discarding extras.
+
+    Missing fields in older corpora remain missing. The migration handles the
+    few historical representations we know; validation never coerces bad data.
+    """
+    try:
+        records.Paper.model_validate(paper)
+    except ValidationError as exc:
+        error = exc.errors(include_input=False, include_url=False)[0]
+        location = ".".join(str(part) for part in error["loc"])
+        raise ValueError(f"invalid paper field {location}: {error['msg']}") from exc
 
 
 #: The only thing the ingest ever wrote into the old `notes`. Matching on it
@@ -448,6 +465,7 @@ def _migrate(paper: dict) -> dict:
 def save_paper(paper: dict) -> None:
     from .notebook import record_history
 
+    _validate_paper(paper)
     with paper_lock(paper["key"]):
         try:
             previous = load_paper(paper["key"])

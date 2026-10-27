@@ -70,16 +70,21 @@ def test_waiting_model_call_rechecks_setting_after_acquiring_slot(monkeypatch):
         yield
 
     api = Mock()
+    from doxograph.analysis_types import ModelResponse
+    api.messages.create.return_value = ModelResponse.from_text("{}")
+    request = dict(model="unused", max_tokens=1, system="test", messages=[],
+                   schema={"type": "object"}, effort="low")
     monkeypatch.setattr(extract, "_pass_slots", slot())
     with pytest.raises(RuntimeError, match="AI analysis is disabled"):
-        extract._create(api, model="unused")
+        extract._create(api, **request)
     api.messages.create.assert_not_called()
     config.set_ai_enabled(True)
     # Re-enabling permits calls again.
     from contextlib import nullcontext
     monkeypatch.setattr(extract, "_pass_slots", nullcontext())
-    extract._create(api, model="unused")
-    api.messages.create.assert_called_once_with(model="unused")
+    extract._create(api, **request)
+    api.messages.create.assert_called_once()
+    assert api.messages.create.call_args.kwargs["model"] == "unused"
 
 
 def test_import_endpoints_override_automatic_analysis_including_native_defaults(monkeypatch):
