@@ -154,3 +154,45 @@ def test_workspace_notes_keep_open_in_reading_layout(engine, width):
                 await expect(editor).to_have_value('A revised question, saved while reading.')
                 assert not errors
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('width', [1440, 390])
+def test_palette_reveals_reading_search_and_import(engine, width):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Reading with the command palette'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A searchable passage.']))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': width, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                await expect(page.locator('#reading-claim-tools')).to_be_hidden()
+                await expect(page.locator('#refs')).to_be_hidden()
+                await page.evaluate('window.originalPage = document.querySelector("#reader .pdf-page")')
+                await page.keyboard.press('Meta+k')
+                await page.locator('#command-query').fill('Search claims and PDF text')
+                await page.keyboard.press('Enter')
+                await expect(page.locator('#command-palette')).to_be_hidden()
+                await expect(page.locator('#reading-claim-tools')).to_be_visible()
+                await expect(page.locator('#btn-reader-filters')).to_have_attribute('aria-expanded', 'true')
+                await expect(page.locator('#q')).to_be_focused()
+                await page.keyboard.insert_text('searchable')
+                await expect(page.locator('#q')).to_have_value('searchable')
+                await page.locator('#btn-reader-filters').click()
+                await page.keyboard.press('Meta+k')
+                await page.locator('#command-query').fill('Add papers')
+                await page.keyboard.press('Enter')
+                await expect(page.locator('#command-palette')).to_be_hidden()
+                await expect(page.locator('#side')).to_be_visible()
+                await expect(page.locator('#btn-reader-library')).to_have_attribute('aria-expanded', 'true')
+                await expect(page.locator('#paper-import')).to_have_attribute('open', '')
+                await expect(page.locator('#refs')).to_be_focused()
+                await expect(page.locator('#refs')).to_be_in_viewport()
+                assert await page.evaluate('originalPage === document.querySelector("#reader .pdf-page")')
+                assert await page.locator('#q').input_value() == 'searchable'
+    run_browser(scenario())

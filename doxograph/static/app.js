@@ -115,6 +115,19 @@ function setReadingFilters(open) {
   $('btn-reader-filters').setAttribute('aria-expanded', String(open));
 }
 
+function focusClaimSearch() {
+  if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
+  if (readingPaper()) setReadingFilters(true);
+  $('q').focus();
+  $('q').select();
+}
+
+function focusPaperImport() {
+  if (readingPaper()) setReadingLibrary(false);
+  $('paper-import').open = true;
+  $('refs').focus();
+}
+
 // A passage from the paper becomes the quote of a new claim, with its page as
 // the locator. A draft already being written for this paper keeps its text
 // and takes the passage.
@@ -4908,10 +4921,8 @@ const CommandPalette = (() => {
         connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
       add(`tool:${tool}`, 'Action', titles[tool], '', () => document.querySelector(`[data-tool="${tool}"]`).click());
     });
-    add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', () => $('refs').focus(), 'import');
-    add('search', 'Action', 'Search claims and PDF text', '', () => {
-      showView('claims'); syncHash(true); renderAll(); $('q').focus(); $('q').select();
-    });
+    add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', focusPaperImport, 'import');
+    add('search', 'Action', 'Search claims and PDF text', '', focusClaimSearch);
     click('btn-workspace-add', 'Create workspace');
     click('btn-export', 'Export HTML');
     click('btn-bib', 'Export BibTeX');
@@ -5088,10 +5099,7 @@ document.addEventListener('keydown', async (event) => {
     // The box filters the claims, so it belongs to that view: reaching for it
     // from the map or the tensions is a way of asking to go back.
     event.preventDefault();
-    if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
-    if (readingPaper()) setReadingFilters(true);
-    $('q').focus();
-    $('q').select();
+    focusClaimSearch();
     return;
   }
   if (V.view !== 'claims') {
