@@ -300,7 +300,9 @@ const ResearchTools = (() => {
   function scaleFor(zoom, base) {
     if (zoom !== 'fit') return Number(zoom);
     const scroller = el('pdf-scroll');
-    const width = (scroller?.clientWidth || 700) - 18;
+    const style = scroller && getComputedStyle(scroller);
+    const padding = style ? parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) : 16;
+    const width = (scroller?.clientWidth || 700) - padding - 2;
     return Math.max(.3, Math.round(width / base.w * 1000) / 1000);
   }
   async function mountReader(paper) {

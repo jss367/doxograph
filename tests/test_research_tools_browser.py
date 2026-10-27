@@ -330,6 +330,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await rail.locator('.highlight-entry blockquote').click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
                 # The PDF can be put away, and the choice is remembered in this browser.
+                await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Hide PDF', exact=True).click()
                 await page.locator('#reader').wait_for(state='hidden')
                 assert await page.locator('#panes.reading').count() == 0
@@ -571,6 +572,7 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                 # paper opened, is saved on the way out.
                 await page.get_by_role('button', name='Previous page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '23'")
+                await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Hide PDF', exact=True).click()
                 await page.locator('#reader').wait_for(state='hidden')
                 await saved_page(url, 23)
@@ -949,6 +951,7 @@ def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(eng
                 marks = httpx.get(url+'/api/notebook').json()['highlights']
                 second = next(h for h in marks if h['page'] == 2)
                 # With the PDF put away, clicking a mark brings it back outlined on that mark.
+                await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Hide PDF', exact=True).click()
                 await page.locator('#reader').wait_for(state='hidden')
                 await rail.locator(f'.highlight-entry[data-highlight="{second["id"]}"] blockquote').click()
@@ -1069,7 +1072,8 @@ def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(eng
                     await route.continue_()
                 await page.route('**/api/papers/paper', fail_delete)
                 ask = page.locator('#ask')
-                await page.get_by_role('button', name='Remove', exact=True).first.click()
+                await page.locator('.paper-actions > summary').click()
+                await page.get_by_role('button', name='Remove paper', exact=True).click()
                 await ask.wait_for(state='visible')
                 assert 'note you are writing' in await ask.inner_text()
                 await ask.get_by_role('button', name='Remove', exact=True).click()
@@ -1077,7 +1081,8 @@ def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(eng
                 assert failed and await page.locator('#papers li[data-paper="paper"]').count() == 1
                 assert await rail.locator('[data-highlight-note]').input_value() == 'A thought about recovery'
                 await page.unroute('**/api/papers/paper')
-                await page.get_by_role('button', name='Remove', exact=True).first.click()
+                await page.locator('.paper-actions > summary').click()
+                await page.get_by_role('button', name='Remove paper', exact=True).click()
                 await ask.wait_for(state='visible')
                 await ask.get_by_role('button', name='Remove', exact=True).click()
                 await page.locator('#papers li[data-paper="paper"]').wait_for(state='detached')

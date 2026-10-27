@@ -12,6 +12,7 @@
 </head>
 <body>
 <header>
+  <button type="button" id="btn-reader-library" class="reader-only" aria-controls="side" aria-expanded="true">Hide library</button>
   <h1>Doxograph</h1>
   <span class="workspace-control">
     <label for="workspace">Workspace</label>
@@ -163,25 +164,17 @@
 
 <div id="layout">
   <aside id="side">
-    <div class="drop" id="drop">Drop PDFs anywhere on this page</div>
-    <textarea id="refs" placeholder="Paste arXiv IDs, arXiv or DOI links, PDF URLs, or LessWrong posts — one per line"></textarea>
-    <div class="row">
-      <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
-      <button type="button" id="btn-add" class="primary" style="margin-left:auto">Add</button>
-    </div>
-    <p class="warn" id="ref-warn" hidden></p>
+    <details id="paper-import" open><summary>Add papers</summary>
+      <div class="drop" id="drop">Drop PDFs anywhere on this page</div>
+      <textarea id="refs" placeholder="Paste arXiv IDs, arXiv or DOI links, PDF URLs, or LessWrong posts — one per line"></textarea>
+      <div class="row">
+        <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
+        <button type="button" id="btn-add" class="primary" style="margin-left:auto">Add</button>
+      </div>
+      <p class="warn" id="ref-warn" hidden></p>
+    </details>
 
-    <div class="sec research-tools-nav">
-      <h2>Your research tools</h2>
-      <button type="button" data-tool="notes" title="Questions, working conclusions, and next steps for this workspace">Workspace notes</button>
-      <button type="button" id="btn-research-notes" title="Long-form documents for arguments, reviews, and plans">Research notes</button>
-      <button type="button" data-tool="boards">Evidence boards</button>
-      <button type="button" data-tool="reading">Reading queue</button>
-      <button type="button" data-tool="marks">Marks and questions</button>
-      <button type="button" data-tool="searches">Saved searches</button>
-      <button type="button" data-tool="connections">Claim connections</button>
-    </div>
-    <div class="sec">
+    <div class="sec paper-library">
       <div class="sechead">
         <h2>Papers</h2>
         <select id="paper-sort" aria-label="Sort papers">
@@ -195,6 +188,16 @@
       <ul class="plist" id="papers"></ul>
     </div>
 
+    <div class="sec research-tools-nav">
+      <h2>Your research tools</h2>
+      <button type="button" data-tool="notes" title="Questions, working conclusions, and next steps for this workspace">Workspace notes</button>
+      <button type="button" id="btn-research-notes" title="Long-form documents for arguments, reviews, and plans">Research notes</button>
+      <button type="button" data-tool="boards">Evidence boards</button>
+      <button type="button" data-tool="reading">Reading queue</button>
+      <button type="button" data-tool="marks">Marks and questions</button>
+      <button type="button" data-tool="searches">Saved searches</button>
+      <button type="button" data-tool="connections">Claim connections</button>
+    </div>
     <div class="sec" id="labels-sec" hidden>
       <h2>Labels</h2>
       <ul class="taglist" id="labels"></ul>
@@ -281,21 +284,28 @@
       </section>
     </div>
     <section id="continue-reading" class="continue-reading" aria-labelledby="continue-title" hidden></section>
-    <div class="filters">
-      <input type="search" id="q" placeholder="Filter claims, quotes, papers">
-      <select id="kind"><option value="">every kind</option></select>
-      <label><input type="checkbox" id="only-unreviewed"> unreviewed only</label>
-      <label title="Claims whose quote was not found in the PDF text"><input type="checkbox" id="only-unverified"> quote not found</label>
-      <label><input type="checkbox" id="group-by-tag" checked> group by topic</label>
-      <div id="active-filters" class="active-filters" role="group" aria-label="Active filters" hidden></div>
+    <div id="reading-navigation" class="reader-only">
+      <button type="button" id="btn-back-library">← All papers</button>
+      <span>Reading</span>
+      <button type="button" id="btn-reader-filters" aria-controls="reading-claim-tools" aria-expanded="false">Claim filters</button>
     </div>
-    <div id="selection-tools" class="selection-tools">
-      <span id="selection-count">Select claims or papers to work with them</span>
-      <button type="button" data-tool="select-visible">Select visible claims</button>
-      <button type="button" data-tool="compare">Compare & organize</button>
-      <button type="button" data-tool="save-search">Save this search</button>
-      <button type="button" id="btn-focus-review" title="Review the claims matching your current filters beside their source PDFs">Focused review</button>
-      <button type="button" data-tool="clear-selection">Clear selection</button>
+    <div id="reading-claim-tools">
+      <div class="filters">
+        <input type="search" id="q" placeholder="Filter claims, quotes, papers">
+        <select id="kind"><option value="">every kind</option></select>
+        <label><input type="checkbox" id="only-unreviewed"> unreviewed only</label>
+        <label title="Claims whose quote was not found in the PDF text"><input type="checkbox" id="only-unverified"> quote not found</label>
+        <label><input type="checkbox" id="group-by-tag" checked> group by topic</label>
+        <div id="active-filters" class="active-filters" role="group" aria-label="Active filters" hidden></div>
+      </div>
+      <div id="selection-tools" class="selection-tools">
+        <span id="selection-count">Select claims or papers to work with them</span>
+        <button type="button" data-tool="select-visible">Select visible claims</button>
+        <button type="button" data-tool="compare">Compare & organize</button>
+        <button type="button" data-tool="save-search">Save this search</button>
+        <button type="button" id="btn-focus-review" title="Review the claims matching your current filters beside their source PDFs">Focused review</button>
+        <button type="button" data-tool="clear-selection">Clear selection</button>
+      </div>
     </div>
     <div id="panes">
       <div id="paperhead"></div>

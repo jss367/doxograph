@@ -32,12 +32,14 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
                 await expect(card).to_contain_text('A study of recovery')
                 # Resuming puts the paper on the reading queue; the page it is on
                 # is saved as it is read and the card follows.
+                await page.locator('#btn-back-library').click()
                 await card.get_by_role('button', name='Resume at page 1').click()
                 await ready(page)
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 assert httpx.get(url + '/api/notebook').json()['reading'][0]['status'] == 'reading'
                 await page.get_by_role('button', name='Next page', exact=True).click()
-                await expect(card.get_by_role('button', name='Resume at page 2')).to_be_visible()
+                await expect(page.locator('#reader-page')).to_have_value('2')
+                await expect(card).to_be_hidden()
 
                 # Reading a queued paper can differ from the library underneath it.
                 await page.locator('#papers li[data-paper="two"]').click()
@@ -50,6 +52,7 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
                 await expect(page.locator('#reader-page')).to_have_value('2')
                 await page.reload()
                 await expect(card).to_contain_text('A study of recovery')
+                await page.locator('#btn-back-library').click()
                 await card.get_by_role('button', name='Resume at page 2').click()
                 await ready(page)
                 await expect(page.locator('#reader-page')).to_have_value('2')

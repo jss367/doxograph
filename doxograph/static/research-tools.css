@@ -47,16 +47,12 @@
 .history-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); padding: .7rem; }
 .history-diff > div, .connection-pair > div { min-width: 0; }
 .research-sheet.is-busy #research-body, .research-sheet.is-busy #research-tabs { pointer-events: none; opacity: .7; }
-/* The paper read beside its notes. The reader column sticks under the filter
-   bar and scrolls on its own; the rail of notes, highlights, and claims scrolls
-   with the main pane. `--reader-top` is the filter bar's height, set by app.js. */
+/* The paper and notes share a reading layout; each owns its scroll position. */
 #paperhead:empty { display: none; }
 #reader[hidden], #panes.reading #reader[hidden] { display: none; }
-#panes.reading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(22rem, 38%); gap: 1.2rem; align-items: start; }
 #claim-column { min-width: 0; }
 #panes.reading #paperhead { grid-column: 1 / -1; }
-#panes.reading #reader { position: sticky; top: var(--reader-top, 2.6rem); min-width: 0;
-  height: calc(100vh - 3rem - var(--reader-top, 2.6rem) - 1.4rem); display: flex; flex-direction: column; }
+#panes.reading #reader { min-width: 0; display: flex; flex-direction: column; }
 .reader-toolbar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: 0 0 .5rem; font-size: .85rem; color: var(--muted); }
 .reader-toolbar label { display: flex; align-items: center; gap: .3rem; }
 .reader-toolbar input { width: 4rem; }
@@ -138,4 +134,124 @@
   .connection-pair, .history-diff { grid-template-columns: 1fr; }
   .comparison-card { flex-basis: 85vw; }
   .research-sheet { padding: .7rem; }
+}
+
+/* A paper is a place to read, with the library alongside it. */
+.reader-only { display: none; }
+#reading-claim-tools { display: contents; }
+#paper-import > summary { cursor: pointer; font-weight: 600; font-size: .85rem; margin-bottom: .65rem; }
+body.reading-paper { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+.reading-paper > header { flex: 0 0 auto; align-items: center; gap: .75rem; padding: .6rem 1rem; }
+.reading-paper > header .stats,
+.reading-paper > header .workspace-control label,
+.reading-paper #btn-workspace-rename, .reading-paper #btn-workspace-add,
+.reading-paper #btn-retag, .reading-paper #btn-bib, .reading-paper #btn-export,
+.reading-paper #btn-help { display: none; }
+.reading-paper > header .actions { margin-left: auto; }
+.reading-paper > header .workspace-control select { font-size: .85rem; font-weight: 500; border-color: transparent; }
+.reading-paper .reader-only { display: flex; }
+.reading-paper #layout { flex: 1; min-height: 0; --side-width: 15rem; }
+.reading-paper #side { height: 100%; background: var(--panel); padding: 1rem .75rem; display: flex; flex-direction: column;
+  width: 15rem; flex: 0 0 15rem; }
+.reading-paper #side-resize { display: none; }
+.reading-paper #side > * { flex-shrink: 0; order: 3; }
+.reading-paper #side > #paper-import { order: 0; }
+.reading-paper #side > .paper-library { order: 1; }
+.reading-paper #side > .research-tools-nav { order: 2; }
+.reading-paper.library-collapsed #side,
+.reading-paper.library-collapsed #side-resize { display: none; }
+.reading-paper #side .sec { margin-top: 1.3rem; }
+.reading-paper #side .sec h2 { font-size: .66rem; letter-spacing: .07em; }
+.reading-paper #side .plist .pt { font-size: .82rem; }
+.reading-paper #side .plist .pm { font-size: .7rem; }
+.reading-paper #side .plist li { border-radius: 6px; }
+.reading-paper .research-tools-nav { gap: .1rem; }
+.reading-paper .research-tools-nav button { width: 100%; text-align: left; border: 0; background: transparent;
+  padding: .3rem .5rem; font-size: .8rem; color: var(--muted); border-radius: 5px; }
+.reading-paper .research-tools-nav button:hover { background: var(--sel); color: var(--accent); }
+.reading-paper #main { height: 100%; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.reading-paper #continue-reading { display: none; }
+#reading-navigation { align-items: center; gap: 1rem; padding: .6rem 1.25rem; border-bottom: 1px solid var(--line);
+  color: var(--muted); font-size: .76rem; flex: 0 0 auto; }
+#reading-navigation > span { padding-left: 1rem; border-left: 1px solid var(--line); }
+#reading-navigation #btn-reader-filters { margin-left: auto; }
+#reading-navigation button, .reading-paper #btn-reader-library { background: transparent; border-color: transparent;
+  color: var(--muted); font-size: .8rem; }
+#reading-navigation button:hover, .reading-paper #btn-reader-library:hover { color: var(--accent); background: var(--sel); }
+.reading-paper #reading-claim-tools { display: none; }
+.reading-paper.reading-filters-open #reading-claim-tools { display: block; padding: .5rem 1.25rem 0;
+  max-height: 32vh; overflow: auto; flex: 0 0 auto; border-bottom: 1px solid var(--line); }
+.reading-paper #panes.reading { flex: 1; min-height: 0; display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(19rem, 30%); grid-template-rows: auto minmax(0, 1fr); gap: 0; }
+.reading-paper #paperhead { min-width: 0; }
+.reading-head { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem 1.5rem;
+  margin: 0; padding: .9rem 1.25rem; border-bottom: 1px solid var(--line); }
+.reading-title { flex: 1 1 20rem; min-width: 0; }
+.reading-head h2 { font-size: 1rem; line-height: 1.4; font-weight: 600; }
+.reading-head h2 a { color: var(--ink); text-decoration: none; }
+.reading-head h2 a:hover { color: var(--accent); }
+.reading-head .pm { font-size: .76rem; margin: .25rem 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reading-actions { display: flex; align-items: center; gap: .5rem; font-size: .8rem; }
+.reading-actions > button { background: transparent; border-color: transparent; color: var(--accent); }
+.paper-actions { position: relative; }
+.paper-actions > summary { cursor: pointer; list-style: none; padding: .4rem .75rem; border: 1px solid var(--line);
+  border-radius: 7px; background: var(--panel); white-space: nowrap; }
+.paper-actions > summary::-webkit-details-marker { display: none; }
+.paper-actions > summary::after { content: '⌄'; margin-left: .65rem; color: var(--muted); }
+.paper-actions-menu { position: absolute; z-index: 30; right: 0; top: calc(100% + .4rem);
+  width: 14rem; max-height: min(65dvh, 36rem); overflow-y: auto; padding: .4rem;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); box-shadow: 0 8px 30px rgb(0 0 0 / .12); }
+.paper-actions-menu button, .paper-actions-menu a { display: block; width: 100%; padding: .45rem .6rem;
+  border: 0; border-radius: 5px; text-align: left; background: transparent; color: var(--ink); text-decoration: none; }
+.paper-actions-menu button:hover, .paper-actions-menu a:hover { background: var(--sel); }
+.paper-actions-menu button:disabled { opacity: .45; cursor: default; }
+.paper-actions-menu .danger { color: var(--warn); }
+.paper-actions-menu hr { border: 0; border-top: 1px solid var(--line); margin: .3rem 0; }
+.paper-about { flex: 1 0 100%; color: var(--muted); font-size: .8rem; }
+.paper-about > summary { cursor: pointer; }
+.reading-paper #panes.reading #reader { position: relative; top: auto; height: 100%; min-height: 0;
+  padding: .75rem 1rem 0; background: var(--panel); }
+.reading-paper .reader-toolbar { font-size: .75rem; gap: .3rem; padding-bottom: .65rem; }
+.reading-paper .reader-toolbar button { border-color: transparent; background: transparent; padding: .25rem .4rem; }
+.reading-paper .reader-toolbar button:hover { background: var(--sel); }
+.reading-paper .reader-toolbar input { width: 3.5rem; }
+.reading-paper .pdf-scroll { background: color-mix(in srgb, var(--line) 55%, var(--panel)); border-radius: 5px 5px 0 0; padding: 1rem; }
+.reading-paper #reader-hint { font-size: .7rem; background: var(--panel); }
+.reading-paper #panes.reading #claim-column { height: 100%; overflow-y: auto;
+  border-left: 1px solid var(--line); overflow-wrap: anywhere; }
+.reading-paper #panes.reading #content { padding: 1.25rem; }
+.reading-paper #workspace-notes-reading { padding: 1.25rem 1.25rem 0; }
+.reading-paper #workspace-notes-reading:empty { display: none; }
+.reading-paper #content > .note:first-child { margin-top: 0; border: 0; padding: 0 0 1.25rem; background: transparent;
+  border-bottom: 1px solid var(--line); }
+.reading-paper #content .who { font-size: .68rem; letter-spacing: .08em; }
+.reading-paper #content .note .smeta { flex-wrap: wrap; gap: .75rem; }
+.reading-paper #content .note .hint { font-size: .8rem; line-height: 1.65; }
+.reading-paper #content .note .cact { margin-left: 0 !important; }
+.reading-paper #content .note .cact button { color: var(--accent); background: var(--sel); border-color: transparent; border-radius: 6px; }
+.reading-paper .highlights h3 { font-size: .85rem; font-weight: 600; }
+.reading-paper .highlights > .hint, .reading-paper #content > .empty { font-size: .8rem; color: var(--muted); line-height: 1.7; }
+.reading-paper .claim { font-size: .88rem; }
+.reading-paper #storage-warning:not([hidden]) { margin: .5rem 1rem; max-height: 22vh; overflow: auto; flex-shrink: 0; }
+.paper-actions summary:focus-visible, .paper-about summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 1100px) {
+  .reading-paper #side { width: 13rem; flex-basis: 13rem; }
+  .reading-paper #panes.reading { grid-template-columns: minmax(0, 1fr) minmax(17rem, 34%); }
+  .reading-paper .reading-head { gap: .5rem; }
+}
+@media (max-width: 800px) {
+  .reading-paper > header { gap: .4rem; padding: .5rem; }
+  .reading-paper > header h1 { display: none; }
+  .reading-paper > header .workspace-control { min-width: 0; flex: 1; }
+  .reading-paper > header .workspace-control select { max-width: 100%; }
+  .reading-paper > header #btn-command-palette { font-size: .75rem; }
+  .reading-paper > header kbd { display: none; }
+  .reading-paper #main { overflow-y: auto; }
+  .reading-paper #panes.reading { flex: 0 0 auto; display: flex; flex-direction: column; }
+  .reading-paper #paperhead { width: 100%; }
+  .reading-paper #panes.reading #reader { width: 100%; height: 70dvh; min-height: 24rem; }
+  .reading-paper #panes.reading #claim-column { width: 100%; height: auto; overflow: visible; border-left: 0; border-top: 1px solid var(--line); }
+  .reading-paper .reading-head { padding: .75rem; }
+  #reading-navigation { padding: .5rem; gap: .4rem; }
+  #reading-navigation > span { display: none; }
 }

@@ -237,6 +237,7 @@ def test_workspace_notes_in_main_view_and_beside_paper(engine):
                 await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
                 release_snapshot.set()
                 await page.evaluate('window.oldNotesPoll')
+                await page.locator('#btn-reader-filters').click()
                 await page.locator('#q').fill('no matching claims')
                 await expect(editor).to_have_value('Working conclusion: recovery varies with the training conditions.')
                 await page.locator('#q').fill('')
@@ -255,7 +256,7 @@ def test_workspace_notes_in_main_view_and_beside_paper(engine):
                 editor = await open_notes(page)
                 await expect(page.locator('#research-tools')).not_to_be_visible()
                 await expect(page.locator('#reader')).to_be_visible()
-                await page.locator('[data-clear-filter="paper"]').click()
+                await page.locator('#btn-back-library').click()
                 await expect(page.locator('#workspace-notes-home #workspace-notes')).to_be_visible()
 
                 # A clean, unfocused overview follows another window's saved text.
