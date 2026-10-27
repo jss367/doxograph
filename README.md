@@ -754,8 +754,8 @@ It supports Markdown, equations, tables, and local images, with Write, Split,
 and Preview views. For multiple named documents, use **Research notes**.
 
 A paper's note sits under the summary in its header, or at the top of the rail
-beside the paper when its PDF is open: **Write a note** opens a box, Save puts
-it on the paper, and it is there the next time you open it.
+beside the paper when its PDF is open. An empty note is ready to type into;
+Save puts it on the paper, and it is there the next time you open it.
 Write what the paper is for, what to read it for, what is wrong with it, what
 to do about it — whatever the extraction could not have told you. A claim's
 note is a field in its editor, under the links to your own claims: press `e`,
