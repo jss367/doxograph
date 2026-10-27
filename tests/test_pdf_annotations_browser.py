@@ -189,3 +189,48 @@ def test_claim_annotations_check_document_ambiguity_and_span_page_breaks(engine)
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_claim_annotations_use_the_verifiers_span_for_wording_differences(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Evidence with wording differences'))
+    repeated_text = 'We also tested a persistent outcome after interruption.'
+    store.pdf_path('paper').write_bytes(minimal_pdf([
+        'We find recovery under steering is a path-dependent outcome across all three model scales.\n' + repeated_text,
+        repeated_text,
+    ]))
+    claim = store.add_claim('paper', {
+        'text':'Evidence with a small wording difference',
+        'quote':'recovery under steering is a path dependant outcome across all three model scales', 'locator':'p. 1',
+    })
+    repeated = store.add_claim('paper', {
+        'text':'Repeated evidence with a wording difference',
+        'quote':'We also tested a persistant outcome after interruption.', 'locator':'p. 1',
+    })
+    assert claim['quote_verified'] is True and repeated['quote_verified'] is True
+    assert store.quote_context('paper', repeated['id'])['repeated'] is True
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                async with page.expect_response(lambda response: f'/claims/{repeated["id"]}/quote-context' in response.url) as response:
+                    await page.locator('#papers li[data-paper="paper"]').click()
+                assert (await response.value).status == 200
+                badge = page.get_by_role('button', name='Show claim: Evidence with a small wording difference', exact=True)
+                await badge.wait_for()
+                source = page.locator(f'.claim-passage[data-claim="{claim["id"]}"]')
+                mark_box = await source.bounding_box()
+                text_box = await page.locator('.pdf-page[data-page="1"] .textLayer span').first.bounding_box()
+                assert mark_box['x'] > text_box['x']  # Exclude "We find", outside the verifier's span.
+                assert await page.get_by_role('button', name='Show claim: Repeated evidence with a wording difference', exact=True).count() == 0
+                await badge.click()
+                assert await page.locator(f'#content .claim.sel[data-claim="{claim["id"]}"]').count() == 1
+                assert not errors
+
+    run_browser(scenario())

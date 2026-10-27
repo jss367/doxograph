@@ -590,6 +590,28 @@ const ResearchTools = (() => {
       if (reader === active) toast(`Could not locate claim passages: ${error.message}`, {tone:'warn'});
     }).finally(() => { active.quoteTextTask = null; });
   }
+  function annotationQuote(claim) {
+    const active = reader;
+    if (!active.quoteText || active.quoteText.text.includes(quoteLetters(claim.quote))) return claim.quote;
+    // The verifier also accepts small wording/OCR differences. Resolve only
+    // quotes missing from the exact index, using its matched span rather than
+    // a second approximate matcher that could choose different evidence.
+    active.quoteSources ||= new Map();
+    const key = JSON.stringify([claim.id, claim.quote]);
+    if (!active.quoteSources.has(key)) {
+      const source = {quote:null};
+      active.quoteSources.set(key, source);
+      client.request(`/api/papers/${encodeURIComponent(active.paper)}/claims/${encodeURIComponent(claim.id)}/quote-context`,
+        {headers:{'X-Doxograph-Workspace':active.workspace}}).then(context => {
+        if (reader !== active) return;
+        source.quote = context.quote === claim.quote && context.found && !context.repeated ? context.matched || null : null;
+        redrawHighlights();
+      }).catch(error => {
+        if (reader === active) toast(`Could not locate a saved quote: ${error.message}`, {tone:'warn'});
+      });
+    }
+    return active.quoteSources.get(key).quote;
+  }
   // Captured claims already store their quote and page, including captures made
   // before the reader showed annotations. Match against the rendered text so
   // their marks follow zoom, line wrapping, and PDF.js's text positioning.
@@ -660,7 +682,9 @@ const ResearchTools = (() => {
       badges.push({y:h.rects[0].y, action:`data-tool="show-highlight-note" data-highlight="${html(h.id)}"`, label:'Note', description:`Show note: ${h.note}`});
     }
     for (const claim of quoted) {
-      const rects = claimRects(page, claim.quote);
+      const quote = annotationQuote(claim);
+      if (!quote) continue;
+      const rects = claimRects(page, quote);
       if (!rects.length) continue;
       passages.push(...rects.map(r => `<div class="claim-passage" data-claim="${html(claim.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`));
       badges.push({y:rects[0].y, action:`data-act="goto-claim" data-claim="${html(claim.id)}" data-paper="${html(reader.paper)}"`, label:claim.note?.trim() ? 'Note' : 'Claim', description:`Show claim: ${claim.text}${claim.note?.trim() ? ` — ${claim.note}` : ''}`});

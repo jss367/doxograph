@@ -473,6 +473,15 @@ def test_a_passage_the_paper_prints_twice_is_marked_even_when_the_quote_drifts(t
     assert found["repeated"] is True
 
 
+def test_a_verified_wording_difference_exposes_the_matched_span_not_the_whole_sentence(tmp_path):
+    pdf = tmp_path / 'wording.pdf'
+    pdf.write_bytes(minimal_pdf('We find that recovery under steering is a path-dependent outcome across all scales.'))
+    found = quotes.locate(pdf, 'recovery under steering is a path dependant outcome')
+    assert found['found'] is True
+    assert found['matched'] == 'recovery under steering is a path-dependent outcome'
+    assert found['suggestion'].startswith('We find that')
+
+
 def test_the_text_of_a_replaced_pdf_cannot_be_stored_after_the_replacement(tmp_path):
     """A reader that started before a publish must not store what it read
     afterwards: stored last is stored newest, and would be believed."""
