@@ -139,7 +139,7 @@ def test_poll_prunes_only_parked_drafts_for_deleted_papers(engine, action, faile
 
                 # Only the deleted paper's ghost draft could prompt now.
                 await page.locator("#workspace").select_option(other_workspace["id"])
-                await page.wait_for_function("id => currentWorkspaceId === id", arg=other_workspace["id"])
+                await page.wait_for_function("id => workspaceClient.workspaceId === id", arg=other_workspace["id"])
                 await expect(page.locator("#ask")).not_to_be_visible()
 
     run_browser(scenario())

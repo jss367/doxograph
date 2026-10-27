@@ -106,8 +106,8 @@ async def _polled(page, rounds: int = 2) -> None:
     the page runs one round at a time, the second is certain to have started
     after this read of the count.
     """
-    done = await page.evaluate("polls")
-    await page.wait_for_function("n => polls >= n", arg=done + rounds, timeout=30000)
+    done = await page.evaluate("poller.completed")
+    await page.wait_for_function("n => poller.completed >= n", arg=done + rounds, timeout=30000)
 
 
 async def _poll(page) -> None:
@@ -116,11 +116,7 @@ async def _poll(page) -> None:
     Most scenarios test how the UI responds to a changed corpus, rather than
     the timer itself. Keep _polled for the tests that exercise scheduling.
     """
-    await asyncio.wait_for(page.evaluate("""async () => {
-        while (polling) await new Promise(resolve => setTimeout(resolve, 10));
-        polling = true;
-        try { await pollOnce(); } finally { polling = false; }
-    }"""), timeout=30)
+    await asyncio.wait_for(page.evaluate("pollOnce()"), timeout=30)
 
 
 def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
@@ -2106,7 +2102,7 @@ def test_a_link_naming_a_workspace_writes_there_before_the_registry_loads():
                 await asyncio.wait_for(held.wait(), timeout=10)
                 # The registry has not answered yet, and already anything the
                 # page sends carries the workspace the link named.
-                assert await page.evaluate("currentWorkspaceId") == other["id"]
+                assert await page.evaluate("workspaceClient.workspaceId") == other["id"]
                 assert await page.evaluate("window.doxographWorkspaceId") == other["id"]
                 release.set()
                 await loading
@@ -2487,7 +2483,7 @@ def test_removing_a_paper_names_the_workspace_it_was_asked_in():
                 await route.continue_()
                 if request.method == "DELETE":
                     # The switch lands in the gap the flush's read leaves open.
-                    await page.evaluate(f"currentWorkspaceId = '{other['id']}'")
+                    await page.evaluate(f"workspaceClient.select('{other['id']}')")
 
             async def record_paper_delete(route, request):
                 if request.method == "DELETE":
@@ -2603,7 +2599,7 @@ def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
             async def move_after_claim_delete(route, request):
                 await route.continue_()
                 if request.method == "DELETE":
-                    await page.evaluate("currentWorkspaceId = workspaces[1].id")
+                    await page.evaluate("workspaceClient.select(workspaceClient.workspaces[1].id)")
 
             async def record_pass(route, request):
                 sent_to.append(request.headers.get("x-doxograph-workspace"))
@@ -2842,7 +2838,7 @@ def test_a_flush_leaves_alone_a_delete_made_in_another_workspace():
                     const flushing = flushTrash();
                     // The gap the drain leaves: the reader moves on and deletes
                     // something in the corpus they moved to.
-                    currentWorkspaceId = workspaces[1].id;
+                    workspaceClient.select(workspaceClient.workspaces[1].id);
                     deleteLater('claim', b, path(b), 'the claim');
                     return [await flushing, trash.has(`claim:${b}`)];
                   })()
@@ -4688,7 +4684,7 @@ def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
 
                 # The page is still in the Default corpus, and says so.
                 assert await page.locator("#workspace").input_value() == "default"
-                assert await page.evaluate("currentWorkspaceId") == "default"
+                assert await page.evaluate("workspaceClient.workspaceId") == "default"
                 assert await page.evaluate("window.doxographWorkspaceId") == "default"
 
                 # And a write made in that window lands where the picker says.
@@ -5616,13 +5612,13 @@ def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back(
                 httpx.post(f"{url}/api/tags", json={"name": "alignment", "description": ""})
                 await asyncio.wait_for(held.wait(), timeout=10)
 
-                polls = await page.evaluate("polls")
+                polls = await page.evaluate("poller.completed")
                 await page.locator("#new-tag").fill("interpretability")
                 await page.locator("#btn-tag").click()
                 await page.wait_for_function("S.tags.some((t) => t.name === 'interpretability')")
 
                 release.set()
-                await page.wait_for_function("n => polls > n", arg=polls, timeout=10000)
+                await page.wait_for_function("n => poller.completed > n", arg=polls, timeout=10000)
                 assert await page.evaluate("S.tags.some((t) => t.name === 'interpretability')")
 
     run_browser(scenario())

@@ -1,25 +1,23 @@
 'use strict';
 
-let S = { papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
-          kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
-let workspaces = [];
-let currentWorkspaceId = null;
-// The workspace change in flight, if any: its corpus is still on its way.
-let workspaceSwitch = null;
-let pendingMutations = 0;
-// The page can be asked to write before the workspace registry has loaded: a
-// Finder or Dock drop in the native app, a paste into the box, an Export. Take
-// the workspace from the address, or from what this browser was last on, before
-// any of that is possible — a request sent with no workspace named goes to the
-// Default corpus, which is the one thing a link naming another must never do.
-// `loadWorkspaces` corrects this if the name turns out not to exist.
+// Select the destination before Dock uploads, drops, or other writes can run.
+let initialWorkspaceId = 'default';
 try {
-  const named = new URLSearchParams((location.hash || '').replace(/^#/, '')).get('ws');
-  currentWorkspaceId = named || localStorage.getItem('doxograph-workspace') || 'default';
-} catch (e) {
-  currentWorkspaceId = 'default';
-}
-window.doxographWorkspaceId = currentWorkspaceId;
+  initialWorkspaceId = new URLSearchParams(location.hash.slice(1)).get('ws')
+    || localStorage.getItem('doxograph-workspace') || 'default';
+} catch (_) { /* storage may be unavailable */ }
+const workspaceClient = createWorkspaceClient({
+  workspaceId: initialWorkspaceId,
+  fetch: (...args) => fetch(...args),
+  rememberWorkspace(id) {
+    try { localStorage.setItem('doxograph-workspace', id); } catch (_) { /* optional */ }
+  },
+  onWorkspaceChange(id) { window.doxographWorkspaceId = id; },
+});
+window.doxographWorkspaceId = workspaceClient.workspaceId;
+// The library keeps its optimistic view of the client's latest snapshot here.
+// Feature modules access the client directly, not this rendering alias.
+let S = workspaceClient.state;
 // selectedId is a claim id rather than a render position: in grouped mode a
 // claim with several topics is drawn once per topic, so positions do not map
 // onto claims one-to-one. newClaim holds a claim being written by hand; it lives
@@ -448,7 +446,7 @@ function trashed(kind, id) {
 // server never heard about changes nothing on its side, and the next poll
 // would be answered "not modified" and leave the row missing for good.
 function forgetStateTag() {
-  stateEtag = null;
+  workspaceClient.invalidateState();
 }
 
 // Whether a claim still says what a synthesis's basis on file recorded it
@@ -648,7 +646,7 @@ function pruneTrashed() {
 async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   const token = `${kind}:${id}`;
   if (trash.has(token)) return;
-  const workspace = currentWorkspaceId || 'default';
+  const workspace = workspaceClient.workspaceId || 'default';
   let notice = null;
   // The entry stays in the trash until the request settles, so the row does not
   // flash back on screen between the notice fading and the server answering.
@@ -758,7 +756,7 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
 // reader has already been told so, and whatever was waiting on the deletion
 // must not go ahead against a corpus that still holds it. Every caller checks.
 async function settleDeletes(wanted = null) {
-  const workspace = currentWorkspaceId;
+  const workspace = workspaceClient.workspaceId;
   if (!await flushTrash(wanted)) return null;
   return { 'X-Doxograph-Workspace': workspace };
 }
@@ -777,7 +775,7 @@ async function flushTrash(wanted = null) {
   // call off an action in a workspace it has nothing to do with. It is left
   // to its own eight seconds, and to the flush that leaving that workspace
   // runs.
-  const workspace = currentWorkspaceId || 'default';
+  const workspace = workspaceClient.workspaceId || 'default';
   let settled = true;
   for (;;) {
     const waiting = [...trash.values()]
@@ -810,7 +808,8 @@ window.addEventListener('pagehide', () => {
     // whichever lost would come back 404 over a row that was deleted after all.
     if (entry.sending) return;
     const headers = { 'X-Doxograph-Workspace': entry.workspace };
-    try { fetch(entry.path, { method: 'DELETE', headers, keepalive: true }); } catch (e) { /* leaving anyway */ }
+    workspaceClient.response(entry.path, { method: 'DELETE', headers, keepalive: true })
+      .catch(() => {}); // The page is leaving; there is no remaining UI for a failure.
   });
   trash.clear();
 });
@@ -829,7 +828,7 @@ function hashParams() {
 
 function currentHash() {
   const params = new URLSearchParams();
-  if (currentWorkspaceId && currentWorkspaceId !== 'default') params.set('ws', currentWorkspaceId);
+  if (workspaceClient.workspaceId && workspaceClient.workspaceId !== 'default') params.set('ws', workspaceClient.workspaceId);
   if (V.view !== 'claims') params.set('view', V.view);
   if (V.paper) params.set('paper', V.paper);
   if (V.tag) params.set('tag', V.tag);
@@ -857,7 +856,7 @@ let restoringHistory = false;
 // the final paper/view. Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
 function navigationVersion() {
-  const route = JSON.stringify([currentWorkspaceId, V.view, V.paper, V.tag, V.label,
+  const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden]);
   if (route !== navigationRoute) { navigationRoute = route; navigationSeq++; }
   return navigationSeq;
@@ -877,13 +876,13 @@ function syncHash(push = false) {
 // come from the existing notebook rather than a second copy of reading progress.
 let continuation = null;
 function continuationState() {
-  if (continuation?.workspace === currentWorkspaceId) return continuation;
+  if (continuation?.workspace === workspaceClient.workspaceId) return continuation;
   let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(`doxograph-continue:${currentWorkspaceId}`)) || {}; } catch (_) { /* optional */ }
+  try { saved = JSON.parse(localStorage.getItem(`doxograph-continue:${workspaceClient.workspaceId}`)) || {}; } catch (_) { /* optional */ }
   // A fresh deep link is a visit. On reload, the library behind a resumed PDF
   // has already been visited and must not displace the more recent reader.
   const reloading = performance.getEntriesByType('navigation')[0]?.type === 'reload';
-  continuation = {workspace:currentWorkspaceId, paper:saved.paper || null, claim:saved.claim || null,
+  continuation = {workspace:workspaceClient.workspaceId, paper:saved.paper || null, claim:saved.claim || null,
     observedPaper:reloading ? V.paper : null};
   return continuation;
 }
@@ -893,7 +892,7 @@ function rememberContinuation(paper, claim = null) {
   if (state.paper !== paper) state.claim = null;
   state.paper = paper;
   if (claim) state.claim = claim;
-  try { localStorage.setItem(`doxograph-continue:${currentWorkspaceId}`, JSON.stringify({paper:state.paper, claim:state.claim})); } catch (_) { /* keep for this session */ }
+  try { localStorage.setItem(`doxograph-continue:${workspaceClient.workspaceId}`, JSON.stringify({paper:state.paper, claim:state.claim})); } catch (_) { /* keep for this session */ }
 }
 
 function continuationTargets() {
@@ -1064,8 +1063,8 @@ window.addEventListener('popstate', async () => {
   try {
     // The workspace reset clears the filters; the URL being moved to puts back
     // whatever it holds, which is the whole point of going back to it.
-    if (wanted !== currentWorkspaceId) {
-      if (workspaces.some((w) => w.id === wanted)) await switchWorkspace(wanted);
+    if (wanted !== workspaceClient.workspaceId) {
+      if (workspaceClient.workspaces.some((w) => w.id === wanted)) await switchWorkspace(wanted);
       if (seq !== popSeq) return;
       // The switch can be refused — a change still in flight, or the reader
       // keeping their drafts — and a workspace this page does not know is
@@ -1073,15 +1072,15 @@ window.addEventListener('popstate', async () => {
       // not in, and applying its paper and filters to the one it is in would
       // be worse than ignoring it: a key that exists in both corpora would
       // open the wrong paper, which `dropMissingFilters` cannot catch.
-      if (currentWorkspaceId !== wanted) return;
-    } else if (workspaceSwitch) {
+      if (workspaceClient.workspaceId !== wanted) return;
+    } else if (workspaceController.pending) {
       // A switch is running and this entry belongs to where the page is now —
-      // but `currentWorkspaceId` only changes once that switch's own flush is
+      // but `workspaceClient.workspaceId` only changes once that switch's own flush is
       // done, so the switch may be on its way somewhere else entirely. Wait
       // for it, then ask again where it left us.
-      await workspaceSwitch;
+      await workspaceController.pending;
       if (seq !== popSeq) return;
-      if (currentWorkspaceId !== wanted) return;
+      if (workspaceClient.workspaceId !== wanted) return;
     }
     applyHash();
     dropMissingFilters();
@@ -1097,89 +1096,13 @@ window.addEventListener('popstate', async () => {
   }
 });
 
-async function api(path, options = {}) {
-  const request = { ...options };
-  const headers = new Headers(request.headers || {});
-  // A caller that named a workspace meant that one. An undo offered in a
-  // notice can outlive the picker, and finishing it against whatever is
-  // selected by then would write to the wrong corpus — the same paper
-  // imported twice carries the same key and claim ids in both.
-  if (!headers.has('X-Doxograph-Workspace') && currentWorkspaceId) {
-    headers.set('X-Doxograph-Workspace', currentWorkspaceId);
-  }
-  request.headers = headers;
-  const method = (request.method || 'GET').toUpperCase();
-  const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(method);
-  if (mutating) pendingMutations += 1;
-  try {
-    const response = await fetch(path, request);
-    if (!response.ok) {
-      let detail = response.statusText;
-      try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
-      throw new Error(detail);
-    }
-    return response.status === 204 ? null : await response.json();
-  } finally {
-    if (mutating) pendingMutations -= 1;
-  }
-}
+const api = (path, options) => workspaceClient.request(path, options);
 
-// The corpus is fetched with the ETag of the last answer applied, so a poll
-// that finds nothing changed costs the server a directory listing and costs
-// the page nothing at all: `fetchState` returns null on a 304 and `S` is left
-// alone. The tag is committed only once the payload has been applied to `S`,
-// in `pull`. Committing it on receipt would, if the jobs request beside it
-// failed, leave the page presenting a tag for a corpus it never showed and
-// getting 304s against it until the next write.
-let stateEtag = null;
-
-async function fetchState() {
-  const headers = new Headers();
-  if (currentWorkspaceId) headers.set('X-Doxograph-Workspace', currentWorkspaceId);
-  if (stateEtag) headers.set('If-None-Match', stateEtag);
-  const response = await fetch('/api/state', { headers });
-  if (response.status === 304) return null;
-  if (!response.ok) {
-    let detail = response.statusText;
-    try { detail = (await response.json()).detail || detail; } catch (e) { /* keep statusText */ }
-    throw new Error(detail);
-  }
-  return { state: await response.json(), etag: response.headers.get('ETag') };
-}
-
-async function fetchJobs() {
-  const result = await api('/api/jobs');
-  return result.jobs || [];
-}
-
-// Which pull was asked last, and which is the latest whose answer is in `S`.
-// A poll and a refresh after a write can be out together, and the poll's
-// answer arriving second would put back the corpus from before the write and
-// the ETag that goes with it, so the next poll is told nothing has changed.
-let pullsAsked = 0;
-let pullApplied = 0;
-
-// Pulls the corpus and the jobs, keeping `S.jobs` across a state answer that
-// did not change. Returns whether the corpus changed.
 async function pull() {
-  const requestedWorkspace = currentWorkspaceId;
-  const asked = ++pullsAsked;
-  const [next, jobs] = await Promise.all([fetchState(), fetchJobs()]);
-  if (requestedWorkspace !== currentWorkspaceId) return false;
-  // Overtaken by a pull asked after this one: what that brought is newer.
-  if (asked < pullApplied) return false;
-  pullApplied = asked;
-  if (next) {
-    S = { ...next.state, jobs };
-    stateEtag = next.etag;
-    if (S.workspace && currentWorkspace()?.name !== S.workspace.name) {
-      workspaces = workspaces.map((workspace) =>
-        workspace.id === S.workspace.id ? S.workspace : workspace);
-      renderWorkspacePicker();
-    }
-  } else {
-    S.jobs = jobs;
-  }
+  const result = await workspaceClient.pull();
+  if (!result.applied) return false;
+  S = workspaceClient.state;
+  if (result.registryChanged) renderWorkspacePicker();
   pruneTrashed();   // a delete that has not been sent yet is already gone here
   // And the view is checked against the corpus that is left, which is where a
   // filter naming something that has gone is dropped. Here rather than only at
@@ -1196,7 +1119,7 @@ async function pull() {
   for (const key of Object.keys(V.parkedNewClaims)) {
     if (!papers.has(key)) delete V.parkedNewClaims[key];
   }
-  return Boolean(next);
+  return result.changed;
 }
 
 // What has to be asked again when the corpus moves. Every path that pulls
@@ -1213,9 +1136,9 @@ function corpusChanged() {
 }
 
 async function refresh() {
-  const requestedWorkspace = currentWorkspaceId;
+  const requestedWorkspace = workspaceClient.workspaceId;
   const changed = await pull();
-  if (requestedWorkspace !== currentWorkspaceId) return;
+  if (requestedWorkspace !== workspaceClient.workspaceId) return;
   if (changed) corpusChanged();
   render();
 }
@@ -1226,9 +1149,9 @@ async function refresh() {
 // screen and stays clickable. This keeps the open editor's draft across it.
 async function refreshAll() {
   captureOpenEditor();
-  const requestedWorkspace = currentWorkspaceId;
+  const requestedWorkspace = workspaceClient.workspaceId;
   const changed = await pull();
-  if (requestedWorkspace !== currentWorkspaceId) return;
+  if (requestedWorkspace !== workspaceClient.workspaceId) return;
   if (changed) corpusChanged();
   renderAll();
 }
@@ -1255,26 +1178,25 @@ async function refreshShowingError() {
 }
 
 function currentWorkspace() {
-  return workspaces.find((workspace) => workspace.id === currentWorkspaceId) || null;
+  return workspaceClient.currentWorkspace();
 }
 
 function workspaceQuery() {
-  return `workspace=${encodeURIComponent(currentWorkspaceId || 'default')}`;
+  return `workspace=${encodeURIComponent(workspaceClient.workspaceId || 'default')}`;
 }
 
 function renderWorkspacePicker() {
-  $('workspace').innerHTML = workspaces.map((workspace) =>
+  $('workspace').innerHTML = workspaceClient.workspaces.map((workspace) =>
     `<option value="${esc(workspace.id)}">${esc(workspace.name)}</option>`).join('');
-  $('workspace').value = currentWorkspaceId || 'default';
+  $('workspace').value = workspaceClient.workspaceId || 'default';
   const selected = currentWorkspace();
   $('btn-workspace-rename').disabled = !selected;
   document.title = selected ? `${selected.name} — Doxograph` : 'Doxograph';
-  window.doxographWorkspaceId = currentWorkspaceId || 'default';
+  window.doxographWorkspaceId = workspaceClient.workspaceId || 'default';
 }
 
 function resetWorkspaceView() {
-  S = { papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {}, ledger: [], context: '', tensions: [], agreements: [], syntheses: [],
-        kinds: [], strengths: [], relations: [], jobs: [], has_key: true };
+  S = workspaceClient.state;
   Object.assign(V, {
     paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
@@ -1296,92 +1218,40 @@ function resetWorkspaceView() {
   closePaperMenu();
 }
 
-// Bumped by every selection, so a switch that stopped to wait for an earlier
-// one can tell it has since been overtaken and stand down rather than load a
-// workspace the reader has already moved on from.
-let switchSeq = 0;
-
-async function switchWorkspace(workspaceId) {
-  if (workspaceId === currentWorkspaceId && !workspaceSwitch) return;
-  if (!await ResearchNotes.beforeWorkspaceSwitch()) { renderWorkspacePicker(); return; }
-  if (!await ResearchTools.beforeWorkspaceSwitch()) { renderWorkspacePicker(); return; }
-  const seq = ++switchSeq;
-  // The picker is a native select, so the browser has already moved it to the
-  // new name by the time this runs — and nothing here moves the corpus for a
-  // while yet. Every step below is a wait: an earlier switch to finish, the
-  // question about unsaved edits, and then the flush of held deletes inside
-  // `loadWorkspace`. `currentWorkspaceId` and `window.doxographWorkspaceId`
-  // name the workspace being left for all of it, and the rest of the page
-  // stays live, so a reference added, a PDF dropped, an export or a Dock
-  // upload made in that window would go to the corpus the picker had stopped
-  // showing. It is put back to the one that is actually live, and only moves
-  // when `loadWorkspace` has moved it — which is also what the refusals below
-  // used to each have to do for themselves.
-  renderWorkspacePicker();
-  // A switch spans several awaits, and the first of them sends the held
-  // deletes — a flush that ends in a read, which is not counted as a change in
-  // flight. The picker stays live for that stretch, so a second selection can
-  // arrive mid-switch. Two loads running together write `currentWorkspaceId`
-  // and `S` in whatever order their requests land, and the newer one can be
-  // overwritten by the older one finishing behind it: the page settles in the
-  // workspace that was superseded. So the switch already running finishes
-  // first, and only the newest selection goes on from there.
-  while (workspaceSwitch) {
-    // A switch that failed still ends this one's wait; its own caller reports it.
-    await workspaceSwitch.catch(() => {});
-    // Overtaken while waiting. The selection that overtook this one owns the
-    // picker from here, including putting it back if it refuses too.
-    if (seq !== switchSeq) return;
-  }
-  // The switch that just finished may have landed where this one was headed.
-  if (workspaceId === currentWorkspaceId) return;
-  if (pendingMutations || savingClaims.size || V.synthSaving || V.noteSaving || V.researchSaving) {
-    toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
-    return;
-  }
-  const hasDraft = V.editing || V.synthEditing || V.noteEditing || V.newClaim
-    || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
-    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty();
-  if (hasDraft && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
-                                       { ok: 'Discard and switch' })) return;
-  // The dialog is another await the picker is live across.
-  if (seq !== switchSeq) return;
-  const run = loadWorkspace(workspaceId);
-  workspaceSwitch = run;
-  try {
-    await run;
-  } finally {
-    if (workspaceSwitch === run) workspaceSwitch = null;
-  }
-}
-
-// The half of the switch that replaces the corpus, kept separate so that
-// anyone who arrives while it is running can wait for it. `currentWorkspaceId`
-// changes at the start and `S` only when the answer lands, so code that reads
-// both in between would be judging the new workspace by the old corpus.
-async function loadWorkspace(workspaceId) {
-  await flushTrash();
-  currentWorkspaceId = workspaceId;
-  stateEtag = null;   // the tag belongs to the other workspace's corpus
-  try { localStorage.setItem('doxograph-workspace', workspaceId); } catch (e) { /* optional */ }
-  resetWorkspaceView();
-  renderWorkspacePicker();
-  syncHash(true);   // a no-op while a popped entry is being restored
-  await refresh();
-  $('kind').innerHTML = '<option value="">every kind</option>'
-    + S.kinds.map((kind) => `<option value="${esc(kind)}">${esc(kind)}</option>`).join('');
-}
+const workspaceController = createWorkspaceController(workspaceClient, {
+  async prepare() {
+    return await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+  },
+  showCurrent: renderWorkspacePicker,
+  canLeave() {
+    if (workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || V.noteSaving || V.researchSaving) {
+      toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
+      return false;
+    }
+    return true;
+  },
+  async confirmLeave() {
+    const hasDraft = V.editing || V.synthEditing || V.noteEditing || V.newClaim
+      || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
+      || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty();
+    return !hasDraft || await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
+                                           { ok: 'Discard and switch' });
+  },
+  beforeLeave: flushTrash,
+  async enter() {
+    resetWorkspaceView();
+    renderWorkspacePicker();
+    syncHash(true);
+    await refresh();
+    $('kind').innerHTML = '<option value="">every kind</option>'
+      + S.kinds.map(kind => `<option value="${esc(kind)}">${esc(kind)}</option>`).join('');
+  },
+});
+const switchWorkspace = id => workspaceController.switchTo(id);
 
 async function loadWorkspaces() {
-  const response = await fetch('/api/workspaces');
-  if (!response.ok) throw new Error('Could not load workspaces');
-  workspaces = (await response.json()).workspaces || [];
-  // `currentWorkspaceId` was taken from the address or from this browser's last
-  // choice before the page could send anything anywhere. This is where it is
-  // checked against the corpora that actually exist.
-  const wanted = currentWorkspaceId;
-  currentWorkspaceId = workspaces.some((workspace) => workspace.id === wanted) ? wanted : 'default';
-  try { localStorage.setItem('doxograph-workspace', currentWorkspaceId); } catch (e) { /* optional */ }
+  await workspaceClient.loadWorkspaces();
+  S = workspaceClient.state;
   renderWorkspacePicker();
 }
 
@@ -1626,7 +1496,7 @@ function rerunTextSearch() {
 // "reading the papers" every time a paper is imported.
 async function runTextSearch(query, quiet = false) {
   const seq = ++textSearchSeq;
-  const workspace = currentWorkspaceId;
+  const workspace = workspaceClient.workspaceId;
   if (!quiet) {
     captureOpenEditor();   // the redraw rebuilds any open form from state
     V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
@@ -1642,7 +1512,7 @@ async function runTextSearch(query, quiet = false) {
   // An answer to a query that is no longer the one on screen is dropped: the
   // requests are not guaranteed to come back in the order they went out, and
   // the corpus can have changed under the one still running.
-  if (seq !== textSearchSeq || workspace !== currentWorkspaceId) return;
+  if (seq !== textSearchSeq || workspace !== workspaceClient.workspaceId) return;
   V.textSearch = next;
   captureOpenEditor();
   drawSearchProgress();
@@ -2129,7 +1999,7 @@ async function editLabels(key) {
 
 function paperCache() {
   window.__paperCache = window.__paperCache || {};
-  const workspace = currentWorkspaceId || 'default';
+  const workspace = workspaceClient.workspaceId || 'default';
   window.__paperCache[workspace] = window.__paperCache[workspace] || {};
   return window.__paperCache[workspace];
 }
@@ -3068,7 +2938,7 @@ function renderJobs() {
   const importStates = { queued: 'Waiting to import…', fetching: 'Importing…', reading: 'Analyzing…',
                          done: 'Imported', error: 'Import failed' };
   $('jobs').innerHTML = active.slice(0, 6).map((j) => {
-    const disabled = pendingJobActions.has(`${currentWorkspaceId}:${j.id}`) ? 'disabled' : '';
+    const disabled = pendingJobActions.has(`${workspaceClient.workspaceId}:${j.id}`) ? 'disabled' : '';
     const explained = j.state === 'error' && j.explanation;
     const status = j.kind === 'import' ? (importStates[j.state] || j.state) : j.state;
     return `
@@ -3091,7 +2961,7 @@ function renderJobs() {
 $('jobs').addEventListener('click', async (event) => {
   const button = event.target.closest('.dismiss-job, .retry-job, .open-job');
   if (!button || button.disabled) return;
-  const workspace = currentWorkspaceId;
+  const workspace = workspaceClient.workspaceId;
   const actionKey = `${workspace}:${button.dataset.jobId}`;
   if (pendingJobActions.has(actionKey)) return;
   pendingJobActions.add(actionKey);
@@ -3105,7 +2975,7 @@ $('jobs').addEventListener('click', async (event) => {
       });
     }
     await refresh();
-    if (open && workspace === currentWorkspaceId) {
+    if (open && workspace === workspaceClient.workspaceId) {
       if (S.papers.some((paper) => paper.key === button.dataset.paper)) openPaper(button.dataset.paper);
       else toast('This paper is no longer in this workspace.', { tone: 'warn' });
     }
@@ -3113,7 +2983,7 @@ $('jobs').addEventListener('click', async (event) => {
     toast(`Could not ${open ? 'open paper' : retry ? 'retry import' : 'dismiss notification'}: ${error.message}`, { tone: 'warn' });
   } finally {
     pendingJobActions.delete(actionKey);
-    if (workspace === currentWorkspaceId) renderJobs();
+    if (workspace === workspaceClient.workspaceId) renderJobs();
   }
 });
 
@@ -3261,7 +3131,7 @@ async function reviewWholePaper(paper) {
   // The notice outlives the picker, so the undo carries the workspace the
   // decision was taken in rather than whichever one is selected when it is
   // clicked: the same paper imported twice has the same claim ids in both.
-  const workspace = currentWorkspaceId;
+  const workspace = workspaceClient.workspaceId;
   // An open editor on this paper is frozen for the length of the request, as
   // one is during a single toggle: a full-form Save started meanwhile carries
   // the old checkbox, and landing after the bulk write would put it back.
@@ -3294,7 +3164,7 @@ async function reviewWholePaper(paper) {
   // so the undo waits for it rather than being overtaken by it — and the offer
   // comes back rather than being spent, since the reader did ask to undo.
   async function undo() {
-    const mine = currentWorkspaceId === workspace;
+    const mine = workspaceClient.workspaceId === workspace;
     if (mine && changed.some((id) => isSaving(id))) {
       toast('Wait for the change in flight to finish, then undo.', { tone: 'warn' });
       offerUndo();
@@ -3314,7 +3184,7 @@ async function reviewWholePaper(paper) {
       // Only where the decision was taken. An editor open on the same claim id
       // in another corpus is a different claim, and correcting its checkbox
       // would unreview it when that form is saved.
-      if (currentWorkspaceId === workspace) syncDraftReviews(changed, false);
+      if (workspaceClient.workspaceId === workspace) syncDraftReviews(changed, false);
     } catch (error) {
       toast(`Could not undo: ${error.message}`, { tone: 'warn' });
     } finally {
@@ -3607,7 +3477,7 @@ async function removePaper(paper) {
   // badly: landing first it is thrown away under a page that reported it
   // saved, landing second it is a 404 over a removal the reader did ask for.
   // The guard below stops the next one; this is the one already in flight.
-  if (pendingMutations) {
+  if (workspaceClient.pendingMutations) {
     toast('Wait for the change in flight to finish, then remove the paper.', { tone: 'warn' });
     return;
   }
@@ -3677,7 +3547,7 @@ async function removePaper(paper) {
     // Moved on meanwhile: the view belongs to another corpus now, and the drafts
     // and selection this would tidy up went with `resetWorkspaceView`. A note
     // being written there on a mark of the same key is that corpus's own.
-    if (currentWorkspaceId !== workspace) {
+    if (workspaceClient.workspaceId !== workspace) {
       await refreshAll();
       return;
     }
@@ -4311,7 +4181,7 @@ $('ai-enabled').addEventListener('change', async () => {
       body: JSON.stringify({ ai_enabled: enabled }),
     });
     S.ai_enabled = settings.ai_enabled;
-    stateEtag = null;
+    workspaceClient.invalidateState();
     $('ai-settings-status').textContent = settings.ai_enabled ? 'AI analysis enabled.' : 'AI analysis disabled.';
   } catch (error) {
     $('ai-settings-status').textContent = `Could not save: ${error.message}`;
@@ -4333,7 +4203,7 @@ $('ai-access').addEventListener('change', async () => {
       body: JSON.stringify({ ai_provider: provider }),
     });
     S.ai_provider = settings.ai_provider;
-    stateEtag = null;
+    workspaceClient.invalidateState();
     $('ai-settings-status').textContent = 'Model access saved.';
   } catch (error) {
     $('ai-settings-status').textContent = `Could not save: ${error.message}`;
@@ -4362,8 +4232,8 @@ document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-paper-chat]');
   if (!button || button.disabled) return;
   const key = button.dataset.paperChat;
-  const id = JSON.stringify([currentWorkspaceId, key]);
-  if (!paperChats.has(id)) paperChats.set(id, { key, workspace: currentWorkspaceId, messages: [], draft: '', busy: false, error: '' });
+  const id = JSON.stringify([workspaceClient.workspaceId, key]);
+  if (!paperChats.has(id)) paperChats.set(id, { key, workspace: workspaceClient.workspaceId, messages: [], draft: '', busy: false, error: '' });
   activeChat = paperChats.get(id);
   $('chat-paper-title').textContent = (S.papers.find((p) => p.key === key) || {}).title || key;
   renderPaperChat();
@@ -4442,7 +4312,7 @@ $('ai-provider-form').addEventListener('submit', async (event) => {
         base_url: $('ai-base-url').value }),
     });
     Object.assign(S, settings);
-    stateEtag = null;
+    workspaceClient.invalidateState();
     providerDrafts = {};
     $('ai-settings-status').textContent = 'Provider saved. New analysis uses this selection.';
     renderStats();
@@ -4602,7 +4472,7 @@ $('btn-workspace-rename').addEventListener('click', async () => {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
-    workspaces = result.workspaces;
+    workspaceClient.setWorkspaces(result.workspaces);
     renderWorkspacePicker();
     await refresh();
   } catch (error) {
@@ -4621,7 +4491,7 @@ $('btn-workspace-add').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
-    workspaces = result.workspaces || workspaces;
+    workspaceClient.setWorkspaces(result.workspaces || workspaceClient.workspaces);
     renderWorkspacePicker();
     await switchWorkspace(result.workspace.id);
   } catch (error) {
@@ -4943,7 +4813,7 @@ const CommandPalette = (() => {
   function sync(force = false) {
     if (!dialog.open) return;
     // A workspace can also change through Back while this modal is open.
-    if (sourceWorkspace !== currentWorkspaceId || workspaceSwitch || S.workspace?.id !== currentWorkspaceId) {
+    if (sourceWorkspace !== workspaceClient.workspaceId || workspaceController.pending || S.workspace?.id !== workspaceClient.workspaceId) {
       dialog.close(); return;
     }
     const entries = catalog();
@@ -4970,9 +4840,9 @@ const CommandPalette = (() => {
   function open() {
     if (dialog.open) { query.focus(); return; }
     if (document.querySelector('dialog[open]')) return;
-    if (workspaceSwitch || S.workspace?.id !== currentWorkspaceId) return;
+    if (workspaceController.pending || S.workspace?.id !== workspaceClient.workspaceId) return;
     closePaperMenu(); closeSettings();
-    sourceWorkspace = currentWorkspaceId;
+    sourceWorkspace = workspaceClient.workspaceId;
     query.value = ''; signature = '';
     dialog.showModal(); sync(true); query.focus();
   }
@@ -4980,7 +4850,7 @@ const CommandPalette = (() => {
   async function activate() {
     const entry = results[active];
     if (!entry) return;
-    if (sourceWorkspace !== currentWorkspaceId || workspaceSwitch) { dialog.close(); return; }
+    if (sourceWorkspace !== workspaceClient.workspaceId || workspaceController.pending) { dialog.close(); return; }
     // Recheck the live catalog: a background refresh may have removed a paper,
     // board, topic, or disabled an AI action since it was highlighted.
     const live = catalog().find(e => e.id === entry.id);
@@ -5157,20 +5027,13 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
-// How many background polls have run to completion, and whether one is out.
-// A round slower than the interval used to have the next one start beside it,
-// stacking reads on a machine that was already struggling; now the tick is
-// skipped instead. The browser tests wait on the count rather than on the
-// clock — a sleep a little longer than the interval is a coin flip on a loaded
-// machine, where the tick it was supposed to cover has not landed yet — and
-// one round at a time is what makes the count mean what they read it as: that
-// a round which began after they looked has since finished.
-let polls = 0;
-let polling = false;
+const poller = createPoller({ run: updateFromPoll, isVisible: () => !document.hidden });
+// Manual reads wait out an older round so they see changes made after it began.
+const pollOnce = () => poller.afterCurrent();
 
 // One round of the background poll. Keeps settings current while editing; the
 // content guard preserves the editor DOM, draft text, focus, and selection.
-async function pollOnce() {
+async function updateFromPoll() {
   const changed = await pull();
   renderJobs();
   if (!changed) {
@@ -5192,6 +5055,10 @@ async function pollOnce() {
 }
 
 async function boot() {
+  ResearchNotes.connect(workspaceClient);
+  ResearchTools.connect(workspaceClient);
+  window.FocusedReview.connect(workspaceClient);
+  connectPaperMap(workspaceClient);
   await loadWorkspaces();
   applyHash();
   await refresh();
@@ -5209,15 +5076,7 @@ async function boot() {
   if (V.view === 'research') renderContent();
   const noteId = new URLSearchParams(location.search).get('note');
   if (noteId) await ResearchNotes.open(noteId);
-  setInterval(async () => {
-    if (document.hidden || polling) return;
-    polling = true;
-    try {
-      await pollOnce();
-    } catch (e) { /* the server may be restarting; try again next tick */ }
-    polling = false;
-    polls += 1;
-  }, 2500);
+  poller.start();
 }
 
 boot().catch((error) => {

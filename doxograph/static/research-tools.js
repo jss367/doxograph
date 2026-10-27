@@ -1,5 +1,6 @@
 /* Reader-owned workflows. Stored with the active workspace; never sent to a model. */
 const ResearchTools = (() => {
+  let client;
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
@@ -28,11 +29,11 @@ const ResearchTools = (() => {
   // counts as unsaved once it differs from the note on file, so leaving the
   // page asks first, as it does for a board or a connection being edited.
   const highlightDrafting = () => Boolean(markEditor) && markEditor.text !== markEditor.saved;
-  const markEditorOn = paper => markEditor?.workspace === currentWorkspaceId && markEditor.paper === paper;
+  const markEditorOn = paper => markEditor?.workspace === client.workspaceId && markEditor.paper === paper;
   const unsaved = () => dirty || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
-  const resolve = ref => S.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
+  const resolve = ref => client.state.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
   const selectedPapers = () => [...new Set([...papers, ...refs().map(r => r.paper)])];
   const button = (action, title, data = '') => `<button type="button" data-tool="${action}" ${data}>${title}</button>`;
   const input = (label, id, value = '') => `<label>${label}<input id="${id}" value="${html(value)}"></label>`;
@@ -41,8 +42,8 @@ const ResearchTools = (() => {
     try { sessionStorage.setItem(`doxograph-selection:${workspace}`, JSON.stringify({claims:[...claims], papers:[...papers]})); } catch (_) { /* optional */ }
   }
   function sync() {
-    if (workspace !== currentWorkspaceId) {
-      workspace = currentWorkspaceId;
+    if (workspace !== client.workspaceId) {
+      workspace = client.workspaceId;
       // The switch has happened: an editor open on a mark of the workspace
       // left is closed here and not before, since a later guard can still
       // refuse the switch after this module has agreed to it.
@@ -56,18 +57,18 @@ const ResearchTools = (() => {
     // Reconcile the editor against the new corpus without using a missing
     // mark as its saved baseline. Clean editors close; changed text remains
     // editable and copyable until explicitly discarded.
-    if (markEditor && S.notebook) {
-      const removed = !S.papers.some(p => p.key === markEditor.paper)
-        || !(S.notebook.highlights || []).some(h => h.id === markEditor.id && h.paper === markEditor.paper);
+    if (markEditor && client.state.notebook) {
+      const removed = !client.state.papers.some(p => p.key === markEditor.paper)
+        || !(client.state.notebook.highlights || []).some(h => h.id === markEditor.id && h.paper === markEditor.paper);
       if (removed !== Boolean(markEditor.removed)) {
         if (removed && !highlightDrafting()) markEditor = null;
         else markEditor.removed = removed;
         redrawContent();
       }
     }
-    const available = new Set(S.claims.map(refKey));
+    const available = new Set(client.state.claims.map(refKey));
     claims = new Set([...claims].filter(k => available.has(k)));
-    papers = new Set([...papers].filter(k => S.papers.some(p => p.key === k)));
+    papers = new Set([...papers].filter(k => client.state.papers.some(p => p.key === k)));
     remember();
     el('selection-count').textContent = `${claims.size} claims · ${papers.size} papers selected`;
     document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
@@ -76,7 +77,7 @@ const ResearchTools = (() => {
   }
   function claimCheckbox(row) {
     const key = refKey(row);
-    const connections = (S.notebook?.connections || []).filter(c => refKey(c.source) === key || refKey(c.target) === key).length;
+    const connections = (client.state.notebook?.connections || []).filter(c => refKey(c.source) === key || refKey(c.target) === key).length;
     return `<div class="claim-selection"><label><input type="checkbox" data-select-claim="${html(key)}" ${claims.has(key) ? 'checked' : ''}> Select claim</label>
       ${connections ? button('connections', `${connections} manual connection${connections === 1 ? '' : 's'}`) : ''}</div>`;
   }
@@ -84,7 +85,7 @@ const ResearchTools = (() => {
     return `<input type="checkbox" class="paper-selection" aria-label="Select paper: ${html(p.title || p.key)}" data-select-paper="${html(p.key)}" ${papers.has(p.key) ? 'checked' : ''}>`;
   }
   async function request(path = '', method = 'GET', body, ws = modalWorkspace || workspace) {
-    return api('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':ws},
+    return client.request('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':ws},
       ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   }
   function message(text, error = false) {
@@ -192,7 +193,7 @@ const ResearchTools = (() => {
   }
   function renderNotes() {
     notes = {text:notebook.notes, saved:notebook.notes, error:''};
-    const name = workspaces.find(w => w.id === modalWorkspace)?.name || 'this workspace';
+    const name = client.workspaces.find(w => w.id === modalWorkspace)?.name || 'this workspace';
     el('research-body').innerHTML = `<div class="workspace-notes">
       <p class="hint">Your notes for ${html(name)}. Changes save automatically.</p>
       <label for="workspace-notes">What are you investigating?</label>
@@ -214,7 +215,7 @@ const ResearchTools = (() => {
       </div><p class="hint">Topics must already exist in the vocabulary. Paper labels also apply to the papers of selected claims.</p></fieldset>
       <div class="comparison">${refs().map(r => `<article class="comparison-card">${claimSummary(r)}${button('unpin', 'Unpin claim', `data-ref="${html(refKey(r))}"`)}</article>`).join('')}
       ${[...papers].map(key => {
-        const p = S.papers.find(p => p.key === key);
+        const p = client.state.papers.find(p => p.key === key);
         return `<article class="comparison-card"><h3>${html(p.title)}</h3><p class="hint">${html((p.authors || []).join(', '))} · ${html(p.year)}</p>
           <p>${html(p.summary || 'No summary recorded.')}</p><p>${html(p.notes)}</p>
           ${button('source', p.has_pdf ? 'Read paper' : 'Open paper', `data-paper="${html(key)}"`)}${button('unpin-paper', 'Unpin paper', `data-paper="${html(key)}"`)}</article>`;
@@ -255,7 +256,7 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = `<div class="tool-actions">${button('queue-selection','Add selected papers')}</div>
       <p class="hint">Queue order is independent of claim review. Page position and bookmarks are saved as you read.</p>
       ${notebook.reading.map((r,i) => {
-        const p = S.papers.find(p => p.key === r.paper);
+        const p = client.state.papers.find(p => p.key === r.paper);
         return `<article class="reading-entry" data-reading="${html(r.paper)}"><h3>${html(p?.title || 'Removed paper: '+r.paper)}</h3>
           <div class="tool-actions"><label>Reading status<select data-reading-status="${html(r.paper)}">${['queued','reading','finished'].map(s => `<option ${r.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
           ${p?.has_pdf ? button('reader',`Resume at page ${r.page}`,`data-paper="${html(r.paper)}"`) : '<span class="hint">No PDF available</span>'}
@@ -268,7 +269,7 @@ const ResearchTools = (() => {
   }
   function renderMarks() {
     const marks = notebook.highlights.filter(h => marksFilter === 'all' || h.question);
-    const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:S.papers.find(p => p.key === key)}))
+    const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:client.state.papers.find(p => p.key === key)}))
       .sort((a, b) => (a.paper?.title || a.key).localeCompare(b.paper?.title || b.key));
     el('research-body').innerHTML = `<p class="hint">Passages and figures you marked while reading, with your notes and questions. Open a mark to return to its page.</p>
       <div class="tool-actions"><label>Show<select id="marks-filter">${[['all','All marks'],['questions','Open questions']].map(([value, label]) => `<option value="${value}" ${marksFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
@@ -285,7 +286,7 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = `<p class="hint">Saved searches remember filters, not a fixed list of results. New matching claims appear automatically.</p>
       ${button('save-search','Save current library filters')}
       ${notebook.searches.map(s => `<article class="reading-entry" data-search="${html(s.id)}"><h3>${html(s.name)}</h3>
-        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${S.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || 'All claims')}</p>
+        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${client.state.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || 'All claims')}</p>
         ${button('apply-search','Open search')}${button('rename-search','Rename')}${button('delete-search','Delete')}</article>`).join('')}`;
   }
   async function queue(keys) {
@@ -296,7 +297,7 @@ const ResearchTools = (() => {
   async function download(format, board = null) {
     if (dirty) await save();
     if (!board && !claims.size && !papers.size) throw new Error('Select claims or papers to export first.');
-    const response = await fetch('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
+    const response = await client.response('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
       body:JSON.stringify({format,board,claims:refs(),papers:[...papers]})});
     await saveFile(response, `selected-research.${format === 'csv' ? 'csv' : 'md'}`);
   }
@@ -308,8 +309,7 @@ const ResearchTools = (() => {
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function downloadAnnotated(paper, ws = modalWorkspace) {
-    const response = await fetch(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':ws}});
-    if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || 'Export failed'); }
+    const response = await client.response(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':ws}});
     await saveFile(response, `${paper}-annotated.pdf`);
     const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
     (el('research-tools').open ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
@@ -350,7 +350,7 @@ const ResearchTools = (() => {
     return Math.max(.3, Math.round(width / base.w * 1000) / 1000);
   }
   async function mountReader(paper) {
-    const ws = currentWorkspaceId;
+    const ws = client.workspaceId;
     // The newest request wins: a mount that waited for the last reader to be
     // torn down must not go on to open its paper if a later render has asked
     // for another paper, or for none, meanwhile.
@@ -421,7 +421,7 @@ const ResearchTools = (() => {
           if (!reader.pinned) reader.navigated = true;
         });
       }, {passive:true});
-      const progress = (S.notebook?.reading || []).find(r => r.paper === paper);
+      const progress = (client.state.notebook?.reading || []).find(r => r.paper === paper);
       reader.savedPage = progress?.page ?? null;
       const asked = pendingPage && pendingPage.paper === paper && pendingPage.workspace === ws ? pendingPage : null;
       pendingPage = null;
@@ -596,7 +596,7 @@ const ResearchTools = (() => {
     return page.rendering;
   }
   function paperHighlights(paper) {
-    return (S.notebook?.highlights || []).filter(h => h.paper === paper);
+    return (client.state.notebook?.highlights || []).filter(h => h.paper === paper);
   }
   function drawPageHighlights(page) {
     const layer = page.el.querySelector('.highlightLayer');
@@ -671,14 +671,14 @@ const ResearchTools = (() => {
     }
     const field = el('reader-page');
     if (field && document.activeElement !== field) field.value = page.number;
-    const progress = (S.notebook?.reading || []).find(r => r.paper === reader.paper);
+    const progress = (client.state.notebook?.reading || []).find(r => r.paper === reader.paper);
     const marked = Boolean(progress?.bookmarks.includes(page.number));
     const bookmark = el('reader').querySelector('[data-tool="bookmark"]');
     if (bookmark) bookmark.textContent = marked ? 'Remove bookmark' : 'Bookmark this page';
     readerHint();
     // Where the reading stopped, for the queue: only for a paper that is on it.
     // Compared against the page this reader last saved, not the notebook in
-    // `S`: that is refreshed by the poll, and between polls it would still say
+    // `client.state`: that is refreshed by the poll, and between polls it would still say
     // the page the paper opened on, so going back to it would never be saved.
     clearTimeout(reader.progressTimer);
     if (!progress) return;
@@ -710,8 +710,8 @@ const ResearchTools = (() => {
       await mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === number) return false; r.page = number; }, {refresh:false});
       active.savedPage = number;
       // What the queue and the Continue card show until the next poll.
-      if (ws === currentWorkspaceId) {
-        const local = (S.notebook?.reading || []).find(r => r.paper === paper);
+      if (ws === client.workspaceId) {
+        const local = (client.state.notebook?.reading || []).find(r => r.paper === paper);
         if (local) local.page = number;
         renderContinuation();
       }
@@ -826,7 +826,7 @@ const ResearchTools = (() => {
   function highlightsHtml(paper) {
     const mine = paperHighlights(paper).slice().sort((a, b) => a.page - b.page);
     const empty = '<p class="hint">Select a passage in the paper to highlight it, with a note or a question of your own, or to capture it as a claim. Mark a figure by dragging a box around it.</p>';
-    const hasPdf = S.papers.find(p => p.key === paper)?.has_pdf;
+    const hasPdf = client.state.papers.find(p => p.key === paper)?.has_pdf;
     return `<section class="highlights"><h3>Marks${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}
       ${mine.length && hasPdf ? `<span class="cact">${button('export-annotated', 'Export annotated PDF', `data-paper="${html(paper)}" title="A copy of the PDF with these marks written in as annotations"`)}</span>` : ''}</h3>${mine.length ? mine.map(h => {
       const editing = markEditorOn(paper) && markEditor.id === h.id, figure = h.kind === 'figure';
@@ -857,7 +857,7 @@ const ResearchTools = (() => {
     }
   }
   function recoveryHtml() {
-    if (!markEditor?.removed || markEditor.workspace !== currentWorkspaceId) return '';
+    if (!markEditor?.removed || markEditor.workspace !== client.workspaceId) return '';
     return `<section class="highlights"><article class="highlight-entry" data-removed-mark>
       <p class="warn" role="status">This mark was removed in another window. Your unsaved note is kept here.</p>
       <textarea data-highlight-note="${html(markEditor.id)}" aria-label="Note on removed mark">${html(markEditor.text)}</textarea>
@@ -866,7 +866,7 @@ const ResearchTools = (() => {
   }
   // Polls leave a visible editor alone, including one whose mark disappeared.
   function holds() {
-    return Boolean(markEditor) && markEditor.workspace === currentWorkspaceId
+    return Boolean(markEditor) && markEditor.workspace === client.workspaceId
       && (markEditor.removed || markEditorOn(V.paper));
   }
   function markDraftOn(paper) { return markEditorOn(paper) && highlightDrafting(); }
@@ -887,7 +887,7 @@ const ResearchTools = (() => {
       const active = reader, navigation = navigationVersion();
       if (!active?.openFailed) return;
       await unmountReader();
-      if (currentWorkspaceId === active.workspace && navigationVersion() === navigation
+      if (client.workspaceId === active.workspace && navigationVersion() === navigation
         && V.paper === active.paper && V.view === 'claims' && !V.pdfHidden) await mountReader(active.paper);
       return;
     }
@@ -909,8 +909,8 @@ const ResearchTools = (() => {
       const id = target.closest('[data-highlight]')?.dataset.highlight;
       if (reader) { await goToPage(Number(data.page), id); return; }
       // The PDF was put away, or this paper has none any more.
-      if (!S.papers.find(p => p.key === V.paper)?.has_pdf) throw new Error('This paper has no PDF to show the passage in.');
-      askPage(V.paper, currentWorkspaceId, Number(data.page), id || null);
+      if (!client.state.papers.find(p => p.key === V.paper)?.has_pdf) throw new Error('This paper has no PDF to show the passage in.');
+      askPage(V.paper, client.workspaceId, Number(data.page), id || null);
       if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); redrawContent(); }
       return;
     }
@@ -936,7 +936,7 @@ const ResearchTools = (() => {
     // joins it and a queued one is marked as being read; a finished one is
     // left as it is.
     if (name === 'reader') {
-      const navigation = navigationVersion(), ws = currentWorkspaceId;
+      const navigation = navigationVersion(), ws = client.workspaceId;
       if (el('research-tools').open) {
         if (!await discardDrafts()) return;
         await close({duringOperation:true});
@@ -950,7 +950,7 @@ const ResearchTools = (() => {
         entry.status = 'reading';
       });
       // Moved on while the request was out: the paper chosen since stands.
-      if (currentWorkspaceId !== ws || navigationVersion() !== navigation) return;
+      if (client.workspaceId !== ws || navigationVersion() !== navigation) return;
       const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
       if (reader?.paper === paper && reader.workspace === ws && !V.pdfHidden) { await goToPage(page, data.mark || null); return; }
       askPage(paper, ws, page, data.mark || null);
@@ -959,7 +959,7 @@ const ResearchTools = (() => {
       return;
     }
     if (name === 'figure-mode') { setFigureMode(!reader?.figureMode); return; }
-    if (name === 'export-annotated') { await downloadAnnotated(data.paper, currentWorkspaceId); return; }
+    if (name === 'export-annotated') { await downloadAnnotated(data.paper, client.workspaceId); return; }
     if (name === 'highlight-selection') {
       const color = COLORS.includes(data.color) ? data.color : 'yellow';
       const figure = reader?.figure;
@@ -991,7 +991,7 @@ const ResearchTools = (() => {
       // another without asking.
       if (markEditor?.id !== id && highlightDrafting()
         && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
-      markEditor = {id, paper:highlight.paper, workspace:currentWorkspaceId, saved:highlight.note, text:highlight.note, removed:false}; redrawContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
+      markEditor = {id, paper:highlight.paper, workspace:client.workspaceId, saved:highlight.note, text:highlight.note, removed:false}; redrawContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
     }
     if (name === 'cancel-highlight') { markEditor = null; redrawContent(); return; }
     if (name === 'capture-highlight') {
@@ -1002,7 +1002,7 @@ const ResearchTools = (() => {
     }
     if (name === 'save-highlight') {
       const draft = markEditor;
-      if (!draft || draft.id !== id || draft.workspace !== currentWorkspaceId) return;
+      if (!draft || draft.id !== id || draft.workspace !== client.workspaceId) return;
       const note = draft.text;
       target.disabled = true;
       try {
@@ -1028,7 +1028,7 @@ const ResearchTools = (() => {
       // The editor goes once the write has landed and before the refresh,
       // which would otherwise find the mark gone and report a removal made
       // in another window; a write that fails leaves the editor as it was.
-      await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); }, {refresh:false});
+      await mutateNotebook(client.workspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); }, {refresh:false});
       if (markEditor?.id === id) { markEditor = null; }
       await refreshAll();
       redrawHighlights(); return;
@@ -1247,7 +1247,7 @@ const ResearchTools = (() => {
         notebook.highlights.find(h => h.id === id).question = question;
         await save(); return;
       }
-      await mutateNotebook(currentWorkspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This mark was removed in another window.'); h.question = question; });
+      await mutateNotebook(client.workspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This mark was removed in another window.'); h.question = question; });
     });
   });
   document.addEventListener('keydown', event => {
@@ -1256,7 +1256,7 @@ const ResearchTools = (() => {
   document.addEventListener('input', event => {
     const target = event.target;
     if (target.dataset.highlightNote) {
-      if (markEditor?.id === target.dataset.highlightNote && markEditor.workspace === currentWorkspaceId) markEditor.text = target.value;
+      if (markEditor?.id === target.dataset.highlightNote && markEditor.workspace === client.workspaceId) markEditor.text = target.value;
       return;
     }
     if (!el('research-tools')?.contains(target)) return;
@@ -1298,6 +1298,6 @@ const ResearchTools = (() => {
     // switch leaves the note where it was.
     return true;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+  return {connect(value) { client = value; }, sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     openBoard: id => run(() => open('boards', id))};
 })();

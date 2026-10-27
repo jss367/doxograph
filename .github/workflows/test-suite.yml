@@ -117,6 +117,8 @@ jobs:
           for asset in doxograph/static/*.js; do
             node --check "$asset"
           done
+      - name: Test frontend request and workspace behavior
+        run: node --test tests/frontend/*.test.cjs
 
   native:
     name: Native macOS checks

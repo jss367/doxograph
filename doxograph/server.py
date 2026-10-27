@@ -396,6 +396,7 @@ class SelectWorkspace:
         # registry needs to be reported in the UI.
         if scope.get("path") in {
             "/", "/app.css", "/app.js", "/appearance.js", "/paper-map.js",
+            "/workspace-client.js", "/workspace-controller.js", "/poller.js",
             "/favicon.png", "/api/health", "/api/code",
             "/api/workspaces",
         }:
@@ -1033,6 +1034,21 @@ def appearance_js() -> FileResponse:
 @app.get("/paper-map.js")
 def paper_map_js() -> FileResponse:
     return FileResponse(STATIC / "paper-map.js", media_type="text/javascript")
+
+
+@app.get("/workspace-client.js")
+def workspace_client_js() -> FileResponse:
+    return FileResponse(STATIC / "workspace-client.js", media_type="text/javascript")
+
+
+@app.get("/workspace-controller.js")
+def workspace_controller_js() -> FileResponse:
+    return FileResponse(STATIC / "workspace-controller.js", media_type="text/javascript")
+
+
+@app.get("/poller.js")
+def poller_js() -> FileResponse:
+    return FileResponse(STATIC / "poller.js", media_type="text/javascript")
 
 
 @app.get("/favicon.png")

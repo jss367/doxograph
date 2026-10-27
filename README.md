@@ -807,6 +807,7 @@ or too confidently worded. The retagger has its own, shorter prompt in
 .venv/bin/python -m pytest
 .venv/bin/python -m ruff check doxograph tests
 .venv/bin/python -m mypy
+node --test tests/frontend/*.test.cjs
 ```
 
 CI runs these checks, JavaScript syntax checks, and macOS Swift type checking
@@ -822,12 +823,28 @@ dependencies in `pyproject.toml`, run:
 uv pip compile pyproject.toml --extra dev --python-version 3.13 --universal --generate-hashes --output-file requirements-dev.lock
 ```
 
+Frontend request and navigation behavior is tested directly with Node.js 20 or
+newer, without launching a browser. Those tests exercise request destinations,
+ETag handling, responses arriving out of order, queued workspace switches, and
+poll scheduling; the browser suite still verifies the full editing workflows.
+
 Browser features live in separate assets under `doxograph/static/`: appearance
 preferences in `appearance.js`, the paper map and citation loading in
 `paper-map.js`, and the research tools, long-form notes, and focused review in
-their corresponding scripts. `app.js` coordinates the library and its shared
-workspace state. These are classic scripts loaded in the order in `index.html`,
-so they need no JavaScript build step.
+their corresponding scripts. The workspace client in `workspace-client.js`
+owns requests, the latest corpus snapshot, the workspace registry, ETags, and
+the count of writes in flight. Features receive that client through `connect`
+instead of reading the library's state variables. Its `request` method reads
+JSON and its `response` method preserves download bodies and headers; both
+capture their destination before waiting for a response. `select` invalidates
+older corpus refreshes even when navigating away and back to the same workspace.
+
+`workspace-controller.js` serializes workspace changes through explicit hooks
+for draft checks, pending deletes, and rendering. `poller.js` owns the timer and
+prevents overlapping rounds; manual refreshes can wait for an older round to
+finish before reading again. `app.js` supplies those hooks and keeps rendering,
+editor drafts, and optimistic deletions. These are classic scripts loaded in
+the order in `index.html`, so they need no JavaScript build step.
 
 For the fast Python/API checks, browser executables do not need to be installed:
 
