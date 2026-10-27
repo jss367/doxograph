@@ -30,11 +30,13 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
                 card = page.locator('#continue-reading')
                 await page.locator('#papers li[data-paper="one"]').click()
                 await expect(card).to_contain_text('A study of recovery')
+                # Resuming puts the paper on the reading queue; the page it is on
+                # is saved as it is read and the card follows.
                 await card.get_by_role('button', name='Resume at page 1').click()
                 await ready(page)
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                assert httpx.get(url + '/api/notebook').json()['reading'][0]['status'] == 'reading'
                 await page.get_by_role('button', name='Next page', exact=True).click()
-                await ready(page)
-                await page.get_by_role('button', name='Close research tools').click()
                 await expect(card.get_by_role('button', name='Resume at page 2')).to_be_visible()
 
                 # Reading a queued paper can differ from the library underneath it.
@@ -42,15 +44,16 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
                 await page.locator('[data-tool="reading"]').click()
                 await ready(page)
                 await page.locator('#research-body').get_by_role('button', name='Resume at page 2').click()
+                await page.locator('#research-tools').wait_for(state='hidden')
                 await ready(page)
-                await page.get_by_role('button', name='Close research tools').click()
+                await expect(page.locator('.paperhead h2')).to_have_text('A study of recovery')
+                await expect(page.locator('#reader-page')).to_have_value('2')
                 await page.reload()
                 await expect(card).to_contain_text('A study of recovery')
                 await card.get_by_role('button', name='Resume at page 2').click()
                 await ready(page)
                 await expect(page.locator('#reader-page')).to_have_value('2')
-                await expect(page.locator('#research-body h3').first).to_have_text('A study of recovery')
-                await page.get_by_role('button', name='Close research tools').click()
+                await expect(page.locator('.paperhead h2')).to_have_text('A study of recovery')
 
                 # A fresh library URL still offers the last paper in this browser.
                 await page.goto(url)

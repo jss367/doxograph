@@ -332,28 +332,34 @@ to a model.
   Notes also save when you close the editor or switch tools or workspaces.
   If saving fails, your text stays in the editor so you can retry. If another
   window changes the notes, copy your text before reloading the saved version.
-- **Read & capture**, in a paper's header, opens an offline PDF reader. Scroll
-  continuously between pages; the page number and saved reading position follow
-  as you read. Select a passage on the page and choose **Capture selected passage**
-  to fill the quote and page fields. Write the claim in your own words, optionally add a note, and
-  save. Quotes receive the same local verification as ordinary manual claims.
-  Your unfinished claim and its source page stay intact while you scroll or zoom.
-  Pages with no selectable text can still be read and transcribed by hand.
-- **Marks**, in the same reader, annotate a paper without creating a claim.
-  **Highlight selected passage** marks text on the page; **Mark a figure** lets
-  you drag a box around a figure, table, or any other region. Marks come in
-  yellow, green, blue, or pink and stay in place at any zoom. Each takes a note
-  of your own, and ticking **Open question** turns that note into a question to
-  come back to. A highlighted passage can still become a claim with **Capture as
-  claim**. The panel lists the page's marks and links to other marked pages.
-- **Marks and questions** lists every mark in the workspace by paper, or only
-  the open questions. **Open page** returns to the mark in the reader, and
-  **Mark answered** clears the question but keeps the note.
-- **Export annotated PDF**, in the reader or the Marks list, downloads a copy of
-  the paper with its marks written in as standard PDF highlight and rectangle
-  annotations, carrying your notes and questions, so other PDF readers show
-  them. Marks are stored in the workspace's `notebook.json`; the
-  stored PDF is never changed.
+- **Reading a paper.** Selecting a paper that has a PDF opens the paper itself
+  in the middle of the page, scrolling through every page, with a rail on the
+  right for what is yours: your note on the paper, your highlights, and the
+  claims. The reader is offline; the PDF is drawn in the browser and never sent
+  anywhere. Zoom defaults to the width of the column. **Hide PDF** in the
+  paper's header lists the claims full width instead, and the choice is kept in
+  this browser. A claim's **PDF p.N** link scrolls the open paper to that page.
+- **Passages.** Select text on a page and a small toolbar appears under it.
+  A color (yellow, green, blue, or pink) makes a **highlight**, drawn over the
+  text and listed in the rail with its page, where it takes a note of your own
+  and can be captured as a claim or removed. **Capture as claim** opens the
+  claim editor with the quote and page filled in; write the claim in your own
+  words and save. Quotes receive the same local verification as ordinary manual
+  claims. Pages with no selectable text can still be read and transcribed by
+  hand. Clicking a mark in the rail scrolls the paper to it.
+- **Figures and questions.** **Mark a figure** in the reader's toolbar lets you
+  drag a box around a figure, table, or any other region of the page, then
+  pick its color. A figure mark takes a note like a passage does but cannot
+  become a claim. Ticking **Open question** on any mark turns its note into a
+  question to come back to. Marks are stored in the workspace's
+  `notebook.json`; the PDF is not changed.
+- **Marks and questions**, in the sidebar, lists every mark in the workspace by
+  paper, or only the open questions. **Open page** returns to the mark in the
+  paper, and **Mark answered** clears the question but keeps the note.
+- **Export annotated PDF**, in the rail's Marks heading or the Marks list,
+  downloads a copy of the paper with its marks written in as standard PDF
+  highlight and rectangle annotations, carrying your notes and questions, so
+  other PDF readers show them. The stored PDF is never changed.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
   reload in the same browser tab. Compare sources, quotes, evidence, and notes
@@ -392,10 +398,10 @@ to a model.
   draft. Image and library links use absolute URLs back to this Doxograph
   installation; this is an export, not two-way Markdown synchronization.
 - **Reading queue** keeps an ordered list of papers with queued, reading, and
-  finished states, independently of claim review. The reader saves your page
-  position; bookmark pages and resume them from the queue.
-- **Continue where you left off**, above the library filters, opens your last
-  paper or resumes its saved PDF page. Jump to the next unreviewed claim in
+  finished states, independently of claim review. **Bookmark this page** in the
+  reader puts the paper on the queue at that page; for a paper on the queue the
+  reader saves your page position as you scroll, and the queue's buttons open
+  the paper where you left it or at a bookmark.
   that paper, then the remaining corpus, even when current filters hide it.
   The last paper and review position are remembered per workspace in this browser.
 - **Bulk organization**, under Compare & organize, adds, removes, or replaces
@@ -629,8 +635,9 @@ the only thing here no model writes and no model reads.
 For questions and thoughts about the whole workspace, open **Workspace notes**
 in the sidebar. You get one document per workspace, saved automatically.
 
-A paper's note sits under the summary in its header: **Write a note** opens a
-box, Save puts it on the paper, and it is there the next time you open it.
+A paper's note sits under the summary in its header, or at the top of the rail
+beside the paper when its PDF is open: **Write a note** opens a box, Save puts
+it on the paper, and it is there the next time you open it.
 Write what the paper is for, what to read it for, what is wrong with it, what
 to do about it — whatever the extraction could not have told you. A claim's
 note is a field in its editor, under the links to your own claims: press `e`,

@@ -2,8 +2,19 @@
 const ResearchTools = (() => {
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
-  let modalWorkspace = null, reader = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
-  let epoch = 0, progressSave = null;
+  let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
+  let epoch = 0;
+  // The paper open beside its notes in the main pane. Separate from the modal:
+  // it stays up while the research tools are opened and closed over it.
+  let reader = null, readerEpoch = 0, mountSeq = 0;
+  // The editor owns its identity and saved baseline across polls and requests.
+  let markEditor = null;
+  // A page asked for before its paper's reader is up: {paper, workspace, page,
+  // mark}. Named, so a reader mounted for another paper meanwhile discards it
+  // rather than opening on a page that was meant for somewhere else.
+  let pendingPage = null;
+  const askPage = (paper, workspace, page, mark = null) => { pendingPage = {paper, workspace, page, mark}; };
+  const COLORS = ['yellow', 'green', 'blue', 'pink'];
   let notes = null, notesTimer = null, notesSaving = null;
   const el = (id) => document.getElementById(id);
   const html = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
@@ -13,10 +24,12 @@ const ResearchTools = (() => {
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   };
   const promptDialog = (title, value, {ok}) => askDialog({title, input:{value}, ok});
-  // Keep note drafts by highlight so scrolling the sidebar does not discard them.
-  const noteDrafts = () => reader && tab === 'reader' ? [...reader.noteValues].map(([id, value]) => ({dataset:{highlightNote:id}, value}))
-    .filter(field => field.value !== (notebook.highlights.find(h => h.id === field.dataset.highlightNote)?.note ?? field.value)) : [];
-  const unsaved = () => dirty || reader?.draft || connectionDraft || noteDrafts().length > 0;
+  // A highlight note being written in the rail is a draft until Save note. It
+  // counts as unsaved once it differs from the note on file, so leaving the
+  // page asks first, as it does for a board or a connection being edited.
+  const highlightDrafting = () => Boolean(markEditor) && markEditor.text !== markEditor.saved;
+  const markEditorOn = paper => markEditor?.workspace === currentWorkspaceId && markEditor.paper === paper;
+  const unsaved = () => dirty || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
   const resolve = ref => S.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
@@ -30,11 +43,27 @@ const ResearchTools = (() => {
   function sync() {
     if (workspace !== currentWorkspaceId) {
       workspace = currentWorkspaceId;
+      // The switch has happened: an editor open on a mark of the workspace
+      // left is closed here and not before, since a later guard can still
+      // refuse the switch after this module has agreed to it.
+      markEditor = null;
       claims = new Set(); papers = new Set();
       try {
         const data = JSON.parse(sessionStorage.getItem(`doxograph-selection:${workspace}`) || '{}');
         claims = new Set(data.claims || []); papers = new Set(data.papers || []);
       } catch (_) { /* no saved selection */ }
+    }
+    // Reconcile the editor against the new corpus without using a missing
+    // mark as its saved baseline. Clean editors close; changed text remains
+    // editable and copyable until explicitly discarded.
+    if (markEditor && S.notebook) {
+      const removed = !S.papers.some(p => p.key === markEditor.paper)
+        || !(S.notebook.highlights || []).some(h => h.id === markEditor.id && h.paper === markEditor.paper);
+      if (removed !== Boolean(markEditor.removed)) {
+        if (removed && !highlightDrafting()) markEditor = null;
+        else markEditor.removed = removed;
+        redrawContent();
+      }
     }
     const available = new Set(S.claims.map(refKey));
     claims = new Set([...claims].filter(k => available.has(k)));
@@ -43,6 +72,7 @@ const ResearchTools = (() => {
     el('selection-count').textContent = `${claims.size} claims · ${papers.size} papers selected`;
     document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
     document.querySelectorAll('[data-select-paper]').forEach(c => c.checked = papers.has(c.dataset.selectPaper));
+    redrawHighlights();
   }
   function claimCheckbox(row) {
     const key = refKey(row);
@@ -53,8 +83,8 @@ const ResearchTools = (() => {
   function paperCheckbox(p) {
     return `<input type="checkbox" class="paper-selection" aria-label="Select paper: ${html(p.title || p.key)}" data-select-paper="${html(p.key)}" ${papers.has(p.key) ? 'checked' : ''}>`;
   }
-  async function request(path = '', method = 'GET', body) {
-    return api('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':modalWorkspace || workspace},
+  async function request(path = '', method = 'GET', body, ws = modalWorkspace || workspace) {
+    return api('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':ws},
       ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   }
   function message(text, error = false) {
@@ -74,11 +104,8 @@ const ResearchTools = (() => {
   async function save() {
     dirty = true;
     notebook = await request('', 'PUT', notebook);
-    // Keep scrolling during a save from restoring an older page from the response.
-    if (reader?.views && tab === 'reader') rememberReaderPage();
     dirty = false;
     await refreshAll();
-    if (reader?.document && tab === 'reader') { rememberContinuation(reader.paper); renderContinuation(); }
     message('Saved.');
   }
   function notesChanged() { return notes && notes.text !== notes.saved; }
@@ -112,15 +139,12 @@ const ResearchTools = (() => {
     notesStatus();
     return notesSaving;
   }
-  async function close() {
-    if (busy) return;
+  async function close({duringOperation = false} = {}) {
+    if (busy && !duringOperation) return;
     if (!await saveNotes()) return;
-    await flushReaderProgress();
-    if (unsaved() && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
-    stopReaderViews();
+    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
     epoch++;
-    if (reader?.document) await reader.document.loadingTask.destroy();
-    reader = null; dirty = false; connectionDraft = false;
+    dirty = false; connectionDraft = false;
     notes = null;
     el('research-tools').close();
   }
@@ -154,7 +178,7 @@ const ResearchTools = (() => {
   }
   function render() {
     const labels = {notes:'Workspace notes', compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
-    el('research-tools-title').textContent = tab === 'notes' ? 'Workspace notes' : tab === 'reader' ? 'Read & capture' : tab === 'history' ? 'Edit history' : 'Your research tools';
+    el('research-tools-title').textContent = tab === 'notes' ? 'Workspace notes' : tab === 'history' ? 'Edit history' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
       + button('reload', 'Reload saved version');
     if (tab === 'compare') renderCompare();
@@ -193,8 +217,7 @@ const ResearchTools = (() => {
         const p = S.papers.find(p => p.key === key);
         return `<article class="comparison-card"><h3>${html(p.title)}</h3><p class="hint">${html((p.authors || []).join(', '))} · ${html(p.year)}</p>
           <p>${html(p.summary || 'No summary recorded.')}</p><p>${html(p.notes)}</p>
-          ${p.has_pdf ? button('reader', 'Read & capture', `data-paper="${html(key)}"`) : ''}
-          ${button('source', 'Open paper', `data-paper="${html(key)}"`)}${button('unpin-paper', 'Unpin paper', `data-paper="${html(key)}"`)}</article>`;
+          ${button('source', p.has_pdf ? 'Read paper' : 'Open paper', `data-paper="${html(key)}"`)}${button('unpin-paper', 'Unpin paper', `data-paper="${html(key)}"`)}</article>`;
       }).join('')}</div>${!claims.size && !papers.size ? '<p class="empty">Select claims or papers in the library to compare them here.</p>' : ''}`;
   }
   function currentBoard() { return notebook.boards.find(b => b.id === boardId); }
@@ -247,7 +270,7 @@ const ResearchTools = (() => {
     const marks = notebook.highlights.filter(h => marksFilter === 'all' || h.question);
     const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:S.papers.find(p => p.key === key)}))
       .sort((a, b) => (a.paper?.title || a.key).localeCompare(b.paper?.title || b.key));
-    el('research-body').innerHTML = `<p class="hint">Passages and figures you marked in Read & capture, with your notes and questions. Open a mark to return to its page.</p>
+    el('research-body').innerHTML = `<p class="hint">Passages and figures you marked while reading, with your notes and questions. Open a mark to return to its page.</p>
       <div class="tool-actions"><label>Show<select id="marks-filter">${[['all','All marks'],['questions','Open questions']].map(([value, label]) => `<option value="${value}" ${marksFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
       ${papers.map(({key, paper}) => `<section class="marks-paper"><h3>${html(paper?.title || 'Removed paper: '+key)}</h3>
         ${paper?.has_pdf ? `<div class="tool-actions">${button('export-annotated','Export annotated PDF',`data-paper="${html(key)}"`)}</div>` : ''}
@@ -284,11 +307,12 @@ const ResearchTools = (() => {
     link.download = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '')?.[1] || fallback;
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  async function downloadAnnotated(paper) {
-    const response = await fetch(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':modalWorkspace}});
+  async function downloadAnnotated(paper, ws = modalWorkspace) {
+    const response = await fetch(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':ws}});
+    if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || 'Export failed'); }
     await saveFile(response, `${paper}-annotated.pdf`);
     const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
-    message(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
+    (el('research-tools').open ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
   }
   async function showHistory(paper, claim = null) {
     historyPaper = paper; historyClaim = claim;
@@ -308,285 +332,264 @@ const ResearchTools = (() => {
           ${button('restore', deleted ? 'Restore deletion' : 'Restore this version',`data-revision="${html(e.id)}" ${fields.length ? '' : 'disabled'}`)}</article>`;
       }).join('')}${entries.length ? '' : '<p class="empty">No earlier versions yet. Future edits will appear here.</p>'}`;
   }
-  async function showReader(paper, requestedPage, mark = null) {
-    stopReaderViews();
-    if (reader?.document) await reader.document.loadingTask.destroy();
-    if (!notebook.reading.some(r => r.paper === paper)) await queue([paper]);
-    const progress = notebook.reading.find(r => r.paper === paper);
-    if (progress.status === 'queued') { progress.status = 'reading'; await save(); }
-    tab = 'reader';
-    reader = {paper, page:Number(requestedPage || progress.page), document:null, draft:false, noteValues:new Map(), figureMode:false, focus:mark};
-    render();
-    el('research-body').innerHTML = `<h3>${html(S.papers.find(p => p.key === paper)?.title || paper)}</h3>
-      <div class="reader-controls tool-actions">${button('previous-page','Previous page')}
-      <label>Page<input id="reader-page" type="number" min="1" value="${reader.page}"></label><span id="reader-total"></span>
-      ${button('go-page','Go')}${button('next-page','Next page')}${button('bookmark','Bookmark this page')}
-      <label>Zoom<select id="reader-zoom"><option value="1">100%</option><option value="1.3" selected>130%</option><option value="1.6">160%</option><option value="2">200%</option></select></label></div>
-      <p id="reader-hint" class="hint">Loading PDF…</p>
-      <div class="reader-layout"><div class="pdf-scroll" tabindex="0" role="region" aria-label="PDF pages"><div id="pdf-pages"></div></div>
-        <div class="reader-side"><section id="highlight-panel"><h3>Marks</h3>
-          <div class="tool-actions"><label>Color<select id="highlight-color">${['yellow','green','blue','pink'].map(c => `<option value="${c}">${c}</option>`).join('')}</select></label>
-          ${button('highlight-selection','Highlight selected passage')}${button('figure-mode','Mark a figure','aria-pressed="false"')}
-          ${button('export-annotated','Export annotated PDF',`data-paper="${html(paper)}"`)}</div><div id="page-highlights"></div></section>
-        <form id="capture-form"><h3>Capture a claim</h3><p class="hint">Select text directly on the page, then capture it. Add your interpretation before saving.</p>
-          ${button('capture-selection','Capture selected passage')}${area('Verbatim quote','capture-quote')}
-          ${input('Page or section','capture-locator')}${area('Claim in your own words','capture-text')}${area('Your note (optional)','capture-note')}
-          <button type="submit" class="primary">Save claim</button><p id="capture-status" role="status"></p>
-        </form></div></div>`;
-    const generation = ++epoch;
-    const pdfjs = await import('/vendor/pdf.min.mjs');
-    pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
-    const doc = await pdfjs.getDocument({url:`/pdf/${encodeURIComponent(paper)}?workspace=${encodeURIComponent(modalWorkspace)}&inline=1`, isEvalSupported:false, cMapUrl:'/vendor/cmaps/', cMapPacked:true, standardFontDataUrl:'/vendor/standard_fonts/', wasmUrl:'/vendor/wasm/'}).promise;
-    if (generation !== epoch || !el('research-tools').open) { await doc.loadingTask.destroy(); return; }
-    reader.document = doc;
-    reader.pdfjs = pdfjs;
-    reader.page = Math.max(1, Math.min(reader.page, doc.numPages));
-    el('reader-total').textContent = `of ${doc.numPages}`;
-    el('reader-page').max = doc.numPages;
-    // Show the requested page before obtaining metadata for the rest of the PDF.
-    const active = reader, page = await doc.getPage(reader.page);
-    if (reader !== active) return;
-    const viewport = page.getViewport({scale:1});
-    active.defaultSize = {width:viewport.width, height:viewport.height, unit:page.userUnit || 1};
-    active.sizes = new Map([[active.page, active.defaultSize]]);
-    await layoutReader();
-    rememberContinuation(reader.paper);
-    renderContinuation();
+  // --- The paper, read beside its notes -----------------------------------
+  // Mounted by app.js whenever the claims view shows one paper with a PDF.
+  // Pages are laid out as placeholders at their size and drawn only near the
+  // viewport, so a long paper costs what is on screen and not a canvas per page.
+  const readerKey = (paper, ws) => `${ws}\u0000${paper}`;
+  const zoomKey = 'doxograph-reader-zoom', ZOOMS = ['fit', '1', '1.3', '1.6', '2'];
+  function savedZoom() {
+    try { const zoom = localStorage.getItem(zoomKey); return ZOOMS.includes(zoom) ? zoom : 'fit'; }
+    catch (_) { return 'fit'; }
   }
-  function stopReaderViews() {
-    if (!reader) return;
-    reader.observer?.disconnect();
-    clearTimeout(reader.progressTimer);
-    cancelAnimationFrame(reader.scrollFrame);
-    const scroll = el('pdf-pages')?.parentElement;
-    scroll?.removeEventListener('scroll', reader.onScroll);
-    for (const type of ['wheel','touchmove','keydown']) scroll?.removeEventListener(type, reader.onScrollIntent);
-    for (const view of reader.views || []) {
-      view.renderTask?.cancel();
-      view.textLayer?.cancel();
-    }
+  // The scale a zoom setting means: 'fit' is whatever fills the column.
+  function scaleFor(zoom, base) {
+    if (zoom !== 'fit') return Number(zoom);
+    const scroller = el('pdf-scroll');
+    const width = (scroller?.clientWidth || 700) - 18;
+    return Math.max(.3, Math.round(width / base.w * 1000) / 1000);
   }
-  async function flushReaderProgress() {
-    while (progressSave) await progressSave;
-    if (!reader?.progressPending) return;
-    const active = reader;
-    clearTimeout(active.progressTimer);
-    active.progressPending = false;
-    progressSave = save();
-    try { await progressSave; }
-    finally { progressSave = null; }
-  }
-  function scheduleReaderProgress() {
-    const active = reader;
-    clearTimeout(active.progressTimer);
-    active.progressTimer = setTimeout(() => {
-      if (reader !== active || !active.progressPending) return;
-      if (busy) { scheduleReaderProgress(); return; }
-      // Background progress saves leave text selection and claim editing interactive.
-      flushReaderProgress().catch(error => message(error.message, true));
-    }, 250);
-  }
-  function updateReaderControls() {
-    const progress = notebook.reading.find(r => r.paper === reader.paper);
-    el('reader-page').value = reader.page;
-    if (!reader.draft) el('capture-locator').value = `p. ${reader.page}`;
-    el('research-body').querySelector('[data-tool="bookmark"]').textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page';
-    el('research-body').querySelector('[data-tool="previous-page"]').disabled = reader.page === 1;
-    el('research-body').querySelector('[data-tool="next-page"]').disabled = reader.page === reader.document.numPages;
-    const view = reader.views?.[reader.page - 1];
-    el('reader-hint').textContent = view?.hasText === false
-      ? 'This page has no selectable text. You can transcribe a quote and write a claim by hand.'
-      : 'Scroll to read more pages. Select a passage to capture it.';
-    if (reader.highlightsPage !== reader.page) renderHighlights();
-    rememberReaderPage();
-  }
-  function rememberReaderPage() {
-    const progress = notebook.reading.find(r => r.paper === reader.paper);
-    if (progress.page !== reader.page) {
-      progress.page = reader.page;
-      reader.progressPending = true;
-      scheduleReaderProgress();
-    }
-  }
-  function renderReaderPage(active, view) {
-    if (view.rendered) return Promise.resolve();
-    if (!view.renderPromise) {
-      view.renderPromise = renderReaderView(active, view).finally(() => { view.renderPromise = null; });
-    }
-    return view.renderPromise;
-  }
-  function sizeReaderPage(view, size, scale) {
-    view.container.style.width = `${size.width * scale}px`;
-    view.container.style.height = `${size.height * scale}px`;
-    view.container.style.setProperty('--total-scale-factor', scale * size.unit);
-    view.container.style.setProperty('--scale-round-x', '1px');
-    view.container.style.setProperty('--scale-round-y', '1px');
-  }
-  function measureReaderPage(active, view, page) {
-    const viewport = page.getViewport({scale:1});
-    const size = {width:viewport.width, height:viewport.height, unit:page.userUnit || 1};
-    active.sizes.set(view.number, size);
-    const scroll = view.container.parentElement.parentElement;
-    const anchor = active.views[active.page - 1].container;
-    const before = anchor.getBoundingClientRect().top;
-    const maxOffset = scroll.scrollHeight - scroll.clientHeight;
-    const atEnd = !active.navigation && active.page === active.views.length && maxOffset > 2 && scroll.scrollTop >= maxOffset - 2;
-    const pinned = active.navigation && Math.abs(scroll.scrollTop - active.navigation.top) < 2;
-    sizeReaderPage(view, size, active.scale);
-    // Refining an offscreen estimate must not move the passage being read.
-    if (atEnd) scroll.scrollTop = scroll.scrollHeight;
-    else scroll.scrollTop += anchor.getBoundingClientRect().top - before;
-    if (pinned) active.navigation.top = scroll.scrollTop;
-  }
-  async function renderReaderView(active, view) {
-    view.rendering = true;
-    const {container} = view;
+  async function mountReader(paper) {
+    const ws = currentWorkspaceId;
+    // The newest request wins: a mount that waited for the last reader to be
+    // torn down must not go on to open its paper if a later render has asked
+    // for another paper, or for none, meanwhile.
+    const ticket = ++mountSeq;
+    if (reader && (!paper || reader.key !== readerKey(paper, ws))) await unmountReader();
+    if (ticket !== mountSeq) return;
+    el('reader').hidden = !paper;
+    if (!paper || reader) return;
+    const generation = ++readerEpoch;
+    const zoom = savedZoom();
+    reader = {key:readerKey(paper, ws), workspace:ws, paper, generation, zoom, scale:1, pages:[], current:1, navigated:false, selection:null, figureMode:false, drag:null, figure:null, focus:null, loadingTask:null, document:null, pdfjs:null, observer:null, resizer:null, progressTimer:null, savedPage:null, wantedPage:null, progressSave:Promise.resolve()};
+    el('reader').innerHTML = `<div class="reader-toolbar">${button('previous-page', 'Previous page')}
+      <label>Page<input id="reader-page" type="number" min="1" value="1" aria-label="Page number"></label><span id="reader-total"></span>${button('go-page', 'Go')}${button('next-page', 'Next page')}
+      <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
+      ${button('bookmark', 'Bookmark this page')}${button('figure-mode', 'Mark a figure', 'aria-pressed="false" title="Drag a box around a figure, table, or any region of the page"')}<span class="reader-status" id="reader-status"></span></div>
+      <div class="pdf-scroll" id="pdf-scroll"><div class="passage-tools" id="passage-tools" hidden>
+        ${COLORS.map(c => button('highlight-selection', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Highlight in ${c}" title="Highlight in ${c}"`)).join('')}
+        ${button('capture-selection', 'Capture as claim')}</div></div>
+      <p id="reader-hint" class="hint">Loading PDF…</p>`;
+    // Buttons on the toolbar must not take the selection away before they act on it.
+    el('passage-tools').addEventListener('mousedown', event => event.preventDefault());
     try {
-      const page = await active.document.getPage(view.number);
-      if (reader !== active || !container.isConnected) return;
-      measureReaderPage(active, view, page);
-      if (!view.nearby && active.page !== view.number) return;
-      view.page = page;
-      const viewport = page.getViewport({scale:active.scale});
-      const canvas = document.createElement('canvas');
-      const layer = document.createElement('div'); layer.className = 'textLayer';
-      const highlights = document.createElement('div'); highlights.className = 'highlightLayer';
-      container.replaceChildren(canvas, highlights, layer);
-      renderHighlightLayer(view);
+      const pdfjs = await import('/vendor/pdf.min.mjs');
+      if (reader?.generation !== generation) return;
+      pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
+      const task = pdfjs.getDocument({url:`/pdf/${encodeURIComponent(paper)}?workspace=${encodeURIComponent(ws)}&inline=1`, isEvalSupported:false, cMapUrl:'/vendor/cmaps/', cMapPacked:true, standardFontDataUrl:'/vendor/standard_fonts/', wasmUrl:'/vendor/wasm/'});
+      reader.loadingTask = task;
+      const doc = await task.promise;
+      if (reader?.generation !== generation) { await doc.loadingTask.destroy(); return; }
+      reader.document = doc; reader.pdfjs = pdfjs;
+      const first = await doc.getPage(1);
+      if (reader?.generation !== generation) return;
+      const base = first.getViewport({scale:1});
+      const scroller = el('pdf-scroll');
+      reader.scale = scaleFor(zoom, {w:base.width, h:base.height});
+      for (let number = 1; number <= doc.numPages; number++) {
+        const page = {number, el:document.createElement('div'), base:{w:base.width, h:base.height}, renderedAt:0, rendering:null, pdfPage:number === 1 ? first : null, text:null};
+        page.el.className = 'pdf-page pending'; page.el.dataset.page = number;
+        sizePage(page);
+        scroller.appendChild(page.el);
+        reader.pages.push(page);
+      }
+      el('reader-total').textContent = `of ${doc.numPages}`;
+      el('reader-page').max = doc.numPages;
+      reader.observer = new IntersectionObserver(entries => {
+        if (reader?.generation !== generation) return;
+        for (const entry of entries) {
+          const page = reader.pages[Number(entry.target.dataset.page) - 1];
+          if (entry.isIntersecting) renderPage(page);
+          else if (!pageNear(page)) {
+            page.error = null;
+            if (page.renderedAt) clearPage(page);
+          }
+        }
+      }, {root:scroller, rootMargin:'600px 0px'});
+      reader.pages.forEach(page => reader.observer.observe(page.el));
+      // Fit width follows the column as the window or the side pane is resized.
+      reader.resizer = new ResizeObserver(() => {
+        if (reader?.generation !== generation || reader.zoom !== 'fit' || reader.resizeTimer) return;
+        reader.resizeTimer = setTimeout(() => { reader.resizeTimer = null; if (reader?.generation === generation) run(() => setZoom('fit')); }, 150);
+      });
+      reader.resizer.observe(scroller);
+      scroller.addEventListener('scroll', () => {
+        if (reader?.generation !== generation || reader.scrollTick) return;
+        reader.scrollTick = requestAnimationFrame(() => {
+          if (reader?.generation !== generation) return;
+          reader.scrollTick = null; trackCurrentPage();
+          if (!reader.pinned) reader.navigated = true;
+        });
+      }, {passive:true});
+      const progress = (S.notebook?.reading || []).find(r => r.paper === paper);
+      reader.savedPage = progress?.page ?? null;
+      const asked = pendingPage && pendingPage.paper === paper && pendingPage.workspace === ws ? pendingPage : null;
+      pendingPage = null;
+      goToPage(asked?.page || progress?.page || 1, asked?.mark || null, {initial:true});
+      trackCurrentPage();
+    } catch (error) {
+      if (reader?.generation === generation) {
+        reader.openFailed = true;
+        el('reader-hint').textContent = `Could not open the PDF: ${error.message} `;
+        el('reader-hint').insertAdjacentHTML('beforeend', button('retry-reader', 'Retry PDF'));
+      }
+    }
+  }
+  async function unmountReader() {
+    const gone = reader;
+    reader = null;
+    el('reader').hidden = true; el('reader').innerHTML = '';
+    if (!gone) return;
+    gone.observer?.disconnect(); gone.resizer?.disconnect();
+    clearTimeout(gone.progressTimer); clearTimeout(gone.resizeTimer);
+    // A page reached within the debounce is still the page the reading
+    // stopped on: save it now, for the paper and workspace this reader had,
+    // behind any save of its already in flight. Not awaited: the next paper
+    // must not wait on it.
+    if (gone.wantedPage !== null && gone.wantedPage !== gone.savedPage) queueProgressSave(gone);
+    if (gone.loadingTask?.destroy) await gone.loadingTask.destroy();
+    else if (gone.document) await gone.document.loadingTask.destroy();
+  }
+  // The scale a page is drawn at: under Fit width each page fits the column
+  // on its own, so a landscape page in a portrait paper does not overflow;
+  // a numeric zoom is the same for every page.
+  function pageScale(page) {
+    return reader.zoom === 'fit' ? scaleFor('fit', page.base) : reader.scale;
+  }
+  function sizePage(page) {
+    const scale = pageScale(page);
+    keepingView(() => {
+      page.el.style.width = `${Math.floor(page.base.w * scale)}px`;
+      page.el.style.height = `${Math.floor(page.base.h * scale)}px`;
+    });
+  }
+  // Where the eye is taken to be: the same line a third of the way down the
+  // scroller that names the current page, so the page under it is the one
+  // kept in place by every correction below.
+  const READING_LINE = .35;
+  const readingLine = scroller => scroller.scrollTop + scroller.clientHeight * READING_LINE;
+  function pinnedPage(scroller) {
+    if (!reader.pinned) return null;
+    const page = reader.pages[reader.pinned - 1];
+    const expected = Math.min(Math.max(0, page.el.offsetTop - 8), scroller.scrollHeight - scroller.clientHeight);
+    if (Math.abs(scroller.scrollTop - expected) <= 2) return page;
+    reader.pinned = null;
+    return null;
+  }
+  function viewportAnchor() {
+    if (!reader?.pages.length) return null;
+    const scroller = el('pdf-scroll');
+    const pinned = pinnedPage(scroller);
+    if (pinned) return {page:pinned, within:null};
+    if (reader.tracked && scroller.scrollHeight > scroller.clientHeight
+      && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) return {end:true};
+    const line = readingLine(scroller);
+    const page = reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages.at(-1);
+    return {page, within:(line - page.el.offsetTop) / Math.max(1, page.el.offsetHeight)};
+  }
+  function restoreViewport(anchor) {
+    if (!anchor) return;
+    const scroller = el('pdf-scroll');
+    scroller.scrollTop = anchor.end ? scroller.scrollHeight - scroller.clientHeight
+      : anchor.within === null ? Math.max(0, anchor.page.el.offsetTop - 8)
+      : anchor.page.el.offsetTop + anchor.within * anchor.page.el.offsetHeight - scroller.clientHeight * READING_LINE;
+  }
+  function keepingView(resize) {
+    // A navigation pin follows its target's top, even while that target's own
+    // placeholder grows. Natural reading follows the reading-line position.
+    const anchor = viewportAnchor();
+    resize();
+    restoreViewport(anchor);
+  }
+  // A page scrolled far away gives back its canvas and the caches PDF.js keeps
+  // behind it (operator lists, decoded images), so a long paper costs what is
+  // near the viewport. A page with a selection on it stays: the passage being
+  // highlighted must not vanish under the pointer.
+  function pageSelected(page) {
+    const selection = window.getSelection();
+    return Boolean(selection?.rangeCount) && selection.containsNode(page.el, true);
+  }
+  function clearPage(page) {
+    if (page.rendering || pageSelected(page)) return;
+    for (const canvas of page.el.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
+    page.el.innerHTML = ''; page.el.classList.add('pending'); page.renderedAt = 0;
+    page.text = null;
+    page.pdfPage?.cleanup();
+  }
+  function pageNear(page) {
+    const scroller = el('pdf-scroll');
+    if (!scroller) return false;
+    const top = page.el.offsetTop, bottom = top + page.el.offsetHeight;
+    return bottom > scroller.scrollTop - 600 && top < scroller.scrollTop + scroller.clientHeight + 600;
+  }
+  function renderPage(page, {retry = false} = {}) {
+    if (!reader || page.rendering || (page.pdfPage && page.renderedAt === pageScale(page))) return page.rendering || Promise.resolve();
+    if (page.error && !retry) return Promise.resolve();
+    const generation = reader.generation;
+    let scale = null, failed = false;
+    page.error = null;
+    page.rendering = (async () => {
+      const pdfPage = page.pdfPage || (page.pdfPage = await reader.document.getPage(page.number));
+      if (reader?.generation !== generation) return;
+      // The page's own size, known only now: until here it was laid out at
+      // the first page's, which is what most papers' pages share.
+      const unit = pdfPage.getViewport({scale:1});
+      page.base = {w:unit.width, h:unit.height};
+      scale = pageScale(page);
+      if (page.renderedAt === scale) { sizePage(page); return; }
+      const viewport = pdfPage.getViewport({scale});
+      const container = page.el;
+      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
+      keepingView(() => {
+        container.style.width = `${viewport.width}px`;
+        container.style.height = `${viewport.height}px`;
+      });
+      container.style.setProperty('--total-scale-factor', viewport.scale * (pdfPage.userUnit || 1));
+      container.style.setProperty('--scale-round-x', '1px');
+      container.style.setProperty('--scale-round-y', '1px');
+      const canvas = container.querySelector('canvas');
       const ratio = Math.min(devicePixelRatio || 1, 2);
       canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
       canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
-      view.renderTask = page.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio,0,0,ratio,0,0]});
-      await view.renderTask.promise;
-      const content = await page.getTextContent();
-      if (reader !== active || !container.isConnected) return;
-      view.textLayer = new active.pdfjs.TextLayer({textContentSource:content, container:layer, viewport});
-      await view.textLayer.render();
-      view.hasText = content.items.some(item => item.str?.trim());
-      view.rendered = true;
-      if (active.page === view.number) updateReaderControls();
-    } catch (error) {
-      if (reader === active && container.isConnected && error.name !== 'RenderingCancelledException' && error.name !== 'AbortException') {
-        message(`Could not display page ${view.number}: ${error.message}`, true);
-      }
-    } finally {
-      view.rendering = false;
-      // Keep canvas memory bounded as the reader moves through a long PDF.
-      if (!view.nearby && !readerPageSelected(view)) releaseReaderPage(view);
-    }
-  }
-  function readerPageSelected(view) {
-    const selection = window.getSelection();
-    return selection?.rangeCount > 0 && selection.containsNode(view.container, true);
-  }
-  function releaseReaderPage(view) {
-    if (view.rendering || readerPageSelected(view) || !view.container.hasChildNodes()) return;
-    for (const canvas of view.container.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
-    view.container.replaceChildren();
-    view.rendered = false;
-    // PDF.js retains operator lists and decoded images after the canvas is removed.
-    // cleanup() also waits internally if a newer render is using the same proxy.
-    view.page.cleanup();
-    view.renderTask = null;
-    view.textLayer = null;
-    view.page = null;
-  }
-  async function layoutReader() {
-    const active = reader;
-    stopReaderViews();
-    active.scale = Number(el('reader-zoom').value);
-    const pages = el('pdf-pages'), scroll = pages.parentElement;
-    active.views = Array.from({length:active.document.numPages}, (_, i) => {
-      const number = i + 1, container = document.createElement('div');
-      container.className = 'pdf-page'; container.dataset.page = number;
-      container.setAttribute('role', 'group'); container.setAttribute('aria-label', `Page ${number}`);
-      const view = {number, container};
-      sizeReaderPage(view, active.sizes.get(number) || active.defaultSize, active.scale);
-      return view;
-    });
-    pages.replaceChildren(...active.views.map(view => view.container));
-    const views = active.views;
-    active.observer = new IntersectionObserver(entries => {
-      if (reader !== active || active.views !== views) return;
-      for (const entry of entries) {
-        const view = active.views[Number(entry.target.dataset.page) - 1];
-        view.nearby = entry.isIntersecting;
-        if (view.nearby) renderReaderPage(active, view);
-        else if (!readerPageSelected(view)) releaseReaderPage(view);
-      }
-    }, {root:scroll, rootMargin:'100% 0px'});
-    active.views.forEach(view => active.observer.observe(view.container));
-    active.onScroll = () => {
-      cancelAnimationFrame(active.scrollFrame);
-      active.scrollFrame = requestAnimationFrame(() => {
-        if (reader !== active || active.views !== views) return;
-        const bounds = scroll.getBoundingClientRect();
-        const readingLine = bounds.top + Math.min(scroll.clientHeight * .35, 200);
-        const navigation = active.navigation;
-        const keepTarget = navigation && Math.abs(scroll.scrollTop - navigation.top) < 2;
-        if (!keepTarget) active.navigation = null;
-        const maxOffset = scroll.scrollHeight - scroll.clientHeight;
-        if (maxOffset <= 2) return; // No scrolling: retain the explicitly selected page.
-        const atEnd = scroll.scrollTop >= maxOffset - 2;
-        const view = keepTarget ? active.views[navigation.page - 1] : atEnd ? active.views.at(-1)
-          : active.views.find(view => view.container.getBoundingClientRect().bottom > readingLine) || active.views.at(-1);
-        if (active.page !== view.number) {
-          active.page = view.number;
-          updateReaderControls();
-        }
+      await pdfPage.render({canvasContext:canvas.getContext('2d'), viewport, transform:ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0]}).promise;
+      if (reader?.generation !== generation || pageScale(page) !== scale) return;
+      const content = page.text || (page.text = await pdfPage.getTextContent());
+      if (reader?.generation !== generation || pageScale(page) !== scale) return;
+      await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
+      if (reader?.generation !== generation || pageScale(page) !== scale) return;
+      page.hasText = content.items.some(item => item.str?.trim());
+      page.renderedAt = scale;
+      container.classList.remove('pending');
+      drawPageHighlights(page);
+      if (page.number === reader.current) readerHint();
+    })().catch(error => {
+      failed = true;
+      page.error = error.message;
+      if (reader?.generation === generation && page.number === reader.current) readerHint();
+    })
+      .finally(() => {
+        page.rendering = null;
+        if (reader?.generation !== generation) return;
+        // A failed page waits for another explicit navigation or visibility
+        // change; it must not be mistaken for a render invalidated by zoom.
+        if (failed) { clearPage(page); return; }
+        // The zoom changed under this render: draw it again at the new scale.
+        if (page.renderedAt !== pageScale(page) && pageNear(page)) renderPage(page);
+        // Scrolled out of reach while drawing: the observer's leave came too
+        // early to release it, so it is released here.
+        else if (page.renderedAt && !pageNear(page)) clearPage(page);
       });
-    };
-    active.onScrollIntent = event => {
-      if (event.type === 'wheel' && !event.deltaY) return;
-      if (event.type === 'keydown' && !['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) return;
-      active.navigation = null;
-      active.onScroll();
-    };
-    scroll.addEventListener('scroll', active.onScroll, {passive:true});
-    for (const type of ['wheel','touchmove','keydown']) scroll.addEventListener(type, active.onScrollIntent, {passive:true});
-    await goToReaderPage(active.page);
+    return page.rendering;
   }
-  async function goToReaderPage(number) {
-    const active = reader, view = active.views[number - 1];
-    active.page = number;
-    const scroll = el('pdf-pages').parentElement;
-    scroll.scrollTop += view.container.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop - 8;
-    // Preserve an explicit visible target even when its scroll position is clamped.
-    active.navigation = {page:number, top:scroll.scrollTop};
-    updateReaderControls();
-    view.nearby = true;
-    await renderReaderPage(active, view);
+  function paperHighlights(paper) {
+    return (S.notebook?.highlights || []).filter(h => h.paper === paper);
   }
-  function renderHighlightLayer(view) {
-    const layer = view.container.querySelector('.highlightLayer');
+  function drawPageHighlights(page) {
+    const layer = page.el.querySelector('.highlightLayer');
     if (!layer) return;
-    const here = notebook.highlights.filter(h => h.paper === reader.paper && h.page === view.number);
     const percent = value => `${(value * 100).toFixed(3)}%`;
-    layer.innerHTML = here.flatMap(h => h.rects.map(r =>
-      `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}${h.id === reader.focus ? ' focused' : ''}" data-mark="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
-  }
-  function renderHighlights() {
-    const mine = notebook.highlights.filter(h => h.paper === reader.paper);
-    const here = mine.filter(h => h.page === reader.page);
-    reader.highlightsPage = reader.page;
-    // A mark opened from the Marks list stays outlined until the reader moves to another page.
-    if (reader.focus && !here.some(h => h.id === reader.focus)) reader.focus = null;
-    for (const view of reader.views || []) renderHighlightLayer(view);
-    el('pdf-pages').classList.toggle('drawing', reader.figureMode);
-    const toggle = el('research-body').querySelector('[data-tool="figure-mode"]');
-    toggle.textContent = reader.figureMode ? 'Cancel figure mark' : 'Mark a figure';
-    toggle.setAttribute('aria-pressed', String(reader.figureMode));
-    const drafts = new Map(noteDrafts().map(field => [field.dataset.highlightNote, field.value]));
-    const others = [...new Set(mine.map(h => h.page))].filter(page => page !== reader.page).sort((a, b) => a - b);
-    el('page-highlights').innerHTML = (reader.figureMode ? '<p class="hint">Drag a box around the figure on the page.</p>' : '')
-      + (here.map(h => `<article class="highlight-entry${h.id === reader.focus ? ' focused' : ''}" data-highlight="${html(h.id)}">
-        ${markQuote(h)}
-        <label>Your note or question<textarea data-highlight-note="${html(h.id)}">${html(drafts.get(h.id) ?? h.note)}</textarea></label>
-        <label><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
-        <div class="tool-actions">${button('save-highlight','Save note')}${h.kind === 'figure' ? '' : button('capture-highlight','Capture as claim')}${button('remove-highlight',h.kind === 'figure' ? 'Remove mark' : 'Remove highlight')}</div></article>`).join('')
-      || '<p class="hint">Select a passage and highlight it, or mark a figure by dragging a box around it.</p>')
-      + (others.length ? `<div class="tool-actions"><span class="hint">Other marked pages</span>${others.map(page => button('highlight-page',`Page ${page}`,`data-page="${page}"`)).join('')}</div>` : '');
-    el('page-highlights').querySelector('.focused')?.scrollIntoView({block:'nearest'});
+    layer.innerHTML = paperHighlights(reader.paper).filter(h => h.page === page.number).flatMap(h => h.rects.map(r =>
+      `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}${h.id === reader.focus ? ' focused' : ''}" data-highlight="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
   }
   // A figure is the box dragged out on the page, in the same fractions as a passage's lines.
   function figureRect(drag, event) {
@@ -596,9 +599,164 @@ const ResearchTools = (() => {
     const [y1, y2] = [drag.y, event.clientY].map(y => clamp((y - drag.box.top) / drag.box.height)).sort((a, b) => a - b);
     return {x:round(x1), y:round(y1), w:round(x2 - x1), h:round(y2 - y1)};
   }
+  function setFigureMode(on) {
+    if (!reader) return;
+    reader.figureMode = on;
+    if (!on) { reader.drag = null; el('reader').querySelector('.figure-draft')?.remove(); hidePassageTools(); }
+    el('pdf-scroll')?.classList.toggle('drawing', on);
+    const toggle = el('reader').querySelector('[data-tool="figure-mode"]');
+    if (toggle) { toggle.textContent = on ? 'Cancel figure mark' : 'Mark a figure'; toggle.setAttribute('aria-pressed', String(on)); }
+    if (on) { window.getSelection()?.removeAllRanges(); hidePassageTools(); }
+    readerHint();
+  }
+  // The box just drawn waits for a color: the passage toolbar, under the box,
+  // offers the same swatches it offers a selected passage.
+  function offerFigure(page, rect, pageEl) {
+    reader.figure = {page, rect};
+    const tools = el('passage-tools'), scroller = el('pdf-scroll');
+    const box = scroller.getBoundingClientRect(), at = pageEl.getBoundingClientRect();
+    tools.classList.add('for-figure');
+    tools.hidden = false;
+    tools.style.top = `${at.top + (rect.y + rect.h) * at.height - box.top + scroller.scrollTop + 6}px`;
+    tools.style.left = `${Math.max(4, Math.min(at.left + rect.x * at.width - box.left + scroller.scrollLeft, scroller.clientWidth - tools.offsetWidth - 4))}px`;
+  }
+  function redrawHighlights() {
+    if (!reader) return;
+    reader.pages.forEach(page => { if (page.renderedAt) drawPageHighlights(page); });
+  }
+  function readerHint() {
+    const hint = el('reader-hint');
+    if (!hint || !reader) return;
+    const page = reader.pages[reader.current - 1];
+    hint.textContent = page?.error ? `Could not draw page ${page.number}: ${page.error}`
+      : reader.figureMode ? 'Drag a box around the figure on the page, then pick a color.'
+      : page?.renderedAt && !page.hasText
+      ? 'This page has no selectable text. You can transcribe a quote and add a claim by hand.'
+      : 'Select a passage to highlight it or capture it as a claim, or mark a figure.';
+  }
+  function trackCurrentPage(asked = null) {
+    if (!reader?.pages.length) return;
+    const scroller = el('pdf-scroll');
+    // A page gone to by name is the current page even when the scroller cannot
+    // reach its top, as with a short last page or a paper that fits whole; it
+    // stands until the reader scrolls away from where that landed.
+    if (asked) reader.pinned = asked;
+    else pinnedPage(scroller);
+    const line = readingLine(scroller);
+    // Scrolled to the very end, the last page is the one being read even
+    // when it is too short to reach the reading line.
+    const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+    const page = reader.pinned ? reader.pages[reader.pinned - 1]
+      : atEnd ? reader.pages[reader.pages.length - 1]
+      : reader.pages.find(p => p.el.offsetTop + p.el.offsetHeight > line) || reader.pages[reader.pages.length - 1];
+    if (page.number === reader.current && reader.tracked) return;
+    reader.current = page.number; reader.tracked = true;
+    // The mark opened from the Marks list stays outlined until the reader moves to another page.
+    if (reader.focus && paperHighlights(reader.paper).find(h => h.id === reader.focus)?.page !== page.number) {
+      reader.focus = null; redrawHighlights(); focusRailEntry(null);
+    }
+    const field = el('reader-page');
+    if (field && document.activeElement !== field) field.value = page.number;
+    const progress = (S.notebook?.reading || []).find(r => r.paper === reader.paper);
+    const marked = Boolean(progress?.bookmarks.includes(page.number));
+    const bookmark = el('reader').querySelector('[data-tool="bookmark"]');
+    if (bookmark) bookmark.textContent = marked ? 'Remove bookmark' : 'Bookmark this page';
+    readerHint();
+    // Where the reading stopped, for the queue: only for a paper that is on it.
+    // Compared against the page this reader last saved, not the notebook in
+    // `S`: that is refreshed by the poll, and between polls it would still say
+    // the page the paper opened on, so going back to it would never be saved.
+    clearTimeout(reader.progressTimer);
+    if (!progress) return;
+    reader.wantedPage = page.number;
+    if (reader.savedPage !== page.number) {
+      const active = reader;
+      reader.progressTimer = setTimeout(() => { if (reader === active) queueProgressSave(active); }, 1500);
+    }
+  }
+  // One save after another: two in flight would race for the revision. Each
+  // saves the page wanted when its turn comes, and when it lands the reader
+  // may have moved on — a save held long enough for a move away and back
+  // would otherwise leave the queue on a page nobody is reading — so the
+  // wanted page is compared again and another save follows if they differ.
+  // Works on the reader it is given rather than the one mounted, so a reader
+  // being torn down can still save the page it reached.
+  // One chain of saves per paper and workspace, shared by a reader torn down
+  // and the reader opened on the same paper after it, so they land in order.
+  const progressChains = new Map();
+  function queueProgressSave(active) {
+    const {paper, workspace:ws, key} = active;
+    const chain = (progressChains.get(key) || Promise.resolve()).then(async () => {
+      const number = active.wantedPage;
+      if (number === null || number === active.savedPage) return;
+      // Torn down and replaced by a reader on the same paper: that reader's
+      // page is the one to keep, so this save stands down.
+      const successor = reader && reader !== active && reader.key === key ? reader : null;
+      if (successor) { if (successor.wantedPage !== successor.savedPage) queueProgressSave(successor); return; }
+      await mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === number) return false; r.page = number; }, {refresh:false});
+      active.savedPage = number;
+      // What the queue and the Continue card show until the next poll.
+      if (ws === currentWorkspaceId) {
+        const local = (S.notebook?.reading || []).find(r => r.paper === paper);
+        if (local) local.page = number;
+        renderContinuation();
+      }
+      // A reader opened on this paper while the save ran started from the
+      // page the queue had then; it now knows what the queue says.
+      const since = reader && reader !== active && reader.key === key ? reader : null;
+      if (since) { since.savedPage = number; if (since.wantedPage !== null && since.wantedPage !== number) queueProgressSave(since); }
+      active.retried = false;
+      if (active.wantedPage !== active.savedPage) queueProgressSave(active);
+    }).catch(async error => {
+      // Once more after a moment, since a reader already torn down has no
+      // later scroll to try again; then say so rather than lose the page.
+      if (!active.retried) { active.retried = true; await new Promise(resolve => setTimeout(resolve, 600)); queueProgressSave(active); return; }
+      toast(`Could not save the page you stopped on (page ${active.wantedPage}): ${error.message}`, {tone:'warn'});
+    });
+    progressChains.set(key, chain);
+    active.progressSave = chain;
+  }
+  async function goToPage(number, highlight = null, {initial = false} = {}) {
+    if (!reader?.pages.length) { if (reader) askPage(reader.paper, reader.workspace, number, highlight); return; }
+    if (!initial) reader.navigated = true;
+    const page = reader.pages[Math.max(1, Math.min(number, reader.pages.length)) - 1];
+    el('pdf-scroll').scrollTo({top:Math.max(0, page.el.offsetTop - 8)});
+    trackCurrentPage(page.number);
+    const active = reader;
+    if (highlight) active.focus = highlight;
+    await renderPage(page, {retry:true});
+    if (!highlight || reader !== active || active.focus !== highlight) return;
+    drawPageHighlights(page);
+    page.el.querySelectorAll(`.highlightLayer [data-highlight="${CSS.escape(highlight)}"]`).forEach(mark => {
+      mark.classList.add('flash'); setTimeout(() => mark.classList.remove('flash'), 1600);
+    });
+    focusRailEntry(highlight);
+  }
+  // The rail is drawn by app.js, so the outline follows the mark by hand: on
+  // the entry of the mark asked for, and off again when the reader moves on.
+  function focusRailEntry(id) {
+    document.querySelectorAll('.highlight-entry.focused').forEach(entry => entry.classList.remove('focused'));
+    const entry = id && document.querySelector(`.highlight-entry[data-highlight="${CSS.escape(id)}"]`);
+    if (entry) { entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'}); }
+  }
+  async function setZoom(zoom) {
+    if (!reader?.pages.length || !ZOOMS.includes(zoom)) return;
+    const scale = scaleFor(zoom, reader.pages[0].base);
+    const same = zoom === reader.zoom && scale === reader.scale;
+    reader.zoom = zoom;
+    try { localStorage.setItem(zoomKey, zoom); } catch (_) { /* preference remains for this page */ }
+    if (same) return;
+    const active = reader, anchor = viewportAnchor();
+    reader.scale = scale;
+    reader.pages.forEach(page => { clearPage(page); sizePage(page); });
+    restoreViewport(anchor);
+    reader.tracked = false;
+    await Promise.all(active.pages.filter(pageNear).map(page => renderPage(page, {retry:true})));
+    if (reader === active) trackCurrentPage();
+  }
   // Client rectangles of the selection as fractions of the page, one per line of text.
-  function selectionRects(range, container) {
-    const box = container.getBoundingClientRect();
+  function selectionRects(range, pageEl) {
+    const box = pageEl.getBoundingClientRect();
     const rects = [...range.getClientRects()]
       .map(r => ({left:Math.max(r.left, box.left), right:Math.min(r.right, box.right), top:Math.max(r.top, box.top), bottom:Math.min(r.bottom, box.bottom)}))
       .filter(r => r.right - r.left > .5 && r.bottom - r.top > .5)
@@ -614,43 +772,283 @@ const ResearchTools = (() => {
     return lines.slice(0, 500).map(r => ({x:round((r.left - box.left) / box.width), y:round((r.top - box.top) / box.height),
       w:round((r.right - r.left) / box.width), h:round((r.bottom - r.top) / box.height)})).filter(r => r.w > 0 && r.h > 0);
   }
+  function hidePassageTools() {
+    if (reader) { reader.selection = null; reader.figure = null; }
+    const tools = el('passage-tools');
+    if (tools) { tools.hidden = true; tools.classList.remove('for-figure'); }
+  }
+  function trackSelection() {
+    if (!reader || reader.figureMode || reader.figure) return;
+    const selection = window.getSelection();
+    const layerOf = node => (node && (node.nodeType === 1 ? node : node.parentElement))?.closest('#reader .textLayer') || null;
+    const layer = selection && !selection.isCollapsed && selection.rangeCount ? layerOf(selection.anchorNode) : null;
+    if (!layer || layerOf(selection.focusNode) !== layer) { hidePassageTools(); return; }
+    const pageEl = layer.closest('.pdf-page');
+    const range = selection.getRangeAt(0);
+    const text = selection.toString().trim(), rects = selectionRects(range, pageEl);
+    if (!text || !rects.length) { hidePassageTools(); return; }
+    reader.selection = {page:Number(pageEl.dataset.page), text, rects};
+    const tools = el('passage-tools'), scroller = el('pdf-scroll');
+    tools.classList.remove('for-figure');
+    const box = scroller.getBoundingClientRect(), lines = range.getClientRects();
+    const last = lines[lines.length - 1] || pageEl.getBoundingClientRect();
+    tools.hidden = false;
+    tools.style.top = `${last.bottom - box.top + scroller.scrollTop + 6}px`;
+    tools.style.left = `${Math.max(4, Math.min(last.left - box.left + scroller.scrollLeft, scroller.clientWidth - tools.offsetWidth - 4))}px`;
+  }
+  // Read, change, write: the saved notebook rather than a copy held since the
+  // modal last opened, so a highlight made here cannot overwrite a board saved
+  // there. `fn` returns false to leave the notebook as it is.
+  async function mutateNotebook(ws, fn, {refresh = true} = {}) {
+    const latest = await request('', 'GET', undefined, ws);
+    if (fn(latest) === false) return latest;
+    const saved = await request('', 'PUT', latest, ws);
+    if (refresh) await refreshAll();
+    return saved;
+  }
+  // The rail's list of the paper's highlights, in page order, drawn by app.js
+  // under the paper's note. The note being edited is held here, not in the DOM:
+  // a redraw rebuilds the editor from it.
+  function highlightsHtml(paper) {
+    const mine = paperHighlights(paper).slice().sort((a, b) => a.page - b.page);
+    const empty = '<p class="hint">Select a passage in the paper to highlight it, with a note or a question of your own, or to capture it as a claim. Mark a figure by dragging a box around it.</p>';
+    const hasPdf = S.papers.find(p => p.key === paper)?.has_pdf;
+    return `<section class="highlights"><h3>Marks${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}
+      ${mine.length && hasPdf ? `<span class="cact">${button('export-annotated', 'Export annotated PDF', `data-paper="${html(paper)}" title="A copy of the PDF with these marks written in as annotations"`)}</span>` : ''}</h3>${mine.length ? mine.map(h => {
+      const editing = markEditorOn(paper) && markEditor.id === h.id, figure = h.kind === 'figure';
+      return `<article class="highlight-entry${h.id === reader?.focus ? ' focused' : ''}${h.question ? ' question' : ''}" data-highlight="${html(h.id)}">
+        <blockquote class="highlight-${html(h.color)}" data-tool="highlight-page" data-page="${h.page}" title="${figure ? 'Show this figure in the paper' : 'Show this passage in the paper'}">${figure ? '<em>Figure or region</em>' : html(h.text)}</blockquote>
+        ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="${figure ? 'Your note or question on this figure' : 'Your note or question on this passage'}" aria-label="Note on this mark">${html(markEditor.text)}</textarea>`
+          : h.note.trim() ? noteHtml(h.note, h.question ? 'my question' : 'my note') : ''}
+        <div class="hmeta"><span>p. ${h.page}</span>
+          <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
+          <span class="cact">
+          ${editing ? button('save-highlight', 'Save note') + button('cancel-highlight', 'Cancel') : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
+          ${figure ? '' : button('capture-highlight', 'Capture as claim')}${button('remove-highlight', 'Remove')}</span></div>
+      </article>`;
+    }).join('') : empty}</section>`;
+  }
+  function redrawContent() {
+    const field = document.activeElement, claim = field?.closest('form[data-form]');
+    const selector = field?.matches('[data-highlight-note]')
+      ? `[data-highlight-note="${CSS.escape(field.dataset.highlightNote)}"]`
+      : claim && field.name ? `form[data-form="${CSS.escape(claim.dataset.form)}"] [name="${CSS.escape(field.name)}"]` : null;
+    const cursor = selector ? {selector, start:field.selectionStart, end:field.selectionEnd} : null;
+    captureOpenEditor();
+    renderContent();
+    const replacement = cursor && document.querySelector(cursor.selector);
+    if (replacement) {
+      replacement.focus();
+      if (cursor.start !== null && cursor.start !== undefined) replacement.setSelectionRange(cursor.start, cursor.end);
+    }
+  }
+  function recoveryHtml() {
+    if (!markEditor?.removed || markEditor.workspace !== currentWorkspaceId) return '';
+    return `<section class="highlights"><article class="highlight-entry" data-removed-mark>
+      <p class="warn" role="status">This mark was removed in another window. Your unsaved note is kept here.</p>
+      <textarea data-highlight-note="${html(markEditor.id)}" aria-label="Note on removed mark">${html(markEditor.text)}</textarea>
+      <div class="tool-actions">${button('copy-removed-note', 'Copy note')}${button('discard-removed-note', 'Discard note')}</div>
+    </article></section>`;
+  }
+  // Polls leave a visible editor alone, including one whose mark disappeared.
+  function holds() {
+    return Boolean(markEditor) && markEditor.workspace === currentWorkspaceId
+      && (markEditor.removed || markEditorOn(V.paper));
+  }
+  function markDraftOn(paper) { return markEditorOn(paper) && highlightDrafting(); }
+  function dropMarkDraft(paper) { if (markEditorOn(paper)) markEditor = null; }
+  function goToPaper(paper, claim = null) {
+    captureOpenEditor(); parkNewClaimForNavigation(paper);
+    V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null;
+    V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
+    V.selectedId = claim;
+    el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
+    scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
+  }
+  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
+    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
+  async function readerAction(name, target) {
+    const data = target.dataset;
+    if (name === 'retry-reader') {
+      const active = reader, navigation = navigationVersion();
+      if (!active?.openFailed) return;
+      await unmountReader();
+      if (currentWorkspaceId === active.workspace && navigationVersion() === navigation
+        && V.paper === active.paper && V.view === 'claims' && !V.pdfHidden) await mountReader(active.paper);
+      return;
+    }
+    if (['previous-page', 'next-page', 'go-page'].includes(name)) {
+      if (!reader?.pages.length) return;
+      const page = name === 'go-page' ? Number(el('reader-page').value) : reader.current + (name === 'next-page' ? 1 : -1);
+      if (!Number.isInteger(page) || page < 1 || page > reader.pages.length) throw new Error('Choose a page within this PDF.');
+      await goToPage(page); return;
+    }
+    if (name === 'copy-removed-note') { if (markEditor?.removed) await copyText(markEditor.text, 'Note copied.'); return; }
+    if (name === 'discard-removed-note') {
+      const draft = markEditor;
+      if (draft?.removed && await confirmDialog('Discard this recovered note?', {ok:'Discard note'}) && markEditor === draft) {
+        markEditor = null; redrawContent();
+      }
+      return;
+    }
+    if (name === 'highlight-page') {
+      const id = target.closest('[data-highlight]')?.dataset.highlight;
+      if (reader) { await goToPage(Number(data.page), id); return; }
+      // The PDF was put away, or this paper has none any more.
+      if (!S.papers.find(p => p.key === V.paper)?.has_pdf) throw new Error('This paper has no PDF to show the passage in.');
+      askPage(V.paper, currentWorkspaceId, Number(data.page), id || null);
+      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); redrawContent(); }
+      return;
+    }
+    if (name === 'bookmark') {
+      if (!reader?.pages.length) return;
+      const active = reader;
+      const {paper, current, workspace:ws} = active;
+      await mutateNotebook(ws, n => {
+        let progress = n.reading.find(r => r.paper === paper);
+        if (!progress) { progress = {paper, status:'reading', page:current, bookmarks:[]}; n.reading.push(progress); }
+        progress.page = current;
+        progress.bookmarks = progress.bookmarks.includes(current) ? progress.bookmarks.filter(p => p !== current) : [...progress.bookmarks, current];
+      });
+      // A replacement on the same paper learns what reached disk. Resume
+      // that page only if it has not received a newer navigation or scroll.
+      if (!reader || reader.key !== active.key) return;
+      reader.savedPage = current;
+      if (reader !== active && !reader.navigated) { await goToPage(current); return; }
+      reader.tracked = false; trackCurrentPage(); return;
+    }
+    // Resuming a paper from the queue or the Continue card: it opens in the
+    // main pane at that page. Resuming is reading, so a paper not on the queue
+    // joins it and a queued one is marked as being read; a finished one is
+    // left as it is.
+    if (name === 'reader') {
+      const navigation = navigationVersion(), ws = currentWorkspaceId;
+      if (el('research-tools').open) {
+        if (!await discardDrafts()) return;
+        await close({duringOperation:true});
+        if (el('research-tools').open) return;
+      }
+      const paper = data.paper;
+      const saved = await mutateNotebook(ws, n => {
+        const entry = n.reading.find(r => r.paper === paper);
+        if (!entry) { n.reading.push({paper, status:'reading', page:1, bookmarks:[]}); return; }
+        if (entry.status !== 'queued') return false;
+        entry.status = 'reading';
+      });
+      // Moved on while the request was out: the paper chosen since stands.
+      if (currentWorkspaceId !== ws || navigationVersion() !== navigation) return;
+      const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
+      if (reader?.paper === paper && reader.workspace === ws && !V.pdfHidden) { await goToPage(page, data.mark || null); return; }
+      askPage(paper, ws, page, data.mark || null);
+      if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
+      if (V.paper === paper && V.view === 'claims') redrawContent(); else goToPaper(paper);
+      return;
+    }
+    if (name === 'figure-mode') { setFigureMode(!reader?.figureMode); return; }
+    if (name === 'export-annotated') { await downloadAnnotated(data.paper, currentWorkspaceId); return; }
+    if (name === 'highlight-selection') {
+      const color = COLORS.includes(data.color) ? data.color : 'yellow';
+      const figure = reader?.figure;
+      if (figure) {
+        const {paper, workspace:ws} = reader;
+        hidePassageTools(); setFigureMode(false);
+        await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:figure.page, kind:'figure', rects:[figure.rect], text:'', color, note:'', question:false}); });
+        redrawHighlights(); return;
+      }
+      const passage = reader?.selection;
+      if (!passage) throw new Error('Select a passage in the paper first.');
+      const {paper, workspace:ws} = reader;
+      window.getSelection()?.removeAllRanges(); hidePassageTools();
+      await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:passage.page, kind:'passage', rects:passage.rects, text:passage.text, color, note:'', question:false}); });
+      redrawHighlights(); return;
+    }
+    if (name === 'capture-selection') {
+      const passage = reader?.selection;
+      if (!passage) throw new Error('Select a passage in the paper first.');
+      const paper = reader.paper;
+      window.getSelection()?.removeAllRanges(); hidePassageTools();
+      startClaimFromPassage(paper, {quote:passage.text, locator:`p. ${passage.page}`}); return;
+    }
+    const id = target.closest('[data-highlight]')?.dataset.highlight;
+    const highlight = paperHighlights(V.paper).find(h => h.id === id);
+    if (!highlight) throw new Error('This highlight is no longer here. It may have been removed in another window.');
+    if (name === 'edit-highlight') {
+      // One note is written at a time; the one half-written is not dropped for
+      // another without asking.
+      if (markEditor?.id !== id && highlightDrafting()
+        && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
+      markEditor = {id, paper:highlight.paper, workspace:currentWorkspaceId, saved:highlight.note, text:highlight.note, removed:false}; redrawContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
+    }
+    if (name === 'cancel-highlight') { markEditor = null; redrawContent(); return; }
+    if (name === 'capture-highlight') {
+      // The note as it is being written, when its editor is open: what is on
+      // screen, not the saved version the person is in the middle of changing.
+      const note = markEditor?.id === id ? markEditor.text : highlight.note;
+      startClaimFromPassage(highlight.paper, {quote:highlight.text, locator:`p. ${highlight.page}`, note}); return;
+    }
+    if (name === 'save-highlight') {
+      const draft = markEditor;
+      if (!draft || draft.id !== id || draft.workspace !== currentWorkspaceId) return;
+      const note = draft.text;
+      target.disabled = true;
+      try {
+        await mutateNotebook(draft.workspace, n => {
+          const h = n.highlights.find(h => h.id === id && h.paper === draft.paper);
+          if (!h) throw new Error('This highlight was removed in another window.');
+          if (h.note !== draft.saved) throw new Error('This note changed in another window. Your draft is kept; copy it before reloading the saved note.');
+          h.note = note;
+        }, {refresh:false});
+        draft.saved = note;
+        // Only this exact editor may be completed by its save. New typing
+        // remains a draft against the version that actually reached disk.
+        if (markEditor === draft && draft.text === note) markEditor = null;
+        else if (markEditor === draft) toast('Saved the note as it was when you clicked Save. What you typed since is still in the editor.');
+        await refreshAll();
+      } finally { target.disabled = false; }
+      return;
+    }
+    if (name === 'remove-highlight') {
+      const label = highlight.kind === 'figure' ? 'mark' : 'highlight';
+      const writing = markEditor?.id === id && markEditor.text.trim();
+      if ((highlight.note || writing) && !await confirmDialog(`Remove this ${label} and its note?`, {ok:`Remove ${label}`})) return;
+      // The editor goes once the write has landed and before the refresh,
+      // which would otherwise find the mark gone and report a removal made
+      // in another window; a write that fails leaves the editor as it was.
+      await mutateNotebook(currentWorkspaceId, n => { n.highlights = n.highlights.filter(h => h.id !== id); }, {refresh:false});
+      if (markEditor?.id === id) { markEditor = null; }
+      await refreshAll();
+      redrawHighlights(); return;
+    }
+  }
   async function discardDrafts({reloadNotes = false} = {}) {
     clearTimeout(notesTimer);
     if (reloadNotes) { if (notesSaving) await notesSaving; }
     else if (!await saveNotes()) return false;
-    if ((unsaved() || notesChanged()) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) {
+    if ((dirty || connectionDraft || notesChanged()) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) {
       if (notesChanged() && !notes.error) notesTimer = setTimeout(saveNotes, 600);
       return false;
     }
     if (dirty) { notebook = await request(); dirty = false; }
-    if (reader) reader.draft = false;
     connectionDraft = false;
     return true;
   }
   async function action(name, target) {
     const data = target.dataset;
-    if (name === 'close') { setBusy(false); await close(); return; }
+    if (name === 'close') { await close({duringOperation:true}); return; }
     if (name === 'retry-notes') { await saveNotes(); return; }
     if (name === 'tab' || name === 'reload') {
       if (!await discardDrafts({reloadNotes:name === 'reload'})) return;
-      stopReaderViews();
-      if (reader?.document) await reader.document.loadingTask.destroy();
-      reader = null; epoch++;
+      epoch++;
       notebook = await request();
       notes = null;
-      tab = data.tab || (['reader','history'].includes(tab) ? 'compare' : tab); render(); return;
+      tab = data.tab || (tab === 'history' ? 'compare' : tab); render(); return;
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
     if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
     if (name === 'source') {
       if (!await discardDrafts()) return;
-      setBusy(false); await close();
-      captureOpenEditor(); parkNewClaimForNavigation(data.paper);
-      V.paper = data.paper; V.view = 'claims'; V.tag = null; V.label = null;
-      V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
-      V.selectedId = data.claim || null;
-      el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
-      scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected(); return;
+      await close({duringOperation:true}); if (el('research-tools').open) return;
+      goToPaper(data.paper, data.claim || null); return;
     }
     if (name === 'bulk') {
       const values = el('bulk-values').value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -724,7 +1122,7 @@ const ResearchTools = (() => {
       const id = target.closest('[data-search]').dataset.search, search = notebook.searches.find(s=>s.id === id);
       if (name === 'apply-search') {
         if (!await discardDrafts()) return;
-        setBusy(false); await close(); captureOpenEditor();
+        await close({duringOperation:true}); if (el('research-tools').open) return; captureOpenEditor();
         const params = new URLSearchParams();
         if (workspace !== 'default') params.set('ws',workspace);
         for (const field of ['q','paper','tag','label','kind']) if (search[field]) params.set(field, search[field]);
@@ -738,6 +1136,10 @@ const ResearchTools = (() => {
       } else notebook.searches = notebook.searches.filter(s=>s.id !== id);
       await save(); renderSearches(); return;
     }
+    if (name === 'answer-question') {
+      notebook.highlights.find(h => h.id === target.closest('[data-highlight]').dataset.highlight).question = false;
+      await save(); renderMarks(); message('Question marked answered. The mark and its note remain.'); return;
+    }
     if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper,data.claim); return; }
     if (name === 'restore') {
       const entry = historyData.entries.find(e => e.id === data.revision);
@@ -747,83 +1149,23 @@ const ResearchTools = (() => {
       await refreshAll(); await showHistory(historyPaper,historyClaim);
       message(restored.deleted ? 'Claim removed. Its wording remains in history.' : restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
-    if (name === 'reader') { if (!await discardDrafts()) return; await showReader(data.paper,data.page,data.mark); return; }
-    if (name === 'export-annotated') { await downloadAnnotated(data.paper); return; }
-    if (name === 'answer-question') {
-      notebook.highlights.find(h => h.id === target.closest('[data-highlight]').dataset.highlight).question = false;
-      await save(); renderMarks(); message('Question marked answered. The mark and its note remain.'); return;
-    }
-    if (name === 'figure-mode') { reader.figureMode = !reader.figureMode; renderHighlights(); return; }
-    if (['previous-page','next-page','go-page','highlight-page'].includes(name)) {
-      const page = name === 'go-page' ? Number(el('reader-page').value) : name === 'highlight-page' ? Number(data.page) : reader.page + (name === 'next-page' ? 1 : -1);
-      if (!Number.isInteger(page) || page < 1 || page > reader.document.numPages) throw new Error('Choose a page within this PDF.');
-      await goToReaderPage(page); return;
-    }
-    if (name === 'bookmark') {
-      const progress = notebook.reading.find(r=>r.paper === reader.paper);
-      progress.bookmarks = progress.bookmarks.includes(reader.page) ? progress.bookmarks.filter(p=>p !== reader.page) : [...progress.bookmarks,reader.page];
-      await save(); target.textContent = progress.bookmarks.includes(reader.page) ? 'Remove bookmark' : 'Bookmark this page'; return;
-    }
-    if (name === 'highlight-selection') {
-      if (!reader.selection || !reader.rects?.length) throw new Error('Select a passage on the PDF page first.');
-      notebook.highlights.push({id:uid(),paper:reader.paper,page:reader.selectionPage,rects:reader.rects,text:reader.selection,color:el('highlight-color').value,note:''});
-      reader.selection = ''; reader.rects = []; window.getSelection()?.removeAllRanges();
-      await save(); renderHighlights(); return;
-    }
-    if (['save-highlight','capture-highlight','remove-highlight'].includes(name)) {
-      const id = target.closest('[data-highlight]').dataset.highlight, highlight = notebook.highlights.find(h => h.id === id);
-      const note = target.closest('[data-highlight]').querySelector('[data-highlight-note]').value;
-      if (name === 'capture-highlight') {
-        el('capture-quote').value = highlight.text; el('capture-locator').value = `p. ${highlight.page}`;
-        if (!el('capture-note').value) el('capture-note').value = note;
-        reader.draft = true; el('capture-text').focus(); return;
-      }
-      if (name === 'save-highlight') highlight.note = note;
-      if (name === 'remove-highlight') {
-        const label = highlight.kind === 'figure' ? 'mark' : 'highlight';
-        if ((highlight.note || note) && !await confirmDialog(`Remove this ${label} and its note?`,{ok:`Remove ${label}`})) return;
-        notebook.highlights = notebook.highlights.filter(h => h.id !== id);
-      }
-      await save(); renderHighlights(); return;
-    }
-    if (name === 'capture-selection') {
-      if (!reader.selection) throw new Error('Select a passage on the PDF page first.');
-      el('capture-quote').value = reader.selection; el('capture-locator').value = reader.selectionLocator;
-      reader.draft = true; el('capture-text').focus(); return;
-    }
   }
   async function run(task) {
     if (busy) return;
     setBusy(true);
-    try { await flushReaderProgress(); await task(); }
+    try { await task(); }
     catch (error) { message(error.message,true); if (!el('research-tools').open) toast(error.message,{tone:'warn'}); }
-    finally { setBusy(false); if (reader?.progressPending) scheduleReaderProgress(); }
+    finally { setBusy(false); }
   }
-  document.addEventListener('selectionchange', () => {
-    if (!reader || tab !== 'reader') return;
-    const selection = window.getSelection();
-    const pageFor = node => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('#pdf-pages .pdf-page');
-    const start = pageFor(selection?.anchorNode), end = pageFor(selection?.focusNode);
-    if (start && end && selection.toString().trim()) {
-      reader.selection = selection.toString().trim();
-      const first = Math.min(Number(start.dataset.page), Number(end.dataset.page));
-      const last = Math.max(Number(start.dataset.page), Number(end.dataset.page));
-      reader.selectionLocator = first === last ? `p. ${first}` : `pp. ${first}–${last}`;
-      reader.selectionPage = first;
-      reader.rects = first === last && selection.rangeCount ? selectionRects(selection.getRangeAt(0), start) : [];
-    }
-    for (const view of reader.views || []) {
-      if (view.rendered && !view.nearby && !readerPageSelected(view)) releaseReaderPage(view);
-    }
-  });
+  document.addEventListener('selectionchange', trackSelection);
   document.addEventListener('pointerdown', event => {
-    const container = event.target.closest?.('#pdf-pages .pdf-page');
-    const layer = container?.querySelector('.highlightLayer');
-    if (!reader?.figureMode || busy || event.button !== 0 || !layer) return;
+    const container = event.target.closest?.('#reader .pdf-page');
+    if (!reader?.figureMode || busy || event.button !== 0 || !container || !container.querySelector('.highlightLayer')) return;
     event.preventDefault();
+    hidePassageTools();
     container.setPointerCapture(event.pointerId);
     reader.drag = {page:Number(container.dataset.page), container, box:container.getBoundingClientRect(), x:event.clientX, y:event.clientY};
-    layer.insertAdjacentHTML('beforeend', '<div class="figure-draft"></div>');
+    container.querySelector('.highlightLayer').insertAdjacentHTML('beforeend', '<div class="figure-draft"></div>');
   });
   document.addEventListener('pointermove', event => {
     if (!reader?.drag) return;
@@ -834,24 +1176,30 @@ const ResearchTools = (() => {
     if (!reader?.drag) return;
     const {page, container} = reader.drag, rect = figureRect(reader.drag, event);
     reader.drag = null;
-    container.querySelector('.figure-draft')?.remove();
     // A click without a drag is not a figure; stay in figure mode for another try.
-    if (rect.w < .01 || rect.h < .01) return;
-    run(async () => {
-      notebook.highlights.push({id:uid(),paper:reader.paper,page,kind:'figure',rects:[rect],text:'',color:el('highlight-color').value,note:'',question:false});
-      reader.figureMode = false;
-      await save(); renderHighlights();
-    });
+    if (rect.w < .01 || rect.h < .01) { container.querySelector('.figure-draft')?.remove(); return; }
+    offerFigure(page, rect, container);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && reader?.figureMode && !document.querySelector('dialog[open]')) { hidePassageTools(); setFigureMode(false); }
   });
   document.addEventListener('click', event => {
     // The label too: its text reaching the card would redraw the box away before it ticks.
     if (event.target.closest('[data-select-claim], [data-select-paper], .claim-selection label')) { event.stopPropagation(); return; }
+    // A claim's PDF link scrolls the paper already open beside it rather than
+    // opening a second copy in a new tab.
+    const link = event.target.closest('a.pdflink');
+    if (link && reader && link.dataset.paper === reader.paper) {
+      event.preventDefault(); event.stopPropagation();
+      goToPage(Number(link.dataset.page) || 1); return;
+    }
     const target = event.target.closest('[data-tool]');
     if (!target) return;
     event.preventDefault(); event.stopPropagation();
     const name = target.dataset.tool;
     if (name === 'clear-selection') { claims.clear(); papers.clear(); remember(); sync(); return; }
     if (name === 'select-visible') { visibleClaims().forEach(c=>claims.add(refKey(c))); remember(); sync(); return; }
+    if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       if (!el('research-tools').open) {
         await open(['notes','boards','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare');
@@ -877,15 +1225,26 @@ const ResearchTools = (() => {
       notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;
       await save();
     });
-    if (target.id === 'reader-zoom') run(layoutReader);
+    if (target.id === 'reader-zoom') run(() => setZoom(target.value));
     if (target.id === 'marks-filter') { marksFilter = target.value; renderMarks(); }
     if (target.matches('[data-highlight-question]')) run(async () => {
-      notebook.highlights.find(h => h.id === target.dataset.highlightQuestion).question = target.checked;
-      await save(); renderHighlights();
+      const id = target.dataset.highlightQuestion, question = target.checked;
+      if (el('research-tools').open) {
+        notebook.highlights.find(h => h.id === id).question = question;
+        await save(); return;
+      }
+      await mutateNotebook(currentWorkspaceId, n => { const h = n.highlights.find(h => h.id === id); if (!h) throw new Error('This mark was removed in another window.'); h.question = question; });
     });
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target.id === 'reader-page') { event.preventDefault(); run(() => readerAction('go-page', event.target)); }
   });
   document.addEventListener('input', event => {
     const target = event.target;
+    if (target.dataset.highlightNote) {
+      if (markEditor?.id === target.dataset.highlightNote && markEditor.workspace === currentWorkspaceId) markEditor.text = target.value;
+      return;
+    }
     if (!el('research-tools')?.contains(target)) return;
     if (target.id === 'workspace-notes') {
       notes.text = target.value;
@@ -898,31 +1257,33 @@ const ResearchTools = (() => {
     if (target.id === 'board-title') { currentBoard().title = target.value; dirty = true; }
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
     if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
-    if (target.dataset.highlightNote && reader) reader.noteValues.set(target.dataset.highlightNote, target.value);
-    if (target.closest('#capture-form') && reader) reader.draft = true;
-  });
-  document.addEventListener('submit', event => {
-    if (event.target.id !== 'capture-form') return;
-    event.preventDefault();
-    run(async () => {
-      const text = el('capture-text').value.trim();
-      if (!text) throw new Error('Write the claim in your own words before saving.');
-      const result = await api(`/api/papers/${encodeURIComponent(reader.paper)}/claims`,{method:'POST',headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
-        body:JSON.stringify({text,quote:el('capture-quote').value,locator:el('capture-locator').value,note:el('capture-note').value})});
-      reader.draft = false; event.target.reset(); el('capture-locator').value = `p. ${reader.page}`;
-      await refreshAll(); el('capture-status').textContent = result.quote_verified === false ? 'Claim saved. The quote was not found by the text check; review its wording.' : 'Claim saved with its source.';
-    });
   });
   document.addEventListener('DOMContentLoaded', () => {
     el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
   });
   window.addEventListener('beforeunload', event => { if (unsaved() || notesChanged() || notesSaving) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
-    if (!el('research-tools').open) return true;
-    if (busy) { message('Finish the current operation before switching workspaces.', true); return false; }
-    await close();
-    return !el('research-tools').open;
+    // A reader action waiting on the notebook would finish in the workspace
+    // it started in and open its paper over the one switched to.
+    if (busy) {
+      const text = 'Finish the current operation before switching workspaces.';
+      if (el('research-tools').open) message(text, true); else toast(text, {tone:'warn'});
+      return false;
+    }
+    if (el('research-tools').open) {
+      await close();
+      if (el('research-tools').open) return false;
+    }
+    // A highlight note being written in the rail is state app.js cannot see;
+    // the switch would hide its editor and the next edit would overwrite it.
+    if (highlightDrafting()) {
+      if (!await confirmDialog('Discard the highlight note you are writing before switching workspaces?', {ok:'Discard note'})) return false;
+    }
+    // Agreed to, not yet done: the editor is closed by sync() once the
+    // workspace has actually changed, so a guard after this one refusing the
+    // switch leaves the note where it was.
+    return true;
   }
-  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,
+  return {sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     openBoard: id => run(() => open('boards', id))};
 })();
