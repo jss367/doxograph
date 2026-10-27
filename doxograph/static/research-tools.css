@@ -20,9 +20,14 @@
   border-radius: 6px; background: var(--panel); padding: .85rem 1rem; margin-bottom: 1rem; }
 .workspace-notes-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .workspace-notes h2 { font-size: 1rem; margin: 0; }
+.workspace-notes .note-toolbar { margin: .4rem 0 .6rem; padding-top: 0; border-top: none; }
+.workspace-notes .note-prose :is(p, blockquote) { white-space: normal; }
+#workspace-notes-rich-preview { max-height: 14rem; overflow: auto; padding: .3rem .5rem; }
+#workspace-notes-reading .note-pages { grid-template-columns: minmax(0, 1fr); }
+#workspace-notes-reading .note-read { border-left: 0; padding-left: 0; }
 .workspace-notes > .hint { margin: .35rem 0 .65rem; }
 .workspace-notes #workspace-notes { display: block; width: 100%; min-height: 7rem; max-height: 45vh;
-  resize: vertical; line-height: 1.65; padding: .65rem .8rem; }
+  resize: vertical; line-height: 1.65; padding: .65rem .8rem; tab-size: 2; }
 #workspace-notes-preview { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted);
   margin: .5rem 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 #workspace-notes-preview[hidden] { display: none; }

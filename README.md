@@ -322,14 +322,16 @@ All of these tools work with **Enable AI analysis** turned off. Your workspace
 notes, boards, connections, reading progress, marks, and saved searches
 belong to the selected workspace and are stored in `notebook.json`. They are
 never sent to a model.
-Long-form research notes and their images are also private to the workspace,
-stored separately in `research-notes.json` and `note-images/`, and never sent
-to a model.
+Long-form research notes are also private to the workspace, stored separately
+in `research-notes.json`, and never sent to a model. Images embedded in either
+writing space are stored locally in `note-images/`.
 
 - **Workspace notes** appears above the claims in the main workspace view.
   Keep your questions, working conclusions, and next steps here; use
   **Research notes** for longer documents such as arguments, reviews, and plans.
-  Edit in place or collapse to a two-line preview. **Keep open while reading**
+  Write in Markdown with equations, tables, links, and local images; choose
+  Write, Split, or Preview and use the formatting toolbar. Upload, drop, or paste
+  images to store them locally. Edit in place or collapse to a two-line preview. **Keep open while reading**
   places the same editor in the paper's notes column, beside its PDF when
   available. The sidebar's **Workspace notes** button brings the editor into
   view. Expansion and reading preferences are remembered for each workspace
@@ -475,7 +477,7 @@ syntheses.json       what the papers hold on each topic
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 research-notes.json  your long-form Markdown notes, with per-note revisions
-note-images/        local images embedded in research notes
+note-images/        local images embedded in workspace and research notes
 export/              generated HTML
 ```
 
@@ -644,6 +646,8 @@ the only thing here no model writes and no model reads.
 
 For questions and thoughts about the whole workspace, edit **Workspace notes**
 in the main view. You get one document per workspace, saved automatically.
+It supports Markdown, equations, tables, and local images, with Write, Split,
+and Preview views. For multiple named documents, use **Research notes**.
 
 A paper's note sits under the summary in its header, or at the top of the rail
 beside the paper when its PDF is open: **Write a note** opens a box, Save puts

@@ -254,7 +254,23 @@
         <p class="hint">Your questions, working conclusions, and next steps.</p>
         <p id="workspace-notes-preview" hidden></p>
         <div id="workspace-notes-editor">
-          <textarea id="workspace-notes" aria-labelledby="workspace-notes-title" rows="4" placeholder="What are you investigating? Capture questions, thoughts, and next steps. Changes save automatically."></textarea>
+          <div class="note-toolbar" aria-label="Workspace writing tools">
+            <button type="button" data-workspace-format="heading">Heading</button>
+            <button type="button" data-workspace-format="bold">Bold</button>
+            <button type="button" data-workspace-format="equation">Equation</button>
+            <button type="button" data-workspace-format="table">Table</button>
+            <button type="button" data-workspace-format="link">Link</button>
+            <button type="button" id="workspace-notes-add-image">Image</button>
+            <input id="workspace-notes-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+            <label class="note-view-label">View <select id="workspace-notes-view">
+              <option value="write">Write</option><option value="split">Split</option><option value="preview">Preview</option>
+            </select></label>
+          </div>
+          <div id="workspace-notes-pages" class="note-pages" data-mode="write">
+            <div class="note-write"><textarea id="workspace-notes" aria-labelledby="workspace-notes-title" rows="4" spellcheck="true" placeholder="What are you investigating? Capture questions, thoughts, and next steps. Changes save automatically."></textarea></div>
+            <div class="note-read"><article id="workspace-notes-rich-preview" class="note-prose" aria-label="Workspace notes preview"></article></div>
+          </div>
+          <p id="workspace-notes-image-status" class="hint" role="status" hidden></p>
         </div>
         <div class="workspace-notes-footer">
           <label><input type="checkbox" id="workspace-notes-keep"> Keep open while reading</label>
@@ -394,6 +410,7 @@
 <script src="/workspace-client.js"></script>
 <script src="/workspace-controller.js"></script>
 <script src="/poller.js"></script>
+<script src="/note-writing.js"></script>
 <script src="/workspace-notes.js"></script>
 <script src="/research-notes.js"></script>
 <script src="/research-tools.js"></script>
