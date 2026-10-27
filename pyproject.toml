@@ -19,6 +19,7 @@ dependencies = [
     "pypdf>=4.0",
     "fpdf2>=2.8.8",
     "Pillow>=10",
+    "mcp>=2.3,<3",
 ]
 
 [project.optional-dependencies]
