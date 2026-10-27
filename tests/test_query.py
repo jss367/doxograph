@@ -113,6 +113,29 @@ def test_saved_analysis_preserves_decisions_staleness_and_references(client, cor
     assert before == {p: p.read_bytes() for p in config.data_dir().rglob("*.json")}
 
 
+def test_synthesis_reads_omit_large_saved_basis_and_preserve_staleness(client, corpus):
+    payload = "CLAIM_BASIS_SENTINEL " * 2000
+    store.update_claim("alpha", corpus[0], {"evidence": payload})
+    live = {c["id"]: c for c in store.claim_rows()}
+    store.record_synthesis("recovery", "A concise synthesis.", live)
+    stored = store.syntheses_path().read_bytes()
+
+    response = client.get("/api/query/evidence", params={"kind": "syntheses", "limit": 1})
+    assert response.status_code == 200
+    [row] = response.json()["items"]
+    assert row["text"] == "A concise synthesis." and row["n_claims"] == 2
+    assert row["stale"] is False
+    assert "claims" not in row and "tensions" not in row and "prompt_basis" not in row
+    assert "CLAIM_BASIS_SENTINEL" not in response.text and len(response.content) < 10000
+    assert store.syntheses_path().read_bytes() == stored
+    assert "CLAIM_BASIS_SENTINEL" in store.load_syntheses()["recovery"]["claims"][corpus[0]]
+
+    store.update_claim("alpha", corpus[0], {"evidence": "A different measurement"})
+    changed = client.get("/api/query/evidence", params={"kind": "syntheses"}).json()["items"][0]
+    assert changed["stale"] is True
+    assert store.syntheses_path().read_bytes() == stored
+
+
 def test_personal_notes_are_previewed_and_read_in_bounded_chunks(client):
     text = "A long personal note. " * 1000
     saved = research_notes.create_note(research_notes.NoteBody(title="Reading plan", body=text))

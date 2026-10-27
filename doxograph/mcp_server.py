@@ -150,6 +150,8 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
 
         Never generates analysis. Topic is an exact slug. Agreements and tensions
         include paper/claim references; fetch their quoted claims with search_claims.
+        Syntheses return text and source counts; use search_claims(topic=topic)
+        for source claims, following next_offset.
         Dismissed and stale results remain labeled and must not be treated as confirmed.
         """
         return await get("/api/query/evidence", workspace, kind=kind, topic=topic, limit=limit, offset=offset)

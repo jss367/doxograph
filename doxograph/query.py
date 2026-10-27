@@ -100,6 +100,12 @@ def evidence(kind: Literal["agreements", "tensions", "syntheses"], topic: str = 
     # Agreements can cite arbitrarily many claims. Preserve their references;
     # retrieve the full quoted claims through /claims rather than embedding all.
     for row in rows:
+        if kind == "syntheses":
+            # The store has already computed staleness from these full-text
+            # comparison snapshots. They are not part of an agent's answer.
+            for field in ("claims", "tensions", "prompt_basis"):
+                row.pop(field, None)
+        row.pop("fingerprints", None)
         if isinstance(row.get("claims"), list):
             row["claims"] = [{"paper": c["paper"], "id": c["id"]} for c in row["claims"]]
     return page(rows, limit, offset, kind=kind, storage_issues=issues)
