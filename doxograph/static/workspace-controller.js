@@ -2,7 +2,7 @@
 
 // Serializes navigation without owning DOM, drafts, or application rendering.
 function createWorkspaceController(client, {
-  prepare, showCurrent, canLeave, confirmLeave, beforeLeave, enter,
+  prepare, showCurrent, canLeave, confirmLeave, beforeLeave, beforeSelect = async () => true, enter,
 }) {
   let pending = null, sequence = 0;
 
@@ -21,6 +21,9 @@ function createWorkspaceController(client, {
     if (!await confirmLeave() || asked !== sequence) return;
     const run = (async () => {
       await beforeLeave();
+      // Draining deletes can leave editors interactive for an entire request.
+      // Flush edits made during that wait before changing their destination.
+      if (!await beforeSelect()) { showCurrent(); return; }
       client.select(id);
       await enter();
     })();

@@ -1220,7 +1220,8 @@ function resetWorkspaceView() {
 
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
-    return await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+    return await WorkspaceNotes.beforeWorkspaceSwitch()
+      && await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave() {
@@ -1238,8 +1239,12 @@ const workspaceController = createWorkspaceController(workspaceClient, {
                                            { ok: 'Discard and switch' });
   },
   beforeLeave: flushTrash,
+  beforeSelect: () => WorkspaceNotes.beforeWorkspaceSwitch(),
   async enter() {
     resetWorkspaceView();
+    // Selection cleared the client snapshot. Retire the previous workspace's
+    // editor before the destination read can pause or fail.
+    WorkspaceNotes.sync({view:V.view, paper:V.paper});
     renderWorkspacePicker();
     syncHash(true);
     await refresh();
@@ -1589,6 +1594,7 @@ function render() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
 }
 
@@ -1618,6 +1624,7 @@ function renderAll() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   syncHash();
 }
@@ -2746,6 +2753,7 @@ function renderContent() {
   renderActiveFilters();
   restoreNoteCursor(cursor);
   renderContinuation();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   syncHash();
 }
 
@@ -4911,6 +4919,9 @@ document.addEventListener('keydown', async (event) => {
   // editor branches would also run `cancelEdit` and drop a draft the user
   // only meant to keep by dismissing the menu.
   if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
+  // This independent editor owns its keyboard. Escape here must not reach
+  // the claim-editor fallback and discard a draft elsewhere in the view.
+  if (event.target.closest?.('#workspace-notes-panel')) return;
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key !== 'Escape') return;
@@ -5051,10 +5062,12 @@ async function updateFromPoll() {
   syncHash();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
 }
 
 async function boot() {
+  WorkspaceNotes.connect(workspaceClient);
   ResearchNotes.connect(workspaceClient);
   ResearchTools.connect(workspaceClient);
   window.FocusedReview.connect(workspaceClient);
