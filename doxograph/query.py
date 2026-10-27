@@ -16,8 +16,11 @@ QueryText = Annotated[str, Query(max_length=1000)]
 
 def matches(q: str, *values) -> bool:
     """Every query word must occur; case and accents follow PDF search."""
+    terms = search.terms(q)
+    if not terms:
+        return True
     text = search.fold(" ".join(str(value or "") for value in values))
-    return all(term in text for term in search.terms(q))
+    return all(term in text for term in terms)
 
 
 def page(rows: list[dict], limit: int, offset: int, **extra) -> dict:

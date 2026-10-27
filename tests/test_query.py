@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import config, notebook, research_notes, server, store
+from doxograph import config, notebook, research_notes, search, server, store
 
 
 @pytest.fixture
@@ -133,6 +133,21 @@ def test_personal_notes_are_previewed_and_read_in_bounded_chunks(client):
 @pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 101}, {"offset": -1}, {"reviewed": "maybe"}, {"q": "x" * 1001}])
 def test_invalid_claim_queries_are_rejected(client, params):
     assert client.get("/api/query/claims", params=params).status_code == 422
+
+
+@pytest.mark.parametrize("q", ["", "   ... !!!"])
+def test_listing_notes_does_not_fold_large_bodies_without_search_terms(client, monkeypatch, q):
+    research_notes.create_note(research_notes.NoteBody(title="Long note", body="A long note. " * 10000))
+    fold = search.fold
+
+    def bounded_fold(text):
+        assert len(text) < 1000, "An unfiltered listing folded the note body"
+        return fold(text)
+
+    monkeypatch.setattr(search, "fold", bounded_fold)
+    response = client.get("/api/query/notes", params={"q": q})
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
 
 
 def test_unreadable_papers_are_reported_as_partial_results(client, corpus):
