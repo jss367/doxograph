@@ -1,6 +1,7 @@
 """Workspace metadata damage must not hide or overwrite healthy research."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -149,6 +150,53 @@ def test_metadata_stat_failure_does_not_bypass_the_safe_reader(monkeypatch):
     assert response.json()["storage_issues"][0]["path"] == str(path)
 
 
+@pytest.mark.parametrize("filename,section,_", DOCUMENTS)
+def test_acl_change_invalidates_healthy_metadata_cache(monkeypatch, filename, section, _):
+    corpus()
+    store.save_ledger([{"id": "L1", "text": "My claim"}])
+    store.save_context("My research")
+    store.retire_key("previous")
+    path = config.data_dir() / filename
+    original_stat, original_read = Path.stat, Path.read_text
+    baseline = path.stat()
+    readable = True
+    ctime = baseline.st_ctime_ns
+
+    def acl_stat(candidate, *args, **kwargs):
+        if candidate == path:
+            return SimpleNamespace(
+                st_size=baseline.st_size, st_mtime_ns=baseline.st_mtime_ns,
+                st_ino=baseline.st_ino, st_mode=baseline.st_mode, st_ctime_ns=ctime,
+            )
+        return original_stat(candidate, *args, **kwargs)
+
+    def acl_read(candidate, *args, **kwargs):
+        if candidate == path and not readable:
+            raise PermissionError("ACL denies reading metadata")
+        return original_read(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", acl_stat)
+    monkeypatch.setattr(Path, "read_text", acl_read)
+    with client() as c:
+        healthy = c.get("/api/state")
+        assert healthy.json()["storage_issues"] == []
+        readable = False
+        ctime += 1
+        damaged = c.get("/api/state", headers={"If-None-Match": healthy.headers["etag"]})
+        assert damaged.status_code == 200
+        [issue] = damaged.json()["storage_issues"]
+        assert issue["path"] == str(path)
+        assert "ACL denies" in issue["detail"]
+        assert len(damaged.json()["papers"]) == len(damaged.json()["claims"]) == 2
+        readable = True
+        ctime += 1
+        repaired = c.get("/api/state", headers={"If-None-Match": damaged.headers["etag"]})
+    assert repaired.status_code == 200
+    assert repaired.json()["storage_issues"] == []
+    if section:
+        assert repaired.json()[section] == healthy.json()[section]
+
+
 @pytest.mark.parametrize("filename,_,contents", DOCUMENTS)
 def test_metadata_damage_is_confined_to_its_workspace(filename, _, contents):
     corpus()
@@ -206,6 +254,64 @@ def test_corrupt_retirement_history_blocks_reservation_and_local_and_remote_dele
     assert store.retired_keys_path().read_text() == "{broken"
     store.retired_keys_path().write_text('["previous"]')
     assert store.reserve_key("previous") == "previousa"
+
+
+@pytest.mark.parametrize("failure", ["read", "write"])
+def test_retirement_failure_prevents_remote_cleanup(monkeypatch, failure):
+    paper = store.new_paper("current", pdf_upload={"file_id": "remote-file"})
+    store.save_paper(paper)
+    store.pdf_path("current").write_bytes(b"PDF")
+    store.text_path("current").write_text("Extracted text")
+    store.retire_key("previous")
+    path = store.retired_keys_path()
+    original_read, original_write = Path.read_text, store.write_atomic
+
+    def read(candidate, *args, **kwargs):
+        if candidate == path and failure == "read":
+            raise PermissionError("Cannot read retirement history")
+        return original_read(candidate, *args, **kwargs)
+
+    def write(candidate, contents):
+        if candidate == path and failure == "write":
+            raise PermissionError("Cannot write retirement history")
+        return original_write(candidate, contents)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(store, "write_atomic", write)
+    api = Mock()
+    with pytest.raises((storage.StorageReadError, PermissionError), match="retirement history"):
+        extract.delete_paper("current", api=api)
+    api.files.delete.assert_not_called()
+    assert store.load_paper("current") == paper
+    assert store.pdf_path("current").read_bytes() == b"PDF"
+    assert store.text_path("current").read_text() == "Extracted text"
+    assert original_read(path) == '[\n  "previous"\n]\n'
+
+
+def test_cleanup_does_not_repeat_retirement_after_remote_deletion(monkeypatch):
+    store.save_paper(store.new_paper("current", pdf_upload={
+        "file_id": "remote-current", "superseded_file_ids": ["remote-old"],
+    }))
+    store.pdf_path("current").write_bytes(b"PDF")
+    store.text_path("current").write_text("Extracted text")
+    retired = store.retired_keys_path()
+    api = Mock()
+
+    def delete_remote(file_id):
+        if file_id == "remote-old":
+            assert "current" in store.retired_keys()
+            # Simulate damage or a permission change while cloud calls run.
+            retired.write_text("{broken")
+            monkeypatch.setattr(store, "retire_key", Mock(side_effect=AssertionError("retirement repeated")))
+
+    api.files.delete.side_effect = delete_remote
+    extract.delete_paper("current", api=api)
+    assert [call.args[0] for call in api.files.delete.call_args_list] == ["remote-old", "remote-current"]
+    assert not store.paper_path("current").exists()
+    assert not store.pdf_path("current").exists()
+    assert not store.text_path("current").exists()
+    with pytest.raises(storage.StorageReadError):
+        store.reserve_key("current")
 
 
 def test_damaged_vocabulary_blocks_pending_recovery_before_any_papers_move():

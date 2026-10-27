@@ -21,7 +21,7 @@ import tempfile
 import threading
 import time
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -514,11 +514,19 @@ def all_papers(*, issues: list[records.StorageIssue] | None = None) -> list[dict
 
 
 @_locked
-def delete_paper(key: str) -> None:
-    """Remove a paper under its lock, so an in-flight save cannot resurrect it."""
+def delete_paper(key: str, *, before_remove: Callable[[], None] | None = None) -> None:
+    """Retire a key, run optional cleanup, then remove its files under its lock.
+
+    Cleanup may delete remote uploads, so retirement must succeed before it
+    starts. If cleanup fails, keep local metadata for a retry. Retirement is
+    deliberately not repeated after cleanup, when a new failure would strand
+    local metadata referring to uploads that have already been removed.
+    """
     # Retire before unlinking. The other order leaves a window where the key is
     # free but not yet recorded, and a concurrent ingest could take it.
     retire_key(key)
+    if before_remove is not None:
+        before_remove()
     paper_path(key).unlink(missing_ok=True)
     pdf_path(key).unlink(missing_ok=True)
     text_path(key).unlink(missing_ok=True)
@@ -1120,6 +1128,7 @@ def corpus_signature() -> str:
     costs a good fraction of a second, and the page asks twice a second. The
     writes are all atomic replaces, so a changed file has a new inode and
     mtime; a CLI process writing the corpus is seen the same way as this one.
+    Ctime also detects ACL changes that leave contents and mode bits unchanged.
     """
     parts: list[tuple] = []
     for directory, suffix in ((config.papers_dir(), ".json"), (config.pdfs_dir(), ".pdf")):
@@ -1128,7 +1137,7 @@ def corpus_signature() -> str:
                 for entry in entries:
                     if entry.name.endswith(suffix) and not entry.name.startswith("."):
                         st = entry.stat()
-                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode))
+                        parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_ctime_ns))
         except FileNotFoundError:
             pass
     for path in (config.tags_path(), config.ledger_path(), tensions_path(), syntheses_path(),
@@ -1136,7 +1145,7 @@ def corpus_signature() -> str:
                  tag_change_path(), retired_keys_path()):
         try:
             st = path.stat()
-            parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode))
+            parts.append((path.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_ctime_ns))
         except FileNotFoundError:
             parts.append((path.name,))
         except OSError as exc:

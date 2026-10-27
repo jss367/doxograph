@@ -359,8 +359,6 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
 def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
     """Delete a paper's remote uploads before removing its local metadata."""
     with store.extraction_lock(key), store.paper_lock(key):
-        # Refuse before remote cleanup when the identity cannot be retired.
-        store.retired_keys()
         try:
             paper = store.load_paper(key)
         except KeyError:
@@ -375,14 +373,17 @@ def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
         # Keep the historical Anthropic cleanup when that provider is selected.
         if file_ids and config.ai_provider() == "api" and config.analysis_config().provider != "anthropic" and api is None:
             file_ids = []
-        if file_ids:
-            api = api or (api_client() if config.ai_provider() != "api" else client())
-        for file_id in file_ids:
-            try:
-                api.files.delete(file_id)
-            except anthropic.NotFoundError:
-                pass
-        store.delete_paper(key)
+        def cleanup_uploads() -> None:
+            nonlocal api
+            if file_ids:
+                api = api or (api_client() if config.ai_provider() != "api" else client())
+            for file_id in file_ids:
+                try:
+                    api.files.delete(file_id)
+                except anthropic.NotFoundError:
+                    pass
+
+        store.delete_paper(key, before_remove=cleanup_uploads)
 
 
 def _pdf_block(key: str, force_upload: bool = False) -> dict:
