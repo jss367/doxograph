@@ -95,6 +95,9 @@ def test_workspace_notes_autosave_navigation_and_isolation(engine):
 def test_workspace_notes_inflight_edits_failures_and_conflicts(engine):
     config.set_ai_enabled(False)
     other = config.create_workspace('Other research')
+    store.save_paper(store.new_paper('paper', title='Evidence to browse'))
+    for index in range(20):
+        store.add_claim('paper', {'text': f'Finding {index}.', 'tags': [], 'quote': 'An observation.'})
 
     async def scenario():
         async with browser_session(engine) as browser:
@@ -130,6 +133,14 @@ def test_workspace_notes_inflight_edits_failures_and_conflicts(engine):
                 await editor.fill('Keep this draft after a failure')
                 await expect(page.locator('#workspace-notes-status')).to_contain_text('Couldn’t save.')
                 await expect(editor).to_have_value('Keep this draft after a failure')
+                # Tool navigation reveals an offscreen save error instead of
+                # appearing to ignore the click while the draft stays hidden.
+                await page.locator('#main').evaluate('(node) => { node.scrollTop = node.scrollHeight; }')
+                await expect(page.locator('#workspace-notes-panel')).not_to_be_in_viewport()
+                await page.route('**/api/notebook/notes', fail_save, times=1)
+                await page.locator('.research-tools-nav').get_by_role('button', name='Evidence boards', exact=True).click()
+                await expect(page.locator('#workspace-notes-panel')).to_be_in_viewport()
+                await expect(page.locator('#research-tools')).not_to_be_visible()
                 await page.get_by_role('button', name='Retry save', exact=True).click()
                 await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
                 assert httpx.get(url + '/api/notebook').json()['notes'] == 'Keep this draft after a failure'

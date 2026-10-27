@@ -166,6 +166,10 @@ const WorkspaceNotes = (() => {
     el('workspace-notes-panel').scrollIntoView({block:'nearest'});
     el('workspace-notes').focus({preventScroll:true});
   }
+  function reveal() {
+    forced = true; expanded = true; update();
+    el('workspace-notes-panel').scrollIntoView({block:'nearest'});
+  }
   document.addEventListener('input', event => {
     if (event.target.id !== 'workspace-notes' || draft?.workspace !== client.workspaceId) return;
     draft.text = event.target.value;
@@ -231,11 +235,10 @@ const WorkspaceNotes = (() => {
       if (file) { event.preventDefault(); event.stopPropagation(); uploadImage(file); }
     });
   });
-  return {connect(value) { client = value; }, sync, open, flush,
+  return {connect(value) { client = value; }, sync, open, flush, reveal,
     async beforeWorkspaceSwitch() {
       if (await flush()) return true;
-      forced = true; expanded = true; update();
-      el('workspace-notes-panel').scrollIntoView({block:'nearest'});
+      reveal();
       return false;
     }};
 })();

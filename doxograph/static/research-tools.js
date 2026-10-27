@@ -116,7 +116,7 @@ const ResearchTools = (() => {
     el('research-tools').close();
   }
   async function open(next = 'compare', requestedBoard = null) {
-    if (!await WorkspaceNotes.flush()) return false;
+    if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return false; }
     sync();
     modalWorkspace = workspace;
     tab = next;
