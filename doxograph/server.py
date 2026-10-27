@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import (__version__, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
+from . import (__version__, agent, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
                search, store, notebook, records, research_notes, storage, providers, query)
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
 
@@ -1032,6 +1032,11 @@ def research_notes_css() -> FileResponse:
     return FileResponse(STATIC / "research-notes.css", media_type="text/css")
 
 
+@app.get("/agent-chat.js")
+def agent_chat_js():
+    return FileResponse(STATIC / "agent-chat.js", media_type="text/javascript")
+
+
 @app.get("/focused-review.js")
 def focused_review_js() -> FileResponse:
     return FileResponse(STATIC / "focused-review.js", media_type="text/javascript")
@@ -1495,15 +1500,13 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
     return {"queued": job["id"]}
 
 
-@app.post("/api/papers/{key}/chat")
-def paper_chat(key: str, body: ChatBody) -> dict:
-    _require_analysis()
+@contextlib.contextmanager
+def _chat_errors(label: str):
+    """Map the failures of a model-backed chat to the response the page shows."""
     try:
-        return chat.answer(key, [message.model_dump() for message in body.messages])
-    except KeyError:
-        raise HTTPException(404, f"no paper {key}")
+        yield
     except providers.ProviderResponseError as exc:
-        logger.exception("Paper chat received an invalid provider response")
+        logger.exception(f"{label} received an invalid provider response")
         raise HTTPException(502, str(exc)[:500])
     except InputTooLargeError as exc:
         raise HTTPException(413, str(exc)[:500])
@@ -1512,13 +1515,13 @@ def paper_chat(key: str, body: ChatBody) -> dict:
     except ModelInputError as exc:
         raise HTTPException(400, str(exc)[:500])
     except ValueError:
-        logger.exception("Paper chat encountered invalid saved data or configuration")
-        raise HTTPException(500, "Paper chat could not read the saved paper or model configuration. Check your library and provider settings.")
+        logger.exception(f"{label} encountered invalid saved data or configuration")
+        raise HTTPException(500, f"{label} could not read the saved paper or model configuration. Check your library and provider settings.")
     except ModelSetupError as exc:
-        logger.exception("Paper chat model setup failed")
+        logger.exception(f"{label} model setup failed")
         raise HTTPException(502, str(exc)[:500])
     except (anthropic.APIError, httpx.HTTPError) as exc:
-        logger.exception("Paper chat provider request failed")
+        logger.exception(f"{label} provider request failed")
         status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
         if status in (401, 403):
             detail = "The model service refused access. Check the selected provider's credentials, then retry."
@@ -1530,8 +1533,29 @@ def paper_chat(key: str, body: ChatBody) -> dict:
             detail = "The model service could not be reached or is unavailable. Check your connection and provider settings, then retry."
         raise HTTPException(502, detail)
     except RuntimeError:
-        logger.exception("Paper chat model request failed")
+        logger.exception(f"{label} model request failed")
         raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.")
+
+
+@app.post("/api/papers/{key}/chat")
+def paper_chat(key: str, body: ChatBody) -> dict:
+    _require_analysis()
+    with _chat_errors("Paper chat"):
+        try:
+            return chat.answer(key, [message.model_dump() for message in body.messages])
+        except KeyError:
+            raise HTTPException(404, f"no paper {key}")
+
+
+class AgentBody(ChatBody):
+    paper: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/api/agent/chat")
+def agent_chat(body: AgentBody) -> dict:
+    _require_analysis()
+    with _chat_errors("Library agent"):
+        return agent.answer([message.model_dump() for message in body.messages], body.paper)
 
 
 @app.post("/api/papers/{key}/review")

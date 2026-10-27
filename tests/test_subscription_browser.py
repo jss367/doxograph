@@ -120,3 +120,40 @@ def test_long_chat_keeps_draft_and_explains_how_to_start_over(answer, turns):
 
     with _server() as url:
         asyncio.run(check(url))
+
+
+@pytest.mark.browser
+def test_library_agent_dialog_sends_the_conversation_and_shows_lookups():
+    config.set_ai_provider('claude_code')
+
+    async def check(url):
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            requests = []
+
+            async def respond(route):
+                requests.append(route.request.post_data_json['messages'])
+                await route.fulfill(content_type='application/json', body=json.dumps({
+                    'answer': 'Two papers agree.', 'activity': ['Searched claims steering'], 'assistant': 'Claude'}))
+
+            await page.route('**/api/agent/chat', respond)
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            await page.locator('#agent-question').fill('What agrees on steering?')
+            await page.locator('#agent-send').click()
+            await page.get_by_text('Two papers agree.', exact=True).wait_for()
+            assert await page.locator('#agent-messages .activity').text_content() == 'Searched claims steering'
+            await page.locator('#agent-question').fill('And disagrees?')
+            await page.locator('#agent-send').click()
+            await page.locator('#agent-question:enabled').wait_for()
+            assert [m['content'] for m in requests[1]] == ['What agrees on steering?', 'Two papers agree.', 'And disagrees?']
+            await page.locator('#agent-clear').click()
+            assert await page.locator('#agent-messages').inner_text() == ''
+            await browser.close()
+            assert errors == []
+
+    with _server() as url:
+        asyncio.run(check(url))

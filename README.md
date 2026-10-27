@@ -141,6 +141,21 @@ page reloads. **New conversation** clears the current paper's conversation.
 Failed questions keep their draft so you can retry. Chat uses the model access
 selected in Settings and is disabled when AI analysis is off.
 
+## Ask the library
+
+**Ask the library** in the header opens a chat that answers across every paper in
+the workspace, where paper chat reads one PDF. It needs **Claude subscription
+(Claude Code)** selected in Settings → Model access. Claude looks things up with
+five read-only tools over a snapshot taken when you send the question: the paper
+list, one paper's claims and quotes, a claim search, the topics, and one topic's
+synthesis with its agreements and tensions. The line under each answer lists
+the lookups it made.
+
+It has no file, shell, web, or write access, and it does not receive the PDFs.
+Your paper and claim notes, your research context, and your own claims are left
+out of the snapshot, as they are for paper chat. Answers can be wrong; check them
+against the papers.
+
 ## Use
 
 ```
