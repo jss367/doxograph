@@ -791,7 +791,9 @@ function graphFit() {
   const top = wrap.getBoundingClientRect().top - mainRect.top + main.scrollTop;
   // A wrapped header can put the pane's CSS bottom below the actual viewport.
   const visibleHeight = Math.min(main.clientHeight, window.innerHeight - mainRect.top);
-  const height = Math.max(288, visibleHeight - top - 16);
+  // A wrapped legend or the timeline hint can leave less than 18rem.
+  // Let the canvas shrink with the available space instead of clipping its bottom.
+  const height = Math.max(160, visibleHeight - top - 16);
   wrap.style.height = `${height}px`;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(wrap.clientWidth * dpr);

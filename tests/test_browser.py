@@ -2799,7 +2799,8 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine):
+@pytest.mark.parametrize("x_axis", ["connections", "year"])
+def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine, x_axis):
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
 
@@ -2809,6 +2810,8 @@ def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine)
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                await page.get_by_label("X axis", exact=True).select_option(x_axis)
                 await page.wait_for_function("window.doxographGraph().alpha === 0")
                 # Reproduce a wrapped header regardless of the platform's system font.
                 await page.add_style_tag(content="header { min-height: 180px; }")

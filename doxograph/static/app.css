@@ -431,7 +431,7 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
   --map-cite: #80b7ff; --map-conflict: #ff8793; --map-other: #c3a2f0;
 }
 .graph-wrap { position: relative; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--panel); overflow: hidden; min-height: 18rem; }
+  background: var(--panel); overflow: hidden; min-height: 10rem; }
 .graph-wrap canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 .graph-wrap canvas.hover { cursor: pointer; }
 .graph-wrap canvas.drag { cursor: grabbing; }
