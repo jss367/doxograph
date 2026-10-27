@@ -414,6 +414,10 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 
 /* The map: papers as nodes on a canvas. The wrapper is sized from JS to fill
    what is left of #main below the header, so the whole graph is on screen. */
+:root { --map-cite: #2563b8; --map-conflict: #c52b3d; --map-other: #7951b0; }
+:root[style*="color-scheme: dark"] {
+  --map-cite: #80b7ff; --map-conflict: #ff8793; --map-other: #c3a2f0;
+}
 .graph-wrap { position: relative; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel); overflow: hidden; min-height: 18rem; }
 .graph-wrap canvas { display: block; width: 100%; height: 100%; cursor: grab; }
@@ -423,18 +427,24 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
   background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
   padding: .35rem .5rem; font-size: .82rem; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
 .graph-tip .pm { color: var(--muted); font-size: .76rem; margin-top: .15rem; }
+.graph-tip-relation { margin: .3rem 0; font-weight: 700; }
+.graph-tip-relation.cite { color: var(--map-cite); }
+.graph-tip-relation.conflict, .graph-conflict { color: var(--map-conflict); }
+.graph-tip-citations { margin-top: .4rem; }
 .graph-controls { flex-wrap: wrap; font-size: .84rem; color: var(--muted); }
 .graph-controls label { display: flex; align-items: center; gap: .25rem; }
 .graph-controls input[type=range] { width: 6rem; }
 .graph-legend { display: flex; gap: .9rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted);
   margin: .3rem 0 .5rem; }
-.graph-legend i { display: inline-block; width: 1.2rem; height: 0; border-top: 2px solid var(--line);
+.graph-legend i { position: relative; display: inline-block; width: 1.8rem; height: 0; border-top: 1px solid var(--muted);
   vertical-align: middle; margin-right: .3rem; }
-.graph-legend i.tension { border-top-color: var(--warn); }
-.graph-legend i.cite { border-top-color: var(--accent); }
-.graph-legend i.supports { border-top-color: var(--ok); }
-.graph-legend i.contradicts { border-top-color: var(--warn); border-top-style: dotted; }
-.graph-legend i.other { border-top-color: var(--accent); }
+.graph-legend i.tension { border-top: 3px dashed var(--map-conflict); }
+.graph-legend i.cite { border-top: 2px solid var(--map-cite); }
+.graph-legend i.cite::after { content: ''; position: absolute; right: -1px; top: -6px;
+  border-left: 9px solid var(--map-cite); border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+.graph-legend i.supports { border-top: 2px solid var(--ok); }
+.graph-legend i.contradicts { border-top: 3px dotted var(--map-conflict); }
+.graph-legend i.other { border-top: 2px dashed var(--map-other); }
 
 /* The research form: context and the ledger of my own claims. */
 .edit.research .linkrow input[name="ledger-id"] { flex: 0 0 5rem; font-family: ui-monospace, Menlo, monospace; }

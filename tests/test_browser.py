@@ -3110,6 +3110,88 @@ def test_the_map_draws_a_citation_from_one_paper_to_another():
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engine):
+    from pdfs import minimal_pdf
+
+    titles = {"paper-a": "A study of model behavior and recovery",
+              "paper-b": "Evaluating the persistence of safeguards"}
+    for key, title in titles.items():
+        _paper(key, title, "recovery", year=2026)
+        other = "paper-b" if key == "paper-a" else "paper-a"
+        store.pdf_path(key).write_bytes(minimal_pdf([
+            title, f"References\n[1] {titles[other]}. 2026.",
+        ]))
+    store.save_ledger([{"id": "L1", "text": "Safeguards persist after further training."}])
+    store.update_claim("paper-a", "paper-a-c1", {
+        "ledger_links": [{"claim": "L1", "relation": relation, "note": ""}
+                         for relation in ["supports", "contradicts", "method-for", "refines"]],
+    })
+    store.record_tensions("recovery", [
+        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "contradiction", "note": "Opposing findings."},
+    ], {r["id"]: r for r in store.claim_rows()})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1280, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.wait_for_function("""window.doxographGraph().edges.filter(e => e.type === 'cite').length === 2
+                    && window.doxographGraph().alpha === 0""")
+                # Keep the same readable arrangement while exercising real pointer events.
+                await page.evaluate("""() => {
+                    GRAPH.autofit = false; GRAPH.zoom = 1.2; GRAPH.tx = GRAPH.ty = 0;
+                    const positions = {'p:paper-a': [-160, -80], 'p:paper-b': [160, -80], 'l:L1': [-160, 110]};
+                    for (const [id, [x, y]] of Object.entries(positions)) {
+                        Object.assign(GRAPH.nodes.get(id), {x, y, fixed: true});
+                    }
+                    graphDraw();
+                }""")
+                points = await page.evaluate("""() => {
+                    const rect = GRAPH.canvas.getBoundingClientRect();
+                    const screen = (p) => ({x: rect.x + rect.width / 2 + p.x * GRAPH.zoom,
+                                           y: rect.y + rect.height / 2 + p.y * GRAPH.zoom});
+                    return {nodes: [...GRAPH.nodes.values()].map(n => ({id: n.id, ...screen(n)})),
+                        edges: GRAPH.edgePaths.map(p => ({type: p.edge.type, a: p.edge.a, b: p.edge.b,
+                            relation: p.edge.relation, ...screen(graphPathPoint(p, 0.5))}))};
+                }""")
+                tip = page.locator('.graph-tip')
+                for node in points["nodes"]:
+                    if node["id"] != "p:paper-a":
+                        continue
+                    await page.mouse.move(node["x"], node["y"])
+                    await tip.wait_for(state="visible")
+                    assert "Cites (1): paper-b 2026" in await tip.inner_text()
+                    assert "Cited by (1): paper-b 2026" in await tip.inner_text()
+
+                citations = [e for e in points["edges"] if e["type"] == "cite"]
+                assert abs(citations[0]["y"] - citations[1]["y"]) >= 20
+                for edge in points["edges"]:
+                    await page.mouse.move(edge["x"], edge["y"])
+                    await tip.wait_for(state="visible")
+                    source = titles[edge["a"][2:]]
+                    target = titles.get(edge["b"][2:], "My claim L1: Safeguards persist after further training.")
+                    assert await tip.locator(':scope > strong').all_text_contents() == [source, target]
+                    relation = "cites →" if edge["type"] == "cite" else edge.get("relation") or "contradicts"
+                    if relation == "method-for":
+                        relation = "supplies a method for"
+                    assert await tip.locator('.graph-tip-relation').inner_text() == relation
+                    # A background refresh preserves the hovered connection.
+                    await page.evaluate("renderGraph()")
+                    assert await tip.is_visible()
+
+                # Removing the hovered layer clears its explanation as well.
+                await page.locator('[data-graph-opt="ledger"]').uncheck()
+                await tip.wait_for(state="hidden")
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
     from pdfs import minimal_pdf
 
