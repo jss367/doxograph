@@ -1,4 +1,5 @@
 """Saved claims and highlight notes remain discoverable from their PDF passages."""
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -317,5 +318,50 @@ def test_claim_annotations_retry_a_transient_document_index_failure(engine):
                 await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
                 await badge.wait_for()
                 assert await page.locator('.pdf-page[data-page="20"] canvas').count() == 0
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_claim_annotations_discard_stale_responses_before_restoring_a_quote(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Restoring an edited quote'))
+    original = 'Recovery under steering is a path dependant outcome across all scales.'
+    edited = 'Recovery under steering is a path-dependent outcome across all scales.'
+    store.pdf_path('paper').write_bytes(minimal_pdf(edited))
+    claim = store.add_claim('paper', {'text':'Restored evidence', 'quote':original, 'locator':'p. 1'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            held, release, requests = asyncio.Event(), asyncio.Event(), []
+
+            async def hold_first(route):
+                requests.append(route.request.url)
+                if len(requests) == 1:
+                    held.set()
+                    await release.wait()
+                await route.continue_()
+
+            await page.route('**/quote-context', hold_first)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await asyncio.wait_for(held.wait(), timeout=10)
+                path = f'/api/papers/paper/claims/{claim["id"]}'
+                assert httpx.patch(url + path, json={'quote':edited}).status_code == 200
+                await _poll(page)
+                async with page.expect_response(lambda response: '/quote-context' in response.url) as first:
+                    release.set()
+                assert (await (await first.value).json())['quote'] == edited
+                # Restore A after A's delayed request returned B. A needs a
+                # fresh lookup rather than a permanent cached negative result.
+                async with page.expect_response(lambda response: '/quote-context' in response.url) as second:
+                    assert httpx.patch(url + path, json={'quote':original}).status_code == 200
+                    await _poll(page)
+                assert (await (await second.value).json())['quote'] == original
+                await page.get_by_role('button', name='Show claim: Restored evidence', exact=True).wait_for()
+                assert len(requests) == 2
 
     run_browser(scenario())

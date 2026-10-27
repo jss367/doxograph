@@ -603,7 +603,13 @@ const ResearchTools = (() => {
       client.request(`/api/papers/${encodeURIComponent(active.paper)}/claims/${encodeURIComponent(claim.id)}/quote-context`,
         {headers:{'X-Doxograph-Workspace':active.workspace}}).then(context => {
         if (reader !== active) return;
-        source.quote = context.quote === claim.quote && context.found && !context.repeated ? context.matched || null : null;
+        // An edit may have overtaken this request. This is not a cached miss
+        // for the old quote: restoring it must be able to resolve it again.
+        if (context.quote !== claim.quote) {
+          if (active.quoteSources.get(key) === source) active.quoteSources.delete(key);
+          return;
+        }
+        source.quote = context.found && !context.repeated ? context.matched || null : null;
         redrawHighlights();
       }).catch(error => {
         if (reader !== active) return;
