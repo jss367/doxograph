@@ -23,6 +23,7 @@ const GRAPH = {
   zoom: 1, tx: 0, ty: 0,   // world -> screen: centre + (world * zoom) + (tx, ty)
   autofit: true,           // keep everything in view until the user takes over
   canvas: null, ctx: null, observer: null, signature: '', maxShared: 1, minShared: 1,
+  timeline: null,
 };
 
 function graphReset() {
@@ -33,6 +34,7 @@ function graphReset() {
   GRAPH.zoom = 1; GRAPH.tx = GRAPH.ty = 0; GRAPH.autofit = true;
   GRAPH.canvas = GRAPH.ctx = null;
   GRAPH.signature = '';
+  GRAPH.timeline = null;
   if (GRAPH.observer) { GRAPH.observer.disconnect(); GRAPH.observer = null; }
 }
 
@@ -144,6 +146,7 @@ function graphData() {
       id: `p:${p.key}`, type: 'paper', key: p.key, label: p.title || p.key, cite: graphCite(p),
       n: p.n_claims || 0, topic: ranked.length ? ranked[0][0] : null, tags: new Set(counts.keys()),
       labels: new Set(p.labels || []),
+      year: Number.isInteger(p.year) && p.year > 0 ? p.year : null,
       r: 6 + 3 * Math.sqrt(p.n_claims || 0),
     });
   }
@@ -253,7 +256,7 @@ function graphData() {
 // set of nodes or edges changed, which is what warrants reheating.
 function graphSync() {
   const { nodes, edges, maxShared, minShared } = graphData();
-  const signature = JSON.stringify([nodes.map((n) => [n.id, n.n, n.topic]),
+  const signature = JSON.stringify([V.graph.xAxis, nodes.map((n) => [n.id, n.n, n.topic, n.year]),
     edges.map((e) => [e.type, e.a, e.b, e.w, e.n, e.open, e.relation])]);
   const changed = signature !== GRAPH.signature;
   GRAPH.signature = signature;
@@ -274,8 +277,28 @@ function graphSync() {
     .filter((e) => e.source && e.target);
   GRAPH.maxShared = maxShared;
   GRAPH.minShared = minShared;
+  graphTimeline();
   if (GRAPH.hover && !GRAPH.nodes.has(GRAPH.hover.id)) GRAPH.hover = null;
   return changed;
+}
+
+// Only the vertical position is simulated in timeline mode. Missing years
+// (including the ledger's own claims) get a separate, explicitly undated lane.
+function graphTimeline() {
+  GRAPH.timeline = null;
+  if (V.graph.xAxis !== 'year' || !GRAPH.nodes.size) return;
+  const nodes = [...GRAPH.nodes.values()];
+  const years = nodes.filter((n) => n.year != null).map((n) => n.year);
+  const min = years.length ? Math.min(...years) : null;
+  const max = years.length ? Math.max(...years) : null;
+  const width = min !== max ? Math.max(640, 100 * Math.sqrt(nodes.length)) : 0;
+  const undatedX = years.length ? width / 2 + 160 : 0;
+  GRAPH.timeline = { min, max, width, undatedX, hasUndated: nodes.some((n) => n.year == null) };
+  for (const n of nodes) {
+    n.timelineX = n.year == null ? undatedX : min === max ? 0 : (n.year - min) / (max - min) * width - width / 2;
+    n.x = n.timelineX;
+    n.vx = 0;
+  }
 }
 
 // One step of the simulation: pairwise repulsion, springs along edges, a pull
@@ -315,6 +338,7 @@ function graphTick() {
     n.vy -= n.y * pull * alpha;
     n.vx *= 0.6; n.vy *= 0.6;
     if (!n.fixed) { n.x += n.vx; n.y += n.vy; }
+    if (GRAPH.timeline) { n.x = n.timelineX; n.vx = 0; }
   }
   GRAPH.alpha = alpha * 0.975;
   if (GRAPH.alpha < 0.003) GRAPH.alpha = 0;
@@ -356,10 +380,11 @@ function graphAutofit(w, h) {
     x1 = Math.max(x1, n.x + n.r); y1 = Math.max(y1, n.y + n.r);
   }
   const pad = 48;
-  const zoom = Math.min(2, (w - 2 * pad) / Math.max(x1 - x0, 1), (h - 2 * pad) / Math.max(y1 - y0, 1));
+  const axisHeight = GRAPH.timeline ? 44 : 0;
+  const zoom = Math.min(2, (w - 2 * pad) / Math.max(x1 - x0, 1), (h - axisHeight - 2 * pad) / Math.max(y1 - y0, 1));
   GRAPH.zoom = Math.max(0.2, zoom);
   GRAPH.tx = -((x0 + x1) / 2) * GRAPH.zoom;
-  GRAPH.ty = -((y0 + y1) / 2) * GRAPH.zoom;
+  GRAPH.ty = -((y0 + y1) / 2) * GRAPH.zoom - axisHeight / 2;
 }
 
 function graphDraw() {
@@ -372,6 +397,11 @@ function graphDraw() {
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  graphDrawTimeline(ctx, w, h, colors);
+  // Reserve a strip for the axis even when the user pans the map down.
+  if (GRAPH.timeline) {
+    ctx.beginPath(); ctx.rect(0, 0, w, h - 44); ctx.clip();
+  }
   ctx.translate(w / 2 + GRAPH.tx, h / 2 + GRAPH.ty);
   ctx.scale(GRAPH.zoom, GRAPH.zoom);
   // A filter greys the papers it leaves out rather than removing them, so the
@@ -475,6 +505,47 @@ function graphDraw() {
   ctx.restore();
 }
 
+// Draw in screen coordinates so ticks stay readable while zooming and panning.
+function graphDrawTimeline(ctx, w, h, colors) {
+  const timeline = GRAPH.timeline;
+  if (!timeline) return;
+  const { min, max, width, undatedX, hasUndated } = timeline;
+  const screenX = (x) => w / 2 + GRAPH.tx + x * GRAPH.zoom;
+  const tick = (x, label) => {
+    const sx = screenX(x);
+    if (sx < 32 || sx > w - 32) return;
+    ctx.strokeStyle = colors.line;
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, h - 32); ctx.stroke();
+    ctx.fillText(String(label), sx, h - 27);
+  };
+  ctx.save();
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillStyle = colors.muted;
+  if (min != null) {
+    if (min === max) tick(0, min);
+    else {
+      // Whole-year ticks at 1, 2, 5, 10, ... year intervals, spaced for legibility.
+      const wanted = Math.max(1, (max - min) * 80 / (width * GRAPH.zoom));
+      const base = 10 ** Math.floor(Math.log10(wanted));
+      const step = [1, 2, 5, 10].map((n) => n * base).find((n) => n >= wanted);
+      tick(-width / 2, min);
+      for (let year = Math.ceil(min / step) * step; year < max; year += step) {
+        if ((year - min) * width * GRAPH.zoom / (max - min) < 64
+          || (max - year) * width * GRAPH.zoom / (max - min) < 64) continue;
+        tick((year - min) / (max - min) * width - width / 2, year);
+      }
+      if (width * GRAPH.zoom >= 64) tick(width / 2, max);
+    }
+  }
+  if (hasUndated) tick(undatedX, 'Undated');
+  ctx.strokeStyle = colors.line;
+  ctx.beginPath(); ctx.moveTo(0, h - 32); ctx.lineTo(w, h - 32); ctx.stroke();
+  ctx.textAlign = 'left';
+  ctx.fillText('Publication year →', 10, h - 13);
+  ctx.restore();
+}
+
 function graphLoop() {
   GRAPH.frame = 0;
   if (!GRAPH.canvas) return;
@@ -496,6 +567,10 @@ function graphWorld(event) {
 }
 
 function graphNodeAt(x, y) {
+  if (GRAPH.timeline && GRAPH.canvas) {
+    const h = GRAPH.canvas.height / (window.devicePixelRatio || 1);
+    if (h / 2 + GRAPH.ty + y * GRAPH.zoom >= h - 44) return null;
+  }
   let best = null, bestD = Infinity;
   for (const n of GRAPH.nodes.values()) {
     const d = Math.hypot(n.x - x, n.y - y);
@@ -559,7 +634,7 @@ function graphBindCanvas(canvas) {
     const { x, y, sx, sy } = graphWorld(event);
     if (GRAPH.drag) {
       const n = GRAPH.drag.node;
-      n.x = x + GRAPH.drag.dx; n.y = y + GRAPH.drag.dy;
+      n.x = GRAPH.timeline ? n.timelineX : x + GRAPH.drag.dx; n.y = y + GRAPH.drag.dy;
       n.vx = n.vy = 0;
       GRAPH.moved = true;
       graphHeat(0.3);
@@ -637,9 +712,11 @@ function graphHeader() {
   const opts = V.graph;
   return `<div class="paperhead">
     <h2>How the papers connect</h2>
-    <p class="ps">Each circle is a paper, sized by how many claims it makes and coloured by the
+    <p class="ps">Each circle is a paper, sized by how many claims it makes and colored by the
       topic it speaks to most. Squares are your own claims. Drag a node to move it, scroll to
       zoom, drag the background to pan, and click a paper to read it.</p>
+    <p class="ps" data-graph-timeline-hint ${opts.xAxis === 'year' ? '' : 'hidden'}>Earlier papers are on the left, later papers on the right, using their publication year.
+      Papers without a year and your own claims are in the Undated column. Drag vertically to separate items from the same year.</p>
     <div class="graph-legend">
       <span><i></i>claims share a topic</span>
       <span><i class="tension"></i>papers disagree (dashed while open)</span>
@@ -650,6 +727,10 @@ function graphHeader() {
       <span>(links marked independent are not drawn)</span>
     </div>
     <div class="row graph-controls">
+      <label>X axis <select aria-label="X axis" data-graph-opt="xAxis">
+        <option value="connections" ${opts.xAxis !== 'year' ? 'selected' : ''}>Connections</option>
+        <option value="year" ${opts.xAxis === 'year' ? 'selected' : ''}>Publication year</option>
+      </select></label>
       <label><input type="checkbox" data-graph-opt="topics" ${opts.topics ? 'checked' : ''}> shared topics</label>
       <label title="Hide topic edges thinner than this">at least
         <input type="range" min="1" max="${Math.max(1, GRAPH.maxShared || 1)}" value="${GRAPH.minShared || 1}" data-graph-opt="minShared">
@@ -683,6 +764,8 @@ function graphArrow(ctx, from, to, color) {
 }
 
 function graphStatus() {
+  const hint = $('content').querySelector('[data-graph-timeline-hint]');
+  if (hint) hint.hidden = V.graph.xAxis !== 'year';
   const count = $('content').querySelector('[data-graph-count]');
   if (!count) return;
   const papers = [...GRAPH.nodes.values()].filter((n) => n.type === 'paper').length;
@@ -742,9 +825,10 @@ document.getElementById('graph-nav').addEventListener('click', (event) => {
 
 // For the browser tests and anyone poking at the console: where things are.
 window.doxographGraph = () => ({
-  nodes: [...GRAPH.nodes.values()].map((n) => ({ id: n.id, type: n.type, key: n.key, x: n.x, y: n.y, r: n.r, topic: n.topic })),
+  nodes: [...GRAPH.nodes.values()].map((n) => ({ id: n.id, type: n.type, key: n.key, x: n.x, y: n.y, r: n.r, topic: n.topic, year: n.year })),
   edges: GRAPH.edges.map((e) => ({ type: e.type, a: e.a, b: e.b, w: e.w, n: e.n, relation: e.relation })),
   zoom: GRAPH.zoom, tx: GRAPH.tx, ty: GRAPH.ty, alpha: GRAPH.alpha,
+  xAxis: V.graph.xAxis, timeline: GRAPH.timeline,
 });
 
 document.addEventListener('doxograph:appearance', () => {

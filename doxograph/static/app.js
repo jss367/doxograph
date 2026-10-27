@@ -64,7 +64,7 @@ const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: fa
             drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
-            graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
+            graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
 // Whether the paper's PDF is kept out of the claims view. A preference of this
@@ -899,13 +899,14 @@ function syncHash(push = false) {
 let continuation = null;
 function continuationState() {
   if (continuation?.workspace === workspaceClient.workspaceId) return continuation;
-  let saved = {};
+  let saved = {}, dismissed = false;
   try { saved = JSON.parse(localStorage.getItem(`doxograph-continue:${workspaceClient.workspaceId}`)) || {}; } catch (_) { /* optional */ }
+  try { dismissed = localStorage.getItem(`doxograph-continue-dismissed:${workspaceClient.workspaceId}`) === '1'; } catch (_) { /* optional */ }
   // A fresh deep link is a visit. On reload, the library behind a resumed PDF
   // has already been visited and must not displace the more recent reader.
   const reloading = performance.getEntriesByType('navigation')[0]?.type === 'reload';
   continuation = {workspace:workspaceClient.workspaceId, paper:saved.paper || null, claim:saved.claim || null,
-    observedPaper:reloading ? V.paper : null};
+    observedPaper:reloading ? V.paper : null, dismissed};
   return continuation;
 }
 
@@ -939,18 +940,19 @@ function continuationTargets() {
 function renderContinuation() {
   const {paper, progress, next} = continuationTargets();
   const card = $('continue-reading');
-  card.hidden = !paper && !next;
-  const html = `<h2 id="continue-title">Continue where you left off</h2>
+  card.hidden = continuationState().dismissed || (!paper && !next);
+  const html = `<h2 id="continue-title">Continue</h2>
     <div class="continue-items">
-      ${paper ? `<div class="continue-item"><p class="continue-label">Last paper</p>
-        <p class="continue-text">${esc(paper.title || paper.key)}</p>
+      ${paper ? `<div class="continue-item">
+        <p class="continue-text" title="${esc(paper.title || paper.key)}">${esc(paper.title || paper.key)}</p>
         <div class="row"><button type="button" data-continue="paper">Open paper</button>
         ${paper.has_pdf ? `<button type="button" class="primary" data-tool="reader" data-paper="${esc(paper.key)}">Resume at page ${progress?.page || 1}</button>` : '<span class="hint">No PDF available</span>'}</div></div>` : ''}
-      <div class="continue-item"><p class="continue-label">Claim review</p>
-        <p class="continue-text">${next ? esc(next.text) : S.claims.length ? 'All claims reviewed.' : 'No claims to review yet.'}</p>
-        ${next ? `<p class="hint">${esc(next.paper_title || next.paper)}</p>
-        <button type="button" data-continue="review">Next unreviewed claim</button>` : ''}</div>
-    </div>`;
+      ${next ? `<div class="continue-item">
+        <p class="continue-text" title="${esc(next.paper_title || next.paper)}: ${esc(next.text)}">${esc(next.text)}</p>
+        <button type="button" data-continue="review">Next unreviewed claim</button></div>`
+        : S.claims.length ? '<span class="hint">All claims reviewed.</span>' : ''}
+    </div>
+    <button type="button" class="continue-dismiss" data-continue="dismiss" aria-label="Dismiss continue where you left off" title="Dismiss">×</button>`;
   // Leave focused shortcuts intact across background refreshes.
   if (card.innerHTML !== html) card.innerHTML = html;
 }
@@ -958,6 +960,12 @@ function renderContinuation() {
 $('continue-reading').addEventListener('click', (event) => {
   const button = event.target.closest('[data-continue]');
   if (!button) return;
+  if (button.dataset.continue === 'dismiss') {
+    continuationState().dismissed = true;
+    try { localStorage.setItem(`doxograph-continue-dismissed:${workspaceClient.workspaceId}`, '1'); } catch (_) { /* keep for this session */ }
+    renderContinuation();
+    return;
+  }
   const {paper, next} = continuationTargets();
   const review = button.dataset.continue === 'review';
   const key = review ? next?.paper : paper?.key;
@@ -1225,7 +1233,7 @@ function resetWorkspaceView() {
     error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
-    graph: { topics: true, minShared: null, tensions: true, ledger: true, cites: true },
+    graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
@@ -1242,7 +1250,8 @@ function resetWorkspaceView() {
 
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
-    return await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+    return await WorkspaceNotes.beforeWorkspaceSwitch()
+      && await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave() {
@@ -1260,8 +1269,12 @@ const workspaceController = createWorkspaceController(workspaceClient, {
                                            { ok: 'Discard and switch' });
   },
   beforeLeave: flushTrash,
+  beforeSelect: () => WorkspaceNotes.beforeWorkspaceSwitch(),
   async enter() {
     resetWorkspaceView();
+    // Selection cleared the client snapshot. Retire the previous workspace's
+    // editor before the destination read can pause or fail.
+    WorkspaceNotes.sync({view:V.view, paper:V.paper});
     renderWorkspacePicker();
     syncHash(true);
     await refresh();
@@ -1611,6 +1624,7 @@ function render() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
 }
 
@@ -1640,6 +1654,7 @@ function renderAll() {
   renderJobs();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   syncHash();
 }
@@ -2816,6 +2831,7 @@ function renderContent() {
   restoreNoteCursor(cursor);
   restorePaperActionCursor(actionFocus);
   renderContinuation();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   syncHash();
 }
 
@@ -4764,7 +4780,10 @@ $('panes').addEventListener('input', (e) => {
 
 function graphOption(field) {
   const name = field.dataset.graphOpt;
-  if (name === 'minShared') {
+  if (name === 'xAxis') {
+    V.graph.xAxis = field.value;
+    GRAPH.autofit = true;
+  } else if (name === 'minShared') {
     V.graph.minShared = Math.max(1, parseInt(field.value, 10) || 1);
     const label = $('content').querySelector('[data-graph-min]');
     if (label) label.textContent = String(V.graph.minShared);
@@ -4772,6 +4791,7 @@ function graphOption(field) {
     V.graph[name] = field.checked;
   }
   if (V.view === 'graph') renderGraph();
+  if (V.view === 'graph' && name === 'xAxis') graphFit();
 }
 function applyQuery(value) {
   captureOpenEditor();
@@ -5023,6 +5043,9 @@ document.addEventListener('keydown', async (event) => {
   // editor branches would also run `cancelEdit` and drop a draft the user
   // only meant to keep by dismissing the menu.
   if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
+  // This independent editor owns its keyboard. Escape here must not reach
+  // the claim-editor fallback and discard a draft elsewhere in the view.
+  if (event.target.closest?.('#workspace-notes-panel')) return;
   if (event.key === 'Escape') {
     const menu = document.querySelector('.paper-actions[open]');
     if (menu) {
@@ -5173,10 +5196,12 @@ async function updateFromPoll() {
   syncHash();
   syncAnalysisControls();
   ResearchTools.sync();
+  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
 }
 
 async function boot() {
+  WorkspaceNotes.connect(workspaceClient);
   ResearchNotes.connect(workspaceClient);
   ResearchTools.connect(workspaceClient);
   window.FocusedReview.connect(workspaceClient);
