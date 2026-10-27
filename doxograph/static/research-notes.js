@@ -6,22 +6,7 @@ const ResearchNotes = (() => {
   let workspace, notes = [], draft = null, saved = null, busy = false, previewTimer;
   let mode = 'split';
   const isDirty = () => !!draft && (!saved || draft.title !== saved.title || draft.body !== saved.body);
-  const mathHTML = token => {
-    try { return katex.renderToString(token.text, {displayMode:token.display, throwOnError:false, trust:false, maxSize:20, maxExpand:1000}); }
-    catch (_) { return `<code>${escape(token.raw)}</code>`; }
-  };
-  const markdown = new marked.Marked({gfm:true, renderer:{html:token => escape(token.text)}, extensions:[
-    {name:'noteDisplayMath', level:'block', start:src => src.indexOf('$$'),
-      tokenizer(src) {
-        const match = /^\$\$[ \t]*\n?([\s\S]+?)\$\$(?:[ \t]*(?:\n|$))?/.exec(src);
-        if (match) return {type:'noteDisplayMath', raw:match[0], text:match[1], display:true};
-      }, renderer:mathHTML},
-    {name:'noteInlineMath', level:'inline', start:src => src.indexOf('$'),
-      tokenizer(src) {
-        const match = /^(\${1,2})(?!\$)((?:\\[\s\S]|[^$\n])+?)\1(?!\$)/.exec(src);
-        if (match) return {type:'noteInlineMath', raw:match[0], text:match[2], display:match[1] === '$$'};
-      }, renderer:mathHTML}
-  ]});
+  const markdown = NoteWriting.markdown;
   const button = (action, text, attrs = '') => `<button type="button" data-notes-action="${action}" ${attrs}>${text}</button>`;
   function status(text, error = false) {
     el('notes-status').textContent = text;
@@ -110,25 +95,11 @@ const ResearchNotes = (() => {
   }
   function renderPreview() {
     if (!draft || !el('note-preview')) return;
-    // Parse and sanitize off-DOM, then restrict images before anything can load.
-    const fragment = DOMPurify.sanitize(markdown.parse(draft.body), {RETURN_DOM_FRAGMENT:true, FORBID_TAGS:['style','form','input','button'], FORBID_ATTR:['id','name']});
-    fragment.querySelectorAll('img').forEach(img => {
-      let local = false;
-      try {
-        const url = new URL(img.getAttribute('src') || '', location.href);
-        local = url.origin === location.origin && /^\/api\/research-notes\/images\/[a-f0-9]{64}\.(png|jpg|gif|webp)$/.test(url.pathname)
-          && url.searchParams.get('workspace') === workspace;
-      } catch (_) { /* Malformed image URLs become placeholders too. */ }
-      if (!local) {
-        const placeholder = document.createElement('span');
-        placeholder.className = 'hint';
-        placeholder.textContent = `[Image: ${img.alt || 'upload this image to view it offline'}]`;
-        img.replaceWith(placeholder);
-      } else { img.loading = 'lazy'; img.alt ||= 'Research note image'; }
-    });
+    const fragment = NoteWriting.render(draft.body, workspace);
     fragment.querySelectorAll('a').forEach(link => {
       const target = internalLink(link.getAttribute('href'));
       if (target) {
+        link.removeAttribute('target'); link.removeAttribute('rel');
         link.dataset.notesAction = 'follow'; link.dataset.linkKind = target.kind; link.dataset.linkId = target.id;
         const exists = target.kind === 'note' ? notes.some(n => n.id === target.id) : client.state.papers.some(p => p.key === target.id);
         if (!exists) { link.classList.add('note-missing-link'); link.title = 'This source has been removed.'; }
@@ -266,10 +237,7 @@ const ResearchNotes = (() => {
       const link = document.createElement('a'); link.href = url; link.download = (draft.title.replace(/[^a-zA-Z0-9_-]+/g,'-').slice(0,100) || 'research-note') + '.md';
       link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); return;
     }
-    if (name === 'heading') return insert('\n## ', '', 'Heading');
-    if (name === 'bold') return insert('**','**','text');
-    if (name === 'equation') return insert('\n\n$$\n', '\n$$\n\n', 'E = mc^2');
-    if (name === 'table') return insert('\n\n| Condition | Result |\n| --- | --- |\n| Baseline |  |\n| Intervention |  |\n\n');
+    if (['heading','bold','equation','table'].includes(name)) return insert(...NoteWriting.formats[name]);
     if (name === 'link') return renderLinkPicker();
     if (name === 'insert-link') {
       const {linkKind:kind,linkId:id} = target.dataset;

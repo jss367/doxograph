@@ -1011,6 +1011,11 @@ def research_tools_css() -> FileResponse:
     return FileResponse(STATIC / "research-tools.css", media_type="text/css")
 
 
+@app.get("/note-writing.js")
+def note_writing_js() -> FileResponse:
+    return FileResponse(STATIC / "note-writing.js", media_type="text/javascript")
+
+
 @app.get("/research-notes.js")
 def research_notes_js() -> FileResponse:
     return FileResponse(STATIC / "research-notes.js", media_type="text/javascript")
