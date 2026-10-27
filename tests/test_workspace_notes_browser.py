@@ -414,3 +414,39 @@ $$
                 assert not external
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_workspace_notes_apply_focused_snapshot_on_blur_and_collapse(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                editor = await open_notes(page)
+                await editor.fill('Original notes')
+                await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
+                for text, action in [('From another window', 'blur'), ('Another update', 'collapse')]:
+                    await editor.focus()
+                    data = httpx.get(url + '/api/notebook').json()
+                    data['notes'] = text
+                    httpx.put(url + '/api/notebook', json=data).raise_for_status()
+                    before = await editor.input_value()
+                    await page.evaluate('updateFromPoll()')
+                    await expect(editor).to_have_value(before)
+                    if action == 'blur':
+                        # Moving focus does not request a render or another poll.
+                        await page.locator('#workspace-notes-toggle').focus()
+                        await expect(editor).to_have_value(text)
+                    else:
+                        # Programmatic clicks need not move focus automatically.
+                        await page.evaluate("document.getElementById('workspace-notes-toggle').click()")
+                        await expect(editor).to_be_hidden()
+                        await expect(page.locator('#workspace-notes-preview')).to_have_text(text)
+                    assert httpx.get(url + '/api/notebook').json()['notes'] == text
+
+    run_browser(scenario())
+

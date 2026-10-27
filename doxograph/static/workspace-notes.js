@@ -20,7 +20,10 @@ const WorkspaceNotes = (() => {
     el('workspace-notes-editor').hidden = !expanded;
     el('workspace-notes-preview').hidden = expanded;
     el('workspace-notes-preview').textContent = draft.text.trim() || 'Capture your questions, working conclusions, and next steps.';
-    el('workspace-notes-toggle').textContent = expanded ? 'Collapse notes' : 'Edit notes';
+    // A focusout sync can run between pointerdown and click. Replacing this
+    // button's text node then cancels the click in WebKit.
+    const toggle = el('workspace-notes-toggle'), label = expanded ? 'Collapse notes' : 'Edit notes';
+    if (toggle.textContent !== label) toggle.textContent = label;
     el('workspace-notes-toggle').setAttribute('aria-expanded', String(expanded));
     el('workspace-notes-keep').checked = keep;
     el('workspace-notes').disabled = reloading;
@@ -93,7 +96,7 @@ const WorkspaceNotes = (() => {
         }
       }
       return true;
-    })().finally(() => { saving = null; update(); });
+    })().finally(() => { saving = null; sync(); });
     update();
     return saving;
   }
@@ -168,6 +171,11 @@ const WorkspaceNotes = (() => {
     draft.text = event.target.value;
     update(); schedule();
   });
+  document.addEventListener('focusout', event => {
+    // Polls may already have fetched a newer clean note while this field was
+    // focused. Reconsider that snapshot even if the next poll returns 304.
+    if (event.target.id === 'workspace-notes') queueMicrotask(() => sync());
+  });
   document.addEventListener('change', event => {
     if (event.target.id === 'workspace-notes-view') {
       mode = event.target.value; remember(); update(); renderPreview();
@@ -187,7 +195,10 @@ const WorkspaceNotes = (() => {
       const picker = el('workspace-notes-image'); picker.value = ''; picker.click();
     }
     if (id === 'workspace-notes-toggle') {
-      if (expanded && !await flush()) return;
+      if (expanded) {
+        el('workspace-notes').blur(); sync();
+        if (!await flush()) return;
+      }
       expanded = !expanded;
       if (expanded && mode === 'preview') mode = 'write';
       remember(); update();
