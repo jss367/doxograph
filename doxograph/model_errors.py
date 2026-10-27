@@ -11,3 +11,7 @@ class InputTooLargeError(ModelInputError):
 
 class ModelSetupError(RuntimeError):
     """An application-authored installation or login message safe to display."""
+
+
+class ProviderResponseError(ValueError):
+    """The provider returned an unusable response to a valid request."""

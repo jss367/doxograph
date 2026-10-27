@@ -110,13 +110,15 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Check Python correctness
         run: python -m ruff check doxograph tests
-      - name: Check storage contracts
+      - name: Check storage and provider contracts
         run: python -m mypy
       - name: Check JavaScript syntax
         run: |
           for asset in doxograph/static/*.js; do
             node --check "$asset"
           done
+      - name: Test frontend request and workspace behavior
+        run: node --test tests/frontend/*.test.cjs
 
   native:
     name: Native macOS checks

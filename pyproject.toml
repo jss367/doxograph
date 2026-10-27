@@ -28,6 +28,7 @@ dev = [
     "ruff>=0.17",
     "mypy>=2.4",
     "types-PyYAML>=6.0",
+    "types-jsonschema>=4.0",
 ]
 
 [project.scripts]
@@ -54,8 +55,13 @@ select = ["E9", "F"]
 
 [tool.mypy]
 python_version = "3.13"
-# Enforce strict contracts at the shared storage boundary first. Expand this
-# list as the older dictionary-based modules acquire narrower annotations.
-files = ["doxograph/storage.py", "doxograph/records.py", "doxograph/workspace_metadata.py"]
+# Keep strict contracts at both persistence and provider boundaries. The
+# remaining application modules can be added as their annotations narrow.
+files = [
+    "doxograph/storage.py", "doxograph/records.py", "doxograph/workspace_metadata.py",
+    "doxograph/analysis_types.py",
+    "doxograph/model_errors.py", "doxograph/providers.py",
+    "doxograph/claude_code.py", "doxograph/codex_cli.py",
+]
 strict = true
 follow_imports = "silent"
