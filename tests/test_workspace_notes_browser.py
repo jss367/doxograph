@@ -568,3 +568,41 @@ def test_workspace_notes_old_editor_is_hidden_while_destination_loads(engine, lo
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_workspace_notes_escape_preserves_an_unrelated_claim_draft(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='A paper to review'))
+    store.add_claim('paper', {'text': 'Original claim.', 'tags': [], 'quote': 'An observation.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('.claim [data-act="edit"]').first.click()
+                form = page.locator('form[data-form]')
+                claim = form.locator('textarea[name="text"]')
+                await claim.fill('This claim draft must survive.')
+                editor = await open_notes(page)
+                await editor.fill('These workspace notes must survive too.')
+                for target in ['#workspace-notes', '#workspace-notes-view', '#workspace-notes-toggle']:
+                    await page.locator(target).focus()
+                    await page.keyboard.press('Escape')
+                    await expect(claim).to_have_value('This claim draft must survive.')
+                    await expect(editor).to_have_value('These workspace notes must survive too.')
+                await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
+                await form.get_by_role('button', name='Save', exact=True).click()
+                await expect(form).not_to_be_visible()
+                assert httpx.get(url + '/api/notebook').json()['notes'] == 'These workspace notes must survive too.'
+                assert httpx.get(url + '/api/papers/paper').json()['claims'][0]['text'] == 'This claim draft must survive.'
+                # Escape still cancels the claim editor when that editor owns focus.
+                await page.locator('.claim [data-act="edit"]').first.click()
+                await claim.fill('Cancel this claim edit.')
+                await claim.press('Escape')
+                await expect(form).not_to_be_visible()
+                assert httpx.get(url + '/api/papers/paper').json()['claims'][0]['text'] == 'This claim draft must survive.'
+
+    run_browser(scenario())

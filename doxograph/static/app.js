@@ -4919,6 +4919,9 @@ document.addEventListener('keydown', async (event) => {
   // editor branches would also run `cancelEdit` and drop a draft the user
   // only meant to keep by dismissing the menu.
   if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
+  // This independent editor owns its keyboard. Escape here must not reach
+  // the claim-editor fallback and discard a draft elsewhere in the view.
+  if (event.target.closest?.('#workspace-notes-panel')) return;
   const tag = (event.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) {
     if (event.key !== 'Escape') return;
