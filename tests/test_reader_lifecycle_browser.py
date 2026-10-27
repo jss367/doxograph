@@ -502,3 +502,79 @@ def test_bookmark_reconciles_a_reopened_paper_without_overriding_new_navigation(
                 assert httpx.get(url + '/api/notebook').json()['reading'][0]['bookmarks'] == [3]
                 assert not errors
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('outcome', ['transient', 'persistent', 'replaced'])
+def test_pending_navigation_retries_a_failed_background_render_once(engine, outcome):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='A paper with a delayed page'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['First page.', 'The page requested while loading.', 'Third page.']))
+    store.save_paper(store.new_paper('second', title='Second'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            async def hold_background_page(route):
+                module = '''
+                    export * from '/vendor/pdf.min.mjs?reader-test-original=1';
+                    import * as real from '/vendor/pdf.min.mjs?reader-test-original=1';
+                    export function getDocument(options) {
+                        const task = real.getDocument(options);
+                        return {destroy:() => task.destroy(), promise:task.promise.then(doc => {
+                            const getPage = doc.getPage.bind(doc);
+                            doc.getPage = number => {
+                                if (number !== 2) return getPage(number);
+                                const attempt = window.backgroundAttempts = (window.backgroundAttempts || 0) + 1;
+                                if (attempt === 1) {
+                                    window.backgroundHeld = true;
+                                    return new Promise((_, reject) => {
+                                        window.rejectBackground = () => reject(new Error('Background page load failed'));
+                                    });
+                                }
+                                // Bound a broken retry loop in the test too.
+                                if (attempt > 4) return new Promise(() => {});
+                                if (PERSISTENT) return Promise.reject(new Error('Persistent page load failure'));
+                                return getPage(number);
+                            };
+                            return doc;
+                        })};
+                    }
+                '''.replace('PERSISTENT', str(outcome == 'persistent').lower())
+                await route.fulfill(body=module, content_type='text/javascript')
+            await page.route('**/vendor/pdf.min.mjs', hold_background_page)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
+                # Page 2 is inside the observer margin but has not been
+                # requested by navigation. Hold that background attempt.
+                await page.wait_for_function('window.backgroundHeld === true')
+                assert await page.locator('#reader-page').input_value() == '1'
+                await page.locator('#reader-page').fill('2')
+                await page.get_by_role('button', name='Go', exact=True).click()
+                await page.wait_for_function("document.querySelector('#research-tools').getAttribute('aria-busy') === 'true'")
+                if outcome == 'replaced':
+                    await page.locator('#papers li[data-paper="second"]').click()
+                    await page.locator('.paperhead h2', has_text='Second').wait_for()
+                await page.evaluate('window.rejectBackground()')
+                await ready(page)
+                await page.wait_for_timeout(400)
+                if outcome == 'replaced':
+                    assert await page.evaluate('window.backgroundAttempts') == 1
+                    assert await page.locator('#reader').is_hidden()
+                    assert await page.locator('.paperhead h2').inner_text() == 'Second'
+                else:
+                    assert await page.evaluate('window.backgroundAttempts') == 2
+                    if outcome == 'transient':
+                        await page.locator('#reader .pdf-page[data-page="2"] .textLayer span').first.wait_for()
+                        assert 'Could not draw' not in await page.locator('#reader-hint').inner_text()
+                    else:
+                        assert 'Persistent page load failure' in await page.locator('#reader-hint').inner_text()
+                        assert await page.locator('#reader .pdf-page[data-page="2"] canvas').count() == 0
+                assert await page.locator('#toasts .toast.warn').count() == 0
+                assert not errors
+    run_browser(scenario())

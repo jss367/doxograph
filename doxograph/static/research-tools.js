@@ -523,10 +523,16 @@ const ResearchTools = (() => {
     return bottom > scroller.scrollTop - 600 && top < scroller.scrollTop + scroller.clientHeight + 600;
   }
   function renderPage(page, {retry = false} = {}) {
-    if (!reader || page.rendering || (page.pdfPage && page.renderedAt === pageScale(page))) return page.rendering || Promise.resolve();
+    if (!reader) return Promise.resolve();
+    if (page.rendering) {
+      if (retry) page.retryRequested = true;
+      return page.rendering;
+    }
+    if (page.pdfPage && page.renderedAt === pageScale(page)) return Promise.resolve();
     if (page.error && !retry) return Promise.resolve();
     const generation = reader.generation;
     let scale = null, failed = false;
+    page.retryRequested = false;
     page.error = null;
     page.rendering = (async () => {
       const pdfPage = page.pdfPage || (page.pdfPage = await reader.document.getPage(page.number));
@@ -569,10 +575,18 @@ const ResearchTools = (() => {
     })
       .finally(() => {
         page.rendering = null;
+        const retryRequested = page.retryRequested;
+        page.retryRequested = false;
         if (reader?.generation !== generation) return;
         // A failed page waits for another explicit navigation or visibility
         // change; it must not be mistaken for a render invalidated by zoom.
-        if (failed) { clearPage(page); return; }
+        if (failed) {
+          clearPage(page);
+          // Navigation during a background render requests one retry if it
+          // fails. Consume that request before starting so failure cannot loop.
+          if (retryRequested && pageNear(page)) return renderPage(page, {retry:true});
+          return;
+        }
         // The zoom changed under this render: draw it again at the new scale.
         if (page.renderedAt !== pageScale(page) && pageNear(page)) renderPage(page);
         // Scrolled out of reach while drawing: the observer's leave came too
