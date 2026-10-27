@@ -234,3 +234,88 @@ def test_claim_annotations_use_the_verifiers_span_for_wording_differences(engine
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_claim_annotations_retry_a_transient_verifier_lookup_failure(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Recovering a source passage lookup'))
+    store.pdf_path('paper').write_bytes(minimal_pdf('Recovery under steering is a path-dependent outcome across all scales.'))
+    claim = store.add_claim('paper', {
+        'text':'Evidence after retry',
+        'quote':'Recovery under steering is a path dependant outcome across all scales.', 'locator':'p. 1',
+    })
+    assert claim['quote_verified'] is True
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            requests = []
+
+            async def fail_once(route):
+                requests.append(route.request.url)
+                if len(requests) == 1:
+                    await route.fulfill(status=503, content_type='application/json', body='{"detail":"Try again."}')
+                else:
+                    await route.continue_()
+
+            await page.route('**/quote-context', fail_once)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#toasts .toast', has_text='Could not locate a saved quote').wait_for()
+                badge = page.get_by_role('button', name='Show claim: Evidence after retry', exact=True)
+                assert await badge.count() == 0
+                assert len(requests) == 1
+                # A normal selection redraw retries without remounting the PDF.
+                await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
+                await badge.wait_for()
+                assert len(requests) == 2
+                assert await page.locator('.claim-passage').count() == 1
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_claim_annotations_retry_a_transient_document_index_failure(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Recovering document text indexing'))
+    store.pdf_path('paper').write_bytes(minimal_pdf([f'Page {n} evidence.' for n in range(1, 21)]))
+    claim = store.add_claim('paper', {'text':'Evidence after indexing retry', 'quote':'Page 1 evidence.', 'locator':'p. 1'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1000})
+
+            async def fail_offscreen_page(route):
+                await route.fulfill(content_type='text/javascript', body='''
+                    export * from '/vendor/pdf.min.mjs?index-test-original=1';
+                    import * as real from '/vendor/pdf.min.mjs?index-test-original=1';
+                    export function getDocument(options) {
+                        const task = real.getDocument(options);
+                        return {destroy:() => task.destroy(), promise:task.promise.then(doc => {
+                            const getPage = doc.getPage.bind(doc);
+                            doc.getPage = number => {
+                                if (number === 20 && !window.allowQuoteIndex) return Promise.reject(new Error('Index read failed'));
+                                return getPage(number);
+                            };
+                            return doc;
+                        })};
+                    }
+                ''')
+
+            await page.route('**/vendor/pdf.min.mjs', fail_offscreen_page)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#toasts .toast', has_text='Could not locate claim passages').wait_for()
+                badge = page.get_by_role('button', name='Show claim: Evidence after indexing retry', exact=True)
+                assert await badge.count() == 0
+                await page.evaluate('window.allowQuoteIndex = true')
+                await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
+                await badge.wait_for()
+                assert await page.locator('.pdf-page[data-page="20"] canvas').count() == 0
+
+    run_browser(scenario())

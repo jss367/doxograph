@@ -566,7 +566,7 @@ const ResearchTools = (() => {
   ).join('').replace(/[^\p{L}\p{N}]/gu, '');
   function loadQuoteText() {
     const active = reader;
-    if (!active || active.quoteText || active.quoteTextTask || active.quoteTextFailed) return;
+    if (!active || active.quoteText || active.quoteTextTask) return;
     // Text only, one page at a time: global ambiguity and page-break matches
     // need every page, but offscreen canvases and DOM layers stay unloaded.
     active.quoteTextTask = (async () => {
@@ -586,7 +586,6 @@ const ResearchTools = (() => {
       active.quoteMatches = new Map();
       redrawHighlights();
     })().catch(error => {
-      active.quoteTextFailed = true;
       if (reader === active) toast(`Could not locate claim passages: ${error.message}`, {tone:'warn'});
     }).finally(() => { active.quoteTextTask = null; });
   }
@@ -607,7 +606,11 @@ const ResearchTools = (() => {
         source.quote = context.quote === claim.quote && context.found && !context.repeated ? context.matched || null : null;
         redrawHighlights();
       }).catch(error => {
-        if (reader === active) toast(`Could not locate a saved quote: ${error.message}`, {tone:'warn'});
+        if (reader !== active) return;
+        // A failed request is not a negative match. Let a later poll/redraw
+        // retry, without immediately looping against an unavailable endpoint.
+        if (active.quoteSources.get(key) === source) active.quoteSources.delete(key);
+        toast(`Could not locate a saved quote: ${error.message}`, {tone:'warn'});
       });
     }
     return active.quoteSources.get(key).quote;
