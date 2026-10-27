@@ -4,6 +4,7 @@ import threading
 import time
 
 from doxograph import config, extract, server, store
+from doxograph.analysis_types import ModelResponse
 
 
 def test_items_run_concurrently_and_every_result_is_reported():
@@ -56,11 +57,13 @@ def test_the_cap_holds_across_passes_running_at_once(monkeypatch):
         class messages:
             @staticmethod
             def create(**kwargs):
-                return work(kwargs["item"])
+                work(kwargs["messages"][0]["content"])
+                return ModelResponse.from_text("{}")
 
     # Every model call, from a pass or a single paper's read, goes through
     # `_create`; three passes at once still make two calls between them.
-    call = lambda item: extract._create(Api(), item=item)
+    call = lambda item: extract._create(Api(), model="test", max_tokens=1, system="test",
+        messages=[{"role": "user", "content": str(item)}], schema={"type": "object"}, effort="low")
     passes = [threading.Thread(target=lambda: list(extract.run_concurrently([1, 2, 3, 4], call, workers=4)))
               for _ in range(3)]
     for t in passes:

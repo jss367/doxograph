@@ -21,7 +21,8 @@ from pathlib import Path
 import anthropic
 
 from . import claude_code, codex_cli, config, providers, quotes, store
-from .model_errors import InputTooLargeError, ModelInputError
+from .analysis_types import JSONSchema, Message, MessageClient, ModelResponse, normalize_response
+from .model_errors import InputTooLargeError, ModelInputError, ProviderResponseError
 
 SYSTEM = """\
 You are building a doxography: a record of what each paper claims, arranged so \
@@ -166,7 +167,7 @@ RETAG_SCHEMA = {
 }
 
 
-def client() -> anthropic.Anthropic | claude_code.Client | codex_cli.Client:
+def client() -> MessageClient | providers.TextClient:
     if config.ai_provider() == "codex":
         return codex_cli.Client()
     if config.ai_provider() == "claude_code":
@@ -186,16 +187,16 @@ def api_client() -> anthropic.Anthropic:
 _pass_slots = threading.BoundedSemaphore(config.PASS_WORKERS)
 
 
-def _create(api, **kwargs):
-    """One model call, inside the process-wide cap."""
+def _create(api: MessageClient | providers.TextClient, *, model: str, max_tokens: int,
+            system: str, messages: list[Message], schema: JSONSchema, effort: str) -> ModelResponse:
+    """One typed, validated model call inside the process-wide cap."""
     with _pass_slots:
         config.require_ai_enabled()
-        if "schema" in kwargs:
-            return providers.create(api, **kwargs)
-        return api.messages.create(**kwargs)
+        return providers.create(api, model=model, max_tokens=max_tokens, system=system,
+                                messages=messages, schema=schema, effort=effort)
 
 
-def _answer(response, task: str, subject: str) -> dict:
+def _answer(response: ModelResponse, task: str, subject: str) -> dict:
     """The JSON a call answered with, or an error saying why there is none.
 
     A refusal is not the only reply that comes back without one. Thinking
@@ -203,16 +204,22 @@ def _answer(response, task: str, subject: str) -> dict:
     the answer is finished, and what text there is then fails to parse with
     an error that says nothing about why.
     """
+    response = normalize_response(response)
     if response.stop_reason == "refusal":
         detail = getattr(response.stop_details, "explanation", "") or ""
         raise RuntimeError(f"{task} refused for {subject}: {detail}")
     if response.stop_reason in ("max_tokens", "model_context_window_exceeded"):
         raise RuntimeError(
             f"{task} for {subject} was cut off at the token limit before the answer was complete")
-    text = next((b.text for b in response.content if b.type == "text"), None)
+    if response.stop_reason != "end_turn":
+        raise ProviderResponseError(f"{task} for {subject} did not finish normally; nothing was saved")
+    text = response.text
     if text is None:
         raise RuntimeError(f"{task} for {subject} came back with no answer")
-    return json.loads(text)
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ProviderResponseError(f"{task} for {subject} returned an invalid analysis object; nothing was saved")
+    return payload
 
 
 def run_concurrently(items: list, work, workers: int | None = None):
@@ -501,14 +508,14 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
                                 prompt_tags=prompt_tags, claims_before=claims_before)
 
 
-def merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,
+def merge_extraction(key: str, payload: dict, response: ModelResponse | None = None, keep_reviewed: bool = True,
                      prompt_tags: set[str] | None = None,
                      claims_before: dict[str, str] | None = None) -> dict:
     with store.vocab_lock(), store.paper_lock(key):
         return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags, claims_before)
 
 
-def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: bool = True,
+def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = None, keep_reviewed: bool = True,
                       prompt_tags: set[str] | None = None,
                       claims_before: dict[str, str] | None = None) -> dict:
     paper = store.load_paper(key)
@@ -588,7 +595,7 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
         proposed.setdefault(name, "")
     paper["proposed_tags"] = [{"name": n, "description": d} for n, d in sorted(proposed.items())]
 
-    usage = getattr(response, "usage", None) if response is not None else None
+    usage = response.usage if response is not None else None
     paper["extraction"] = {
         "model": config.model(),
         "provider": config.analysis_identity()[0],
@@ -596,10 +603,10 @@ def _merge_extraction(key: str, payload: dict, response=None, keep_reviewed: boo
         "at": store.now(),
         "schema_version": config.SCHEMA_VERSION,
         "usage": {
-            "input_tokens": getattr(usage, "input_tokens", None),
-            "output_tokens": getattr(usage, "output_tokens", None),
-            "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
-            "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+            "cache_read_input_tokens": usage.cache_read_input_tokens,
         } if usage is not None else None,
     }
     store.refresh_status(paper)
