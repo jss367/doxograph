@@ -37,7 +37,7 @@ def test_question_evidence_and_conclusion_survive_reload(engine):
                 await page.locator('[data-entry-stance]').first.select_option('supporting')
                 await page.locator('[data-entry-stance]').last.select_option('qualifying')
                 await expect(page.locator('.question-overview')).to_contain_text('Supporting evidence')
-                await dialog.get_by_role('button', name='Save board', exact=True).click()
+                await dialog.get_by_role('button', name='Save question', exact=True).click()
                 await ready(page)
                 if engine == 'chromium':
                     Path('.context').mkdir(exist_ok=True)

@@ -154,6 +154,11 @@ header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-le
 .startup-error p { margin: .5rem 0; }
 .startup-error details { margin-top: .75rem; font-size: .8rem; }
 .startup-error pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+#workspace-backups { width: min(56rem, 94vw); max-height: 90dvh; overflow: auto; }
+.backup-version { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  flex-wrap: wrap; padding: .8rem 0; border-bottom: 1px solid var(--line); }
+.backup-version p { margin: .3rem 0 0; }
+.backup-version .row { flex-wrap: wrap; }
 .sidebar-focus { display: flex; gap: .25rem; position: sticky; top: -1.2rem; z-index: 2;
   background: var(--panel); margin: -1.2rem -1rem .9rem; padding: .75rem 1rem;
   border-bottom: 1px solid var(--line); }

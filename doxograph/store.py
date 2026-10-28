@@ -361,6 +361,9 @@ def write_atomic(path: Path, text: str) -> None:
     lock, so a truncated read is reachable. A retag prompted with an empty
     vocabulary would return empty assignments and clear real tags.
     """
+    from .backups import preserve
+
+    preserve(path, text)
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, staged = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:

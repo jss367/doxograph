@@ -3110,7 +3110,7 @@ function renderJobs() {
   active.sort((a, b) => Number(a.state === 'done') - Number(b.state === 'done'));
   const importStates = { queued: 'Waiting to import…', fetching: 'Importing…', reading: 'Analyzing…',
                          done: 'Imported', error: 'Import failed' };
-  $('jobs').innerHTML = active.slice(0, 6).map((j) => {
+  $('jobs').innerHTML = (S.job_recovery_issues || []).map(issue => `<div class="job error"><span class="lbl">Previous imports</span><p class="job-explanation">${esc(issue)}</p></div>`).join('') + active.slice(0, 6).map((j) => {
     const disabled = pendingJobActions.has(`${workspaceClient.workspaceId}:${j.id}`) ? 'disabled' : '';
     const explained = j.state === 'error' && j.explanation;
     const status = j.kind === 'import' ? (importStates[j.state] || j.state) : j.state;
@@ -3122,7 +3122,7 @@ function renderJobs() {
         <details class="job-details" data-job-id="${j.id}" ${expanded.has(String(j.id)) ? 'open' : ''}>
           <summary>Technical details</summary>${esc(j.detail)}</details>` : ''}
       ${j.state === 'error' && j.retryable ? `<div class="job-actions">
-        <button type="button" class="retry-job" data-job-id="${j.id}" ${disabled}>Retry</button></div>` : ''}
+        <button type="button" class="retry-job" data-job-id="${j.id}" ${disabled}>${j.interrupted ? 'Resume import' : 'Retry'}</button></div>` : ''}
       ${j.state === 'done' && j.kind === 'import' && j.key ? `<div class="job-actions">
         <button type="button" class="open-job" data-job-id="${j.id}" data-paper="${esc(j.key)}" ${disabled}>Open paper</button></div>` : ''}
       ${['done', 'error'].includes(j.state) ? `<button type="button" class="dismiss-job" data-job-id="${j.id}"
@@ -5022,6 +5022,8 @@ const CommandPalette = (() => {
     click('btn-workspace-add', 'Create workspace');
     click('btn-export', 'Export HTML');
     click('btn-bib', 'Export BibTeX');
+    click('btn-workspace-archive', 'Download portable workspace archive');
+    click('btn-workspace-backups', 'Browse previous document versions');
     click('btn-settings', 'Open settings', 'appearance theme color AI');
     click('btn-help', 'Show keyboard shortcuts', 'help');
     click('btn-retag', 'Retag all papers');

@@ -199,7 +199,11 @@ paper that arrives without its PDF counts as a failure and says so; running
 In the web app, failed imports explain what went wrong and offer **Retry**
 directly in the notification when trying again can help. Files that are not
 PDFs must be replaced with a valid PDF. Retry reuses the original reference or
-uploaded PDF for the current server session. Successful imports offer **Open paper**;
+uploaded PDF, including after a relaunch. Interrupted imports return with
+**Resume import**; resuming is explicit because a model request sent before
+shutdown may already have completed and can run again. Other interrupted
+analysis passes report the interruption and can be started again from their
+paper or topic. Successful imports offer **Open paper**;
 dismiss a notification with **×** when you are done with it.
 
 A paper you already have is recognized from the reference itself, before any
@@ -272,6 +276,24 @@ already has papers; open it or use **Jump to… → Add papers** to import more.
 If startup fails, the app distinguishes a connection failure from an interface
 failure and offers **Reload library**, with technical details available separately.
 Reloading fetches fresh interface files after an update.
+
+**More workspace actions → Previous document versions** lists local copies
+saved before research documents are overwritten. Doxograph keeps the previous
+20 versions per document. Download an earlier version or restore a paper,
+workspace notebook, research notes, or research context. Restore checks that
+the current file has not changed since you opened the list and backs it up
+before replacement. Paper restores retain claim identity counters and current
+PDF/upload metadata; notebook and note revisions keep increasing. Vocabulary
+and other cross-paper metadata versions are available to download for repair.
+These copies share the workspace's disk and do not protect against losing it.
+
+**Download workspace archive**, in the same menu, saves a ZIP with readable
+Markdown, local images, source PDFs, BibTeX, and the original workspace data.
+Open `index.md` in a Markdown reader. Links between this workspace's notes,
+papers, and images work without the app; links outside the workspace still need
+their original destination. The archive includes a checksum manifest and
+excludes credential files, installation settings, pending job inputs, and
+other workspaces. Prior document versions stay in the local `backups/` folder.
 
 Export HTML writes the file and then offers to open it or to copy its path. A
 reference that nothing identifies stays in the box and is named underneath it,
@@ -632,6 +654,8 @@ ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 research-notes.json  your long-form Markdown notes, with per-note revisions
 note-images/        local images embedded in workspace and research notes
+backups/            previous versions captured before document edits
+.jobs/              background job journals and retained retry references
 export/              generated HTML
 ```
 

@@ -31,6 +31,8 @@
         <button type="button" id="btn-workspace-rename" disabled>Rename workspace</button>
         <hr>
         <button type="button" id="btn-bib">Export BibTeX</button>
+        <button type="button" id="btn-workspace-archive">Download workspace archive</button>
+        <button type="button" id="btn-workspace-backups">Previous document versions</button>
         <button type="button" id="btn-retag" data-ai-action disabled title="Reassign tags on every paper against the current vocabulary">Retag all</button>
         <hr>
         <button type="button" id="btn-help" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Keyboard shortcuts <kbd>?</kbd></button>
@@ -357,6 +359,13 @@
 </div>
 
 <div class="jobs" id="jobs"></div>
+<dialog id="workspace-backups" class="sheet" aria-labelledby="backups-title">
+  <div class="sheet-head"><h2 id="backups-title">Previous document versions</h2>
+    <button type="button" id="backups-close" aria-label="Close previous versions">×</button></div>
+  <p class="hint">Doxograph keeps the previous 20 versions of each research document before edits. These local copies share this computer's disk; download a workspace archive to keep a separate copy.</p>
+  <p id="backups-status" role="status"></p>
+  <div id="backup-versions"></div>
+</dialog>
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <ul class="ctxmenu" id="ctxmenu" hidden></ul>
 
@@ -484,5 +493,6 @@
 <script src="/focused-review.js"></script>
 <script src="/app.js"></script>
 <script src="/agent-chat.js"></script>
+<script src="/workspace-recovery.js"></script>
 </body>
 </html>

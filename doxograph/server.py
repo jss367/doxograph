@@ -12,6 +12,7 @@ import functools
 import os
 import re
 import threading
+import time
 import traceback
 import uuid
 from collections.abc import Callable
@@ -29,7 +30,8 @@ from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from . import (__version__, agent, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook, records, research_notes, storage, providers, query)
+               search, store, notebook, records, research_notes, storage, providers, query, job_journal,
+               backups, workspace_archive)
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,7 @@ async def _lifespan(_: FastAPI):
     never calls `serve()` at all.
     """
     fingerprint.snapshot()
+    _recover_jobs()
     try:
         yield
     finally:
@@ -69,6 +72,8 @@ app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.include_router(research_notes.router)
 app.include_router(query.router)
+app.include_router(backups.router)
+app.include_router(workspace_archive.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
 
 
@@ -95,7 +100,8 @@ async def storage_read_error(request: Request, exc: storage.StorageReadError):
 _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
 _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
-_job_counter = 0
+_job_counter = time.time_ns() // 1000  # Below JavaScript's integer limit; survives process restarts.
+_job_recovery_issues: dict[str, list[str]] = {}
 
 #: Methods that cannot make work, and so are not counted. Everything else is.
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -449,7 +455,7 @@ def _finish(job: dict, key: str) -> None:
     _forget_import(job)
 
 
-def _new_job(label: str) -> dict:
+def _new_job(label: str, **fields) -> dict:
     global _job_counter
     # A job made inside a request the middleware already counted is that
     # request's work arriving in its second form, not a second acceptance.
@@ -462,6 +468,8 @@ def _new_job(label: str) -> dict:
                "detail": "", "key": None, "started": store.now()}
         job["workspace"] = config.workspace_id()
         job["ai_provider"] = config.ai_provider()
+        job.update(fields)
+        job_journal.save(job)
         _jobs[job["id"]] = job
         return job
 
@@ -469,13 +477,12 @@ def _new_job(label: str) -> dict:
 def _set(job: dict, **fields) -> None:
     with _jobs_lock:
         job.update(fields)
+        job_journal.save(job)
 
 
 def _new_import_job(label: str, do_extract: bool, **source) -> dict:
-    job = _new_job(label)
-    _set(job, kind="import", retryable=True,
-         _import={**source, "extract": do_extract})
-    return job
+    return _new_job(label, kind="import", retryable=True,
+                    _import={**source, "extract": do_extract})
 
 
 def _forget_import(job: dict) -> None:
@@ -484,23 +491,40 @@ def _forget_import(job: dict) -> None:
         source = job.pop("_import", {})
         if job.get("kind") == "import":
             job["retryable"] = False
+        job_journal.save(job)
     if staged := source.get("staged"):
         staged.unlink(missing_ok=True)
 
 
 def _close_import_session() -> None:
-    """Release retry inputs now, or when an in-flight worker finishes.
-
-    Background workers can outlive the ASGI lifespan. Their input must stay
-    available until they finish, but no retry will be possible after shutdown.
-    """
+    """Leave retry inputs and the latest notification available after relaunch."""
     with _jobs_lock:
-        retained = [job for job in _jobs.values() if job.get("_import")]
-        for job in retained:
-            job["_discard_import"] = True
-        finished = [job for job in retained if job["state"] in ("done", "error")]
-    for job in finished:
-        _forget_import(job)
+        for job in _jobs.values():
+            if job.get("_import"):
+                job_journal.save(job)
+
+
+def _recover_jobs() -> None:
+    global _job_counter
+    try:
+        workspaces = config.list_workspaces()
+    except ValueError:
+        workspaces = [{"id": config.DEFAULT_WORKSPACE_ID}]
+    with _jobs_lock:
+        for workspace in workspaces:
+            with config.use_workspace(workspace["id"]):
+                issues = []
+                try:
+                    # Browsing a healthy, read-only library needs no lock file.
+                    if any((config.data_dir() / '.jobs').glob('*.json')):
+                        with store.document_lock("job-recovery"):
+                            for job in job_journal.recover(issues):
+                                if job["id"] not in _jobs:
+                                    _jobs[job["id"]] = job
+                                    _job_counter = max(_job_counter, job["id"])
+                except OSError as exc:
+                    issues.append(f'Previous imports could not be recovered: {exc}. Their saved inputs were left in place.')
+                _job_recovery_issues[str(config.data_dir())] = issues
 
 
 def _import_failed(job: dict, exc: Exception) -> None:
@@ -543,7 +567,7 @@ def _prune_jobs() -> None:
     with _jobs_lock:
         by_workspace: dict[str, list[dict]] = {}
         for job in _jobs.values():
-            if job["state"] not in ("done", "error"):
+            if job["state"] not in ("done", "error") or (job.get("interrupted") and job.get("retryable")):
                 continue
             workspace = job.get("workspace", config.DEFAULT_WORKSPACE_ID)
             by_workspace.setdefault(workspace, []).append(job)
@@ -553,6 +577,7 @@ def _prune_jobs() -> None:
                 removed.append(job)
     for job in removed:
         _forget_import(job)
+        job_journal.remove(job)
 
 
 def _submit_job(function, job: dict, *args):
@@ -561,7 +586,11 @@ def _submit_job(function, job: dict, *args):
         # Queue submission is the acceptance point for both selections.
         _set(job, ai_provider=config.ai_provider())
         context = contextvars.copy_context()
-    return _pool.submit(functools.partial(context.run, function), job, *args)
+    try:
+        return _pool.submit(functools.partial(context.run, function), job, *args)
+    except Exception as exc:
+        _set(job, state="error", detail=str(exc), explanation="The operation could not start. Retry to try again.")
+        raise
 
 
 def _workspace_job(function):
@@ -597,8 +626,6 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
         _import_failed(job, exc)
         traceback.print_exc()
     finally:
-        if job.get("_discard_import"):
-            _forget_import(job)
         _prune_jobs()
 
 
@@ -624,8 +651,6 @@ def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> Non
     finally:
         if attempt != staged:
             attempt.unlink(missing_ok=True)
-        if job.get("_discard_import"):
-            _forget_import(job)
         _prune_jobs()
 
 
@@ -1028,6 +1053,11 @@ def startup_js() -> FileResponse:
     return _frontend_response("startup.js", "text/javascript")
 
 
+@app.get("/workspace-recovery.js")
+def workspace_recovery_js() -> FileResponse:
+    return _frontend_response("workspace-recovery.js", "text/javascript")
+
+
 @app.get("/research-tools.js")
 def research_tools_js() -> FileResponse:
     return _frontend_response("research-tools.js", "text/javascript")
@@ -1346,7 +1376,7 @@ def jobs() -> dict:
         # Retry sources include local paths and Ref objects; only notification
         # fields belong on the wire.
         recent = [{k: v for k, v in job.items() if not k.startswith("_")} for job in recent]
-    return {"jobs": recent}
+    return {"jobs": recent, "recovery_issues": _job_recovery_issues.get(str(config.data_dir()), [])}
 
 
 @app.post("/api/jobs/{job_id}/retry")
@@ -1361,15 +1391,24 @@ def retry_import(job_id: int) -> dict:
         source = job.get("_import")
         if not source:
             raise HTTPException(409, "This job cannot be retried. Add the paper again.")
-        previous = {field: job.get(field, "") for field in ("detail", "explanation", "started", "ai_provider")}
-        job.update(state="queued", detail="", explanation="", started=store.now(), ai_provider=config.ai_provider())
+        previous = dict(job)
+        try:
+            job.update(state="queued", detail="", explanation="", started=store.now(), ai_provider=config.ai_provider(), interrupted=False)
+            job_journal.save(job)
+        except OSError:
+            job.clear()
+            job.update(previous)
+            raise HTTPException(503, "The retry could not be saved. Check that the data directory is writable.")
     try:
         if "ref" in source:
             _submit_job(_run_ingest, job, source["ref"], source["extract"])
         else:
             _submit_job(_run_upload, job, source["staged"], source["filename"], source["extract"])
     except Exception:
-        _set(job, state="error", **previous)
+        with _jobs_lock:
+            job.clear()
+            job.update(previous)
+            job_journal.save(job)
         raise HTTPException(503, "The retry could not start. Please try again.")
     return {"id": job_id}
 
@@ -1385,6 +1424,7 @@ def dismiss_job(job_id: int) -> Response:
             raise HTTPException(409, "This job is still running")
         del _jobs[job_id]
     _forget_import(job)
+    job_journal.remove(job)
     return Response(status_code=204)
 
 
@@ -1482,6 +1522,7 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
             with _jobs_lock:
                 _jobs.pop(job["id"], None)
             _forget_import(job)
+            job_journal.remove(job)
             raise
         queued += 1
     return {"queued": queued}

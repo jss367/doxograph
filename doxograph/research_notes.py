@@ -7,6 +7,7 @@ import re
 import uuid
 import warnings
 from typing import Annotated
+from collections.abc import Callable
 from urllib.parse import urljoin
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
@@ -102,15 +103,20 @@ def delete_note(note_id: NoteId, revision: Annotated[int, Query(ge=1)]) -> dict:
 
 def absolute_research_links(body: str, base_url: str) -> str:
     """Keep Markdown source while making this installation's links portable."""
+    return rewrite_research_links(body, lambda url: urljoin(base_url, url))
+
+
+def rewrite_research_links(body: str, transform: Callable[[str], str]) -> str:
+    """Transform local destinations while preserving code examples verbatim."""
     destinations = re.compile(
         r"(?P<code>(?<!`)(?P<ticks>`+)(?!`)[\s\S]*?(?<!`)(?P=ticks)(?!`))"
         r"|(?P<prefix>\]\([ \t]*<?|^[ ]{0,3}\[[^\]\n]+\]:[ \t]*<?)"
-        r"(?P<url>/(?:api/research-notes/images/|[?#])[^\s)>]*)", re.MULTILINE)
+        r"(?P<url>/(?:api/research-notes/images/|pdf/|[?#])[^\s)>]*)", re.MULTILINE)
 
     def replace(match):
         if match.group("code") is not None:
             return match.group()
-        return match.group("prefix") + urljoin(base_url, match.group("url"))
+        return match.group("prefix") + transform(match.group("url"))
 
     output, prose = [], []
     fence = None

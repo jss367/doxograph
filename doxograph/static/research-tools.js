@@ -161,7 +161,7 @@ const ResearchTools = (() => {
   }
   function render() {
     const labels = {compare:'Compare & organize', boards:'Evidence boards', questions:'Research questions', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
-    el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : 'Your research tools';
+    el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : tab === 'questions' ? 'Research questions' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
       + button('reload', 'Reload saved version');
     if (tab === 'compare') renderCompare();
@@ -197,7 +197,7 @@ const ResearchTools = (() => {
     return `<p class="hint">${origins.size} named evidence origins · ${unassessed.size} papers with independence unassessed. Origin names are your labels; paper counts do not establish independent replication.</p><section class="question-overview" aria-label="Evidence for this question">${Object.entries(STANCES).map(([stance,label]) => {
       const entries = board.entries.filter(e => e.kind === 'claim' && (e.stance || 'background') === stance);
       const sourcePapers = new Set(entries.filter(e => resolve(e.reference)).map(e => e.reference.paper));
-      return `<div><h3>${label}</h3><p class="hint">${entries.length} claims · ${sourcePapers.size} papers</p>${entries.length ? entries.map(e => {
+      return `<div><h3>${label}</h3><p class="hint">${entries.length} ${entries.length === 1 ? 'claim' : 'claims'} · ${sourcePapers.size} ${sourcePapers.size === 1 ? 'paper' : 'papers'}</p>${entries.length ? entries.map(e => {
         const row = resolve(e.reference);
         return row ? `<p>${html(row.text)} ${button('source','Check source',`data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}</p>` : '<p class="warn">Source claim no longer exists.</p>';
       }).join('') : '<p class="hint">No evidence assigned yet.</p>'}</div>`;
@@ -209,19 +209,19 @@ const ResearchTools = (() => {
     const available = notebook.boards.filter(b => !questioning || b.question);
     if (!available.some(b => b.id === boardId)) boardId = available[0]?.id || null;
     const board = currentBoard();
-    el('research-body').innerHTML = `<div class="tool-actions"><label>Board<select id="board-picker"><option value="">Choose a board</option>${available.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
-      ${button(questioning ? 'new-question' : 'new-board', questioning ? 'New research question' : 'New board')}${board ? button('delete-board','Delete board') : ''}</div>
-      ${board ? `${input('Board title', 'board-title', board.title)}
+    el('research-body').innerHTML = `<div class="tool-actions"><label>${questioning ? 'Question' : 'Board'}<select id="board-picker"><option value="">${questioning ? 'Choose a question' : 'Choose a board'}</option>${available.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
+      ${button(questioning ? 'new-question' : 'new-board', questioning ? 'New research question' : 'New board')}${board ? button('delete-board', questioning ? 'Delete question' : 'Delete board') : ''}</div>
+      ${board ? `${input(questioning ? 'Question title' : 'Board title', 'board-title', board.title)}
         ${(questioning || board.question) ? `${area('Research question', 'board-question', board.question || '')}${area('Working conclusion', 'board-conclusion', board.conclusion || '')}${area('Open questions and next steps', 'board-open_questions', board.open_questions || '')}${questionOverview(board)}` : ''}
         <div class="tool-actions">${button('board-add-selection','Add selected claims')}${button('board-heading','Add heading')}${button('board-note','Add commentary')}
-        ${button('save-board','Save board')}${button('export-board','Export Markdown','data-format="markdown"')}${button('export-board','Export CSV','data-format="csv"')}</div>
+        ${button('save-board',questioning ? 'Save question' : 'Save board')}${button('export-board','Export Markdown','data-format="markdown"')}${button('export-board','Export CSV','data-format="csv"')}</div>
         <div class="board-entries">${board.entries.map((entry,i) => `<article class="board-entry" data-entry="${html(entry.id)}">
           <div class="entry-actions"><span class="hint">${i+1} · ${html(entry.kind === 'note' ? 'commentary' : entry.kind)}</span>
           ${button('entry-up','↑', `aria-label="Move entry ${i+1} up" ${i === 0 ? 'disabled' : ''}`)}${button('entry-down','↓', `aria-label="Move entry ${i+1} down" ${i === board.entries.length-1 ? 'disabled' : ''}`)}${button('entry-remove','Remove')}</div>
           ${entry.kind === 'claim' ? `${claimSummary(entry.reference)}${board.question ? `<label>Bearing on question<select data-entry-stance="${html(entry.id)}">${Object.entries(STANCES).map(([key, label]) => `<option value="${key}" ${entry.stance === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}` : ''}
           <label>${entry.kind === 'heading' ? 'Heading' : 'Your commentary'}<textarea data-entry-text="${html(entry.id)}">${html(entry.text)}</textarea></label>
         </article>`).join('')}</div>${!board.entries.length ? '<p class="empty">Add selected claims, then arrange headings and commentary around the evidence.</p>' : ''}`
-        : '<p class="empty">Create a board for a question, argument, or section you are writing.</p>'}`;
+        : questioning ? '<p class="empty">Create a research question. Select claims in the library, then add them here as evidence.</p>' : '<p class="empty">Create a board for a question, argument, or section you are writing.</p>'}`;
   }
   function renderConnections() {
     const options = refs().map(r => `<option value="${html(refKey(r))}">${html(resolve(r)?.text || r.claim)}</option>`).join('');
