@@ -74,3 +74,24 @@ def test_cleared_question_keeps_conclusion_open_questions_and_stance_in_exports(
     assert 'Bearing on question: qualifying' in markdown
     csv_text = bytes(notebook.export_selection(notebook.Selection(board='q', format='csv')).body).decode()
     assert 'Still provisional' in csv_text and 'Try another dataset' in csv_text and 'qualifying' in csv_text
+
+
+def test_question_identity_survives_empty_text_and_reset_stances():
+    from doxograph import notebook
+    store.save_paper(store.new_paper('study'))
+    claim = store.add_claim('study', {'text': 'Finding'})
+    # Legacy question without populated text: infer from its evidence bearing.
+    board = {'id': 'q', 'title': 'Does monitoring generalize?', 'entries': [
+        {'id': 'e', 'kind': 'claim', 'reference': {'paper': 'study', 'claim': claim['id']}, 'stance': 'opposing'}]}
+    store.write_json(config.data_dir() / 'notebook.json', {'boards': [board]})
+    loaded = notebook.load()
+    assert loaded['boards'][0]['kind'] == 'question'
+    for fmt in ('markdown', 'csv'):
+        exported = bytes(notebook.export_selection(notebook.Selection(board='q', format=fmt)).body).decode()
+        assert 'opposing' in exported
+    loaded['boards'][0]['entries'][0]['stance'] = 'background'
+    notebook.save_notebook(notebook.Notebook.model_validate(loaded))
+    restored = notebook.load()['boards'][0]
+    assert restored['kind'] == 'question' and notebook.is_question(restored)
+    assert notebook.Board(id='new', title='Blank question', kind='question').kind == 'question'
+    assert notebook.Board(id='board', title='Ordinary board').kind == 'board'

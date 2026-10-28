@@ -190,7 +190,8 @@ const ResearchTools = (() => {
       }).join('')}</div>${!claims.size && !papers.size ? '<p class="empty">Select claims or papers in the library to compare them here.</p>' : ''}`;
   }
   const STANCES = {supporting:'Supporting evidence', opposing:'Conflicting evidence', qualifying:'Conditions and limitations', background:'Background / not assessed'};
-  const isQuestion = board => ['question', 'conclusion', 'open_questions'].some(field => board[field]);
+  const isQuestion = board => board.kind === 'question' || ['question', 'conclusion', 'open_questions'].some(field => board[field])
+    || board.entries.some(entry => entry.kind === 'claim' && entry.stance && entry.stance !== 'background');
 
   function questionOverview(board) {
     const rows = board.entries.filter(e => e.kind === 'claim').map(e => resolve(e.reference)).filter(Boolean);
@@ -1271,7 +1272,7 @@ const ResearchTools = (() => {
       const asking = name === 'new-question';
       const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
       if (!title?.trim()) return;
-      const board = {id:uid(),title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
+      const board = {id:uid(),kind:asking ? 'question' : 'board',title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
       notebook.boards.push(board); boardId = board.id; await save(); renderBoards(); return;
     }
     if (name === 'add-board') { tab = 'boards'; render(); message('Choose or create a board, then add the selected claims.'); return; }

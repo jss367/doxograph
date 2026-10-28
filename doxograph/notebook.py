@@ -13,7 +13,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Path
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 from . import config, storage, store
 
@@ -39,13 +39,29 @@ class Entry(Model):
     stance: Literal["supporting", "opposing", "qualifying", "background"] = "background"
 
 
+def is_question(board: dict) -> bool:
+    return (board.get("kind") == "question"
+            or any(board.get(field) for field in ("question", "conclusion", "open_questions"))
+            or any(entry.get("kind") == "claim" and entry.get("stance", "background") != "background"
+                   for entry in board.get("entries", [])))
+
+
 class Board(Model):
+    kind: Literal["board", "question"] = "board"
     id: str
     title: str = Field(min_length=1, max_length=300)
     entries: list[Entry] = Field(default_factory=list)
     question: str = Field(default="", max_length=20000)
     conclusion: str = Field(default="", max_length=100000)
     open_questions: str = Field(default="", max_length=100000)
+
+    @model_validator(mode="after")
+    def retain_question_identity(self) -> Board:
+        # Migrate earlier questions on read and keep their identity when text or
+        # stances are cleared in a later save. Ordinary boards remain boards.
+        if is_question(self.model_dump()):
+            self.kind = "question"
+        return self
 
 
 class SavedSearch(Model):
@@ -371,10 +387,6 @@ def md(text) -> str:
 def spreadsheet(value) -> str:
     value = str(value or "")
     return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r")) else value
-
-
-def is_question(board: dict) -> bool:
-    return any(board.get(field) for field in ("question", "conclusion", "open_questions"))
 
 
 @router.post("/export")
