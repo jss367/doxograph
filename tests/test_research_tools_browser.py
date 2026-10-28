@@ -189,50 +189,71 @@ def test_paper_reads_beside_its_notes(engine):
                 assert await page.locator('#reader-total').inner_text() == 'of 3'
                 rail = page.locator('#content')
                 assert await rail.locator('.note .who').first.text_content() == 'my note'
-                assert await rail.get_by_role('button', name='Write a note').count() == 1
+                assert await rail.get_by_role('button', name='Write a note').count() == 0
+                assert await rail.get_by_role('textbox', name='my note', exact=True).is_visible()
                 assert await page.locator('.paperhead').get_by_role('button', name='Write a note').count() == 0
                 assert await page.locator('.paperhead').get_by_role('button', name='Read & capture').count() == 0
                 assert await rail.locator('.highlights').count() == 1
                 assert await rail.locator('.claim').count() == 1
                 # The note is written in the rail and stays there.
-                await rail.get_by_role('button', name='Write a note').click()
                 await rail.locator('textarea[data-note="paper"]').fill('Read this for the task differences.')
                 await rail.get_by_role('button', name='Save', exact=True).click()
                 await rail.locator('.note p', has_text='task differences').wait_for()
                 assert next(p for p in httpx.get(url+'/api/state').json()['papers'] if p['key'] == 'paper')['notes'] == 'Read this for the task differences.'
-                # A selected passage becomes a new claim, quote and page filled in.
+                # One click keeps a selected passage as a highlight, drawn over the
+                # text, with its note open in the rail; no color or claim is asked for.
                 bounds = await select_first_line(page)
-                await page.get_by_role('button', name='Capture as claim', exact=True).click()
+                assert await page.locator('#passage-tools button:visible').count() == 1
+                await page.get_by_role('button', name='Highlight', exact=True).click()
+                await ready(page)
+                await rail.locator('.highlight-entry').wait_for()
+                highlight = httpx.get(url+'/api/notebook').json()['highlights'][0]
+                assert highlight['text'] == 'Recovery depends on conditions.' and highlight['page'] == 1 and highlight['color'] == 'yellow'
+                assert len(highlight['rects']) == 1
+                mark = page.locator('#reader .pdf-page[data-page="1"] .highlightLayer .highlight-yellow')
+                await mark.wait_for()
+                box = await mark.bounding_box()
+                assert abs(box['x'] - bounds['x']) < 3 and abs(box['width'] - bounds['width']) < 3
+                assert await page.locator('#passage-tools').is_hidden()
+                assert await page.evaluate("document.activeElement?.matches('[data-highlight-note]') === true")
+                await rail.locator('[data-highlight-note]').fill('Which conditions?')
+                await rail.get_by_role('button', name='Save note', exact=True).click()
+                await ready(page)
+                await rail.locator('.highlight-entry .note p', has_text='Which conditions?').wait_for()
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                # Its color is changed from its entry and is the color of the next mark.
+                assert await rail.locator('.highlight-entry .swatch[aria-pressed="true"]').get_attribute('aria-label') == 'Color yellow'
+                await rail.get_by_role('button', name='Color green', exact=True).click()
+                await ready(page)
+                await page.locator('#reader .pdf-page[data-page="1"] .highlightLayer .highlight-green').wait_for()
+                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['color'] == 'green'
+                assert await page.evaluate("localStorage.getItem('doxograph-highlight-color')") == 'green'
+                # Captured as a claim from its entry: quote, page, and note filled in.
+                await rail.get_by_role('button', name='Capture as claim', exact=True).click()
                 form = page.locator('form[data-form]')
                 await form.wait_for()
                 assert await form.locator('[name="quote"]').input_value() == 'Recovery depends on conditions.'
                 assert await form.locator('[name="locator"]').input_value() == 'p. 1'
+                assert await form.locator('[name="note"]').input_value() == 'Which conditions?'
                 await form.locator('[name="text"]').fill('Recovery is conditional.')
                 await form.locator('[name="note"]').fill('Check the task differences.')
                 await form.get_by_role('button', name='Save', exact=True).click()
                 await page.locator('#content .claim', has_text='Recovery is conditional.').wait_for()
                 claim = next(c for c in httpx.get(url+'/api/state').json()['claims'] if c['text'] == 'Recovery is conditional.')
                 assert claim['quote_verified'] is True and claim['locator'] == 'p. 1' and claim['note'] == 'Check the task differences.'
-                # A selected passage becomes a highlight in the chosen color, drawn over the text.
-                bounds = await select_first_line(page)
-                await page.get_by_role('button', name='Highlight in green', exact=True).click()
+                # Capturing a claim leaves its source visibly marked in the PDF.
+                source = page.locator(f'.annotationLayer .claim-passage[data-claim="{claim["id"]}"]')
+                await source.wait_for()
+                source_box = await source.bounding_box()
+                assert abs(source_box['x'] - bounds['x']) < 4 and abs(source_box['width'] - bounds['width']) < 4
+                badge = page.get_by_role('button', name='Show claim: Recovery is conditional. — Check the task differences.', exact=True)
+                await badge.click()
+                assert await page.locator(f'#content .claim[data-claim="{claim["id"]}"]').evaluate("e => e.classList.contains('sel')")
+                # The PDF indicates an attached highlight note and opens that note.
+                note_badge = page.get_by_role('button', name='Show note: Which conditions?', exact=True)
+                await note_badge.click()
                 await ready(page)
-                await rail.locator('.highlight-entry').wait_for()
-                highlight = httpx.get(url+'/api/notebook').json()['highlights'][0]
-                assert highlight['text'] == 'Recovery depends on conditions.' and highlight['page'] == 1 and highlight['color'] == 'green'
-                assert len(highlight['rects']) == 1
-                mark = page.locator('#reader .pdf-page[data-page="1"] .highlightLayer .highlight-green')
-                await mark.wait_for()
-                box = await mark.bounding_box()
-                assert abs(box['x'] - bounds['x']) < 3 and abs(box['width'] - bounds['width']) < 3
-                assert await page.locator('#passage-tools').is_hidden()
-                # The highlight takes a note of its own, in the rail.
-                await rail.get_by_role('button', name='Add note', exact=True).click()
-                await rail.locator('[data-highlight-note]').fill('Which conditions?')
-                await rail.get_by_role('button', name='Save note', exact=True).click()
-                await ready(page)
-                await rail.locator('.highlight-entry .note p', has_text='Which conditions?').wait_for()
-                assert httpx.get(url+'/api/notebook').json()['highlights'][0]['note'] == 'Which conditions?'
+                assert await rail.locator('.highlight-entry').evaluate("e => e === document.activeElement && e.classList.contains('focused')")
                 # It stays in place at another zoom.
                 await page.locator('#reader-zoom').select_option('2')
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
@@ -318,6 +339,14 @@ def test_paper_reads_beside_its_notes(engine):
                 assert await form.locator('[name="quote"]').input_value() == 'Recovery depends on conditions.'
                 await form.get_by_role('button', name='Cancel', exact=True).click()
                 await form.wait_for(state='hidden')
+                assert await rail.locator('[data-highlight-note]').input_value() == 'An unsaved thought'
+                # Another paper and back: the rail is redrawn for this paper,
+                # with the draft still in its editor, rather than left as it was.
+                await page.locator('#papers li[data-paper="plain"]').click()
+                await page.locator('.paperhead h2', has_text='A paper without a PDF').wait_for()
+                assert await rail.locator('[data-highlight-note]').count() == 0
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 assert await rail.locator('[data-highlight-note]').input_value() == 'An unsaved thought'
                 await rail.get_by_role('button', name='Cancel', exact=True).click()
                 assert await rail.locator('[data-highlight-note]').count() == 0
@@ -481,6 +510,8 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('long',title='A long paper',authors=['Ada Researcher'],year=2026))
     store.pdf_path('long').write_bytes(minimal_pdf([f'Page {n} of the long paper.' for n in range(1, 25)]))
+    # Exercise document-wide quote indexing while the reader releases offscreen pages.
+    store.add_claim('long', {'text':'Evidence on the last page', 'quote':'Page 24 of the long paper.', 'locator':'p. 24'})
     store.save_paper(store.new_paper('other',title='The other paper',authors=['Bo Writer'],year=2025))
     store.pdf_path('other').write_bytes(minimal_pdf(['The other paper.']))
     rect = {'x':.1,'y':.1,'w':.3,'h':.02}
@@ -507,6 +538,7 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                 await page.wait_for_function("document.querySelectorAll('#reader .pdf-page').length === 24")
                 await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: document.querySelector('#pdf-scroll').scrollHeight})")
                 await page.locator('#reader .pdf-page[data-page="24"] .textLayer span').first.wait_for()
+                await page.locator('#reader .pdf-page[data-page="24"]').get_by_role('button', name='Show claim: Evidence on the last page', exact=True).wait_for()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '24'")
                 await page.wait_for_function("""(() => {
                     const first = document.querySelector('#reader .pdf-page[data-page="1"]');
@@ -687,12 +719,12 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
                 await page.mouse.move(*end, steps=8)
                 await page.mouse.up()
                 await page.locator('#passage-tools.for-figure').wait_for(state='visible')
-                assert not await page.get_by_role('button', name='Capture as claim', exact=True).is_visible()
-                await page.get_by_role('button', name='Highlight in blue', exact=True).click()
+                assert not await page.get_by_role('button', name='Highlight', exact=True).is_visible()
+                await page.get_by_role('button', name='Mark this figure', exact=True).click()
                 await ready(page)
                 await second.locator('.highlightLayer .figure').wait_for()
                 [figure] = httpx.get(url+'/api/notebook').json()['highlights']
-                assert figure['kind'] == 'figure' and figure['page'] == 2 and figure['color'] == 'blue' and figure['text'] == ''
+                assert figure['kind'] == 'figure' and figure['page'] == 2 and figure['color'] == 'yellow' and figure['text'] == ''
                 [rect] = figure['rects']
                 assert abs(rect['x'] - .2) < .01 and abs(rect['w'] - .4) < .01
                 assert abs(rect['y'] - (top - box['y']) / box['height']) < .01 and abs(rect['h'] - 150 / box['height']) < .01
@@ -702,8 +734,7 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
                 assert await entry.count() == 1
                 assert 'Figure or region' in await entry.inner_text()
                 assert await entry.get_by_role('button', name='Capture as claim').count() == 0
-                # A note that is an open question.
-                await entry.get_by_role('button', name='Add note', exact=True).click()
+                # Its note is already open: one that is an open question.
                 await rail.locator('[data-highlight-note]').fill('Why does recovery dip here?')
                 await entry.get_by_role('button', name='Save note', exact=True).click()
                 await ready(page)
@@ -820,15 +851,14 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
                 await page.locator('#passage-tools').wait_for(state='hidden')
                 assert await page.locator('#passage-tools.for-figure').count() == 0
                 await select_first_line(page)
-                assert await page.get_by_role('button', name='Capture as claim', exact=True).is_visible()
-                await page.get_by_role('button', name='Highlight in yellow', exact=True).click()
+                assert not await page.get_by_role('button', name='Mark this figure', exact=True).is_visible()
+                await page.get_by_role('button', name='Highlight', exact=True).click()
                 await ready(page)
                 marks = httpx.get(url+'/api/notebook').json()['highlights']
                 assert len(marks) == 1 and marks[0]['kind'] == 'passage'
                 # Removing a mark whose note is only being written asks first.
                 rail = page.locator('#content')
                 entry = rail.locator('.highlight-entry')
-                await entry.get_by_role('button', name='Add note', exact=True).click()
                 await rail.locator('[data-highlight-note]').fill('Not saved yet')
                 await entry.get_by_role('button', name='Remove', exact=True).click()
                 await page.locator('#ask').wait_for(state='visible')
@@ -862,7 +892,7 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
                 assert await page.locator('#toasts .toast', has_text='removed in another window').count() == 0
                 assert not httpx.get(url+'/api/notebook').json()['highlights']
                 await select_first_line(page)
-                await page.get_by_role('button', name='Highlight in yellow', exact=True).click()
+                await page.get_by_role('button', name='Highlight', exact=True).click()
                 await ready(page)
                 await rail.locator('.highlight-entry').wait_for()
                 entry = rail.locator('.highlight-entry')
@@ -933,9 +963,9 @@ def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(eng
                 await page.get_by_role('button', name='Go', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
                 bounds = await select_first_line(page, 2)
-                await page.get_by_role('button', name='Highlight in green', exact=True).click()
+                await page.get_by_role('button', name='Highlight', exact=True).click()
                 await ready(page)
-                mark = page.locator('#reader .pdf-page[data-page="2"] .highlightLayer .highlight-green')
+                mark = page.locator('#reader .pdf-page[data-page="2"] .highlightLayer .highlight-yellow')
                 await mark.wait_for()
                 box = await mark.bounding_box()
                 assert abs(box['x'] - bounds['x']) < 3 and abs(box['width'] - bounds['width']) < 3
@@ -944,10 +974,12 @@ def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(eng
                 await page.get_by_role('button', name='Go', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '1'")
                 bounds = await select_first_line(page, 1)
-                await page.get_by_role('button', name='Highlight in yellow', exact=True).click()
+                await page.get_by_role('button', name='Highlight', exact=True).click()
                 await ready(page)
                 rail = page.locator('#content')
                 await page.wait_for_function("document.querySelectorAll('#content .highlight-entry').length === 2")
+                # The note opened on the second mark; a clean editor moves on to the new one.
+                assert await rail.locator('[data-highlight-note]').count() == 1
                 marks = httpx.get(url+'/api/notebook').json()['highlights']
                 second = next(h for h in marks if h['page'] == 2)
                 # With the PDF put away, clicking a mark brings it back outlined on that mark.

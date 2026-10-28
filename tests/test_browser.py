@@ -544,7 +544,7 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.get_by_role("button", name="Add claim by hand").click()
                 await page.locator('form[data-form="__new__"] textarea[name="text"]').fill(draft_text)
-                await page.get_by_role("button", name="Save", exact=True).click()
+                await page.locator('form[data-form="__new__"]').get_by_role("button", name="Save", exact=True).click()
                 await asyncio.wait_for(request_started.wait(), timeout=5)
 
                 await page.locator('#papers [data-paper="paper-b"]').click()
@@ -5070,25 +5070,27 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
                 await page.goto(url)
                 field = page.locator('textarea[data-note="paper-a"]')
                 await page.click('#papers [data-paper="paper-a"]')
-                await page.get_by_role("button", name="Write a note").click()
+                assert await field.is_visible()
+                assert await page.get_by_role("button", name="Write a note").count() == 0
+                assert await page.evaluate("V.noteEditing") is None
+                assert await page.evaluate("Object.keys(V.noteDrafts).length") == 0
                 await field.fill("Read this one for the method.")
 
                 # Leaving the paper takes the header with it, so the editor is
                 # parked rather than left pointing at a textarea nobody can see.
                 await page.click('#papers [data-paper="paper-b"]')
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
-                assert await page.locator("textarea[data-note]").count() == 0
+                assert await page.locator('textarea[data-note="paper-b"]').input_value() == ""
 
                 # Coming back offers the draft again rather than a blank box.
                 await page.click('#papers [data-paper="paper-a"]')
-                await page.get_by_role("button", name="Write a note").click()
                 assert await field.input_value() == "Read this one for the method."
 
                 await page.get_by_role("button", name="Save", exact=True).click()
                 await field.wait_for(state="hidden")
                 await page.locator(".paperhead .note").get_by_text(
                     "Read this one for the method.").wait_for()
-                # With a note on file the header offers to edit it instead.
+                # Saved notes offer editing beside the text.
                 assert await page.get_by_role("button", name="Write a note").count() == 0
 
     run_browser(scenario())
@@ -5165,7 +5167,6 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers [data-paper="shared"]').click()
-                await page.get_by_role("button", name="Write a note").click()
                 await page.locator('textarea[data-note="shared"]').fill("Typed while it was going.")
 
                 await page.get_by_role("button", name="Remove", exact=True).click()
@@ -5175,10 +5176,8 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
                 await page.locator(".note").get_by_role("button", name="Save").click()
                 await page.locator("#toasts .toast", has_text="the note would go with it").wait_for()
 
-                # And the box is not offered again either.
+                # Cancelling does not offer another editor during removal.
                 await page.locator(".note").get_by_role("button", name="Cancel").click()
-                await page.get_by_role("button", name="Write a note").click()
-                await page.locator("#toasts .toast", has_text="a note would go with it").wait_for()
                 assert await page.locator("textarea[data-note]").count() == 0
 
                 release.set()
@@ -5209,7 +5208,6 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers [data-paper="shared"]').click()
-                await page.get_by_role("button", name="Write a note").click()
                 await page.locator('textarea[data-note="shared"]').fill("Typed and then removed.")
 
                 await page.get_by_role("button", name="Remove", exact=True).click()
@@ -5244,15 +5242,12 @@ def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_
                 note_field = page.locator('textarea[data-note="paper-a"]')
                 claim_field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
-                await claim_field.fill("Claim text typed before the note editor opened.")
-
-                await page.get_by_role("button", name="Write a note").click()
                 await claim_field.fill("Claim text typed while the note editor was open.")
+                await note_field.fill("A note to discard.")
                 await page.locator(".note").get_by_role("button", name="Cancel").click()
-                await note_field.wait_for(state="hidden")
+                assert await note_field.input_value() == ""
                 assert await claim_field.input_value() == "Claim text typed while the note editor was open."
 
-                await page.get_by_role("button", name="Write a note").click()
                 await note_field.fill("A note of my own.")
                 await claim_field.fill("Claim text typed before the note was saved.")
                 await page.locator(".note").get_by_role("button", name="Save").click()
@@ -5278,7 +5273,6 @@ def test_the_background_poll_leaves_a_note_being_written_alone():
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers [data-paper="paper-a"]').click()
-                await page.get_by_role("button", name="Write a note").click()
                 field = page.locator('textarea[data-note="paper-a"]')
                 await field.fill("Half a sentence")
                 await field.focus()
@@ -5317,7 +5311,6 @@ def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 # Asked for first, and still in flight while the note opens.
                 await page.fill("#q", "recovery")
-                await page.get_by_role("button", name="Write a note").click()
                 field = page.locator('textarea[data-note="paper-a"]')
                 await field.fill("Half a sentence")
                 await field.focus()
@@ -5359,14 +5352,12 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers [data-paper="paper-a"]').click()
-                await page.get_by_role("button", name="Write a note").click()
                 await page.locator('textarea[data-note="paper-a"]').fill("A's note.")
                 await page.locator(".note").get_by_role("button", name="Save").click()
                 await asyncio.wait_for(in_flight.wait(), 10)
 
                 # Move to B and start a note there while A's save is held.
                 await page.click('#papers [data-paper="paper-b"]')
-                await page.get_by_role("button", name="Write a note").click()
                 field_b = page.locator('textarea[data-note="paper-b"]')
                 await field_b.fill("B's note, still being written.")
 
@@ -5400,7 +5391,6 @@ def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers [data-paper="paper-a"]').click()
-                await page.get_by_role("button", name="Write a note").click()
                 await page.locator('textarea[data-note="paper-a"]').fill("Mine.")
 
                 form = page.locator('form[data-form="paper-a-c1"]')
@@ -6015,7 +6005,6 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     await page.locator('[data-act="save-synth"]').click()
                 elif action == "save-note":
                     await page.locator('#papers [data-paper="paper-a"]').click()
-                    await page.locator('[data-act="edit-note"]').click()
                     field = page.locator('textarea[data-note="paper-a"]')
                     await field.fill("Worth reading for the method.")
                     await page.locator('[data-act="save-note"]').click()

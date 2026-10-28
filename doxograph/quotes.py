@@ -340,6 +340,9 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
         "pages": text.pages,
         "before": "",
         "suggestion": "",
+        # The matched span itself, before expanding to sentence boundaries.
+        # Readers use this to mark verifier-approved wording/OCR differences.
+        "matched": "",
         "after": "",
         # True when the quote occurs in the paper more than once. Then the
         # passage shown is the first of them and may not be the one the claim
@@ -355,6 +358,7 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     result["repeated"] = bool(span) and (text.squashed.find(span, lo + 1) >= 0
                                          or text.squashed.rfind(span, 0, lo) >= 0)
     start, end = text.offsets[lo], text.offsets[hi - 1] + 1
+    result["matched"] = text.raw[start:end]
     # The sentence is not bounded by the page. A quote can run over a page
     # break, and so can the sentence around one that does not; cut at the
     # break, "use the paper's wording" would save half a sentence as the

@@ -1883,7 +1883,6 @@ function paperHeader(key, reading = false) {
       <button type="button" data-tool="queue-paper" data-paper="${esc(key)}">Add to reading queue</button>
       <button type="button" data-tool="history" data-paper="${esc(key)}">Edit history</button>
       <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
-      ${noteOpen(key) || reading ? '' : `<button type="button" data-act="edit-note" data-paper="${esc(key)}">Write a note</button>`}
       <button type="button" data-act="labels" data-paper="${esc(key)}"
         title="Mark this paper — open source, has a model on HuggingFace, anything you sort papers by">Labels</button>
       <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
@@ -1951,28 +1950,24 @@ function noteHtml(text, label, actions = '') {
   </div>`;
 }
 
-// Whether the paper's note is already on screen, as text or as an editor. The
-// header button is "Write a note", so it stands down once there is one to
-// edit: the block carries its own edit button, next to what it would change.
-function noteOpen(key) {
-  const paper = S.papers.find((x) => x.key === key);
-  return V.noteEditing === key || Boolean(((paper || {}).notes || '').trim());
-}
-
 // The reader's own note on the paper, under the model's summary of it. No
 // pass reads it and no pass writes it, which is the point: it is the place
 // for what you think that no extraction could have told you.
-function paperNote(key, rail = false) {
+function paperNote(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper) return '';
-  if (V.noteEditing === key) {
-    const draft = V.noteDrafts[key];
+  const draft = V.noteDrafts[key];
+  // Empty notes are ready to type into. Merely showing the field must not
+  // hold background updates or count as an unsaved edit on workspace changes.
+  if (draft !== undefined && !isRemoving(key)) V.noteEditing = key;
+  if (V.noteEditing === key || (!(paper.notes || '').trim() && !isRemoving(key))) {
     const text = draft !== undefined ? draft : (paper.notes || '');
     // Frozen from state rather than from the elements, so a redraw during the
     // save cannot hand back an editor whose request is still running.
     const busy = V.noteSaving === key ? ' disabled' : '';
     return `<div class="note editing${busy ? ' saving' : ''}">
-      <textarea data-note="${esc(key)}" rows="4"${busy}
+      <label class="who" for="paper-note-${esc(key)}">my note</label>
+      <textarea id="paper-note-${esc(key)}" data-note="${esc(key)}" rows="4"${busy}
         placeholder="What you make of this paper: what to read it for, what it gets wrong, what to do about it.">${esc(text)}</textarea>
       <div class="smeta">
         <span class="hint">Yours. Nothing sends it to a model.</span>
@@ -1983,16 +1978,7 @@ function paperNote(key, rail = false) {
       </div>
     </div>`;
   }
-  if (!(paper.notes || '').trim()) {
-    // In the rail the empty note is the place for one, not nothing at all.
-    return rail ? `<div class="note">
-      <span class="who">my note</span>
-      <div class="smeta"><span class="hint">What you make of this paper. Nothing sends it to a model.</span>
-        <span class="cact" style="margin-left:auto">
-          <button type="button" data-act="edit-note" data-paper="${esc(key)}">Write a note</button>
-        </span></div>
-    </div>` : '';
-  }
+  if (!(paper.notes || '').trim()) return '';
   return noteHtml(paper.notes, 'my note', `<div class="smeta">
     <span class="cact" style="margin-left:auto">
       <button type="button" data-act="edit-note" data-paper="${esc(key)}">edit</button>
@@ -2934,7 +2920,7 @@ function drawContent() {
   // Beside the paper, the rail opens with what is yours: the note on the
   // paper, then its highlights, then the claims. The highlights stay listed
   // with the PDF put away; clicking one brings it back at that page.
-  if (reading) html += paperNote(V.paper, true);
+  if (reading) html += paperNote(V.paper);
   if (V.paper) {
     const paper = S.papers.find((p) => p.key === V.paper);
     const marked = (S.notebook?.highlights || []).some((h) => h.paper === V.paper);
@@ -4805,7 +4791,10 @@ $('btn-bib').addEventListener('click', () => window.open(`/api/bibtex?${workspac
 
 $('panes').addEventListener('input', (e) => {
   if (e.target.matches('textarea[data-synth]')) V.synthDrafts[e.target.dataset.synth] = e.target.value;
-  if (e.target.matches('textarea[data-note]')) V.noteDrafts[e.target.dataset.note] = e.target.value;
+  if (e.target.matches('textarea[data-note]')) {
+    V.noteEditing = e.target.dataset.note;
+    V.noteDrafts[V.noteEditing] = e.target.value;
+  }
 });
 
 // Each filter keeps whatever is typed in an open editor before redrawing.

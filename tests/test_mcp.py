@@ -105,11 +105,13 @@ def test_mcp_command_does_not_initialize_or_recover_a_local_corpus(monkeypatch):
     from doxograph import mcp_server
 
     urls = []
-    monkeypatch.setattr(mcp_server, "run", urls.append)
+    monkeypatch.setattr(mcp_server, "run", lambda url, **options: urls.append((url, options)))
     monkeypatch.setattr(config, "ensure_dirs", lambda: pytest.fail("adapter initialized local corpus"))
     monkeypatch.setattr(store, "recover_storage", lambda: pytest.fail("adapter recovered local corpus"))
     assert __main__.main(["mcp", "--url", "http://localhost:8766"]) == 0
-    assert urls == ["http://localhost:8766"]
+    assert urls == [("http://localhost:8766", {"without_notes": False})]
+    assert __main__.main(["mcp", "--without-notes"]) == 0
+    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True})
 
 
 def test_real_stdio_handshake_and_workspace_query(tmp_path):

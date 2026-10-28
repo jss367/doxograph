@@ -309,6 +309,16 @@ const ResearchTools = (() => {
     try { const zoom = localStorage.getItem(zoomKey); return ZOOMS.includes(zoom) ? zoom : 'fit'; }
     catch (_) { return 'fit'; }
   }
+  // A new mark takes the color chosen last, in this browser; a mark's color
+  // is changed from its entry in the rail.
+  const colorKey = 'doxograph-highlight-color';
+  function savedColor() {
+    try { const color = localStorage.getItem(colorKey); return COLORS.includes(color) ? color : 'yellow'; }
+    catch (_) { return 'yellow'; }
+  }
+  function storeColor(color) {
+    try { localStorage.setItem(colorKey, color); } catch (_) { /* preference remains for this page */ }
+  }
   // The scale a zoom setting means: 'fit' is whatever fills the column.
   function scaleFor(zoom, base) {
     if (zoom !== 'fit') return Number(zoom);
@@ -336,8 +346,7 @@ const ResearchTools = (() => {
       <label>Zoom<select id="reader-zoom">${ZOOMS.map(z => `<option value="${z}" ${z === zoom ? 'selected' : ''}>${z === 'fit' ? 'Fit width' : `${Math.round(Number(z) * 100)}%`}</option>`).join('')}</select></label>
       ${button('bookmark', 'Bookmark this page')}${button('figure-mode', 'Mark a figure', 'aria-pressed="false" title="Drag a box around a figure, table, or any region of the page"')}<span class="reader-status" id="reader-status"></span></div>
       <div class="pdf-scroll" id="pdf-scroll"><div class="passage-tools" id="passage-tools" hidden>
-        ${COLORS.map(c => button('highlight-selection', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Highlight in ${c}" title="Highlight in ${c}"`)).join('')}
-        ${button('capture-selection', 'Capture as claim')}</div></div>
+        ${button('highlight-selection', 'Highlight', 'class="passage-only" title="Keep this passage in the rail, with a note of your own"')}${button('highlight-selection', 'Mark this figure', 'class="figure-only" title="Keep this region in the rail, with a note of your own"')}</div></div>
       <p id="reader-hint" class="hint">Loading PDF…</p>`;
     // Buttons on the toolbar must not take the selection away before they act on it.
     el('passage-tools').addEventListener('mousedown', event => event.preventDefault());
@@ -482,7 +491,7 @@ const ResearchTools = (() => {
     if (page.rendering || pageSelected(page)) return;
     for (const canvas of page.el.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
     page.el.innerHTML = ''; page.el.classList.add('pending'); page.renderedAt = 0;
-    page.text = null;
+    page.text = null; page.quoteIndex = null; page.quoteRects = null;
     page.pdfPage?.cleanup();
   }
   function pageNear(page) {
@@ -514,7 +523,8 @@ const ResearchTools = (() => {
       if (page.renderedAt === scale) { sizePage(page); return; }
       const viewport = pdfPage.getViewport({scale});
       const container = page.el;
-      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
+      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div><div class="annotationLayer"></div>';
+      page.quoteIndex = null; page.quoteRects = null; page.annotationMarkup = null;
       keepingView(() => {
         container.style.width = `${viewport.width}px`;
         container.style.height = `${viewport.height}px`;
@@ -532,6 +542,7 @@ const ResearchTools = (() => {
       if (reader?.generation !== generation || pageScale(page) !== scale) return;
       await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
       if (reader?.generation !== generation || pageScale(page) !== scale) return;
+      page.quoteRects = new Map();
       page.hasText = content.items.some(item => item.str?.trim());
       page.renderedAt = scale;
       container.classList.remove('pending');
@@ -567,12 +578,170 @@ const ResearchTools = (() => {
   function paperHighlights(paper) {
     return (client.state.notebook?.highlights || []).filter(h => h.paper === paper);
   }
+  // Match quotes.squash: NFKD decomposition, Unicode case folding, then
+  // letters/numbers only. These are the folds that differ from lowercase
+  // after decomposition; Cherokee folds to uppercase rather than lowercase.
+  const quoteFolds = {'ß':'ss', 'ẞ':'ss', 'ς':'σ', '\u0345':'ι',
+    'ᲀ':'в', 'ᲁ':'д', 'ᲂ':'о', 'ᲃ':'с', 'ᲄ':'т', 'ᲅ':'т', 'ᲆ':'ъ', 'ᲇ':'ѣ', 'ᲈ':'ꙋ'};
+  const quoteLetters = text => Array.from(text.normalize('NFKD'), char =>
+    /[\u13a0-\u13f5\u13f8-\u13fd\uab70-\uabbf]/u.test(char) ? char.toUpperCase() : quoteFolds[char] || char.toLowerCase()
+  ).join('').replace(/[^\p{L}\p{N}]/gu, '');
+  function loadQuoteText() {
+    const active = reader;
+    if (!active || active.quoteText || active.quoteTextTask) return;
+    // Text only, one page at a time: global ambiguity and page-break matches
+    // need every page, but offscreen canvases and DOM layers stay unloaded.
+    active.quoteTextTask = (async () => {
+      let text = '';
+      const pages = [];
+      for (const page of active.pages) {
+        const pdfPage = page.pdfPage || await active.document.getPage(page.number);
+        if (reader !== active) return;
+        const content = page.text || await pdfPage.getTextContent();
+        if (reader !== active) return;
+        const normalized = quoteLetters(content.items.map(item => item.str || '').join(''));
+        pages.push({start:text.length, text:normalized});
+        text += normalized;
+        if (page.pdfPage !== pdfPage && !page.rendering) pdfPage.cleanup();
+      }
+      active.quoteText = {text, pages};
+      active.quoteMatches = new Map();
+      redrawHighlights();
+    })().catch(error => {
+      if (reader === active) toast(`Could not locate claim passages: ${error.message}`, {tone:'warn'});
+    }).finally(() => { active.quoteTextTask = null; });
+  }
+  function annotationQuote(claim) {
+    const active = reader;
+    if (!active.quoteText || active.quoteText.text.includes(quoteLetters(claim.quote))) return claim.quote;
+    // The verifier also accepts small wording/OCR differences. Resolve only
+    // quotes missing from the exact index, using its matched span rather than
+    // a second approximate matcher that could choose different evidence.
+    active.quoteSources ||= new Map();
+    const key = JSON.stringify([claim.id, claim.quote]);
+    if (!active.quoteSources.has(key)) {
+      const source = {quote:null};
+      active.quoteSources.set(key, source);
+      client.request(`/api/papers/${encodeURIComponent(active.paper)}/claims/${encodeURIComponent(claim.id)}/quote-context`,
+        {headers:{'X-Doxograph-Workspace':active.workspace}}).then(async context => {
+        if (reader !== active) return;
+        // An edit may have overtaken this request. This is not a cached miss
+        // for the old quote: restoring it must be able to resolve it again.
+        if (context.quote !== claim.quote) {
+          if (active.quoteSources.get(key) === source) active.quoteSources.delete(key);
+          // Reconcile the saved quote before retrying. A redraw alone could
+          // repeatedly request A while the backend still holds B.
+          await refresh();
+          return;
+        }
+        source.quote = context.found && !context.repeated ? context.matched || null : null;
+        redrawHighlights();
+      }).catch(error => {
+        if (reader !== active) return;
+        // A failed request is not a negative match. Let a later poll/redraw
+        // retry, without immediately looping against an unavailable endpoint.
+        if (active.quoteSources.get(key) === source) active.quoteSources.delete(key);
+        toast(`Could not locate a saved quote: ${error.message}`, {tone:'warn'});
+      });
+    }
+    return active.quoteSources.get(key).quote;
+  }
+  // Captured claims already store their quote and page, including captures made
+  // before the reader showed annotations. Match against the rendered text so
+  // their marks follow zoom, line wrapping, and PDF.js's text positioning.
+  function claimRects(page, quote) {
+    const needle = quoteLetters(quote);
+    if (!needle || !reader.quoteText) return [];
+    if (page.quoteRects.has(quote)) return page.quoteRects.get(quote);
+    const documentText = reader.quoteText;
+    if (!reader.quoteMatches.has(needle)) {
+      const start = documentText.text.indexOf(needle);
+      reader.quoteMatches.set(needle, start !== -1 && documentText.text.indexOf(needle, start + 1) === -1
+        ? {start, end:start + needle.length} : null);
+    }
+    const match = reader.quoteMatches.get(needle), source = documentText.pages[page.number - 1];
+    if (!match) return [];
+    let start = Math.max(0, match.start - source.start);
+    let end = Math.min(source.text.length, match.end - source.start);
+    if (end <= start) return [];
+    if (!page.quoteIndex) {
+      let text = '';
+      const points = [], walker = document.createTreeWalker(page.el.querySelector('.textLayer'), NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        let offset = 0;
+        for (const char of node.textContent) {
+          const letters = quoteLetters(char);
+          text += letters;
+          // String indices are UTF-16 offsets, as are DOM Range offsets.
+          for (let i = 0; i < letters.length; i++) points.push({node, start:offset, end:offset + char.length});
+          offset += char.length;
+        }
+      }
+      page.quoteIndex = {text, points};
+    }
+    const {text, points} = page.quoteIndex;
+    if (text !== source.text) {
+      // If PDF.js's DOM text differs from its extracted page text, use only
+      // an unambiguous local match for this page's part of the global quote.
+      const part = source.text.slice(start, end);
+      start = text.indexOf(part);
+      end = start + part.length;
+      if (start === -1 || text.indexOf(part, start + 1) !== -1) return [];
+    }
+    let rects = [];
+    if (start < end) {
+      const first = points[start], last = points[end - 1];
+      const prefix = quote.trim().match(/^[^\p{L}\p{N}]+/u)?.[0] || '';
+      const suffix = quote.trim().match(/[^\p{L}\p{N}]+$/u)?.[0] || '';
+      const from = prefix && first.node.textContent.slice(Math.max(0, first.start - prefix.length), first.start) === prefix
+        ? first.start - prefix.length : first.start;
+      const to = suffix && last.node.textContent.slice(last.end, last.end + suffix.length) === suffix
+        ? last.end + suffix.length : last.end;
+      const range = document.createRange();
+      range.setStart(first.node, from); range.setEnd(last.node, to);
+      rects = selectionRects(range, page.el);
+    }
+    page.quoteRects.set(quote, rects);
+    return rects;
+  }
+  function drawPageAnnotations(page) {
+    const layer = page.el.querySelector('.annotationLayer');
+    if (!layer || !page.quoteRects) return;
+    const percent = value => `${(value * 100).toFixed(3)}%`;
+    const badges = [], passages = [];
+    const quoted = client.state.claims.filter(c => c.paper === reader.paper && c.quote?.trim() && c.quote_verified !== false);
+    if (quoted.length) loadQuoteText();
+    for (const h of paperHighlights(reader.paper).filter(h => h.page === page.number && h.note.trim())) {
+      badges.push({y:h.rects[0].y, action:`data-tool="show-highlight-note" data-highlight="${html(h.id)}"`, label:'Note', description:`Show note: ${h.note}`});
+    }
+    for (const claim of quoted) {
+      const quote = annotationQuote(claim);
+      if (!quote) continue;
+      const rects = claimRects(page, quote);
+      if (!rects.length) continue;
+      passages.push(...rects.map(r => `<div class="claim-passage" data-claim="${html(claim.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`));
+      badges.push({y:rects[0].y, action:`data-act="goto-claim" data-claim="${html(claim.id)}" data-paper="${html(reader.paper)}"`, label:claim.note?.trim() ? 'Note' : 'Claim', description:`Show claim: ${claim.text}${claim.note?.trim() ? ` — ${claim.note}` : ''}`});
+    }
+    // Keep nearby badges separate in the page margin, including several claims
+    // on the same passage. The text layer stays selectable beneath the marks.
+    let bottom = 0;
+    const buttons = badges.sort((a, b) => a.y - b.y).map(badge => {
+      const top = Math.max(badge.y * page.el.clientHeight, bottom);
+      bottom = top + 26;
+      return `<button type="button" class="pdf-annotation" ${badge.action} style="top:${top.toFixed(1)}px" title="${html(badge.description)}" aria-label="${html(badge.description)}">${badge.label}</button>`;
+    });
+    const markup = passages.join('') + buttons.join('');
+    // A poll with unchanged annotations must leave a keyboard-focused badge alone.
+    if (page.annotationMarkup !== markup) { layer.innerHTML = markup; page.annotationMarkup = markup; }
+  }
   function drawPageHighlights(page) {
     const layer = page.el.querySelector('.highlightLayer');
     if (!layer) return;
     const percent = value => `${(value * 100).toFixed(3)}%`;
     layer.innerHTML = paperHighlights(reader.paper).filter(h => h.page === page.number).flatMap(h => h.rects.map(r =>
       `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}${h.id === reader.focus ? ' focused' : ''}" data-highlight="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+    drawPageAnnotations(page);
   }
   // A figure is the box dragged out on the page, in the same fractions as a passage's lines.
   function figureRect(drag, event) {
@@ -592,8 +761,8 @@ const ResearchTools = (() => {
     if (on) { window.getSelection()?.removeAllRanges(); hidePassageTools(); }
     readerHint();
   }
-  // The box just drawn waits for a color: the passage toolbar, under the box,
-  // offers the same swatches it offers a selected passage.
+  // The box just drawn waits to be kept: the passage toolbar, under the box,
+  // offers the one button it offers a selected passage.
   function offerFigure(page, rect, pageEl) {
     reader.figure = {page, rect};
     const tools = el('passage-tools'), scroller = el('pdf-scroll');
@@ -612,10 +781,10 @@ const ResearchTools = (() => {
     if (!hint || !reader) return;
     const page = reader.pages[reader.current - 1];
     hint.textContent = page?.error ? `Could not draw page ${page.number}: ${page.error}`
-      : reader.figureMode ? 'Drag a box around the figure on the page, then pick a color.'
+      : reader.figureMode ? 'Drag a box around the figure on the page.'
       : page?.renderedAt && !page.hasText
       ? 'This page has no selectable text. You can transcribe a quote and add a claim by hand.'
-      : 'Select a passage to highlight it or capture it as a claim, or mark a figure.';
+      : 'Select a passage to highlight it and write a note, or mark a figure.';
   }
   function trackCurrentPage(asked = null) {
     if (!reader?.pages.length) return;
@@ -807,7 +976,7 @@ const ResearchTools = (() => {
   // a redraw rebuilds the editor from it.
   function highlightsHtml(paper) {
     const mine = paperHighlights(paper).slice().sort((a, b) => a.page - b.page);
-    const empty = '<p class="hint">Select a passage in the paper to highlight it, with a note or a question of your own, or to capture it as a claim. Mark a figure by dragging a box around it.</p>';
+    const empty = '<p class="hint">Select a passage in the paper and click Highlight to keep it here with a note or a question of your own. A highlight can be captured as a claim later. Mark a figure by dragging a box around it.</p>';
     const hasPdf = client.state.papers.find(p => p.key === paper)?.has_pdf;
     return `<section class="highlights"><h3>Marks${mine.length ? ` <span class="n hint">${mine.length}</span>` : ''}
       ${mine.length && hasPdf ? `<span class="cact">${button('export-annotated', 'Export annotated PDF', `data-paper="${html(paper)}" title="A copy of the PDF with these marks written in as annotations"`)}</span>` : ''}</h3>${mine.length ? mine.map(h => {
@@ -817,6 +986,7 @@ const ResearchTools = (() => {
         ${editing ? `<textarea data-highlight-note="${html(h.id)}" placeholder="${figure ? 'Your note or question on this figure' : 'Your note or question on this passage'}" aria-label="Note on this mark">${html(markEditor.text)}</textarea>`
           : h.note.trim() ? noteHtml(h.note, h.question ? 'my question' : 'my note') : ''}
         <div class="hmeta"><span>p. ${h.page}</span>
+          <span class="swatches" role="group" aria-label="Color of this mark">${COLORS.map(c => button('recolor-highlight', '', `class="swatch highlight-${c}" data-color="${c}" aria-label="Color ${c}" aria-pressed="${c === h.color}" title="Color this mark ${c}"`)).join('')}</span>
           <label title="A question to come back to; it is listed under Marks and questions until answered"><input type="checkbox" data-highlight-question="${html(h.id)}" ${h.question ? 'checked' : ''}> Open question</label>
           <span class="cact">
           ${editing ? button('save-highlight', 'Save note') + button('cancel-highlight', 'Cancel') : button('edit-highlight', h.note.trim() ? 'Edit note' : 'Add note')}
@@ -847,9 +1017,18 @@ const ResearchTools = (() => {
     </article></section>`;
   }
   // Polls leave a visible editor alone, including one whose mark disappeared.
+  // Only one that is on screen: an editor held for a paper left and returned
+  // to is not drawn yet, and a redraw rebuilds it from what is held here.
   function holds() {
     return Boolean(markEditor) && markEditor.workspace === client.workspaceId
-      && (markEditor.removed || markEditorOn(V.paper));
+      && (markEditor.removed || markEditorOn(V.paper))
+      && Boolean(document.querySelector('[data-highlight-note]'));
+  }
+  function openMarkNote(highlight) {
+    markEditor = {id:highlight.id, paper:highlight.paper, workspace:client.workspaceId, saved:highlight.note, text:highlight.note, removed:false};
+    redrawContent();
+    document.querySelector('[data-highlight-note]')?.focus();
+    focusRailEntry(highlight.id);
   }
   function markDraftOn(paper) { return markEditorOn(paper) && highlightDrafting(); }
   function dropMarkDraft(paper) { if (markEditorOn(paper)) markEditor = null; }
@@ -861,8 +1040,8 @@ const ResearchTools = (() => {
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
-  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'capture-selection',
-    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
+  const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
+    'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
   async function readerAction(name, target) {
     const data = target.dataset;
     if (name === 'retry-reader') {
@@ -943,39 +1122,51 @@ const ResearchTools = (() => {
     if (name === 'figure-mode') { setFigureMode(!reader?.figureMode); return; }
     if (name === 'export-annotated') { await downloadAnnotated(data.paper, client.workspaceId); return; }
     if (name === 'highlight-selection') {
-      const color = COLORS.includes(data.color) ? data.color : 'yellow';
-      const figure = reader?.figure;
-      if (figure) {
-        const {paper, workspace:ws} = reader;
-        hidePassageTools(); setFigureMode(false);
-        await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:figure.page, kind:'figure', rects:[figure.rect], text:'', color, note:'', question:false}); });
-        redrawHighlights(); return;
-      }
-      const passage = reader?.selection;
-      if (!passage) throw new Error('Select a passage in the paper first.');
-      const {paper, workspace:ws} = reader;
+      // One click keeps the passage or box as a mark in the color chosen last
+      // and opens its note in the rail, unless a note on another mark is
+      // half-written: that one is not dropped, and the new mark waits.
+      const {paper, workspace:ws} = reader || {};
+      const figure = reader?.figure, passage = reader?.selection;
+      if (!figure && !passage) throw new Error('Select a passage in the paper first.');
+      const mark = figure
+        ? {id:uid(), paper, page:figure.page, kind:'figure', rects:[figure.rect], text:'', color:savedColor(), note:'', question:false}
+        : {id:uid(), paper, page:passage.page, kind:'passage', rects:passage.rects, text:passage.text, color:savedColor(), note:'', question:false};
       window.getSelection()?.removeAllRanges(); hidePassageTools();
-      await mutateNotebook(ws, n => { n.highlights.push({id:uid(), paper, page:passage.page, kind:'passage', rects:passage.rects, text:passage.text, color, note:'', question:false}); });
-      redrawHighlights(); return;
-    }
-    if (name === 'capture-selection') {
-      const passage = reader?.selection;
-      if (!passage) throw new Error('Select a passage in the paper first.');
-      const paper = reader.paper;
-      window.getSelection()?.removeAllRanges(); hidePassageTools();
-      startClaimFromPassage(paper, {quote:passage.text, locator:`p. ${passage.page}`}); return;
+      if (figure) setFigureMode(false);
+      await mutateNotebook(ws, n => { n.highlights.push(mark); });
+      redrawHighlights();
+      if (client.workspaceId === ws && V.paper === paper && !highlightDrafting()) openMarkNote(mark);
+      return;
     }
     const id = target.closest('[data-highlight]')?.dataset.highlight;
     const highlight = paperHighlights(V.paper).find(h => h.id === id);
     if (!highlight) throw new Error('This highlight is no longer here. It may have been removed in another window.');
+    if (name === 'show-highlight-note') {
+      if (reader) { reader.focus = id; redrawHighlights(); }
+      focusRailEntry(id);
+      const entry = document.querySelector(`.highlight-entry[data-highlight="${CSS.escape(id)}"]`);
+      if (entry) { entry.tabIndex = -1; entry.focus({preventScroll:true}); }
+      return;
+    }
     if (name === 'edit-highlight') {
       // One note is written at a time; the one half-written is not dropped for
       // another without asking.
       if (markEditor?.id !== id && highlightDrafting()
         && !await confirmDialog('Discard the note you are writing on another highlight?', {ok:'Discard note'})) return;
-      markEditor = {id, paper:highlight.paper, workspace:client.workspaceId, saved:highlight.note, text:highlight.note, removed:false}; redrawContent(); document.querySelector('[data-highlight-note]')?.focus(); return;
+      openMarkNote(highlight); return;
     }
     if (name === 'cancel-highlight') { markEditor = null; redrawContent(); return; }
+    if (name === 'recolor-highlight') {
+      const color = COLORS.includes(data.color) ? data.color : 'yellow';
+      storeColor(color);
+      if (color === highlight.color) return;
+      await mutateNotebook(client.workspaceId, n => {
+        const h = n.highlights.find(h => h.id === id && h.paper === highlight.paper);
+        if (!h) throw new Error('This highlight was removed in another window.');
+        h.color = color;
+      });
+      redrawHighlights(); return;
+    }
     if (name === 'capture-highlight') {
       // The note as it is being written, when its editor is open: what is on
       // screen, not the saved version the person is in the middle of changing.
