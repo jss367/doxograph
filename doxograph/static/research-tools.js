@@ -135,6 +135,7 @@ const ResearchTools = (() => {
     el('research-tools').showModal();
     el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
     message('');
+    if (next === 'reading') await flushReadingProgress();
     notebook = await request();
     if (requestedBoard !== null) {
       boardId = requestedBoard;
@@ -666,6 +667,19 @@ const ResearchTools = (() => {
   // One chain of saves per paper and workspace, shared by a reader torn down
   // and the reader opened on the same paper after it, so they land in order.
   const progressChains = new Map();
+  async function flushReadingProgress() {
+    if (reader) {
+      clearTimeout(reader.progressTimer);
+      if (reader.wantedPage !== null && reader.wantedPage !== reader.savedPage) queueProgressSave(reader);
+    }
+    // Unmounts flush asynchronously. The queue must read after those saves,
+    // including a retry or successor save appended while this one finishes.
+    let pending;
+    do {
+      pending = [...progressChains.values()];
+      await Promise.all(pending);
+    } while ([...progressChains.values()].some((chain, i) => chain !== pending[i]));
+  }
   function queueProgressSave(active) {
     const {paper, workspace:ws, key} = active;
     const chain = (progressChains.get(key) || Promise.resolve()).then(async () => {

@@ -1,5 +1,7 @@
 """Resume reading and review from the library without a model call."""
 
+import asyncio
+
 import httpx
 import pytest
 from playwright.async_api import expect
@@ -65,6 +67,54 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
                 assert httpx.get(url + '/api/notebook').json()['reading'][0]['page'] == 2
                 await page.screenshot(path='.context/continue-reading.png')
                 assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_reading_queue_waits_for_the_page_save_from_the_previous_paper(engine):
+    config.set_ai_enabled(False)
+    for key in ['one', 'two']:
+        store.save_paper(store.new_paper(key, title=key.title()))
+        store.pdf_path(key).write_bytes(minimal_pdf(['First page.', 'Second page.']))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['reading'] = [{'paper': 'one', 'status': 'reading', 'page': 1, 'bookmarks': []}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="one"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                held, release = asyncio.Event(), asyncio.Event()
+
+                async def hold_progress(route):
+                    if route.request.method == 'PUT' and not held.is_set():
+                        held.set()
+                        await release.wait()
+                    await route.continue_()
+
+                await page.route('**/api/notebook', hold_progress)
+                try:
+                    await page.get_by_role('button', name='Next page', exact=True).click()
+                    await ready(page)
+                    await expect(page.locator('#reader-page')).to_have_value('2')
+                    await page.locator('#papers li[data-paper="two"]').click()
+                    await asyncio.wait_for(held.wait(), timeout=10)
+                    await page.get_by_role('button', name='Reading queue', exact=True).click()
+                    await _poll(page)
+                    await expect(page.locator('#research-tools')).to_have_attribute('aria-busy', 'true')
+                    await expect(page.locator('#research-body')).to_contain_text('Loading your research')
+                finally:
+                    release.set()
+                await ready(page)
+                await page.locator('#research-body').get_by_role('button', name='Resume at page 2').click()
+                await ready(page)
+                await expect(page.locator('.paperhead h2')).to_have_text('One')
+                await expect(page.locator('#reader-page')).to_have_value('2')
 
     run_browser(scenario())
 
