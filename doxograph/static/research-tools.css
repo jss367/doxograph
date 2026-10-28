@@ -1,4 +1,8 @@
 .research-tools-nav { display: flex; flex-direction: column; gap: .15rem; }
+.question-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .8rem; margin: 1rem 0; }
+.question-overview > div { padding: .8rem; border: 1px solid var(--line); border-radius: 8px; }
+.question-overview h3 { margin-top: 0; }
+.question-overview button { font-size: .75rem; }
 .research-tools-nav h2 { width: 100%; }
 .research-tools-nav button { display: flex; align-items: center; gap: .65rem; width: 100%;
   text-align: left; border-color: transparent; background: transparent; padding: .5rem .6rem;

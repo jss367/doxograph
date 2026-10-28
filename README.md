@@ -431,6 +431,12 @@ writing space are stored locally in `note-images/`.
   headings and commentary, move entries with the arrow buttons, and save the
   board. Source claims remain linked to their papers; if a source is removed,
   the board marks it as missing and keeps your commentary.
+- **Research questions**, under Write, turn a board into an investigation with
+  a working conclusion and open questions. Add selected claims and assign their
+  bearing as supporting, opposing, qualifying, or background evidence. The
+  overview groups them by your judgment and links each one to its source.
+  Markdown exports include the question, conclusion, next steps, and judgments.
+  These are your assessments and work with AI disabled.
 - **Saved searches** remember the current query, paper, topic, label, claim kind,
   review and quote-verification filters, and grouping. Opening one runs those
   filters against the current corpus, so new matching claims appear naturally.

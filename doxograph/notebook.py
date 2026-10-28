@@ -36,12 +36,16 @@ class Entry(Model):
     kind: Literal["claim", "heading", "note"]
     text: str = ""
     reference: Reference | None = None
+    stance: Literal["supporting", "opposing", "qualifying", "background"] = "background"
 
 
 class Board(Model):
     id: str
     title: str = Field(min_length=1, max_length=300)
     entries: list[Entry] = Field(default_factory=list)
+    question: str = Field(default="", max_length=20000)
+    conclusion: str = Field(default="", max_length=100000)
+    open_questions: str = Field(default="", max_length=100000)
 
 
 class SavedSearch(Model):
@@ -377,6 +381,16 @@ def export_selection(body: Selection) -> Response:
         if not board:
             raise HTTPException(404, "Board no longer exists")
         title, entries = board["title"], board["entries"]
+        if board["question"]:
+            entries = [
+                {"kind": "heading", "text": "Research question"},
+                {"kind": "note", "text": board["question"]},
+                {"kind": "heading", "text": "Working conclusion"},
+                {"kind": "note", "text": board["conclusion"]},
+                {"kind": "heading", "text": "Open questions"},
+                {"kind": "note", "text": board["open_questions"]},
+                *entries,
+            ]
     else:
         refs = [r.model_dump() for r in body.claims]
         seen = {(r["paper"], r["claim"]) for r in refs}
@@ -416,6 +430,7 @@ def export_selection(body: Selection) -> Response:
         lines.extend(["### " + md(row.get("text", "")), "", md(citation), "",
                       "> " + md(row.get("quote", "")).replace("\n", "\n> "), ""])
         for label, value in (("Evidence", row.get("evidence")), ("Topics", ", ".join(row.get("tags", []))),
+                             ("Bearing on question", entry.get("stance") if body.board and board["question"] else ""),
                              ("My note", row.get("note")), ("Paper note", row["paper_notes"]),
                              ("Commentary", text), ("Source", source),
                              ("Reference", row["paper"] + " / " + row["id"])):

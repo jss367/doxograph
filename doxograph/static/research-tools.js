@@ -159,12 +159,12 @@ const ResearchTools = (() => {
       ${button('source', 'Open source', `data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}`;
   }
   function render() {
-    const labels = {compare:'Compare & organize', boards:'Evidence boards', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
+    const labels = {compare:'Compare & organize', boards:'Evidence boards', questions:'Research questions', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
     el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
       + button('reload', 'Reload saved version');
     if (tab === 'compare') renderCompare();
-    if (tab === 'boards') renderBoards();
+    if (tab === 'boards' || tab === 'questions') renderBoards();
     if (tab === 'connections') renderConnections();
     if (tab === 'reading') renderReading();
     if (tab === 'marks') renderMarks();
@@ -188,19 +188,33 @@ const ResearchTools = (() => {
           ${button('source', p.has_pdf ? 'Read paper' : 'Open paper', `data-paper="${html(key)}"`)}${button('unpin-paper', 'Unpin paper', `data-paper="${html(key)}"`)}</article>`;
       }).join('')}</div>${!claims.size && !papers.size ? '<p class="empty">Select claims or papers in the library to compare them here.</p>' : ''}`;
   }
+  const STANCES = {supporting:'Supporting evidence', opposing:'Conflicting evidence', qualifying:'Conditions and limitations', background:'Background / not assessed'};
+  function questionOverview(board) {
+    return `<section class="question-overview" aria-label="Evidence for this question">${Object.entries(STANCES).map(([stance,label]) => {
+      const entries = board.entries.filter(e => e.kind === 'claim' && (e.stance || 'background') === stance);
+      const sourcePapers = new Set(entries.filter(e => resolve(e.reference)).map(e => e.reference.paper));
+      return `<div><h3>${label}</h3><p class="hint">${entries.length} claims · ${sourcePapers.size} papers</p>${entries.length ? entries.map(e => {
+        const row = resolve(e.reference);
+        return row ? `<p>${html(row.text)} ${button('source','Check source',`data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}</p>` : '<p class="warn">Source claim no longer exists.</p>';
+      }).join('') : '<p class="hint">No evidence assigned yet.</p>'}</div>`;
+    }).join('')}</section>`;
+  }
   function currentBoard() { return notebook.boards.find(b => b.id === boardId); }
   function renderBoards() {
-    if (!currentBoard()) boardId = notebook.boards[0]?.id || null;
+    const questioning = tab === 'questions';
+    const available = notebook.boards.filter(b => !questioning || b.question);
+    if (!available.some(b => b.id === boardId)) boardId = available[0]?.id || null;
     const board = currentBoard();
-    el('research-body').innerHTML = `<div class="tool-actions"><label>Board<select id="board-picker"><option value="">Choose a board</option>${notebook.boards.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
-      ${button('new-board','New board')}${board ? button('delete-board','Delete board') : ''}</div>
+    el('research-body').innerHTML = `<div class="tool-actions"><label>Board<select id="board-picker"><option value="">Choose a board</option>${available.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
+      ${button(questioning ? 'new-question' : 'new-board', questioning ? 'New research question' : 'New board')}${board ? button('delete-board','Delete board') : ''}</div>
       ${board ? `${input('Board title', 'board-title', board.title)}
+        ${(questioning || board.question) ? `${area('Research question', 'board-question', board.question || '')}${area('Working conclusion', 'board-conclusion', board.conclusion || '')}${area('Open questions and next steps', 'board-open_questions', board.open_questions || '')}${questionOverview(board)}` : ''}
         <div class="tool-actions">${button('board-add-selection','Add selected claims')}${button('board-heading','Add heading')}${button('board-note','Add commentary')}
         ${button('save-board','Save board')}${button('export-board','Export Markdown','data-format="markdown"')}${button('export-board','Export CSV','data-format="csv"')}</div>
         <div class="board-entries">${board.entries.map((entry,i) => `<article class="board-entry" data-entry="${html(entry.id)}">
           <div class="entry-actions"><span class="hint">${i+1} · ${html(entry.kind === 'note' ? 'commentary' : entry.kind)}</span>
           ${button('entry-up','↑', `aria-label="Move entry ${i+1} up" ${i === 0 ? 'disabled' : ''}`)}${button('entry-down','↓', `aria-label="Move entry ${i+1} down" ${i === board.entries.length-1 ? 'disabled' : ''}`)}${button('entry-remove','Remove')}</div>
-          ${entry.kind === 'claim' ? claimSummary(entry.reference) : ''}
+          ${entry.kind === 'claim' ? `${claimSummary(entry.reference)}${board.question ? `<label>Bearing on question<select data-entry-stance="${html(entry.id)}">${Object.entries(STANCES).map(([key, label]) => `<option value="${key}" ${entry.stance === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}` : ''}
           <label>${entry.kind === 'heading' ? 'Heading' : 'Your commentary'}<textarea data-entry-text="${html(entry.id)}">${html(entry.text)}</textarea></label>
         </article>`).join('')}</div>${!board.entries.length ? '<p class="empty">Add selected claims, then arrange headings and commentary around the evidence.</p>' : ''}`
         : '<p class="empty">Create a board for a question, argument, or section you are writing.</p>'}`;
@@ -1246,10 +1260,12 @@ const ResearchTools = (() => {
     if (name === 'export-board') { await download(data.format, boardId); return; }
     if (name === 'queue-selection') { await queue(selectedPapers()); tab = 'reading'; render(); return; }
     if (name === 'queue-paper') { await queue([data.paper]); tab = 'reading'; render(); return; }
-    if (name === 'new-board') {
-      const title = await promptDialog('Name this evidence board', '', {ok:'Create board'});
+    if (name === 'new-board' || name === 'new-question') {
+      if (!await discardDrafts()) return;
+      const asking = name === 'new-question';
+      const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
       if (!title?.trim()) return;
-      const board = {id:uid(),title:title.trim(),entries:[]};
+      const board = {id:uid(),title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
       notebook.boards.push(board); boardId = board.id; await save(); renderBoards(); return;
     }
     if (name === 'add-board') { tab = 'boards'; render(); message('Choose or create a board, then add the selected claims.'); return; }
@@ -1387,8 +1403,8 @@ const ResearchTools = (() => {
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       if (!el('research-tools').open) {
-        if (!await open(['boards','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare')) return;
-        if (['boards','reading','marks','searches','connections','compare'].includes(name)) return;
+        if (!await open(['boards','questions','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare')) return;
+        if (['boards','questions','reading','marks','searches','connections','compare'].includes(name)) return;
       }
       await action(name,target);
     });
@@ -1406,6 +1422,12 @@ const ResearchTools = (() => {
       if (!await discardDrafts()) { target.value = boardId || ''; return; }
       boardId = next; renderBoards();
     });
+    if (target.matches('[data-entry-stance]')) {
+      currentBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
+      dirty = true;
+      const overview = el('research-body').querySelector('.question-overview');
+      if (overview) overview.outerHTML = questionOverview(currentBoard());
+    }
     if (target.matches('[data-reading-status]')) run(async () => {
       notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;
       await save();
@@ -1432,7 +1454,7 @@ const ResearchTools = (() => {
     }
     if (!el('research-tools')?.contains(target)) return;
     if (target.id.startsWith('connection-')) connectionDraft = true;
-    if (target.id === 'board-title') { currentBoard().title = target.value; dirty = true; }
+    if (target.id.startsWith('board-') && ['title','question','conclusion','open_questions'].includes(target.id.slice(6))) { currentBoard()[target.id.slice(6)] = target.value; dirty = true; }
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
     if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
   });

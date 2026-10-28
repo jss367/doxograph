@@ -4978,8 +4978,8 @@ const CommandPalette = (() => {
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
-    ['boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
-      const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
+    ['questions', 'boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
+      const titles = {questions: 'Open research questions', boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
         connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
       add(`tool:${tool}`, 'Action', titles[tool], '', () => {
         const target = document.querySelector(`[data-tool="${tool}"]`);
