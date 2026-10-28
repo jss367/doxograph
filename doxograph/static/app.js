@@ -3112,6 +3112,58 @@ function mark(passage) {
 }
 
 const pendingJobActions = new Set();
+const jobTimeouts = new Map();
+
+function jobTimeoutPaused(card) {
+  return document.hidden || card.matches(':hover') || card.contains(document.activeElement);
+}
+
+function syncJobTimeouts() {
+  const workspace = workspaceClient.workspaceId;
+  const visible = new Set();
+  for (const card of $('jobs').querySelectorAll('[data-auto-dismiss]')) {
+    const key = card.dataset.jobKey;
+    if (!key.startsWith(`${workspace}:`)) continue;
+    visible.add(key);
+    if (!jobTimeouts.has(key)) {
+      jobTimeouts.set(key, { remaining: 8000, timer: null, expired: false });
+    }
+    const entry = jobTimeouts.get(key);
+    entry.card = card;
+    if (jobTimeoutPaused(card)) {
+      if (entry.timer !== null) {
+        clearTimeout(entry.timer);
+        entry.remaining = Math.max(0, entry.remaining - (performance.now() - entry.started));
+        entry.timer = null;
+      }
+    } else if (entry.timer === null && !entry.expired) {
+      entry.started = performance.now();
+      entry.timer = setTimeout(() => {
+        entry.timer = null;
+        entry.remaining = 0;
+        if (workspace !== workspaceClient.workspaceId || !entry.card.isConnected || !jobTimeouts.has(key)) return;
+        if (jobTimeoutPaused(entry.card)) return;
+        // Use the same persisted dismissal as the close button. On failure,
+        // leave the card available for a manual retry instead of looping.
+        entry.expired = true;
+        entry.card.querySelector('.dismiss-job').click();
+      }, entry.remaining);
+    }
+    card.onmouseenter = card.onmouseleave = syncJobTimeouts;
+  }
+  // Hidden cards get their full reading time when they next become visible,
+  // including after a workspace switch or a backlog of imports clears.
+  for (const [key, entry] of jobTimeouts) {
+    if (visible.has(key)) continue;
+    clearTimeout(entry.timer);
+    jobTimeouts.delete(key);
+  }
+}
+
+for (const type of ['focusin', 'focusout']) {
+  $('jobs').addEventListener(type, () => queueMicrotask(syncJobTimeouts));
+}
+document.addEventListener('visibilitychange', syncJobTimeouts);
 
 function openPaper(paper) {
   captureOpenEditor();
@@ -3132,13 +3184,15 @@ function renderJobs() {
   active.sort((a, b) => Number(a.state === 'done') - Number(b.state === 'done'));
   const importStates = { queued: 'Waiting to import…', fetching: 'Importing…', reading: 'Analyzing…',
                          done: 'Imported', error: 'Import failed' };
-  $('jobs').innerHTML = (S.job_recovery_issues || []).map(issue => `<div class="job error"><span class="lbl">Previous imports</span><p class="job-explanation">${esc(issue)}</p></div>`).join('') + active.slice(0, 6).map((j) => {
+  const next = document.createElement('div');
+  next.innerHTML = (S.job_recovery_issues || []).map(issue => `<div class="job error"><span class="lbl">Previous imports</span><p class="job-explanation">${esc(issue)}</p></div>`).join('') + active.slice(0, 6).map((j) => {
     const disabled = pendingJobActions.has(`${workspaceClient.workspaceId}:${j.id}`) ? 'disabled' : '';
     const explained = Boolean(j.explanation);
     const label = S.papers.find((paper) => paper.key === j.key)?.title || j.label;
     const status = j.kind === 'import' ? (importStates[j.state] || j.state) : j.state;
     return `
-    <div class="job ${j.state === 'error' ? 'error' : ''}">
+    <div class="job ${j.state === 'error' ? 'error' : ''}" data-job-key="${esc(workspaceClient.workspaceId)}:${j.id}"
+      ${j.state === 'done' && j.kind === 'import' ? 'data-auto-dismiss' : ''}>
       <span class="lbl" title="${esc(label)}">${esc(label)}</span>
       <span class="st">${esc(status)}${j.detail && !explained ? ': ' + esc(j.detail) : ''}</span>
       ${explained ? `<p class="job-explanation">${esc(j.explanation)}</p>` : ''}
@@ -3153,6 +3207,22 @@ function renderJobs() {
         aria-label="Dismiss notification for ${esc(label)}" title="Dismiss notification" ${disabled}>×</button>` : ''}
     </div>`;
   }).join('');
+  // Keep unchanged cards in place so polling and other jobs completing do not
+  // interrupt keyboard focus or the hover that pauses a successful import.
+  const container = $('jobs');
+  const existing = new Map([...container.children].filter(card => card.dataset.jobKey)
+    .map(card => [card.dataset.jobKey, card]));
+  const cards = [...next.children].map(card => {
+    const old = existing.get(card.dataset.jobKey);
+    return old && old.outerHTML === card.outerHTML ? old : card;
+  });
+  for (const card of [...container.children]) {
+    if (!cards.includes(card)) card.remove();
+  }
+  cards.forEach((card, index) => {
+    if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null);
+  });
+  syncJobTimeouts();
 }
 
 $('jobs').addEventListener('click', async (event) => {
@@ -3160,24 +3230,24 @@ $('jobs').addEventListener('click', async (event) => {
   if (!button || button.disabled) return;
   const workspace = workspaceClient.workspaceId;
   const actionKey = `${workspace}:${button.dataset.jobId}`;
+  // Selection changes before the destination read retires the previous DOM.
+  if (button.closest('.job').dataset.jobKey !== actionKey) return;
   if (pendingJobActions.has(actionKey)) return;
   pendingJobActions.add(actionKey);
   button.disabled = true;
   const retry = button.classList.contains('retry-job');
   const open = button.classList.contains('open-job');
   try {
-    if (!open) {
-      await api(`/api/jobs/${button.dataset.jobId}${retry ? '/retry' : ''}`, {
-        method: retry ? 'POST' : 'DELETE', headers: { 'X-Doxograph-Workspace': workspace },
-      });
-    }
-    await refresh();
-    if (open && workspace === workspaceClient.workspaceId) {
+    if (open) {
       if (S.papers.some((paper) => paper.key === button.dataset.paper)) openPaper(button.dataset.paper);
       else toast('This paper is no longer in this workspace.', { tone: 'warn' });
     }
+    await api(`/api/jobs/${button.dataset.jobId}${retry ? '/retry' : ''}`, {
+      method: retry ? 'POST' : 'DELETE', headers: { 'X-Doxograph-Workspace': workspace },
+    });
+    await refresh();
   } catch (error) {
-    toast(`Could not ${open ? 'open paper' : retry ? 'retry import' : 'dismiss notification'}: ${error.message}`, { tone: 'warn' });
+    toast(`Could not ${retry ? 'retry import' : 'dismiss notification'}: ${error.message}`, { tone: 'warn' });
   } finally {
     pendingJobActions.delete(actionKey);
     if (workspace === workspaceClient.workspaceId) renderJobs();
