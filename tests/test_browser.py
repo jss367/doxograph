@@ -6081,8 +6081,22 @@ def test_escape_outside_the_claim_form_leaves_its_draft_alone():
                     assert await claim_form.is_visible()
                     assert await claim_field.input_value() == "Draft that Escape elsewhere must keep."
 
+                # Nor does Escape with focus on an unrelated control.
+                await page.locator("#btn-add").focus()
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(100)
+                assert await claim_form.is_visible()
+                assert await claim_field.input_value() == "Draft that Escape elsewhere must keep."
+
                 # From inside the form, Escape still cancels the editor.
                 await claim_field.press("Escape")
+                await claim_form.wait_for(state="hidden")
+
+                # And so does the page's own Escape, with nothing focused.
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Draft the page's own Escape cancels.")
+                await page.evaluate("document.activeElement.blur()")
+                await page.keyboard.press("Escape")
                 await claim_form.wait_for(state="hidden")
 
     run_browser(scenario())

@@ -5160,7 +5160,11 @@ document.addEventListener('keydown', async (event) => {
       scrollToSelected();
     }
   } else if (event.key === 'Escape') {
-    cancelEdit();
+    // The page's own Escape: from inside the claim's form, or with nothing in
+    // particular focused. With focus on some other control — a sidebar
+    // button, the divider — Escape is about that control, not a verdict on
+    // a draft elsewhere on the page.
+    if (event.target === document.body || event.target.closest('form[data-form]')) cancelEdit();
   }
 });
 
