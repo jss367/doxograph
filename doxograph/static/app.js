@@ -1297,13 +1297,13 @@ function resetWorkspaceView() {
 function hasWorkspaceDrafts() {
   return Boolean(V.editing || V.synthEditing || V.noteEditing || V.newClaim
     || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
-    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty()
-    || WorkspaceNotes.hasUnsavedChanges() || ResearchNotes.hasUnsavedChanges() || ResearchTools.hasUnsavedChanges());
+    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty());
 }
 
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
-    && !V.synthSaving && !V.noteSaving && !V.researchSaving && !trash.size;
+    && !V.synthSaving && !V.noteSaving && !V.researchSaving && !trash.size
+    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
 }
 
 const workspaceController = createWorkspaceController(workspaceClient, {
