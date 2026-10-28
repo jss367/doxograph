@@ -134,3 +134,18 @@ def test_live_jobs_cannot_be_recovered_by_a_second_server():
     server._set(job, state='fetching')
     assert job_journal.recover() == []
     assert job['state'] == 'fetching'
+
+
+@pytest.mark.parametrize('key', ['notebook', 'context', 'vocabulary', 'agreements'])
+def test_archive_with_a_paper_named_like_a_document_lock_finishes(key):
+    store.save_paper(store.new_paper(key, title='Synthetic lock collision'))
+    # A subprocess bounds the regression even if a flock blocks on a descriptor
+    # owned by its own thread. This never reads the user's workspace.
+    script = '''from doxograph import workspace_archive
+path = workspace_archive.build()
+try:
+    assert path.stat().st_size > 0
+finally:
+    path.unlink()
+'''
+    subprocess.run([sys.executable, '-c', script], env=os.environ.copy(), check=True, timeout=10)

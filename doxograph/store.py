@@ -46,7 +46,6 @@ STOPWORDS = {
 # because `doxograph serve` and a `doxograph extract` run from a shell are two
 # processes writing the same corpus and a thread lock says nothing about that.
 _locks: dict[str, threading.RLock] = {}
-_extraction_locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 _depth = threading.local()
 
@@ -110,48 +109,49 @@ def _file_lock(path: Path):
 
 
 @contextlib.contextmanager
-def _reentrant_file_lock(name: str, path: Path) -> Iterator[None]:
-    """Take the file lock once per thread, however deeply the block nests.
+def _reentrant_file_lock(path: Path) -> Iterator[None]:
+    """Share thread serialization and reentrancy by the physical lock path.
 
-    `flock` is held per open file description, so a nested acquire from the same
-    thread would open a second descriptor and block on itself.
+    A paper and a document can use the same legacy lock filename. Every wrapper
+    must therefore share both its RLock and its per-thread file descriptor depth;
+    separate semantic mutexes could invert around a nested physical acquisition.
     """
-    held = getattr(_depth, "held", None)
-    if held is None:
-        held = _depth.held = {}
-    if held.get(name):
-        held[name] += 1
-        try:
-            yield
-        finally:
-            held[name] -= 1
-        return
-    held[name] = 1
-    try:
+    identity = str(path.resolve())
+    with _locks_guard:
+        lock = _locks.setdefault(identity, threading.RLock())
+    with lock:
+        held = getattr(_depth, "held", None)
+        if held is None:
+            held = _depth.held = {}
+        if held.get(identity):
+            held[identity] += 1
+            try:
+                yield
+            finally:
+                held[identity] -= 1
+            return
         with _file_lock(path):
-            yield
-    finally:
-        held[name] -= 1
+            held[identity] = 1
+            try:
+                yield
+            finally:
+                del held[identity]
 
 
 def document_lock(name: str) -> contextlib.AbstractContextManager[None]:
     """Serialize access to a workspace document across threads and processes."""
-    return _reentrant_file_lock(name, config.locks_dir() / f"{name}.lock")
+    return _reentrant_file_lock(config.locks_dir() / f"{name}.lock")
 
 
 # The tag vocabulary is a single shared file, so it gets one lock rather than
 # one per paper. Lock order is vocabulary before paper, everywhere, so a tag
 # rewrite (vocabulary then each paper) and an accept (vocabulary then that
 # paper) cannot deadlock against each other.
-_vocab = threading.RLock()
-_claim = threading.RLock()
 
 
 @contextlib.contextmanager
 def paper_lock(key: str):
-    with _locks_guard:
-        lock = _locks.setdefault(key, threading.RLock())
-    with lock, _reentrant_file_lock(f"paper:{key}", config.locks_dir() / f"{key}.lock"):
+    with _reentrant_file_lock(config.locks_dir() / f"{key}.lock"):
         yield
 
 
@@ -164,10 +164,8 @@ def extraction_lock(key: str):
     while ordinary claim edits remain free to land and are reconciled by the
     merge under ``paper_lock``.
     """
-    with _locks_guard:
-        lock = _extraction_locks.setdefault(key, threading.RLock())
     path = config.locks_dir() / f"{key}.extraction.lock"
-    with lock, _reentrant_file_lock(f"extraction:{key}", path):
+    with _reentrant_file_lock(path):
         yield
 
 
@@ -178,13 +176,13 @@ def claim_lock():
     Lock order is claim before paper: ingest holds this while reserving and then
     publishes a PDF under the paper lock.
     """
-    with _claim, _reentrant_file_lock("claim", config.locks_dir() / "claim.lock"):
+    with _reentrant_file_lock(config.locks_dir() / "claim.lock"):
         yield
 
 
 @contextlib.contextmanager
 def vocab_lock():
-    with _vocab, _reentrant_file_lock("vocab", config.locks_dir() / "vocabulary.lock"):
+    with _reentrant_file_lock(config.locks_dir() / "vocabulary.lock"):
         _recover_tag_change()
         yield
 
@@ -287,7 +285,7 @@ def retire_key(key: str) -> None:
     the paper lock, and a tag rename holds the vocabulary lock while taking paper
     locks, so sharing that lock would invert the order and deadlock.
     """
-    with _reentrant_file_lock("retired", config.locks_dir() / "retired-keys.lock"):
+    with _reentrant_file_lock(config.locks_dir() / "retired-keys.lock"):
         known = retired_keys()
         if key not in known:
             known.add(key)
@@ -312,7 +310,7 @@ def reserve_key(base: str, **fields) -> str:
     # and then creating separately leaves a gap in which a concurrent
     # `delete_paper` can retire and unlink a key, after which this caller still
     # believes it is free and recreates it.
-    with _reentrant_file_lock("retired", config.locks_dir() / "retired-keys.lock"):
+    with _reentrant_file_lock(config.locks_dir() / "retired-keys.lock"):
         spent = retired_keys()
         for candidate in key_candidates(base):
             if candidate in spent:
@@ -1278,7 +1276,6 @@ def summarize(paper: dict) -> dict:
 TENSION_KINDS = ["contradiction", "tension"]
 TENSION_STATUSES = ["open", "confirmed", "dismissed"]
 
-_tensions = threading.RLock()
 
 
 def tensions_path() -> Path:
@@ -1291,7 +1288,7 @@ def tensions_lock():
     `vocab_lock` alone: a tag rename rewrites topics here, and a tension merge
     takes both so it cannot land halfway through a rename. The pass itself
     reads papers without their locks and writes only here."""
-    with _tensions, _reentrant_file_lock("tensions", config.locks_dir() / "tensions.lock"):
+    with _reentrant_file_lock(config.locks_dir() / "tensions.lock"):
         yield
 
 
@@ -1617,7 +1614,6 @@ def tension_topics(rows: list[dict] | None = None) -> list[str]:
 
 SYNTHESIS_SOURCES = ["model", "hand"]
 
-_syntheses = threading.RLock()
 
 
 def syntheses_path() -> Path:
@@ -1630,7 +1626,7 @@ def syntheses_lock():
     `vocab_lock` alone: a tag rename rewrites topics here, and a write from
     the model takes both so it cannot land halfway through a rename. It is
     never held together with `tensions_lock`."""
-    with _syntheses, _reentrant_file_lock("syntheses", config.locks_dir() / "syntheses.lock"):
+    with _reentrant_file_lock(config.locks_dir() / "syntheses.lock"):
         yield
 
 
@@ -1860,7 +1856,6 @@ def synthesis_topics(rows: list[dict] | None = None) -> list[str]:
 
 AGREEMENT_STATUSES = TENSION_STATUSES
 
-_agreements = threading.RLock()
 
 
 def agreements_path() -> Path:
@@ -1871,7 +1866,7 @@ def agreements_path() -> Path:
 def agreements_lock():
     """Guard `agreements.json`. Nests inside `vocab_lock` alone, as the
     tensions lock does, and is never held with it."""
-    with _agreements, _reentrant_file_lock("agreements", config.locks_dir() / "agreements.lock"):
+    with _reentrant_file_lock(config.locks_dir() / "agreements.lock"):
         yield
 
 
