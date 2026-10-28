@@ -566,6 +566,15 @@ def test_a_stray_word_in_the_margin_does_not_drag_the_span_into_the_sentence_bef
     )
 
 
+def test_an_exact_quote_keeps_a_short_sentence_at_either_end(tmp_path):
+    pdf = tmp_path / "exact.pdf"
+    pdf.write_bytes(minimal_pdf("No effect. However recovery improved across all three model scales. Not so."))
+    found = quotes.locate(pdf, "No effect. However recovery improved across all three model scales. Not so.")
+    assert found["found"] is True
+    assert found["matched"] == "No effect. However recovery improved across all three model scales. Not so"
+    assert found["suggestion"] == "No effect. However recovery improved across all three model scales. Not so."
+
+
 def test_a_stray_word_in_the_margin_does_not_run_the_span_into_the_sentence_after(tmp_path):
     pdf = tmp_path / "margin.pdf"
     pdf.write_bytes(minimal_pdf(

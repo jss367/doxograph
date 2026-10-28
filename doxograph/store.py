@@ -1323,28 +1323,26 @@ def _pair(ids) -> tuple[str, str]:
     return (a, b)
 
 
-def _claim_paper(claim_id: str) -> str:
-    """The key of the paper a claim id was issued under; see `next_claim_id`."""
-    return claim_id.rsplit("-c", 1)[0]
-
-
-def _live_claims() -> tuple[dict[str, dict], set[str]]:
-    """Every claim on disk by id, and the keys of the papers that could not be read.
+def _live_claims() -> tuple[dict[str, dict], bool]:
+    """Every claim on disk by id, and whether any paper could not be read.
 
     A merge prunes records against the corpus as it is now, and a claim whose
     paper is unreadable is not gone: the file is there, and the reader refuses
     it so a writer cannot replace it. Dropping the tensions and agreements
-    that rest on it would be the loss the reader guards against, so a record
-    with a claim from one of these papers is left exactly as the file has it.
+    that rest on it would be the loss the reader guards against, so while a
+    paper cannot be read, a record with a claim that is not in `live` is left
+    exactly as the file has it. A claim id names its paper only by convention
+    (`next_claim_id`); an older or hand-written id need not, so the missing
+    claim cannot be told from the unreadable paper's, and neither is pruned.
     """
     issues: list[records.StorageIssue] = []
     papers = all_papers(issues=issues)
-    return {c["id"]: c for c in claim_rows(papers)}, {issue["paper"] for issue in issues}
+    return {c["id"]: c for c in claim_rows(papers)}, bool(issues)
 
 
-def _held_back(ids, unreadable: set[str]) -> bool:
-    """Whether a record's claims include one from a paper that cannot be read."""
-    return any(_claim_paper(i) in unreadable for i in ids)
+def _held_back(ids, live: dict[str, dict], unreadable: bool) -> bool:
+    """Whether a record's claims include one that cannot be seen right now."""
+    return unreadable and any(i not in live for i in ids)
 
 
 def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
@@ -1478,10 +1476,10 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
         live, unreadable = _live_claims()
         existing = [t for t in data["tensions"]
                     if len(t.get("claims", [])) == 2
-                    and (all(i in live for i in t["claims"]) or _held_back(t["claims"], unreadable))]
+                    and (all(i in live for i in t["claims"]) or _held_back(t["claims"], live, unreadable))]
         pruned: set[str] = set()
         for tension in existing:
-            if _held_back(tension["claims"], unreadable):
+            if _held_back(tension["claims"], live, unreadable):
                 continue
             was = set(tension.get("topics") or [])
             tension["topics"] = _shared_topics(tension, live)
@@ -1949,7 +1947,7 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
         existing = []
         pruned: set[str] = set()
         for record in data["agreements"]:
-            if _held_back(record.get("claims", []), unreadable):
+            if _held_back(record.get("claims", []), live, unreadable):
                 existing.append(record)
                 continue
             ids = [i for i in record.get("claims", []) if i in live]
@@ -1981,7 +1979,7 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             # A record held back for an unreadable paper is not on the table:
             # its members are not all in `live`, and nothing can be decided
             # about a group whose claims cannot be seen.
-            on_file = [r for r in existing if not _held_back(r["claims"], unreadable)]
+            on_file = [r for r in existing if not _held_back(r["claims"], live, unreadable)]
             contained = [r for r in on_file if set(r["claims"]) <= wanted]
             current = contained[0] if contained else next(
                 (r for r in on_file if wanted < set(r["claims"])), None)
@@ -2072,7 +2070,7 @@ def set_agreement_status(agreement_id: str, status: str) -> dict:
                 if status != "open":
                     live, unreadable = _live_claims()
                     ids = [i for i in record.get("claims", []) if i in live]
-                    if not _held_back(record.get("claims", []), unreadable) \
+                    if not _held_back(record.get("claims", []), live, unreadable) \
                             and len(_agreement_papers(ids, live)) >= 2:
                         record["claims"] = ids
                         record["fingerprints"] = {i: claim_fingerprint(live[i]) for i in ids}

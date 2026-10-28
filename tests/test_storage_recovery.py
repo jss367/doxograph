@@ -454,11 +454,23 @@ def test_extraction_finishing_during_rename_cannot_restore_the_old_topic(monkeyp
     assert all("old" not in c["tags"] for c in paper["claims"])
 
 
-def test_a_pass_leaves_records_of_an_unreadable_paper_alone():
-    """Pruning against the corpus must not mistake a refused file for a deleted paper."""
+@pytest.mark.parametrize("claim_id", ["second-c1", "legacy-1"])
+def test_a_pass_leaves_records_of_an_unreadable_paper_alone(claim_id):
+    """Pruning against the corpus must not mistake a refused file for a deleted paper,
+    whether or not the claim's id names its paper the way `next_claim_id` does."""
     ids = corpus()
-    rows = {row["id"]: row for row in store.claim_rows()}
     path = store.paper_path("second")
+    paper = json.loads(path.read_text())
+    paper["claims"][0]["id"] = claim_id
+    store.write_json(path, paper)
+    ids = [i if i != "second-c1" else claim_id for i in ids]
+    for name in ("tensions", "agreements"):
+        file = getattr(store, f"{name}_path")()
+        data = json.loads(file.read_text())
+        for record in data[name]:
+            record["claims"] = ids
+        store.write_json(file, data)
+    rows = {row["id"]: row for row in store.claim_rows()}
     original = path.read_bytes()
     path.write_bytes(b"{broken")
 

@@ -334,7 +334,10 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     if text is None:
         return None
     score, lo, hi = best_match(needle, text.squashed)
-    if lo >= 0:
+    # A span that is the quote itself was not aligned through a margin, and a
+    # sentence end inside it is the quote's own: "Yes. The model recovers" is
+    # kept whole. Only an inexact alignment can have picked up a stray.
+    if lo >= 0 and text.squashed[lo:hi] != needle:
         lo, hi = _trim_strays(text, lo, hi)
     result = {
         "found": score >= _COVERAGE,
