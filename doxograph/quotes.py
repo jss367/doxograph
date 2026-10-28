@@ -16,6 +16,7 @@ which is what separates this module's `Text` from a plain string.
 from __future__ import annotations
 
 import array
+import bisect
 import contextlib
 import difflib
 import os
@@ -333,6 +334,8 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     if text is None:
         return None
     score, lo, hi = best_match(needle, text.squashed)
+    if lo >= 0:
+        lo, hi = _trim_strays(text, lo, hi)
     result = {
         "found": score >= _COVERAGE,
         "coverage": round(score, 3),
@@ -373,6 +376,40 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     result["before"] = tidy(text.raw[_back(text.raw, begin, low):begin])
     result["after"] = tidy(text.raw[finish:_forward(text.raw, finish, high)])
     return result
+
+
+def _trim_strays(text: Text, lo: int, hi: int) -> tuple[int, int]:
+    """Cut a few matched characters that a sentence boundary separates from the rest.
+
+    The alignment looks at a margin either side of where the quote would sit,
+    and when the paper has a different word where the quote begins or ends, a
+    short word in that margin ("the", "a") can be matched in its place. The
+    span then starts in the sentence before, or runs on into the one after,
+    and the page, the matched passage and the suggested wording all follow it.
+    A quote does not start or stop a few letters across a sentence end, so a
+    boundary within the margin's reach of either edge marks a stray, and the
+    span is cut back to the quote's own sentence. Nothing moves when no such
+    boundary is there: a span over a sentence end further in is a quote that
+    really runs over one.
+    """
+    offsets = text.offsets
+    if hi - lo > _ANCHOR:
+        start, until = offsets[lo], offsets[lo + _ANCHOR]
+        cut = lo
+        for match in _SENTENCE_END.finditer(text.raw, start, until):
+            if _is_boundary(text.raw[max(0, match.start() - 40):match.start() + 1]):
+                cut = bisect.bisect_left(offsets, match.end())
+        if lo < cut < hi:
+            lo = cut
+    if hi - lo > _ANCHOR:
+        start, until = offsets[hi - 1 - _ANCHOR], offsets[hi - 1] + 1
+        for match in _SENTENCE_END.finditer(text.raw, start, until):
+            if _is_boundary(text.raw[max(0, match.start() - 40):match.start() + 1]):
+                cut = bisect.bisect_left(offsets, match.start())
+                if lo < cut < hi:
+                    hi = cut
+                break
+    return lo, hi
 
 
 # A sentence ends at one of these, closing quotes and brackets included, when

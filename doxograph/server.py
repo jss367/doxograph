@@ -1486,7 +1486,19 @@ def patch_paper(key: str, patch: PaperPatch) -> dict:
 
 @app.delete("/api/papers/{key}")
 def remove_paper(key: str) -> dict:
-    extract.delete_paper(key)
+    # A key with nothing on disk has nothing to remove, and retiring it would
+    # still spend the citekey for good: a stale or mistyped request must not.
+    if not key.strip() or not any(path.exists() for path in
+                                  (store.paper_path(key), store.pdf_path(key), store.text_path(key))):
+        raise HTTPException(404, "No such paper.")
+    try:
+        extract.delete_paper(key)
+    except ModelSetupError as exc:
+        raise HTTPException(502, str(exc)[:500])
+    except (anthropic.APIError, httpx.HTTPError):
+        logger.exception("Removing a paper's uploads failed")
+        raise HTTPException(502, "Anthropic could not be reached to delete this paper's uploaded PDF. "
+                                 "Check your connection, then remove the paper again.")
     return {"deleted": key}
 
 
@@ -1645,7 +1657,7 @@ def search_text(q: str = "", limit: int = 20) -> dict:
             {
                 **hit,
                 "title": known[hit["key"]].get("title", ""),
-                "authors": known[hit["key"]].get("authors", []),
+                "authors": known[hit["key"]].get("authors") or [],
                 "year": known[hit["key"]].get("year"),
             }
             for hit in hits if hit["key"] in known

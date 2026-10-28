@@ -452,3 +452,24 @@ def test_extraction_finishing_during_rename_cannot_restore_the_old_topic(monkeyp
         paper = merged.result(timeout=10)
     assert any(c["text"] == "Fresh extraction" for c in paper["claims"])
     assert all("old" not in c["tags"] for c in paper["claims"])
+
+
+def test_a_pass_leaves_records_of_an_unreadable_paper_alone():
+    """Pruning against the corpus must not mistake a refused file for a deleted paper."""
+    ids = corpus()
+    rows = {row["id"]: row for row in store.claim_rows()}
+    path = store.paper_path("second")
+    original = path.read_bytes()
+    path.write_bytes(b"{broken")
+
+    store.record_tensions("old", [], rows)
+    store.record_agreements("old", [], rows)
+    # The views leave the record out while its paper cannot be read; the file keeps it.
+    agreement_id = json.loads(store.agreements_path().read_text())["agreements"][0]["id"]
+    store.set_agreement_status(agreement_id, "confirmed")
+
+    assert [t["claims"] for t in json.loads(store.tensions_path().read_text())["tensions"]] == [ids]
+    assert [a["claims"] for a in json.loads(store.agreements_path().read_text())["agreements"]] == [ids]
+    path.write_bytes(original)
+    assert {r["id"] for r in store.tension_rows()[0]["claims"]} == set(ids)
+    assert {r["id"] for r in store.agreement_rows()[0]["claims"]} == set(ids)

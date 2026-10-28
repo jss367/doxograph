@@ -259,3 +259,48 @@ def test_delete_waits_for_chat_and_removes_its_upload(monkeypatch, paper_with_pd
     assert api.files.deletions == ["file_1"]
     assert not store.paper_path(paper_with_pdf).exists()
     assert not store.pdf_path(paper_with_pdf).exists()
+
+
+def test_removing_a_paper_without_credentials_says_what_the_retry_needs(monkeypatch, paper_with_pdf):
+    paper = store.load_paper(paper_with_pdf)
+    paper["pdf_upload"] = {"file_id": "file_current"}
+    store.save_paper(paper)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(extract.config, "api_key", lambda: None)
+    monkeypatch.setattr(extract, "client", lambda: anthropic.Anthropic())
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.delete(f"/api/papers/{paper_with_pdf}")
+        assert response.status_code == 502
+        assert "ANTHROPIC_API_KEY" in response.json()["detail"]
+        assert store.pdf_path(paper_with_pdf).exists()
+        assert store.load_paper(paper_with_pdf)["pdf_upload"]["file_id"] == "file_current"
+
+        api = FilesClient()
+        monkeypatch.setattr(extract, "client", lambda: api)
+        assert client.delete(f"/api/papers/{paper_with_pdf}").status_code == 200
+    assert api.files.deletions == ["file_current"]
+    assert not store.paper_path(paper_with_pdf).exists()
+
+
+def test_a_revoked_key_is_reported_the_same_way(monkeypatch, paper_with_pdf):
+    paper = store.load_paper(paper_with_pdf)
+    paper["pdf_upload"] = {"file_id": "file_current"}
+    store.save_paper(paper)
+
+    class Revoked(FilesClient):
+        def __init__(self):
+            super().__init__()
+            self.api_key = "sk-revoked"
+            self.files.delete = self._refuse
+
+        def _refuse(self, file_id):
+            raise anthropic.AuthenticationError("invalid x-api-key", response=_response(401), body=None)
+
+    monkeypatch.setattr(extract, "client", Revoked)
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.delete(f"/api/papers/{paper_with_pdf}")
+    assert response.status_code == 502
+    assert "credentials" in response.json()["detail"]
+    assert store.pdf_path(paper_with_pdf).exists()

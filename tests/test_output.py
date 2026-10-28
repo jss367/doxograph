@@ -83,3 +83,16 @@ def test_the_export_api_writes_only_where_the_workspace_keeps_its_export(tmp_pat
     assert response.json()["path"] == str(config.export_path())
     assert config.export_path().exists()
     assert not elsewhere.parent.exists()
+
+
+def test_export_handles_a_paper_whose_authors_are_unknown():
+    """Older imports record unknown authors as null rather than an empty list."""
+    build_corpus()
+    store.write_json(store.paper_path("legacy"), {
+        "key": "legacy", "title": "Legacy paper", "authors": None,
+        "claims": [{"id": "legacy-c1", "text": "Old wording", "tags": ["recovery-rate"]}],
+    })
+    html = export.render()
+    assert "Legacy paper" in html and "Old wording" in html
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.post("/api/export", json={}).status_code == 200

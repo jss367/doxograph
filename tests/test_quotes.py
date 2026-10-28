@@ -544,3 +544,36 @@ def test_a_word_split_at_the_foot_of_a_page_is_rejoined(tmp_path):
     ]))
     found = quotes.locate(pdf, "the transformation of steered activations")
     assert found["suggestion"] == "We measure the transformation of steered activations across scales."
+
+
+def test_a_stray_word_in_the_margin_does_not_drag_the_span_into_the_sentence_before(tmp_path):
+    """The model changed the quote's first word; "the" in the previous sentence
+    must not be matched in its place and carry the passage across a sentence end."""
+    pdf = tmp_path / "margin.pdf"
+    pdf.write_bytes(minimal_pdf([
+        "We report the results of the data.",
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss next. "
+        "The next section covers scaling.",
+    ]))
+    found = quotes.locate(pdf, "The model recovers in 46% of rollouts when steering is removed, which we discuss next")
+    assert found["found"] is True
+    assert found["page"] == 2
+    # The span is cut back to its own sentence, so the diff shows the word the
+    # paper has where the quote says "The", and not a sentence that is not there.
+    assert found["matched"] == "Our model recovers in 46% of rollouts when steering is removed, which we discuss next"
+    assert found["suggestion"] == (
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss next."
+    )
+
+
+def test_a_stray_word_in_the_margin_does_not_run_the_span_into_the_sentence_after(tmp_path):
+    pdf = tmp_path / "margin.pdf"
+    pdf.write_bytes(minimal_pdf(
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss below. "
+        "The next section covers scaling."))
+    found = quotes.locate(pdf, "Our model recovers in 46% of rollouts when steering is removed, which we discuss next")
+    assert found["found"] is True
+    assert found["matched"] == "Our model recovers in 46% of rollouts when steering is removed, which we discuss below"
+    assert found["suggestion"] == (
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss below."
+    )

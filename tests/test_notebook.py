@@ -397,3 +397,15 @@ def test_restoring_a_deleted_claim_can_be_undone_and_redone(client):
         'revision':state['entries'][0]['id'], 'expected':state['expected']})
     assert result.status_code == 200
     assert store.load_paper('one')['claims'][0]['id'] == ref['claim']
+
+
+def test_exports_cite_a_paper_whose_authors_are_unknown(client):
+    store.write_json(store.paper_path('legacy'), {
+        'key': 'legacy', 'title': 'Legacy paper', 'authors': None,
+        'claims': [{'id': 'legacy-c1', 'text': 'Old wording', 'tags': ['testing']}],
+    })
+    ref = {'paper': 'legacy', 'claim': 'legacy-c1'}
+    for fmt in ('markdown', 'csv'):
+        response = client.post('/api/notebook/export', json={'claims': [ref], 'format': fmt})
+        assert response.status_code == 200
+        assert 'Legacy paper' in response.text
