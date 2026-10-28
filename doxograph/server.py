@@ -1552,10 +1552,13 @@ class AgentBody(ChatBody):
 
 
 @app.post("/api/agent/chat")
-def agent_chat(body: AgentBody) -> dict:
+def agent_chat(body: AgentBody, request: Request) -> dict:
     _require_analysis()
+    # The agent's tools call back into this server, on whatever port it is listening on.
+    port = (request.scope.get("server") or (None, 8765))[1]
     with _chat_errors("Library agent"):
-        return agent.answer([message.model_dump() for message in body.messages], body.paper)
+        return agent.answer([message.model_dump() for message in body.messages],
+                            f"http://127.0.0.1:{port}", body.paper)
 
 
 @app.post("/api/papers/{key}/review")

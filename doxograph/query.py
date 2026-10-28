@@ -12,6 +12,10 @@ router = APIRouter(prefix="/api/query", dependencies=[Depends(store.recover_stor
 Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0)]
 QueryText = Annotated[str, Query(max_length=1000)]
+# A client that must not read the user's own writing (the in-app agent) asks for
+# the personal fields to be left out; nothing that serves it should match on them either.
+OmitNotes = Annotated[bool, Query()]
+PERSONAL_CLAIM_FIELDS = ("note", "ledger_links")
 
 
 def matches(q: str, *values) -> bool:
@@ -51,7 +55,7 @@ def papers(q: QueryText = "", topic: str = "", label: str = "",
 
 
 @router.get("/papers/{key}")
-def paper(key: str) -> dict:
+def paper(key: str, omit_notes: OmitNotes = False) -> dict:
     try:
         saved = store.load_paper(key)
     except KeyError:
@@ -59,22 +63,26 @@ def paper(key: str) -> dict:
     # Claims and editing history can be very large. Read claims by paper key
     # through /claims so that a single paper cannot bypass pagination.
     return {"workspace": config.workspace_id(),
-            "paper": {**store.summarize(saved), "abstract": saved.get("abstract", ""),
+            "paper": {**{k: v for k, v in store.summarize(saved).items() if not (omit_notes and k == "notes")},
+                      "abstract": saved.get("abstract", ""),
                       "doi": saved.get("doi"), "source": saved.get("source")}}
 
 
 @router.get("/claims")
 def claims(q: QueryText = "", topic: str = "", paper: str = "",
-           reviewed: bool | None = None, limit: Limit = 20, offset: Offset = 0) -> dict:
+           reviewed: bool | None = None, limit: Limit = 20, offset: Offset = 0,
+           omit_notes: OmitNotes = False) -> dict:
     saved, issues = papers_and_issues()
     rows = [c for c in store.claim_rows(saved)
             if (not topic or topic in c.get("tags", []))
             and (not paper or c["paper"] == paper)
             and (reviewed is None or bool(c.get("reviewed")) == reviewed)
-            and matches(q, c.get("text"), c.get("evidence"), c.get("quote"), c.get("note"),
-                        c.get("tags"), c["paper"], c["paper_title"],
+            and matches(q, c.get("text"), c.get("evidence"), c.get("quote"),
+                        None if omit_notes else c.get("note"), c.get("tags"), c["paper"], c["paper_title"],
                         c["paper_authors"], c["paper_year"])]
     rows.sort(key=lambda c: (c["paper"], c["id"]))
+    if omit_notes:
+        rows = [{k: v for k, v in c.items() if k not in PERSONAL_CLAIM_FIELDS} for c in rows]
     return page(rows, limit, offset, storage_issues=issues)
 
 

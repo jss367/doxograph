@@ -145,16 +145,20 @@ selected in Settings and is disabled when AI analysis is off.
 
 **Ask the library** in the header opens a chat that answers across every paper in
 the workspace, where paper chat reads one PDF. It needs **Claude subscription
-(Claude Code)** selected in Settings → Model access. Claude looks things up with
-five read-only tools over a snapshot taken when you send the question: the paper
-list, one paper's claims and quotes, a claim search, the topics, and one topic's
-synthesis with its agreements and tensions. The line under each answer lists
-the lookups it made.
+(Claude Code)** selected in Settings → Model access. Claude looks things up
+through the [MCP server](#query-doxograph-from-agents) below, started with
+`--without-notes`: it can search papers, claims, and PDF text, read a paper,
+list topics, and read agreements, tensions, and syntheses. The line under each
+answer lists the lookups it made. Claude Code reaches the library through the
+app that is serving the page, so the app has to be running, which it is when you
+use this.
 
 It has no file, shell, web, or write access, and it does not receive the PDFs.
-Your paper and claim notes, your research context, and your own claims are left
-out of the snapshot, as they are for paper chat. Answers can be wrong; check them
-against the papers.
+`--without-notes` leaves out your paper and workspace notes, your claim notes, and
+the links from claims to your own claims, and a search cannot match text inside
+them. Your research context is not exposed by any tool. It can read every
+workspace by ID, but it is asked to stay in the one you are viewing. Answers can
+be wrong; check them against the papers.
 
 ## Use
 
@@ -515,6 +519,11 @@ another port when 8765 is occupied. `--url` accepts local HTTP origins only,
 and defaults to `http://127.0.0.1:8765`. No API key is needed. The adapter does
 not open or initialize a separate corpus, so `DOXOGRAPH_DATA` belongs on the
 HTTP server, not on the MCP command.
+
+Add `--without-notes` to leave out the note tools and the personal fields of the
+other tools: paper notes, claim notes, and links from claims to your own claims.
+Searches then cannot match text inside them. The in-app **Ask the library** chat
+runs the server this way.
 
 | Tool | What it reads |
 | --- | --- |

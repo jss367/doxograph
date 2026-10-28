@@ -40,7 +40,8 @@ def local_url(value: str) -> str:
     return value.rstrip("/")
 
 
-def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTransport | None = None) -> MCPServer:
+def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTransport | None = None,
+                  without_notes: bool = False) -> MCPServer:
     base_url = local_url(base_url)
     server = MCPServer(
         "Doxograph", version=__version__,
@@ -51,11 +52,14 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
             "claim IDs, quotes, and locators. Check reviewed, quote_verified, stale, status, "
             "and storage_issues before treating a result as established evidence. "
             "Follow next_offset for additional results. No tool imports, edits, or calls a model."
+            + (" Personal notes are not available." if without_notes else "")
         ),
     )
 
     async def get(path: str, workspace: str | None = None, **params) -> dict[str, Any]:
         headers = {"X-Doxograph-Workspace": workspace} if workspace is not None else {}
+        if without_notes and path.startswith("/api/query/"):
+            params = {**params, "omit_notes": True}
         # Never inherit proxies or follow redirects out of the local app.
         async with httpx.AsyncClient(base_url=base_url, transport=transport, timeout=30,
                                      trust_env=False, follow_redirects=False) as client:
@@ -156,6 +160,9 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
         """
         return await get("/api/query/evidence", workspace, kind=kind, topic=topic, limit=limit, offset=offset)
 
+    if without_notes:
+        return server
+
     @server.tool(annotations=READ_ONLY)
     async def list_notes(workspace: Workspace, q: QueryText = "", limit: Limit = 20, offset: Offset = 0) -> dict[str, Any]:
         """Find the user's workspace and research notes by title or body, with short previews.
@@ -178,5 +185,5 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
     return server
 
 
-def run(base_url: str = DEFAULT_URL) -> None:
-    create_server(base_url).run(transport="stdio")
+def run(base_url: str = DEFAULT_URL, *, without_notes: bool = False) -> None:
+    create_server(base_url, without_notes=without_notes).run(transport="stdio")
