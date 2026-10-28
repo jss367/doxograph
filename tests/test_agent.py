@@ -128,6 +128,25 @@ def test_endpoint_calls_back_on_its_own_port_in_the_current_workspace(monkeypatc
     assert "--url" in config_arg["args"] and config_arg["args"][config_arg["args"].index("--url") + 1].startswith("http://127.0.0.1:")
 
 
+@pytest.mark.parametrize("host,expected", [("127.0.0.1", "http://127.0.0.1:8765"),
+                                           ("127.0.0.2", "http://127.0.0.2:8765"),
+                                           ("localhost", "http://localhost:8765")])
+def test_agent_calls_back_on_the_address_the_request_arrived_on(monkeypatch, host, expected):
+    config.set_ai_provider("claude_code")
+    urls = []
+    monkeypatch.setattr(agent, "answer", lambda messages, url, focus=None: urls.append(url) or {"answer": "Ok."})
+    with TestClient(server.app, base_url=f"http://{host}:8765") as client:
+        assert client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]}).status_code == 200
+    assert urls == [expected]
+
+
+def test_callback_url_falls_back_to_loopback_for_other_addresses():
+    request = SimpleNamespace(scope={"server": ("192.168.1.5", 9000)})
+    assert server._callback_url(request) == "http://127.0.0.1:9000"
+    assert server._callback_url(SimpleNamespace(scope={"server": ("::1", 9000)})) == "http://[::1]:9000"
+    assert server._callback_url(SimpleNamespace(scope={})) == "http://127.0.0.1:8765"
+
+
 def test_endpoint_maps_setup_errors_and_the_off_switch():
     body = {"messages": [{"role": "user", "content": "Hi"}], "paper": "doe2026"}
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:

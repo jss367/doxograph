@@ -1547,6 +1547,21 @@ def paper_chat(key: str, body: ChatBody) -> dict:
             raise HTTPException(404, f"no paper {key}")
 
 
+def _callback_url(request: Request) -> str:
+    """Where the agent's tools reach this server: the loopback address this request arrived on.
+
+    A server bound to one address (127.0.0.2, ::1) does not answer on 127.0.0.1. The MCP adapter
+    only talks to loopback, so any other address falls back to 127.0.0.1, which a wildcard bind answers.
+    """
+    host, port = (request.scope.get("server") or (None, 8765))[:2]
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = host == "localhost"
+    host = host if loopback else "127.0.0.1"
+    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+
+
 class AgentBody(ChatBody):
     paper: str | None = Field(default=None, max_length=200)
 
@@ -1554,11 +1569,9 @@ class AgentBody(ChatBody):
 @app.post("/api/agent/chat")
 def agent_chat(body: AgentBody, request: Request) -> dict:
     _require_analysis()
-    # The agent's tools call back into this server, on whatever port it is listening on.
-    port = (request.scope.get("server") or (None, 8765))[1]
     with _chat_errors("Library agent"):
         return agent.answer([message.model_dump() for message in body.messages],
-                            f"http://127.0.0.1:{port}", body.paper)
+                            _callback_url(request), body.paper)
 
 
 @app.post("/api/papers/{key}/review")
