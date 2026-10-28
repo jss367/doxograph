@@ -1939,7 +1939,10 @@ def test_a_reference_already_in_the_corpus_is_named_straight_away():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
-                await page.locator("#paper-import > summary").click()
+                await page.locator('#papers [data-paper="doe2026study"]').wait_for()
+                panel = page.locator("#paper-import")
+                if not await panel.evaluate("element => element.open"):
+                    await panel.locator("summary").click()
                 await page.fill("#refs", "https://arxiv.org/abs/2602.06941v2")
                 await page.locator("#btn-add").click()
                 await page.locator("#toasts .toast",
