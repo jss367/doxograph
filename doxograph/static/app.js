@@ -92,7 +92,7 @@ function layoutPanes(reading) {
   $('panes').classList.toggle('reading', Boolean(reading));
   if (Boolean(reading) !== wasReading) {
     $('main').scrollTop = 0;
-    $('paper-import').open = !reading;
+    if (reading) $('paper-import').open = false;
     document.body.classList.remove('library-collapsed', 'reading-filters-open');
     const narrow = reading && window.matchMedia('(max-width: 800px)').matches;
     setReadingLibrary(Boolean(narrow));
@@ -116,6 +116,7 @@ function setReadingFilters(open) {
 }
 
 function focusClaimSearch() {
+  revealSidebar($('papers'));
   if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
   if (readingPaper()) setReadingFilters(true);
   $('q').focus();
@@ -124,6 +125,7 @@ function focusClaimSearch() {
 
 function focusPaperImport() {
   if (readingPaper()) setReadingLibrary(false);
+  revealSidebar($('paper-import'));
   $('paper-import').open = true;
   $('refs').focus();
 }
@@ -146,7 +148,7 @@ function blankClaim(paper) {
   return {
     id: NEW_CLAIM_ID, paper, text: '', kind: S.kinds[0] || 'finding',
     strength: 'supporting', tags: [], evidence: '', quote: '', locator: '',
-    ledger_links: [], note: '', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
+    ledger_links: [], note: '', conditions: '', limitations: '', evidence_origin: '', evidence_relationship: 'unassessed', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
   };
 }
 
@@ -154,7 +156,7 @@ function newClaimHasEdits(draft) {
   if (!draft) return false;
   const blank = blankClaim(draft.paper);
   return ['text', 'kind', 'strength', 'tags', 'evidence', 'quote', 'locator',
-    'ledger_links', 'note', 'reviewed'].some((field) =>
+    'ledger_links', 'note', 'reviewed', 'conditions', 'limitations', 'evidence_origin', 'evidence_relationship'].some((field) =>
     JSON.stringify(draft[field]) !== JSON.stringify(blank[field]));
 }
 
@@ -229,6 +231,37 @@ function refuseWhileRemoving(paper, what) {
 }
 
 const $ = (id) => document.getElementById(id);
+
+function revealSidebar(target) {
+  const group = target?.closest('[data-sidebar-group]');
+  if (group) group.open = true;
+}
+
+function syncSidebarFocus() {
+  const open = [...document.querySelectorAll('[data-sidebar-group]')].filter(group => group.open);
+  document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
+    button.setAttribute('aria-pressed', String(open.length === 1 && open[0].dataset.sidebarGroup === button.dataset.sidebarFocus));
+  });
+}
+
+document.querySelectorAll('[data-sidebar-group]').forEach(group => {
+  const key = `doxograph-sidebar:${group.dataset.sidebarGroup}`;
+  try { group.open = localStorage.getItem(key) !== 'closed'; } catch (_) { /* optional */ }
+  group.addEventListener('toggle', () => {
+    try { localStorage.setItem(key, group.open ? 'open' : 'closed'); } catch (_) { /* optional */ }
+    syncSidebarFocus();
+  });
+});
+document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
+  button.addEventListener('click', () => {
+    document.querySelectorAll('[data-sidebar-group]').forEach(group => {
+      group.open = group.dataset.sidebarGroup === button.dataset.sidebarFocus;
+    });
+    syncSidebarFocus();
+    $('side').scrollTop = 0;
+  });
+});
+syncSidebarFocus();
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -1274,6 +1307,18 @@ function resetWorkspaceView() {
   closePaperMenu();
 }
 
+function hasWorkspaceDrafts() {
+  return Boolean(V.editing || V.synthEditing || V.noteEditing || V.newClaim
+    || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
+    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty());
+}
+
+function canRestoreSavedVersion() {
+  return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
+    && !V.synthSaving && !V.noteSaving && !V.researchSaving && !trash.size
+    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
+}
+
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
     return await WorkspaceNotes.beforeWorkspaceSwitch()
@@ -1288,10 +1333,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     return true;
   },
   async confirmLeave() {
-    const hasDraft = V.editing || V.synthEditing || V.noteEditing || V.newClaim
-      || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
-      || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty();
-    return !hasDraft || await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
+    return !hasWorkspaceDrafts() || await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
                                            { ok: 'Discard and switch' });
   },
   beforeLeave: flushTrash,
@@ -1764,7 +1806,14 @@ function addedLabel(p) {
   return `<time datetime="${esc(p.added)}" title="added ${esc(p.added)}">${esc(day)}</time>`;
 }
 
+let importWorkspace = null, importPaperCount = 0;
 function renderPapers() {
+  if (!$('refs').value.trim()) {
+    if (importWorkspace !== workspaceClient.workspaceId) $('paper-import').open = S.papers.length === 0;
+    else if (!importPaperCount && S.papers.length) $('paper-import').open = false;
+  }
+  importWorkspace = workspaceClient.workspaceId;
+  importPaperCount = S.papers.length;
   const claims = V.view === 'claims';
   const byAdded = V.paperSort.startsWith('added');
   const matched = matchingPapers();
@@ -1787,7 +1836,7 @@ function renderPapers() {
     <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
       ${ResearchTools.paperCheckbox(p)}<span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
-        ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
+        ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims · ${esc(paperReadiness(p))}${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
       <button type="button" class="pmenu" data-menu="${esc(p.key)}"
         aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
@@ -2144,6 +2193,24 @@ async function loadProposed(key, wanted) {
 // under, or the tension it belongs to. A claim with several tags is drawn
 // under each of them, and a passage belongs beside the copy whose button was
 // pressed rather than the first one on the page.
+const EVIDENCE_RELATIONSHIPS = {unassessed:'Independence not assessed', original:'Original experiment', independent_replication:'Independent replication (your assessment)', shared_data:'Uses shared data or experiments'};
+function evidenceQualityHtml(row) {
+  const quote = row.quote_verified === true ? 'Quote found in PDF' : row.quote_verified === false ? 'Quote not found in PDF' : 'Quote not checked';
+  return `<div class="evidence-quality"><span>${row.reviewed ? 'Reviewed by you' : 'Needs human review'}</span><span>${quote}</span><span>${esc(EVIDENCE_RELATIONSHIPS[row.evidence_relationship || 'unassessed'])}</span></div>
+    ${row.conditions ? `<p class="cev"><strong>Conditions:</strong> ${esc(row.conditions)}</p>` : ''}
+    ${row.limitations ? `<p class="cev"><strong>Limitations:</strong> ${esc(row.limitations)}</p>` : ''}
+    ${row.evidence_origin ? `<p class="hint">Evidence origin: ${esc(row.evidence_origin)}</p>` : ''}`;
+}
+function paperReadiness(paper) {
+  const active = S.jobs.find(j => j.key === paper.key && ['queued','fetching','reading'].includes(j.state));
+  if (active) return active.state === 'reading' ? 'Analyzing' : 'Import in progress';
+  if (!paper.has_pdf) return paper.error ? 'PDF unavailable — retry import' : 'No PDF — add a source';
+  if (paper.n_unreviewed) return `${paper.n_unreviewed} to review`;
+  if (paper.n_claims) return 'Claims reviewed';
+  if (paper.has_extraction) return 'No claims found — read manually';
+  return S.ai_enabled === true ? 'Ready to read or analyze' : 'Ready to read — AI off';
+}
+
 function claimCard(row, shown, group = '') {
   if (V.editing === row.id && shown && !shown.has(row.id)) {
     shown.add(row.id);
@@ -2181,6 +2248,7 @@ function claimCard(row, shown, group = '') {
         <button type="button" data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
       </span>
     </div>
+    ${evidenceQualityHtml(row)}
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
     ${(row.note || '').trim() ? noteHtml(row.note, 'my note') : ''}
@@ -2448,6 +2516,7 @@ function tensionClaimCard(row, group = '') {
       ${row.locator ? '· ' + esc(row.locator) : ''}
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
+    ${evidenceQualityHtml(row)}
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
     ${(row.note || '').trim() ? noteHtml(row.note, 'my note') : ''}
@@ -2678,6 +2747,9 @@ $('panes').addEventListener('submit', async (event) => {
 });
 
 function showView(view) {
+  const destination = {claims: 'papers', graph: 'graph-nav', research: 'research-nav',
+    tensions: 'tensions-nav', agreements: 'agreements-nav'}[view];
+  if (destination) revealSidebar($(destination));
   if (view === V.view) return;
   if (V.view === 'research') captureResearchDraft();
   // Neither the tensions view nor the map has an editor. Park any open one
@@ -2718,6 +2790,13 @@ function editForm(row, tagListId = 'taglist') {
           <input name="tags" value="${esc((row.tags || []).join(' '))}" list="${esc(tagListId)}" size="34"></div>
       </div>
       <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
+      <details class="evidence-assessment" ${row.conditions || row.limitations || row.evidence_origin || (row.evidence_relationship && row.evidence_relationship !== 'unassessed') ? 'open' : ''}><summary>Your evidence assessment</summary>
+        <p class="hint">Your assessment is kept locally and preserved when the paper is re-read.</p>
+        <label>Conditions (models, sample sizes, metrics)<textarea name="conditions" rows="2">${esc(row.conditions || '')}</textarea></label>
+        <label>Limitations<textarea name="limitations" rows="2">${esc(row.limitations || '')}</textarea></label>
+        <label>Evidence origin (dataset or experimental run)<input name="evidence_origin" maxlength="300" value="${esc(row.evidence_origin || '')}"></label>
+        <label>Relationship to earlier evidence<select name="evidence_relationship">${Object.entries(EVIDENCE_RELATIONSHIPS).map(([key,label]) => `<option value="${key}" ${(row.evidence_relationship || 'unassessed') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      </details>
       <div><label>Quote (verbatim from the paper)</label>
         <textarea name="quote" rows="2">${esc(row.quote || '')}</textarea></div>
       <div><label>Bearing on my own claims</label>
@@ -3053,7 +3132,7 @@ function renderJobs() {
   active.sort((a, b) => Number(a.state === 'done') - Number(b.state === 'done'));
   const importStates = { queued: 'Waiting to import…', fetching: 'Importing…', reading: 'Analyzing…',
                          done: 'Imported', error: 'Import failed' };
-  $('jobs').innerHTML = active.slice(0, 6).map((j) => {
+  $('jobs').innerHTML = (S.job_recovery_issues || []).map(issue => `<div class="job error"><span class="lbl">Previous imports</span><p class="job-explanation">${esc(issue)}</p></div>`).join('') + active.slice(0, 6).map((j) => {
     const disabled = pendingJobActions.has(`${workspaceClient.workspaceId}:${j.id}`) ? 'disabled' : '';
     const explained = Boolean(j.explanation);
     const label = S.papers.find((paper) => paper.key === j.key)?.title || j.label;
@@ -3067,7 +3146,7 @@ function renderJobs() {
         <details class="job-details" data-job-id="${j.id}" ${expanded.has(String(j.id)) ? 'open' : ''}>
           <summary>Technical details</summary>${esc(j.detail)}</details>` : ''}
       ${j.state === 'error' && j.retryable ? `<div class="job-actions">
-        <button type="button" class="retry-job" data-job-id="${j.id}" ${disabled}>Retry</button></div>` : ''}
+        <button type="button" class="retry-job" data-job-id="${j.id}" ${disabled}>${j.interrupted ? 'Resume import' : 'Retry'}</button></div>` : ''}
       ${j.state === 'done' && j.kind === 'import' && j.key ? `<div class="job-actions">
         <button type="button" class="open-job" data-job-id="${j.id}" data-paper="${esc(j.key)}" ${disabled}>Open paper</button></div>` : ''}
       ${['done', 'error'].includes(j.state) ? `<button type="button" class="dismiss-job" data-job-id="${j.id}"
@@ -3461,6 +3540,8 @@ function readForm(form) {
     locator: value('locator').trim(),
     evidence: value('evidence').trim(),
     quote: value('quote').trim(),
+    conditions: value('conditions').trim(), limitations: value('limitations').trim(),
+    evidence_origin: value('evidence_origin').trim(), evidence_relationship: value('evidence_relationship') || 'unassessed',
     tags: value('tags').split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean),
     ledger_links: links,
     // `[name="note"]` is the claim's own; a link's is `link-note`, read above.
@@ -4306,6 +4387,7 @@ function syncAnalysisControls() {
       : 'Claude receives the PDF, including its page images.';
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
   $('chat-send').disabled = !enabled || Boolean(activeChat && activeChat.busy);
+  $('ai-action-status').hidden = enabled;
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;
   $('import-analysis-status').hidden = S.ai_enabled !== false;
@@ -4961,7 +5043,10 @@ const CommandPalette = (() => {
       `${b.entries.length} entries · Evidence board`, () => ResearchTools.openBoard(b.id)));
     add('all', 'Action', 'Show all papers', 'Browse every claim in this workspace', () => library(), 'library home');
     const click = (id, title, keywords = '') => {
-      if (!$(id).disabled) add(id, 'Action', title, '', () => $(id).click(), keywords);
+      if (!$(id).disabled) add(id, 'Action', title, '', () => {
+        revealSidebar($(id));
+        $(id).click();
+      }, keywords);
     };
     const view = (id, title, next) => add(id, 'Action', title, '', () => {
       if (V.view === next) return;
@@ -4972,16 +5057,22 @@ const CommandPalette = (() => {
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
-    ['boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
-      const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
+    ['questions', 'boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
+      const titles = {questions: 'Open research questions', boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
         connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
-      add(`tool:${tool}`, 'Action', titles[tool], '', () => document.querySelector(`[data-tool="${tool}"]`).click());
+      add(`tool:${tool}`, 'Action', titles[tool], '', () => {
+        const target = document.querySelector(`[data-tool="${tool}"]`);
+        revealSidebar(target);
+        target.click();
+      });
     });
     add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', focusPaperImport, 'import');
     add('search', 'Action', 'Search claims and PDF text', '', focusClaimSearch);
     click('btn-workspace-add', 'Create workspace');
     click('btn-export', 'Export HTML');
     click('btn-bib', 'Export BibTeX');
+    click('btn-workspace-archive', 'Download portable workspace archive');
+    click('btn-workspace-backups', 'Browse previous document versions');
     click('btn-settings', 'Open settings', 'appearance theme color AI');
     click('btn-help', 'Show keyboard shortcuts', 'help');
     click('btn-retag', 'Retag all papers');
@@ -5300,9 +5391,13 @@ async function boot() {
   ResearchTools.connect(workspaceClient);
   window.FocusedReview.connect(workspaceClient);
   connectPaperMap(workspaceClient);
+  AppStartup.phase('connection');
   await loadWorkspaces();
   applyHash();
-  await refresh();
+  const changed = await pull();
+  AppStartup.phase('interface');
+  if (changed) corpusChanged();
+  render();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   // A filter the URL named that the corpus does not have is already gone: the
@@ -5325,7 +5420,4 @@ async function boot() {
   document.addEventListener('visibilitychange', resume);
 }
 
-boot().catch((error) => {
-  document.getElementById('content').innerHTML =
-    `<p class="warn">Could not reach the server: ${esc(error.message)}</p>`;
-});
+AppStartup.run(boot);

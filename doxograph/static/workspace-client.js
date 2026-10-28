@@ -79,7 +79,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
             state: await readJSON(await checkResponse(response)), etag: response.headers.get('ETag'),
           };
         })(),
-        request('/api/jobs', { signal: controller.signal, cache: 'no-store' }).then(result => result.jobs || []),
+        request('/api/jobs', { signal: controller.signal, cache: 'no-store' }),
       ]), deadline]);
     } finally {
       clearTimeout(timeout);
@@ -92,14 +92,14 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     pullApplied = asked;
     let registryChanged = false;
     if (next) {
-      state = { ...next.state, jobs };
+      state = { ...next.state, jobs: jobs.jobs || [], job_recovery_issues: jobs.recovery_issues || [] };
       // Commit only when both reads succeeded and this snapshot was applied.
       etag = next.etag;
       if (state.workspace && currentWorkspace()?.name !== state.workspace.name) {
         workspaces = workspaces.map(w => w.id === state.workspace.id ? state.workspace : w);
         registryChanged = true;
       }
-    } else { state.jobs = jobs; }
+    } else { state.jobs = jobs.jobs || []; state.job_recovery_issues = jobs.recovery_issues || []; }
     return { applied: true, changed: Boolean(next), registryChanged };
   }
 

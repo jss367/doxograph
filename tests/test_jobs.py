@@ -252,7 +252,7 @@ def test_failed_upload_cleanup_releases_retained_bytes(client, immediate_worker,
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
 
 
-def test_shutdown_releases_failed_uploads_in_every_workspace(monkeypatch, immediate_worker, metadata_timeout):
+def test_shutdown_preserves_failed_uploads_in_every_workspace(monkeypatch, immediate_worker, metadata_timeout):
     monkeypatch.setattr(server, "_jobs", {})
     other = config.create_workspace("Other research")
     retained = []
@@ -270,12 +270,12 @@ def test_shutdown_releases_failed_uploads_in_every_workspace(monkeypatch, immedi
                 retained.append(staged)
         assert all(path.exists() for path in retained)
 
-    assert all(not path.exists() for path in retained)
+    assert all(path.exists() for path in retained)
     assert store.pdf_path("existing").read_bytes() == body
     assert store.load_paper("existing")["key"] == "existing"
 
 
-def test_worker_finishing_after_shutdown_releases_its_retry_input(monkeypatch, metadata_timeout):
+def test_worker_failing_after_shutdown_preserves_its_retry_input(monkeypatch, metadata_timeout):
     monkeypatch.setattr(server, "_jobs", {})
     submitted = []
     monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
@@ -289,7 +289,7 @@ def test_worker_finishing_after_shutdown_releases_its_retry_input(monkeypatch, m
     function, *args = submitted[0]
     function(*args)
     assert args[0]["state"] == "error"
-    assert list(config.pdfs_dir().glob(".incoming-*")) == []
+    assert list(config.pdfs_dir().glob(".incoming-*")) == [staged]
 
 
 def test_non_pdf_upload_cannot_retry_the_same_invalid_bytes(client, immediate_worker):

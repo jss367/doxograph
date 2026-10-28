@@ -4,7 +4,7 @@ Older optional fields stay optional, and unknown fields survive a read/write
 cycle. Validation protects the shapes used by the store without migrating data.
 """
 
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +36,10 @@ class Claim(Document):
     locator: str = ""
     ledger_links: list[LedgerLink] = Field(default_factory=list)
     note: str = ""
+    conditions: str = ""
+    limitations: str = ""
+    evidence_origin: str = ""
+    evidence_relationship: Literal["unassessed", "original", "independent_replication", "shared_data"] = "unassessed"
     reviewed: bool = False
     quote_verified: bool | None = None
     quote_page: int | None = Field(default=None, ge=1)

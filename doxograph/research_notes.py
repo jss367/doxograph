@@ -7,6 +7,7 @@ import re
 import uuid
 import warnings
 from typing import Annotated
+from collections.abc import Callable
 from urllib.parse import urljoin
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/api/research-notes")
 NoteId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 AssetId = Annotated[str, Field(pattern=r"^[a-f0-9]{64}\.(png|jpg|gif|webp)$")]
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+REVISION_FILE = 'research-note-revisions.json'
 
 
 class NoteBody(BaseModel):
@@ -42,6 +44,33 @@ class SavedNote(NoteBody):
 
 class SavedNotes(RootModel[list[SavedNote]]):
     root: list[SavedNote] = Field(default_factory=list)
+
+
+class RevisionCounters(RootModel[dict[NoteId, Annotated[int, Field(ge=1)]]]):
+    root: dict[NoteId, Annotated[int, Field(ge=1)]] = Field(default_factory=dict)
+
+
+def remember_revisions(notes: list[dict]) -> None:
+    """Keep revision floors for notes that deletion or restoration can remove."""
+    with store.document_lock('research-notes'):
+        path = config.data_dir() / REVISION_FILE
+        counters = storage.read_model(path, RevisionCounters).model_dump()
+        updated = dict(counters)
+        for note in notes:
+            updated[note['id']] = max(updated.get(note['id'], 0), note['revision'])
+        if updated != counters:
+            store.write_json(path, updated)
+
+
+def next_revision(note_id: str, floor: int = 0) -> int:
+    """Reserve a token before publishing it, so failed writes only leave gaps."""
+    with store.document_lock('research-notes'):
+        path = config.data_dir() / REVISION_FILE
+        counters = storage.read_model(path, RevisionCounters).model_dump()
+        revision = max(counters.get(note_id, 0), floor) + 1
+        counters[note_id] = revision
+        store.write_json(path, counters)
+        return revision
 
 
 def load() -> list[dict]:
@@ -71,7 +100,8 @@ def create_note(body: NoteBody) -> dict:
         raise HTTPException(422, "Give your note a title.")
     with store.document_lock("research-notes"):
         notes = load()
-        note = dict(body.model_dump(), id=uuid.uuid4().hex, revision=1,
+        identifier = uuid.uuid4().hex
+        note = dict(body.model_dump(), id=identifier, revision=next_revision(identifier),
                     created=store.now(), updated=store.now())
         notes.append(note)
         store.write_json(config.data_dir() / "research-notes.json", notes)
@@ -86,7 +116,8 @@ def update_note(note_id: NoteId, body: NoteUpdate) -> dict:
         notes = load()
         note = find(notes, note_id)
         check_revision(note, body.revision)
-        note.update(title=body.title, body=body.body, revision=note["revision"] + 1, updated=store.now())
+        note.update(title=body.title, body=body.body,
+                    revision=next_revision(note_id, note['revision']), updated=store.now())
         store.write_json(config.data_dir() / "research-notes.json", notes)
         return note
 
@@ -96,21 +127,27 @@ def delete_note(note_id: NoteId, revision: Annotated[int, Query(ge=1)]) -> dict:
     with store.document_lock("research-notes"):
         notes = load()
         check_revision(find(notes, note_id), revision)
+        remember_revisions([find(notes, note_id)])
         store.write_json(config.data_dir() / "research-notes.json", [n for n in notes if n["id"] != note_id])
         return {"deleted": note_id}
 
 
 def absolute_research_links(body: str, base_url: str) -> str:
     """Keep Markdown source while making this installation's links portable."""
+    return rewrite_research_links(body, lambda url: urljoin(base_url, url))
+
+
+def rewrite_research_links(body: str, transform: Callable[[str], str]) -> str:
+    """Transform local destinations while preserving code examples verbatim."""
     destinations = re.compile(
         r"(?P<code>(?<!`)(?P<ticks>`+)(?!`)[\s\S]*?(?<!`)(?P=ticks)(?!`))"
         r"|(?P<prefix>\]\([ \t]*<?|^[ ]{0,3}\[[^\]\n]+\]:[ \t]*<?)"
-        r"(?P<url>/(?:api/research-notes/images/|[?#])[^\s)>]*)", re.MULTILINE)
+        r"(?P<url>/(?:api/research-notes/images/|pdf/|[?#])[^\s)>]*)", re.MULTILINE)
 
     def replace(match):
         if match.group("code") is not None:
             return match.group()
-        return match.group("prefix") + urljoin(base_url, match.group("url"))
+        return match.group("prefix") + transform(match.group("url"))
 
     output, prose = [], []
     fence = None
