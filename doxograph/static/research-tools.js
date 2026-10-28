@@ -153,6 +153,7 @@ const ResearchTools = (() => {
     if (!row) return `<p class="warn">Source claim no longer exists: ${html(ref.paper)} / ${html(ref.claim)}</p>`;
     return `<h3>${html(row.text)}</h3><p class="hint">${html(row.paper_title)}<br>${html(citation(row))}</p>
       ${row.quote ? `<blockquote>${html(row.quote)}</blockquote>` : ''}
+      ${evidenceQualityHtml(row)}
       ${row.evidence ? `<p><strong>Evidence</strong><br>${html(row.evidence)}</p>` : ''}
       ${row.note ? `<p><strong>My note</strong><br>${html(row.note)}</p>` : ''}
       <p class="hint">${html((row.tags || []).join(' · '))}</p>
@@ -190,7 +191,10 @@ const ResearchTools = (() => {
   }
   const STANCES = {supporting:'Supporting evidence', opposing:'Conflicting evidence', qualifying:'Conditions and limitations', background:'Background / not assessed'};
   function questionOverview(board) {
-    return `<section class="question-overview" aria-label="Evidence for this question">${Object.entries(STANCES).map(([stance,label]) => {
+    const rows = board.entries.filter(e => e.kind === 'claim').map(e => resolve(e.reference)).filter(Boolean);
+    const origins = new Set(rows.map(c => (c.evidence_origin || '').trim().toLowerCase()).filter(Boolean));
+    const unassessed = new Set(rows.filter(c => !c.evidence_relationship || c.evidence_relationship === 'unassessed').map(c => c.paper));
+    return `<p class="hint">${origins.size} named evidence origins · ${unassessed.size} papers with independence unassessed. Origin names are your labels; paper counts do not establish independent replication.</p><section class="question-overview" aria-label="Evidence for this question">${Object.entries(STANCES).map(([stance,label]) => {
       const entries = board.entries.filter(e => e.kind === 'claim' && (e.stance || 'background') === stance);
       const sourcePapers = new Set(entries.filter(e => resolve(e.reference)).map(e => e.reference.paper));
       return `<div><h3>${label}</h3><p class="hint">${entries.length} claims · ${sourcePapers.size} papers</p>${entries.length ? entries.map(e => {
@@ -1426,7 +1430,7 @@ const ResearchTools = (() => {
       currentBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
       dirty = true;
       const overview = el('research-body').querySelector('.question-overview');
-      if (overview) overview.outerHTML = questionOverview(currentBoard());
+      if (overview) { const summary = overview.previousElementSibling; summary.insertAdjacentHTML('beforebegin', questionOverview(currentBoard())); summary.remove(); overview.remove(); }
     }
     if (target.matches('[data-reading-status]')) run(async () => {
       notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;

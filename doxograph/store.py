@@ -717,7 +717,7 @@ def clean_ledger_links(links: Any) -> list[dict]:
 
 CLAIM_FIELDS = {
     "text", "kind", "strength", "tags", "evidence", "quote", "locator",
-    "ledger_links", "note", "reviewed",
+    "ledger_links", "note", "reviewed", "conditions", "limitations", "evidence_origin", "evidence_relationship",
 }
 
 
@@ -1260,6 +1260,7 @@ def summarize(paper: dict) -> dict:
         # before that field existed does not carry. The page needs it to work
         # out the status of a paper whose last claim it is holding.
         "has_extraction": bool(paper.get("extraction")),
+        "error": paper.get("error", ""),
     }
 
 

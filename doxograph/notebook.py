@@ -266,7 +266,8 @@ def bulk(body: Bulk) -> dict:
 def claim_fields(claim: dict) -> dict:
     defaults = {"text": "", "kind": "finding", "strength": "supporting", "tags": [],
                 "evidence": "", "quote": "", "locator": "", "ledger_links": [],
-                "note": "", "reviewed": False}
+                "note": "", "reviewed": False, "conditions": "", "limitations": "",
+                "evidence_origin": "", "evidence_relationship": "unassessed"}
     return {k: copy.deepcopy(claim.get(k, v)) for k, v in defaults.items()}
 
 
@@ -430,6 +431,9 @@ def export_selection(body: Selection) -> Response:
         lines.extend(["### " + md(row.get("text", "")), "", md(citation), "",
                       "> " + md(row.get("quote", "")).replace("\n", "\n> "), ""])
         for label, value in (("Evidence", row.get("evidence")), ("Topics", ", ".join(row.get("tags", []))),
+                             ("Conditions", row.get("conditions")), ("Limitations", row.get("limitations")),
+                             ("Evidence origin", row.get("evidence_origin")),
+                             ("Replication assessment", row.get("evidence_relationship")),
                              ("Bearing on question", entry.get("stance") if body.board and board["question"] else ""),
                              ("My note", row.get("note")), ("Paper note", row["paper_notes"]),
                              ("Commentary", text), ("Source", source),

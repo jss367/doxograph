@@ -541,6 +541,8 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
     # cannot produce again.
     kept = [c for c in paper.get("claims", [])
             if (keep_reviewed and c.get("reviewed")) or (c.get("note") or "").strip()
+            or any((c.get(field) or "").strip() for field in ("conditions", "limitations", "evidence_origin"))
+            or c.get("evidence_relationship", "unassessed") != "unassessed"
             or changed_during_the_call(c)]
     known = set(store.tag_names())
 

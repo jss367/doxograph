@@ -437,6 +437,12 @@ writing space are stored locally in `note-images/`.
   overview groups them by your judgment and links each one to its source.
   Markdown exports include the question, conclusion, next steps, and judgments.
   These are your assessments and work with AI disabled.
+  Claim editors also offer **Your evidence assessment** for conditions,
+  limitations, evidence origins, and replication judgments. Quote matching,
+  human review, and replication are labeled separately. Question overviews
+  count your named origins and flag unassessed independence; a paper count is
+  not a count of independent replications. These annotations stay out of
+  built-in model requests and survive re-extraction even when reviews are replaced.
 - **Saved searches** remember the current query, paper, topic, label, claim kind,
   review and quote-verification filters, and grouping. Opening one runs those
   filters against the current corpus, so new matching claims appear naturally.

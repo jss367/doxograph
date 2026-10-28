@@ -354,6 +354,11 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .claim .cmeta { font-size: .8rem; color: var(--muted); margin-top: .25rem;
   display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
 .claim .cev { font-size: .86rem; margin: .3rem 0 0; }
+.evidence-quality { display: flex; flex-wrap: wrap; gap: .3rem .75rem; font-size: .7rem; color: var(--muted); margin: .35rem 0; }
+.evidence-assessment { padding: .5rem; border: 1px solid var(--line); border-radius: 6px; }
+.evidence-assessment summary { cursor: pointer; font-size: .85rem; }
+.evidence-assessment label { display: block; margin-top: .5rem; }
+.evidence-assessment :is(input, textarea, select) { width: 100%; }
 .claim blockquote { margin: .3rem 0 0; padding-left: .6rem; border-left: 2px solid var(--line);
   color: var(--muted); font-size: .84rem; }
 .qflag, .qlocator { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;

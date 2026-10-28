@@ -70,6 +70,7 @@ window.FocusedReview = (() => {
             <span>${esc(item.strength)}</span></div>
           <h3>${esc(item.text)}</h3>
           <p class="hint">${esc((item.tags || []).map(tag => '#' + tag).join(' '))}</p>
+          ${evidenceQualityHtml(item)}
           ${item.evidence ? `<h4>Evidence</h4><p>${esc(item.evidence)}</p>` : ''}
           <h4>Quote ${item.quote_verified === false ? '<span class="qflag">not found in PDF</span>' : ''}</h4>
           ${item.quote ? `<blockquote>${esc(item.quote)}</blockquote>` : '<p class="hint">No quote recorded.</p>'}

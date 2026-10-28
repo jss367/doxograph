@@ -148,7 +148,7 @@ function blankClaim(paper) {
   return {
     id: NEW_CLAIM_ID, paper, text: '', kind: S.kinds[0] || 'finding',
     strength: 'supporting', tags: [], evidence: '', quote: '', locator: '',
-    ledger_links: [], note: '', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
+    ledger_links: [], note: '', conditions: '', limitations: '', evidence_origin: '', evidence_relationship: 'unassessed', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
   };
 }
 
@@ -156,7 +156,7 @@ function newClaimHasEdits(draft) {
   if (!draft) return false;
   const blank = blankClaim(draft.paper);
   return ['text', 'kind', 'strength', 'tags', 'evidence', 'quote', 'locator',
-    'ledger_links', 'note', 'reviewed'].some((field) =>
+    'ledger_links', 'note', 'reviewed', 'conditions', 'limitations', 'evidence_origin', 'evidence_relationship'].some((field) =>
     JSON.stringify(draft[field]) !== JSON.stringify(blank[field]));
 }
 
@@ -1814,7 +1814,7 @@ function renderPapers() {
     <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
       ${ResearchTools.paperCheckbox(p)}<span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
-        ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
+        ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims · ${esc(paperReadiness(p))}${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
       <button type="button" class="pmenu" data-menu="${esc(p.key)}"
         aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
@@ -2171,6 +2171,24 @@ async function loadProposed(key, wanted) {
 // under, or the tension it belongs to. A claim with several tags is drawn
 // under each of them, and a passage belongs beside the copy whose button was
 // pressed rather than the first one on the page.
+const EVIDENCE_RELATIONSHIPS = {unassessed:'Independence not assessed', original:'Original experiment', independent_replication:'Independent replication (your assessment)', shared_data:'Uses shared data or experiments'};
+function evidenceQualityHtml(row) {
+  const quote = row.quote_verified === true ? 'Quote found in PDF' : row.quote_verified === false ? 'Quote not found in PDF' : 'Quote not checked';
+  return `<div class="evidence-quality"><span>${row.reviewed ? 'Reviewed by you' : 'Needs human review'}</span><span>${quote}</span><span>${esc(EVIDENCE_RELATIONSHIPS[row.evidence_relationship || 'unassessed'])}</span></div>
+    ${row.conditions ? `<p class="cev"><strong>Conditions:</strong> ${esc(row.conditions)}</p>` : ''}
+    ${row.limitations ? `<p class="cev"><strong>Limitations:</strong> ${esc(row.limitations)}</p>` : ''}
+    ${row.evidence_origin ? `<p class="hint">Evidence origin: ${esc(row.evidence_origin)}</p>` : ''}`;
+}
+function paperReadiness(paper) {
+  const active = S.jobs.find(j => j.key === paper.key && ['queued','fetching','reading'].includes(j.state));
+  if (active) return active.state === 'reading' ? 'Analyzing' : 'Import in progress';
+  if (!paper.has_pdf) return paper.error ? 'PDF unavailable — retry import' : 'No PDF — add a source';
+  if (paper.n_unreviewed) return `${paper.n_unreviewed} to review`;
+  if (paper.n_claims) return 'Claims reviewed';
+  if (paper.has_extraction) return 'No claims found — read manually';
+  return S.ai_enabled === true ? 'Ready to read or analyze' : 'Ready to read — AI off';
+}
+
 function claimCard(row, shown, group = '') {
   if (V.editing === row.id && shown && !shown.has(row.id)) {
     shown.add(row.id);
@@ -2208,6 +2226,7 @@ function claimCard(row, shown, group = '') {
         <button type="button" data-act="del" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">delete</button>
       </span>
     </div>
+    ${evidenceQualityHtml(row)}
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
     ${(row.note || '').trim() ? noteHtml(row.note, 'my note') : ''}
@@ -2475,6 +2494,7 @@ function tensionClaimCard(row, group = '') {
       ${row.locator ? '· ' + esc(row.locator) : ''}
       ${row.reviewed ? '' : '· <span class="hint">unreviewed</span>'}
     </div>
+    ${evidenceQualityHtml(row)}
     ${row.evidence ? `<p class="cev">${esc(row.evidence)}</p>` : ''}
     ${quoteHtml(row, group)}
     ${(row.note || '').trim() ? noteHtml(row.note, 'my note') : ''}
@@ -2748,6 +2768,13 @@ function editForm(row, tagListId = 'taglist') {
           <input name="tags" value="${esc((row.tags || []).join(' '))}" list="${esc(tagListId)}" size="34"></div>
       </div>
       <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
+      <details class="evidence-assessment" ${row.conditions || row.limitations || row.evidence_origin || (row.evidence_relationship && row.evidence_relationship !== 'unassessed') ? 'open' : ''}><summary>Your evidence assessment</summary>
+        <p class="hint">Your assessment is kept locally and preserved when the paper is re-read.</p>
+        <label>Conditions (models, sample sizes, metrics)<textarea name="conditions" rows="2">${esc(row.conditions || '')}</textarea></label>
+        <label>Limitations<textarea name="limitations" rows="2">${esc(row.limitations || '')}</textarea></label>
+        <label>Evidence origin (dataset or experimental run)<input name="evidence_origin" maxlength="300" value="${esc(row.evidence_origin || '')}"></label>
+        <label>Relationship to earlier evidence<select name="evidence_relationship">${Object.entries(EVIDENCE_RELATIONSHIPS).map(([key,label]) => `<option value="${key}" ${(row.evidence_relationship || 'unassessed') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      </details>
       <div><label>Quote (verbatim from the paper)</label>
         <textarea name="quote" rows="2">${esc(row.quote || '')}</textarea></div>
       <div><label>Bearing on my own claims</label>
@@ -3489,6 +3516,8 @@ function readForm(form) {
     locator: value('locator').trim(),
     evidence: value('evidence').trim(),
     quote: value('quote').trim(),
+    conditions: value('conditions').trim(), limitations: value('limitations').trim(),
+    evidence_origin: value('evidence_origin').trim(), evidence_relationship: value('evidence_relationship') || 'unassessed',
     tags: value('tags').split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean),
     ledger_links: links,
     // `[name="note"]` is the claim's own; a link's is `link-note`, read above.
@@ -4334,6 +4363,7 @@ function syncAnalysisControls() {
       : 'Claude receives the PDF, including its page images.';
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
   $('chat-send').disabled = !enabled || Boolean(activeChat && activeChat.busy);
+  $('ai-action-status').hidden = enabled;
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;
   document.querySelectorAll('[data-ai-action]').forEach((button) => {

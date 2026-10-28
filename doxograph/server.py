@@ -894,6 +894,10 @@ class ClaimPatch(BaseModel):
     # nothing but a person writes, so there is nothing to validate it against.
     note: str | None = None
     reviewed: bool | None = None
+    conditions: str | None = Field(default=None, max_length=20000)
+    limitations: str | None = Field(default=None, max_length=20000)
+    evidence_origin: str | None = Field(default=None, max_length=300)
+    evidence_relationship: Literal["unassessed", "original", "independent_replication", "shared_data"] | None = None
 
     @field_validator("kind")
     @classmethod
