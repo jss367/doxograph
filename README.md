@@ -291,9 +291,11 @@ The divider between the lists and the claims can be dragged, so a session spent
 reading papers can give the side pane more of the window and a session spent
 reading claims can give it less. Focus the divider and the left and right arrow
 keys move it too, with Shift for a bigger step and Home to put it back.
-Double-clicking it also puts it back. It goes no wider than half the window,
-it starts at 20rem so a browser set to a larger default font size gets a wider
-pane, and the width is remembered in this browser.
+Double-clicking it also puts it back. Beside the content, it goes no wider than
+half the window. It starts at 20rem so a browser set to a larger default font
+size gets a wider pane, and the width is remembered in this browser.
+In narrow windows, the library stacks above the content at full width and the
+divider is hidden. Widening the window restores the saved sidebar width.
 
 Deleting a claim, an agreement, or a synthesis is not confirmed first. It is
 undone instead: the row leaves the page at once and the request is held until

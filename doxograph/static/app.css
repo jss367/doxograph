@@ -406,7 +406,7 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .link { font-size: .8rem; color: var(--muted); }
 .link .rel { text-transform: uppercase; font-size: .72rem; letter-spacing: .03em;
   color: var(--accent); margin-right: .3rem; }
-.cact { display: flex; gap: .3rem; margin-left: auto; }
+.cact { display: flex; flex-wrap: wrap; gap: .3rem; margin-left: auto; }
 .cact button { padding: .05rem .35rem; font-size: .78rem; }
 
 .edit { display: grid; gap: .4rem; margin: .3rem 0; }
@@ -535,7 +535,7 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 /* Notices: what just happened, and the chance to undo it. Bottom left, so they
    are clear of the job strip in the opposite corner and of the filter row,
    which is where the eye goes next after most of the actions that raise one. */
-.toasts { position: fixed; left: 1rem; bottom: 1rem; width: 22rem; display: grid;
+.toasts { position: fixed; left: 1rem; bottom: 1rem; width: min(22rem, calc(100vw - 2rem)); display: grid;
   gap: .35rem; z-index: 25; justify-items: stretch; }
 .toast { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, .18); padding: .5rem .6rem; font-size: .85rem;
