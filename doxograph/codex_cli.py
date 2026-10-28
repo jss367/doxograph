@@ -54,6 +54,34 @@ def _run(args: list[str], *, env: dict[str, str], cwd: str, input: str | None = 
         raise RuntimeError("Codex timed out. Try again or check your ChatGPT plan's usage limits.") from exc
 
 
+def models() -> list[dict[str, str]]:
+    """Read Codex's model catalog without starting an analysis turn."""
+    binary, env = executable(), environment()
+    message = "Could not load models from Codex. Update the Codex CLI or enter a custom model ID."
+    try:
+        with tempfile.TemporaryDirectory(prefix="doxograph-codex-models-") as cwd:
+            result = _run([binary, "-c", 'model_provider="openai"', "debug", "models"],
+                          env=env, cwd=cwd, timeout=15)
+    except RuntimeError as exc:
+        raise ModelSetupError(message) from exc
+    if result.returncode:
+        raise ModelSetupError(message)
+    try:
+        catalog = json.loads(result.stdout)["models"]
+        if not isinstance(catalog, list) or not all(isinstance(item, dict) for item in catalog):
+            raise ValueError("Expected a model catalog")
+        # Codex orders its recommendations by priority. Hidden models are not
+        # offered, but a saved or custom model can still be selected explicitly.
+        visible = [item for item in catalog if item.get("visibility") == "list"
+                   and isinstance(item.get("slug"), str) and item["slug"]]
+        visible.sort(key=lambda item: item.get("priority") if isinstance(item.get("priority"), int) else 999)
+        return [{"id": item["slug"], "name": item["display_name"]
+                 if isinstance(item.get("display_name"), str) and item["display_name"] else item["slug"]}
+                for item in visible]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ModelSetupError(message) from exc
+
+
 class Client:
     def __init__(self) -> None:
         self.messages = self
