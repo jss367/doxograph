@@ -243,11 +243,6 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .focus-pdf canvas { display: block; margin: 0 auto; background: white; }
 .focus-shortcuts { border-top: 1px solid var(--line); padding-top: .8rem; font-size: .78rem; }
 #focused-review .edit-wrap { margin: .5rem 0; }
-#focused-review .pair { flex-wrap: wrap; }
-#focused-review .pair > div { min-width: 0; max-width: 100%; }
-#focused-review .pair input { max-width: 100%; }
-#focused-review .linkrow { flex-wrap: wrap; }
-#focused-review .linkrow input { min-width: 8rem; }
 @media (max-width: 800px) {
   #focused-review { padding: .8rem; }
   .focus-layout { grid-template-columns: 1fr; gap: 1rem; }
@@ -342,13 +337,17 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .cact { display: flex; gap: .3rem; margin-left: auto; }
 .cact button { padding: .05rem .35rem; font-size: .78rem; }
 
-.edit { display: grid; gap: .4rem; margin: .3rem 0; }
+.edit { display: grid; grid-template-columns: minmax(0, 1fr); gap: .4rem; margin: .3rem 0; }
 .edit .pair { display: flex; gap: .4rem; flex-wrap: wrap; }
+.edit .pair > div { min-width: 0; max-width: 100%; }
+.edit .pair input, .edit .pair select { max-width: 100%; }
 .edit label { font-size: .78rem; color: var(--muted); display: block; }
-.edit .links { display: grid; gap: .3rem; }
-.edit .linkrow { display: flex; gap: .3rem; align-items: center; }
-.edit .linkrow select { max-width: 12rem; }
-.edit .linkrow input { flex: 1; }
+.edit .links { display: grid; grid-template-columns: minmax(0, 1fr); gap: .3rem; }
+.edit .linkrow { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
+/* WebKit otherwise includes long option labels in the pane's scrollable width. */
+.edit .linkrow select { min-width: 0; max-width: min(12rem, 100%); overflow: hidden; text-overflow: ellipsis; }
+.edit .linkrow input { flex: 1 1 8rem; min-width: 0; max-width: 100%; }
+.edit .row { flex-wrap: wrap; }
 
 .proposed { background: var(--panel); border-radius: 5px; padding: .5rem .6rem;
   margin: .5rem 0; font-size: .86rem; }
