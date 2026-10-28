@@ -190,6 +190,8 @@ const ResearchTools = (() => {
       }).join('')}</div>${!claims.size && !papers.size ? '<p class="empty">Select claims or papers in the library to compare them here.</p>' : ''}`;
   }
   const STANCES = {supporting:'Supporting evidence', opposing:'Conflicting evidence', qualifying:'Conditions and limitations', background:'Background / not assessed'};
+  const isQuestion = board => ['question', 'conclusion', 'open_questions'].some(field => board[field]);
+
   function questionOverview(board) {
     const rows = board.entries.filter(e => e.kind === 'claim').map(e => resolve(e.reference)).filter(Boolean);
     const origins = new Set(rows.map(c => (c.evidence_origin || '').trim().toLowerCase()).filter(Boolean));
@@ -206,19 +208,19 @@ const ResearchTools = (() => {
   function currentBoard() { return notebook.boards.find(b => b.id === boardId); }
   function renderBoards() {
     const questioning = tab === 'questions';
-    const available = notebook.boards.filter(b => !questioning || b.question);
+    const available = notebook.boards.filter(b => !questioning || isQuestion(b));
     if (!available.some(b => b.id === boardId)) boardId = available[0]?.id || null;
     const board = currentBoard();
     el('research-body').innerHTML = `<div class="tool-actions"><label>${questioning ? 'Question' : 'Board'}<select id="board-picker"><option value="">${questioning ? 'Choose a question' : 'Choose a board'}</option>${available.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
       ${button(questioning ? 'new-question' : 'new-board', questioning ? 'New research question' : 'New board')}${board ? button('delete-board', questioning ? 'Delete question' : 'Delete board') : ''}</div>
       ${board ? `${input(questioning ? 'Question title' : 'Board title', 'board-title', board.title)}
-        ${(questioning || board.question) ? `${area('Research question', 'board-question', board.question || '')}${area('Working conclusion', 'board-conclusion', board.conclusion || '')}${area('Open questions and next steps', 'board-open_questions', board.open_questions || '')}${questionOverview(board)}` : ''}
+        ${(questioning || isQuestion(board)) ? `${area('Research question', 'board-question', board.question || '')}${area('Working conclusion', 'board-conclusion', board.conclusion || '')}${area('Open questions and next steps', 'board-open_questions', board.open_questions || '')}${questionOverview(board)}` : ''}
         <div class="tool-actions">${button('board-add-selection','Add selected claims')}${button('board-heading','Add heading')}${button('board-note','Add commentary')}
         ${button('save-board',questioning ? 'Save question' : 'Save board')}${button('export-board','Export Markdown','data-format="markdown"')}${button('export-board','Export CSV','data-format="csv"')}</div>
         <div class="board-entries">${board.entries.map((entry,i) => `<article class="board-entry" data-entry="${html(entry.id)}">
           <div class="entry-actions"><span class="hint">${i+1} · ${html(entry.kind === 'note' ? 'commentary' : entry.kind)}</span>
           ${button('entry-up','↑', `aria-label="Move entry ${i+1} up" ${i === 0 ? 'disabled' : ''}`)}${button('entry-down','↓', `aria-label="Move entry ${i+1} down" ${i === board.entries.length-1 ? 'disabled' : ''}`)}${button('entry-remove','Remove')}</div>
-          ${entry.kind === 'claim' ? `${claimSummary(entry.reference)}${board.question ? `<label>Bearing on question<select data-entry-stance="${html(entry.id)}">${Object.entries(STANCES).map(([key, label]) => `<option value="${key}" ${entry.stance === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}` : ''}
+          ${entry.kind === 'claim' ? `${claimSummary(entry.reference)}${isQuestion(board) ? `<label>Bearing on question<select data-entry-stance="${html(entry.id)}">${Object.entries(STANCES).map(([key, label]) => `<option value="${key}" ${entry.stance === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}` : ''}
           <label>${entry.kind === 'heading' ? 'Heading' : 'Your commentary'}<textarea data-entry-text="${html(entry.id)}">${html(entry.text)}</textarea></label>
         </article>`).join('')}</div>${!board.entries.length ? '<p class="empty">Add selected claims, then arrange headings and commentary around the evidence.</p>' : ''}`
         : questioning ? '<p class="empty">Create a research question. Select claims in the library, then add them here as evidence.</p>' : '<p class="empty">Create a board for a question, argument, or section you are writing.</p>'}`;

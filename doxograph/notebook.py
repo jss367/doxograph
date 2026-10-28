@@ -373,6 +373,10 @@ def spreadsheet(value) -> str:
     return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r")) else value
 
 
+def is_question(board: dict) -> bool:
+    return any(board.get(field) for field in ("question", "conclusion", "open_questions"))
+
+
 @router.post("/export")
 def export_selection(body: Selection) -> Response:
     title = body.title
@@ -382,7 +386,7 @@ def export_selection(body: Selection) -> Response:
         if not board:
             raise HTTPException(404, "Board no longer exists")
         title, entries = board["title"], board["entries"]
-        if board["question"]:
+        if is_question(board):
             entries = [
                 {"kind": "heading", "text": "Research question"},
                 {"kind": "note", "text": board["question"]},
@@ -410,12 +414,13 @@ def export_selection(body: Selection) -> Response:
     lines = ["# " + md(title), ""]
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["Type", "Text", "Paper", "Authors", "Year", "Claim ID", "Quote", "Page or section", "Evidence", "Topics", "Claim note", "Paper note", "Commentary", "Source"])
+    header = ["Type", "Text", "Paper", "Authors", "Year", "Claim ID", "Quote", "Page or section", "Evidence", "Topics", "Claim note", "Paper note", "Commentary", "Source", "Conditions", "Limitations", "Evidence origin", "Replication assessment", "Bearing on question"]
+    writer.writerow(header)
     for entry in entries:
         kind, text = entry["kind"], entry.get("text", "")
         if kind != "claim":
             lines.extend([("## " if kind == "heading" else "") + md(text), ""])
-            writer.writerow([kind, spreadsheet(text)] + [""] * 12)
+            writer.writerow([kind, spreadsheet(text)] + [""] * (len(header) - 2))
             continue
         try:
             row = resolve(entry["reference"])
@@ -424,7 +429,7 @@ def export_selection(body: Selection) -> Response:
                 raise
             text = f"Missing source: {entry['reference']['paper']} / {entry['reference']['claim']}\n{text}"
             lines.extend([md(text), ""])
-            writer.writerow(["missing", spreadsheet(text)] + [""] * 12)
+            writer.writerow(["missing", spreadsheet(text)] + [""] * (len(header) - 2))
             continue
         source = row.get("source", {}).get("url", "")
         citation = f"{'; '.join(row['paper_authors'])} ({row['paper_year'] or 'year unknown'}). {row['paper_title']}. {row.get('locator', '')}"
@@ -434,7 +439,7 @@ def export_selection(body: Selection) -> Response:
                              ("Conditions", row.get("conditions")), ("Limitations", row.get("limitations")),
                              ("Evidence origin", row.get("evidence_origin")),
                              ("Replication assessment", row.get("evidence_relationship")),
-                             ("Bearing on question", entry.get("stance") if body.board and board["question"] else ""),
+                             ("Bearing on question", entry.get("stance") if body.board and is_question(board) else ""),
                              ("My note", row.get("note")), ("Paper note", row["paper_notes"]),
                              ("Commentary", text), ("Source", source),
                              ("Reference", row["paper"] + " / " + row["id"])):
@@ -443,7 +448,9 @@ def export_selection(body: Selection) -> Response:
         writer.writerow([spreadsheet(v) for v in ["claim", row.get("text"), row["paper_title"],
             "; ".join(row["paper_authors"]), row["paper_year"], row["id"], row.get("quote"),
             row.get("locator"), row.get("evidence"), ", ".join(row.get("tags", [])), row.get("note"),
-            row["paper_notes"], text, source]])
+            row["paper_notes"], text, source, row.get("conditions"), row.get("limitations"),
+            row.get("evidence_origin"), row.get("evidence_relationship"),
+            entry.get("stance") if body.board and is_question(board) else ""]])
     is_csv = body.format == "csv"
     filename = (store.slugify(title) or "selected-research") + (".csv" if is_csv else ".md")
     return Response(output.getvalue() if is_csv else "\n".join(lines),
