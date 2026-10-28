@@ -652,6 +652,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// A click on the Dock icon brings the window back if it is not showing.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { window.show() }
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         server.stop()
         if relaunchAfterQuit { relaunch() }

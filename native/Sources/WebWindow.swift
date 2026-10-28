@@ -13,6 +13,10 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     private let status: NSTextField
     private var auxiliaryWindows: [NSWindow] = []
     private var host: String?
+    /// Whether the status label is showing a navigation failure. Only that
+    /// message is taken down by the next page that loads; an update's progress
+    /// line is the updater's to take down.
+    private var showingFailure = false
     private let downloads: DownloadController
 
     init(downloads: DownloadController = DownloadController()) {
@@ -70,18 +74,25 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
 
     func load(_ url: URL) {
         host = url.host
-        status.isHidden = true
+        hideStatus()
         webView.load(URLRequest(url: url))
     }
 
     func showStatus(_ text: String) {
         status.stringValue = text
         status.isHidden = false
+        showingFailure = false
     }
 
     /// Take a status message down again without touching the page under it.
     func hideStatus() {
         status.isHidden = true
+        showingFailure = false
+    }
+
+    private func showFailure(_ text: String) {
+        showStatus(text)
+        showingFailure = true
     }
 
     /// Read the workspace chosen by the page so Finder and Dock drops land in
@@ -179,8 +190,16 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         return components.url
     }
 
+    // The failure label is the main window's and is about the app's own page.
+    // The auxiliary PDF and BibTeX windows share this delegate, and a load
+    // that fails there must not write its error over the library. A failure
+    // the label did report comes down with the next page that commits, so a
+    // reload after the server is back does not leave "could not reach the
+    // server" sitting on top of a page that is up — and blocking clicks on it.
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        showStatus("Could not load the app: \(error.localizedDescription)")
+        guard webView === self.webView, !isBenign(error) else { return }
+        showFailure("Could not load the app: \(error.localizedDescription)")
     }
 
     func webView(
@@ -188,7 +207,22 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        showStatus("Could not reach the server: \(error.localizedDescription)")
+        guard webView === self.webView, !isBenign(error) else { return }
+        showFailure("Could not reach the server: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard webView === self.webView, showingFailure else { return }
+        hideStatus()
+    }
+
+    /// A navigation that was cancelled, or one WebKit turned into a download
+    /// at the response stage ("frame load interrupted"), is not a failure of
+    /// the page and is not reported as one.
+    private func isBenign(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled { return true }
+        return error.domain == "WebKitErrorDomain" && error.code == 102
     }
 
     /// The page opens PDFs and BibTeX with `target="_blank"`. In a browser those
@@ -229,6 +263,18 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
 
     func webViewDidClose(_ webView: WKWebView) {
         auxiliaryWindows.first { $0.contentView === webView }?.close()
+    }
+
+    /// Closing the main window is asking to quit: the app is this one window,
+    /// and quitting is what the last window closing does anyway. Routing the
+    /// close through the quit is what keeps the window when the quit is
+    /// refused — "Keep Reading" over a paper being read would otherwise be
+    /// answered with the window already gone, and the app left running with
+    /// nothing to show and no way back to it.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === window else { return true }
+        NSApp.terminate(nil)
+        return false
     }
 
     /// Closing an auxiliary window is the end of it. Without this the window,

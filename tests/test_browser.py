@@ -6056,3 +6056,95 @@ def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
     run_browser(scenario())
     texts = {c["id"]: c["text"] for c in store.load_paper("doe2026study")["claims"]}
     assert texts[one] == "One, edited."
+
+
+@pytest.mark.browser
+def test_escape_outside_the_claim_form_leaves_its_draft_alone():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                claim_form = page.locator('form[data-form="paper-a-c1"]')
+                claim_field = claim_form.locator('textarea[name="text"]')
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Draft that Escape elsewhere must keep.")
+
+                # Escape in the sidebar's new-topic box and in the add-papers
+                # textarea leaves those fields; the editor and its draft stay.
+                for selector in ("#new-tag", "#refs"):
+                    field = page.locator(selector)
+                    await field.fill("typed and abandoned")
+                    await field.press("Escape")
+                    await page.wait_for_timeout(100)
+                    assert await claim_form.is_visible()
+                    assert await claim_field.input_value() == "Draft that Escape elsewhere must keep."
+
+                # Nor does Escape with focus on an unrelated control.
+                await page.locator("#btn-add").focus()
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(100)
+                assert await claim_form.is_visible()
+                assert await claim_field.input_value() == "Draft that Escape elsewhere must keep."
+
+                # From inside the form, Escape still cancels the editor.
+                await claim_field.press("Escape")
+                await claim_form.wait_for(state="hidden")
+
+                # And so does the page's own Escape, with nothing focused.
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await claim_field.fill("Draft the page's own Escape cancels.")
+                await page.evaluate("document.activeElement.blur()")
+                await page.keyboard.press("Escape")
+                await claim_form.wait_for(state="hidden")
+
+    run_browser(scenario())
+    assert store.claim_rows()[0]["text"] == "A claim from Paper A."
+
+
+@pytest.mark.browser
+def test_text_dropped_into_a_field_is_the_fields_and_not_papers_to_add():
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            ingests = []
+            page.on("request", lambda request: ingests.append(request.url)
+                    if request.url.endswith("/api/ingest") else None)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
+                await page.locator('form[data-form="paper-a-c1"] textarea[name="quote"]').wait_for()
+
+                drop = """([selector, text]) => {
+                    const target = selector ? document.querySelector(selector) : document.body;
+                    const data = new DataTransfer();
+                    data.setData('text/plain', text);
+                    const event = new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true });
+                    target.dispatchEvent(event);
+                    return event.defaultPrevented;
+                }"""
+                # Into the quote box: the browser's default (insert the text) is
+                # left to run, and nothing is sent to be ingested.
+                prevented = await page.evaluate(drop, ['form[data-form="paper-a-c1"] textarea[name="quote"]',
+                                                       "A sentence dragged from the reader."])
+                await page.wait_for_timeout(300)
+                assert prevented is False
+                assert ingests == []
+
+                # Onto the page itself: still read as references to add.
+                prevented = await page.evaluate(drop, [None, "2602.06941"])
+                await page.wait_for_timeout(300)
+                assert prevented is True
+                assert len(ingests) == 1
+
+                # A checkbox takes no text, so a drop on one is a drop on the page.
+                prevented = await page.evaluate(drop, ["#auto-extract", "2602.06941"])
+                await page.wait_for_timeout(300)
+                assert prevented is True
+                assert len(ingests) == 2
+
+    run_browser(scenario())
