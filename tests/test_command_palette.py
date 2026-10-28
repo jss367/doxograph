@@ -60,6 +60,7 @@ def test_command_palette_destinations_and_actions(engine):
 
                 # A paper's old filters must not make a topic jump look empty.
                 await page.locator("#q").fill("does not exist")
+                await page.locator("#claim-filter-options > summary").click()
                 await page.locator("#only-unreviewed").check()
                 await page.keyboard.press("Control+k")
                 await query.fill("topic recovery")

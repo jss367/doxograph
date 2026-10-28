@@ -89,6 +89,7 @@ def test_continue_review_clears_filters_and_handles_missing_sources(engine):
                 await expect(card).to_contain_text('No PDF available')
                 assert not await card.locator('[data-tool="reader"]').count()
                 await page.locator('#q').fill('nothing matches')
+                await page.locator("#claim-filter-options > summary").click()
                 await page.locator('#only-unverified').check()
                 await card.get_by_role('button', name='Next unreviewed claim').click()
                 await expect(page.locator(f'.claim.sel[data-claim="{claims[0]["id"]}"]')).to_be_visible()

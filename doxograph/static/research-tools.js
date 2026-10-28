@@ -69,7 +69,16 @@ const ResearchTools = (() => {
     claims = new Set([...claims].filter(k => available.has(k)));
     papers = new Set([...papers].filter(k => client.state.papers.some(p => p.key === k)));
     remember();
-    el('selection-count').textContent = `${claims.size} claims · ${papers.size} papers selected`;
+    const selected = claims.size + papers.size > 0;
+    el('selection-tools').classList.toggle('has-selection', selected);
+    el('selection-tools').hidden = !selected && !client.state.claims.length;
+    el('selection-tools').querySelectorAll('[data-needs-selection]').forEach(button => { button.hidden = !selected; });
+    const visible = visibleClaims().length;
+    el('selection-tools').querySelector('[data-tool="select-visible"]').hidden = !visible;
+    el('btn-focus-review').hidden = !visible;
+    el('selection-count').textContent = selected
+      ? `${claims.size} claims · ${papers.size} papers selected`
+      : `${visible} claim${visible === 1 ? '' : 's'}`;
     document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
     document.querySelectorAll('[data-select-paper]').forEach(c => c.checked = papers.has(c.dataset.selectPaper));
     redrawHighlights();

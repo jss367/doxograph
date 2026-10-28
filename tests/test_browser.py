@@ -199,11 +199,13 @@ def test_workspace_rename_persists_and_reaches_another_window_with_a_draft(named
                 await draft.fill("My unsaved revision.")
 
                 rename = page.get_by_role("button", name="Rename workspace", exact=True)
+                await page.locator("#workspace-actions > summary").click()
                 await rename.click()
                 assert await page.locator("#ask-input").input_value() == workspace["name"]
                 await _answer(page, "Cancel", "Canceled name")
                 await expect(page.locator("#workspace option:checked")).to_have_text(workspace["name"])
 
+                await page.locator("#workspace-actions > summary").click()
                 await rename.click()
                 await _answer(page, "Rename", "Consciousness research")
                 await expect(page.locator("#workspace option:checked")).to_have_text("Consciousness research")
@@ -508,6 +510,7 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
                 assert await page.locator("#workspace").input_value() == animal["id"]
                 assert "A consciousness paper" not in await papers.inner_text()
 
+                await page.locator("#workspace-actions > summary").click()
                 await page.locator("#btn-workspace-add").click()
                 await _answer(page, "OK", "Embodied cognition")
                 await page.locator("#workspace").select_option(label="Embodied cognition")
@@ -5674,6 +5677,7 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
 
                 # Across the corpus with grouping off.
                 await page.locator('#papers [data-paper=""]').click()
+                await page.locator("#claim-filter-options > summary").click()
                 await page.locator("#group-by-tag").uncheck()
                 await card.get_by_role("button", name="hide the paper").click()
                 await card.locator(".qctx").wait_for(state="detached")

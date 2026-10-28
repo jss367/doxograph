@@ -4479,6 +4479,7 @@ function closeSettings({ restoreFocus = false } = {}) {
 
 function openSettings() {
   closePaperMenu();
+  closeActionDisclosures();
   syncThemeControls();
   syncAnalysisControls();
   providerDrafts = {};
@@ -4507,6 +4508,31 @@ $('btn-reset-theme').addEventListener('click', () => {
 
 document.addEventListener('mousedown', (event) => {
   if (!$('settings-menu').contains(event.target) && !$('btn-settings').contains(event.target)) closeSettings();
+});
+
+// Shell disclosures share dismissal behavior without consuming Escape in an
+// editor behind them. Native details keeps keyboard and expanded state intact.
+function closeActionDisclosures({ except = null, restoreFocus = false } = {}) {
+  for (const menu of document.querySelectorAll('.action-disclosure[open]')) {
+    if (menu === except) continue;
+    if (restoreFocus && menu.contains(document.activeElement)) menu.querySelector('summary').focus();
+    menu.open = false;
+  }
+}
+document.addEventListener('mousedown', (event) => {
+  closeActionDisclosures({ except: event.target.closest('.action-disclosure') });
+});
+$('workspace-actions').addEventListener('click', (event) => {
+  if (event.target.closest('button')) closeActionDisclosures({ restoreFocus: true });
+});
+$('btn-close-filters').addEventListener('click', () => closeActionDisclosures({ restoreFocus: true }));
+document.querySelectorAll('.action-disclosure').forEach(menu => {
+  menu.addEventListener('toggle', () => {
+    if (menu.open) {
+      closeActionDisclosures({ except: menu });
+      closeSettings();
+    }
+  });
 });
 
 // --- paper context menu --------------------------------------------------
@@ -5046,6 +5072,11 @@ document.addEventListener('keydown', async (event) => {
   // A modal owns the keyboard while it is up, Escape included: the dialog
   // closes itself, and the editor branches below must not also fire.
   if (document.querySelector('dialog[open]')) return;
+  if (event.key === 'Escape' && document.querySelector('.action-disclosure[open]')) {
+    closeActionDisclosures({ restoreFocus: true });
+    event.preventDefault();
+    return;
+  }
   if (event.key === 'Escape' && !$('settings-menu').hidden) {
     closeSettings({ restoreFocus: true });
     return;

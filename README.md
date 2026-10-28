@@ -230,10 +230,17 @@ separate. The existing corpus is the Default workspace; creating a workspace
 makes an empty, independent corpus with its own papers, topics, research
 context, ledger, tensions, syntheses, and exports. The last selected workspace
 is restored when the page is reopened, unless the address names another one.
-Use **Rename** beside the picker to change any workspace's name, including the
-Default workspace. Its papers, claims, notes, and exports stay in place.
+Use **More workspace actions → Rename workspace** in the header to change any
+workspace's name, including the Default workspace. Its papers, claims, notes,
+and exports stay in place.
 Papers dropped on the Mac app's Dock icon go to the workspace currently shown
 in its window.
+
+The header's **More workspace actions** menu also holds **Create workspace**,
+**Export BibTeX**, **Retag all**, and **Keyboard shortcuts**. Beside claim search,
+**Filters** opens the claim kind, review, quote verification, and grouping controls.
+Active filters remain visible as removable chips after the controls close.
+Select claims or papers to reveal **Compare & organize** and **Clear selection**.
 
 Export HTML writes the file and then offers to open it or to copy its path. A
 reference that nothing identifies stays in the box and is named underneath it,

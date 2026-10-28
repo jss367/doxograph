@@ -46,7 +46,9 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#tags [data-tag="recovery"]').click()
+                await page.locator("#claim-filter-options > summary").click()
                 await page.locator('#only-unreviewed').check()
+                await page.locator('#btn-close-filters').click()
                 await page.locator('#btn-focus-review').click()
                 dialog = page.locator('#focused-review')
                 await expect(page.locator('#focus-progress')).to_have_text('Claim 1 of 2 · 0 reviewed')
