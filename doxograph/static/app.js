@@ -5104,7 +5104,10 @@ document.addEventListener('keydown', async (event) => {
       if (V.synthEditing && !V.synthSaving) cancelSynthEdit();
     } else if (event.target.closest('.note')) {
       if (V.noteEditing && !V.noteSaving) cancelNoteEdit();
-    } else if (V.editing) {
+    } else if (V.editing && event.target.closest('form[data-form]')) {
+      // And only from inside the claim's own form. Escape in the new-topic
+      // box, the add-papers textarea, the reader's page field or a mark's
+      // note is a way out of that field, not a verdict on a draft elsewhere.
       cancelEdit();
     }
     return;
@@ -5168,7 +5171,17 @@ function scrollToSelected() {
 
 // --- drag and drop --------------------------------------------------------
 
+// A text drag over a field is the browser's: a sentence selected in the reader
+// and dragged into the quote box must land there, not be read as papers to
+// add. Files are the page's wherever they are dropped.
+function dropBelongsToField(event) {
+  const types = [...(event.dataTransfer?.types || [])];
+  if (types.includes('Files')) return false;
+  return Boolean(event.target.closest?.('input, textarea, [contenteditable]:not([contenteditable="false"])'));
+}
+
 ['dragenter', 'dragover'].forEach((type) => document.addEventListener(type, (event) => {
+  if (dropBelongsToField(event)) return;
   event.preventDefault();
   document.body.classList.add('dragging');
 }));
@@ -5178,6 +5191,7 @@ function scrollToSelected() {
 }));
 
 document.addEventListener('drop', async (event) => {
+  if (dropBelongsToField(event)) return;
   event.preventDefault();
   const files = [...(event.dataTransfer.files || [])].filter((f) => f.type === 'application/pdf'
     || f.name.toLowerCase().endsWith('.pdf'));
