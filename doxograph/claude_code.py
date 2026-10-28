@@ -55,6 +55,20 @@ def _run(args: list[str], *, env: dict[str, str], cwd: str, input: str | None = 
         raise RuntimeError("Claude Code timed out. Try again or check your plan's usage limits.") from exc
 
 
+def require_subscription(base: list[str], env: dict[str, str], cwd: str) -> None:
+    """Refuse to run unless Claude Code is signed in to a claude.ai subscription."""
+    auth = _run([*base, "auth", "status"], env=env, cwd=cwd, timeout=15)
+    try:
+        status = json.loads(auth.stdout)
+    except ValueError:
+        status = {}
+    if not isinstance(status, dict):
+        status = {}
+    if auth.returncode or not status.get("loggedIn") or status.get("authMethod") != "claude.ai":
+        raise ModelSetupError("Sign in to a Claude subscription with `claude auth login` in Terminal. "
+                           "Doxograph will not fall back to API billing.")
+
+
 class Client:
     def __init__(self) -> None:
         self.messages = self
@@ -66,16 +80,7 @@ class Client:
         # --bare cannot be used: it deliberately disables subscription login.
         with tempfile.TemporaryDirectory(prefix="doxograph-claude-") as cwd:
             base = [binary, "--setting-sources", ""]
-            auth = _run([*base, "auth", "status"], env=env, cwd=cwd, timeout=15)
-            try:
-                status = json.loads(auth.stdout)
-            except ValueError:
-                status = {}
-            if not isinstance(status, dict):
-                status = {}
-            if auth.returncode or not status.get("loggedIn") or status.get("authMethod") != "claude.ai":
-                raise ModelSetupError("Sign in to a Claude subscription with `claude auth login` in Terminal. "
-                                   "Doxograph will not fall back to API billing.")
+            require_subscription(base, env, cwd)
             content = []
             for message in kwargs["messages"]:
                 blocks = message["content"]

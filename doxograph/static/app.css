@@ -482,10 +482,11 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
   box-shadow: 0 10px 40px rgba(0, 0, 0, .3); }
 .sheet::backdrop { background: rgba(0, 0, 0, .35); }
 .paper-chat { width: min(46rem, 92vw); max-width: 46rem; }
-#chat-messages { max-height: 45vh; overflow-y: auto; margin: 1rem 0; }
-#chat-messages p { white-space: pre-wrap; }
-#chat-form { margin-top: 1rem; }
-#chat-form .row { margin-top: .75rem; }
+#chat-messages, #agent-messages { max-height: 45vh; overflow-y: auto; margin: 1rem 0; }
+#chat-messages p, #agent-messages p { white-space: pre-wrap; }
+#agent-messages .activity { margin: .25rem 0 0; font-size: .85em; opacity: .7; }
+#chat-form, #agent-form { margin-top: 1rem; }
+#chat-form .row, #agent-form .row { margin-top: .75rem; }
 .sheet h2 { font-size: 1rem; margin: 0 0 .5rem; }
 .sheet .hint { margin: .5rem 0 0; }
 .sheet input { width: 100%; margin-top: .4rem; }

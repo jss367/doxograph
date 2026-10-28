@@ -24,6 +24,7 @@
   <div class="actions">
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
+    <button type="button" id="btn-agent" data-ai-action disabled title="Ask questions across every paper in this library">Ask the library</button>
     <button type="button" id="btn-retag" data-ai-action disabled title="Reassign tags on every paper against the current vocabulary">Retag all</button>
     <button type="button" id="btn-bib">BibTeX</button>
     <button type="button" id="btn-export" class="primary">Export HTML</button>
@@ -383,6 +384,22 @@
   </form>
 </dialog>
 
+<dialog id="library-agent" class="sheet paper-chat" aria-labelledby="library-agent-title">
+  <div class="row"><h2 id="library-agent-title">Ask the library</h2>
+    <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
+  <p class="hint">Uses your Claude subscription (Settings → Model access) to look through this workspace's papers, claims,
+    topics, agreements, and tensions. It cannot change anything. Your Doxograph notes stay private.
+    Chat lasts for this page session. Check answers against the papers.</p>
+  <div id="agent-messages" role="log" aria-live="polite"></div>
+  <form id="agent-form">
+    <label for="agent-question">Question about the library</label>
+    <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
+    <p class="hint" id="agent-status" role="status"></p>
+    <div class="row right"><button type="button" id="agent-clear">New conversation</button>
+      <button type="submit" class="primary" id="agent-send">Send</button></div>
+  </form>
+</dialog>
+
 <dialog id="research-tools" class="research-sheet" aria-labelledby="research-tools-title">
   <div class="sheet-head"><h2 id="research-tools-title">Research tools</h2>
     <button type="button" data-tool="close" aria-label="Close research tools">×</button></div>
@@ -428,5 +445,6 @@
 <script src="/paper-map.js"></script>
 <script src="/focused-review.js"></script>
 <script src="/app.js"></script>
+<script src="/agent-chat.js"></script>
 </body>
 </html>

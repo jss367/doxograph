@@ -141,6 +141,26 @@ page reloads. **New conversation** clears the current paper's conversation.
 Failed questions keep their draft so you can retry. Chat uses the model access
 selected in Settings and is disabled when AI analysis is off.
 
+## Ask the library
+
+**Ask the library** in the header opens a chat that answers across every paper in
+the workspace, where paper chat reads one PDF. It needs **Claude subscription
+(Claude Code)** selected in Settings → Model access. Claude looks things up
+through the [MCP server](#query-doxograph-from-agents) below, started with
+`--without-notes`: it can search papers, claims, and PDF text, read a paper,
+list topics, and read agreements, tensions, and syntheses. The line under each
+answer lists the lookups it made. Claude Code reaches the library through the
+app that is serving the page, over a loopback address (the default; `--host 0.0.0.0`
+also works). If the app is bound only to another address, the chat says so
+instead of failing partway through an answer.
+
+It has no file, shell, web, or write access, and it does not receive the PDFs.
+`--without-notes` leaves out your paper and workspace notes, your claim notes, and
+the links from claims to your own claims, and a search cannot match text inside
+them. Your research context is not exposed by any tool. It can read every
+workspace by ID, but it is asked to stay in the one you are viewing. Answers can
+be wrong; check them against the papers.
+
 ## Use
 
 ```
@@ -500,6 +520,11 @@ another port when 8765 is occupied. `--url` accepts local HTTP origins only,
 and defaults to `http://127.0.0.1:8765`. No API key is needed. The adapter does
 not open or initialize a separate corpus, so `DOXOGRAPH_DATA` belongs on the
 HTTP server, not on the MCP command.
+
+Add `--without-notes` to leave out the note tools and the personal fields of the
+other tools: paper notes, claim notes, and links from claims to your own claims.
+Searches then cannot match text inside them. The in-app **Ask the library** chat
+runs the server this way.
 
 | Tool | What it reads |
 | --- | --- |
