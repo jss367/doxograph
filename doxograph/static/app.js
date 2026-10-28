@@ -5104,7 +5104,10 @@ document.addEventListener('keydown', async (event) => {
       if (V.synthEditing && !V.synthSaving) cancelSynthEdit();
     } else if (event.target.closest('.note')) {
       if (V.noteEditing && !V.noteSaving) cancelNoteEdit();
-    } else if (V.editing) {
+    } else if (V.editing && event.target.closest('form[data-form]')) {
+      // And only from inside the claim's own form. Escape in the new-topic
+      // box, the add-papers textarea, the reader's page field or a mark's
+      // note is a way out of that field, not a verdict on a draft elsewhere.
       cancelEdit();
     }
     return;
@@ -5157,7 +5160,11 @@ document.addEventListener('keydown', async (event) => {
       scrollToSelected();
     }
   } else if (event.key === 'Escape') {
-    cancelEdit();
+    // The page's own Escape: from inside the claim's form, or with nothing in
+    // particular focused. With focus on some other control — a sidebar
+    // button, the divider — Escape is about that control, not a verdict on
+    // a draft elsewhere on the page.
+    if (event.target === document.body || event.target.closest('form[data-form]')) cancelEdit();
   }
 });
 
@@ -5168,7 +5175,23 @@ function scrollToSelected() {
 
 // --- drag and drop --------------------------------------------------------
 
+// A text drag over a field is the browser's: a sentence selected in the reader
+// and dragged into the quote box must land there, not be read as papers to
+// add. Files are the page's wherever they are dropped.
+const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'url', 'email', 'tel', 'password', 'number']);
+
+function dropBelongsToField(event) {
+  const types = [...(event.dataTransfer?.types || [])];
+  if (types.includes('Files')) return false;
+  const field = event.target.closest?.('input, textarea, [contenteditable]:not([contenteditable="false"])');
+  if (!field) return false;
+  // A checkbox, a range slider or a file picker takes no text, so a drop on
+  // one is a drop on the page.
+  return field.tagName !== 'INPUT' || TEXT_INPUT_TYPES.has((field.getAttribute('type') || '').toLowerCase());
+}
+
 ['dragenter', 'dragover'].forEach((type) => document.addEventListener(type, (event) => {
+  if (dropBelongsToField(event)) return;
   event.preventDefault();
   document.body.classList.add('dragging');
 }));
@@ -5178,6 +5201,7 @@ function scrollToSelected() {
 }));
 
 document.addEventListener('drop', async (event) => {
+  if (dropBelongsToField(event)) return;
   event.preventDefault();
   const files = [...(event.dataTransfer.files || [])].filter((f) => f.type === 'application/pdf'
     || f.name.toLowerCase().endsWith('.pdf'));
