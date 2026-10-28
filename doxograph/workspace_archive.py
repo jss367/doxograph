@@ -69,6 +69,7 @@ def build() -> Path:
                 locks.enter_context(store.paper_lock(key))
                 if store.paper_path(key).is_symlink():
                     raise HTTPException(409, f'The archive cannot include a symbolic link: papers/{key}.json')
+            keys = [key for key in keys if store.paper_path(key).is_file()]
             notes = research_notes.load()
             saved_notebook = notebook.load()
             note_names = {n['id']: f'{(store.slugify(n["title"]) or "note")[:80]}-{n["id"]}.md' for n in notes}
@@ -93,14 +94,14 @@ def build() -> Path:
 
                 for name in sorted(backups.DOCUMENTS | {research_notes.REVISION_FILE}):
                     copy(root / name, 'data/' + name)
-                for folder, suffix in (('papers', '.json'), ('pdfs', '.pdf'), ('note-images', '')):
-                    directory = root / folder
-                    if directory.is_symlink():
-                        raise HTTPException(409, f'The {folder} directory is a symbolic link; move its contents into this workspace before archiving.')
-                    for path in sorted(directory.glob('*')):
-                        if path.name.startswith('.') or (suffix and path.suffix != suffix):
-                            continue
-                        copy(path, f'data/{folder}/{path.name}')
+                # An import can reserve a new key after the initial listing.
+                # Use exactly the locked set for both raw and readable output.
+                for key in keys:
+                    copy(store.paper_path(key), f'data/papers/{key}.json')
+                    copy(store.pdf_path(key), f'data/pdfs/{key}.pdf')
+                for path in sorted((root / 'note-images').glob('*')):
+                    if not path.name.startswith('.'):
+                        copy(path, f'data/note-images/{path.name}')
                 saved_papers = []
                 for key in keys:
                     path = store.paper_path(key)
