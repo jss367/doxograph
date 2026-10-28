@@ -575,6 +575,26 @@ def test_an_exact_quote_keeps_a_short_sentence_at_either_end(tmp_path):
     assert found["suggestion"] == "No effect. However recovery improved across all three model scales. Not so."
 
 
+def test_an_inexact_quote_keeps_a_short_sentence_of_its_own_across_a_boundary(tmp_path):
+    """What lies across the boundary is the quote's own sentence, not a stray."""
+    pdf = tmp_path / "own.pdf"
+    pdf.write_bytes(minimal_pdf("Yes we did. Our model recovers in 46% of rollouts when steering is removed."))
+    found = quotes.locate(pdf, "Yes we did. The model recovers in 46% of rollouts when steering is removed")
+    assert found["found"] is True
+    assert found["matched"].startswith("Yes we did. Our model")
+    assert found["suggestion"].startswith("Yes we did.")
+
+
+def test_a_quote_found_only_with_a_strays_help_is_not_found(tmp_path):
+    """The stray's letters do not count toward the quote once the span is cut."""
+    pdf = tmp_path / "stray.pdf"
+    pdf.write_bytes(minimal_pdf("We looked at the data. Our model recovers in ten rollouts here."))
+    found = quotes.locate(pdf, "The model recovers in ten rollouts")
+    assert found["found"] is False
+    assert found["coverage"] < 0.9
+    assert found["suggestion"] == "Our model recovers in ten rollouts here."
+
+
 def test_a_stray_word_in_the_margin_does_not_run_the_span_into_the_sentence_after(tmp_path):
     pdf = tmp_path / "margin.pdf"
     pdf.write_bytes(minimal_pdf(

@@ -338,7 +338,7 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     # sentence end inside it is the quote's own: "Yes. The model recovers" is
     # kept whole. Only an inexact alignment can have picked up a stray.
     if lo >= 0 and text.squashed[lo:hi] != needle:
-        lo, hi = _trim_strays(text, lo, hi)
+        score, lo, hi = _trim_strays(text, needle, score, lo, hi)
     result = {
         "found": score >= _COVERAGE,
         "coverage": round(score, 3),
@@ -381,7 +381,13 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     return result
 
 
-def _trim_strays(text: Text, lo: int, hi: int) -> tuple[int, int]:
+# The most characters of a quote a stray in the margin can account for. A
+# stray is a short word ("the", "a", "in"); a leading or trailing sentence of
+# the quote's own that matched more than this is kept, boundary and all.
+_STRAY = 6
+
+
+def _trim_strays(text: Text, needle: str, score: float, lo: int, hi: int) -> tuple[float, int, int]:
     """Cut a few matched characters that a sentence boundary separates from the rest.
 
     The alignment looks at a margin either side of where the quote would sit,
@@ -391,10 +397,14 @@ def _trim_strays(text: Text, lo: int, hi: int) -> tuple[int, int]:
     and the page, the matched passage and the suggested wording all follow it.
     A quote does not start or stop a few letters across a sentence end, so a
     boundary within the margin's reach of either edge marks a stray, and the
-    span is cut back to the quote's own sentence. Nothing moves when no such
-    boundary is there: a span over a sentence end further in is a quote that
-    really runs over one.
+    span is cut back to the quote's own sentence. The coverage is then what
+    the retained span earns on its own: a quote that only reached the mark
+    with the stray's help has not been found. Nothing moves when no such
+    boundary is there, or when what lies across it is more than a stray could
+    be: a span over a sentence end further in, or with a whole short sentence
+    of the quote's before it, is a quote that really runs over one.
     """
+    n = len(needle)
     offsets = text.offsets
     if hi - lo > _ANCHOR:
         start, until = offsets[lo], offsets[lo + _ANCHOR]
@@ -403,16 +413,26 @@ def _trim_strays(text: Text, lo: int, hi: int) -> tuple[int, int]:
             if _is_boundary(text.raw[max(0, match.start() - 40):match.start() + 1]):
                 cut = bisect.bisect_left(offsets, match.end())
         if lo < cut < hi:
-            lo = cut
+            kept = _matched(needle, text.squashed[cut:hi])
+            if round(score * n) - kept <= _STRAY:
+                score, lo = kept / n, cut
     if hi - lo > _ANCHOR:
         start, until = offsets[hi - 1 - _ANCHOR], offsets[hi - 1] + 1
         for match in _SENTENCE_END.finditer(text.raw, start, until):
             if _is_boundary(text.raw[max(0, match.start() - 40):match.start() + 1]):
                 cut = bisect.bisect_left(offsets, match.start())
                 if lo < cut < hi:
-                    hi = cut
+                    kept = _matched(needle, text.squashed[lo:cut])
+                    if round(score * n) - kept <= _STRAY:
+                        score, hi = kept / n, cut
                 break
-    return lo, hi
+    return score, lo, hi
+
+
+def _matched(quote: str, window: str) -> int:
+    """How many of `quote`'s characters line up, in order, with `window`."""
+    matcher = difflib.SequenceMatcher(None, quote, window, autojunk=False)
+    return sum(block.size for block in matcher.get_matching_blocks())
 
 
 # A sentence ends at one of these, closing quotes and brackets included, when
