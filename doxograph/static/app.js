@@ -2841,6 +2841,7 @@ function renderContent() {
   const recovery = ResearchTools.recoveryHtml();
   if (recovery) $('content').insertAdjacentHTML('afterbegin', recovery);
   renderActiveFilters();
+  ResearchTools.syncSelectionControls();
   restoreNoteCursor(cursor);
   restorePaperActionCursor(actionFocus);
   renderContinuation();

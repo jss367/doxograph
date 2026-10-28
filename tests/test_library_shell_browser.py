@@ -4,7 +4,7 @@ import pytest
 from playwright.async_api import expect
 
 from browser_support import browser_session, run_browser
-from doxograph import config
+from doxograph import config, store
 from test_browser import _paper, _poll, _server
 
 
@@ -93,5 +93,52 @@ def test_empty_library_hides_claim_actions_until_claims_arrive():
                 await _poll(page)
                 await expect(page.locator("#selection-tools")).to_be_visible()
                 await expect(page.locator("#btn-focus-review")).to_be_visible()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_filter_changes_update_claim_controls_without_polling(engine):
+    _paper("reviewed", "A reviewed finding", "oversight")
+    _paper("unreviewed", "An unreviewed method", "methods")
+    store.update_claim("unreviewed", "unreviewed-c1", {"reviewed": False, "kind": "method"})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await expect(page.locator("#selection-count")).to_have_text("2 claims")
+                await page.evaluate("poller.stop()")
+                count = page.locator("#selection-count")
+                select = page.locator('[data-tool="select-visible"]')
+                review = page.locator("#btn-focus-review")
+                await page.locator("#q").fill("no matching claims")
+                await expect(count).to_have_text("0 claims")
+                await expect(select).to_be_hidden()
+                await expect(review).to_be_hidden()
+                await page.locator("#q").fill("")
+                await expect(count).to_have_text("2 claims")
+                await expect(select).to_be_visible()
+                await expect(review).to_be_visible()
+
+                await page.locator("#claim-filter-options > summary").click()
+                await page.locator("#kind").select_option("finding")
+                await expect(count).to_have_text("1 claim")
+                await page.locator("#only-unreviewed").check()
+                await expect(count).to_have_text("0 claims")
+                await expect(review).to_be_hidden()
+                await page.locator("#kind").select_option("")
+                await expect(count).to_have_text("1 claim")
+                await expect(review).to_be_visible()
+                await page.locator("#btn-close-filters").click()
+                await page.get_by_role("button", name="Clear all", exact=True).click()
+                await expect(count).to_have_text("2 claims")
+                await select.click()
+                await page.locator("#q").fill("no matching claims")
+                await expect(count).to_have_text("2 claims · 0 papers selected")
+                await expect(review).to_be_hidden()
+                await expect(page.locator('[data-tool="compare"]')).to_be_visible()
 
     run_browser(scenario())

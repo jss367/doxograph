@@ -69,6 +69,12 @@ const ResearchTools = (() => {
     claims = new Set([...claims].filter(k => available.has(k)));
     papers = new Set([...papers].filter(k => client.state.papers.some(p => p.key === k)));
     remember();
+    syncSelectionControls();
+    document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
+    document.querySelectorAll('[data-select-paper]').forEach(c => c.checked = papers.has(c.dataset.selectPaper));
+    redrawHighlights();
+  }
+  function syncSelectionControls() {
     const selected = claims.size + papers.size > 0;
     el('selection-tools').classList.toggle('has-selection', selected);
     el('selection-tools').hidden = !selected && !client.state.claims.length;
@@ -79,9 +85,6 @@ const ResearchTools = (() => {
     el('selection-count').textContent = selected
       ? `${claims.size} claims · ${papers.size} papers selected`
       : `${visible} claim${visible === 1 ? '' : 's'}`;
-    document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
-    document.querySelectorAll('[data-select-paper]').forEach(c => c.checked = papers.has(c.dataset.selectPaper));
-    redrawHighlights();
   }
   function claimCheckbox(row) {
     const key = refKey(row);
@@ -1249,6 +1252,6 @@ const ResearchTools = (() => {
     // switch leaves the note where it was.
     return true;
   }
-  return {connect(value) { client = value; }, sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+  return {connect(value) { client = value; }, sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     openBoard: id => run(() => open('boards', id))};
 })();
