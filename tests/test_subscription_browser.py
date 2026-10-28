@@ -246,3 +246,54 @@ def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider)
 
     with _server() as url:
         run_browser(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('source', ['url', 'storage'])
+def test_library_agent_waits_for_workspace_selection_before_opening(engine, source):
+    config.set_ai_provider('claude_code')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            held = asyncio.Event()
+            release = asyncio.Event()
+            requests = []
+
+            async def registry(route):
+                held.set()
+                await release.wait()
+                await route.continue_()
+
+            async def respond(route):
+                requests.append((route.request.headers['x-doxograph-workspace'],
+                                 route.request.post_data_json['messages']))
+                await route.fulfill(json={'answer': 'The default library.', 'assistant': 'Claude'})
+
+            if source == 'storage':
+                await page.add_init_script("localStorage.setItem('doxograph-workspace', 'missing')")
+            await page.route('**/api/workspaces', registry)
+            await page.route('**/api/agent/chat', respond)
+            await page.goto(url + ('/#ws=missing' if source == 'url' else ''),
+                            wait_until='domcontentloaded')
+            await asyncio.wait_for(held.wait(), timeout=10)
+            try:
+                assert await page.locator('#btn-agent').is_disabled()
+                await page.locator('#btn-agent').evaluate('button => button.click()')
+                assert await page.locator('#library-agent').is_hidden()
+            finally:
+                release.set()
+
+            await page.locator('#ai-enabled:enabled').wait_for(state='attached')
+            await page.locator('#btn-agent').click()
+            await page.locator('#agent-question').fill('Which library?')
+            await page.locator('#agent-close').click()
+            await page.locator('#btn-agent').click()
+            assert await page.locator('#agent-question').input_value() == 'Which library?'
+            await page.locator('#agent-send').click()
+            await page.get_by_text('The default library.', exact=True).wait_for()
+            assert requests == [('default', [{'role': 'user', 'content': 'Which library?'}])]
+
+    with _server() as url:
+        run_browser(check(url))

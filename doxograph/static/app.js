@@ -5353,6 +5353,9 @@ async function boot() {
   connectPaperMap(workspaceClient);
   AppStartup.phase('connection');
   await loadWorkspaces();
+  // A stale saved workspace may have fallen back to default. Only open chats
+  // after that selection is final; their setup help is available with AI off.
+  $('btn-agent').disabled = false;
   applyHash();
   const changed = await pull();
   AppStartup.phase('interface');
