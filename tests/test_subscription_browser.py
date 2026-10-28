@@ -6,6 +6,7 @@ import json
 import pytest
 from playwright.async_api import async_playwright
 
+from browser_support import browser_session, run_browser
 from doxograph import config, store
 from test_browser import _server
 
@@ -180,3 +181,119 @@ def test_library_agent_cannot_send_outside_claude_subscription_mode(provider):
 
     with _server() as url:
         asyncio.run(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('provider', ['api', 'codex', 'claude_code'])
+def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider):
+    config.set_ai_enabled(False)
+    config.set_ai_provider(provider)
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            requests = []
+
+            async def respond(route):
+                requests.append(route.request.post_data_json['messages'])
+                await route.fulfill(content_type='application/json', body=json.dumps({
+                    'answer': 'Two papers agree.', 'assistant': 'Claude'}))
+
+            await page.route('**/api/agent/chat', respond)
+            await page.goto(url)
+            await page.locator('#ai-enabled:enabled').wait_for(state='attached')
+            assert await page.locator('#btn-agent').is_enabled()
+            await page.locator('#btn-agent').click()
+            assert await page.locator('#library-agent').is_visible()
+            assert 'Enable AI analysis in Settings.' in await page.locator('#agent-status').inner_text()
+            if provider != 'claude_code':
+                assert 'Choose Claude subscription' in await page.locator('#agent-status').inner_text()
+            await page.locator('#agent-question').fill('Keep my question')
+            assert await page.locator('#agent-send').is_disabled()
+            assert requests == []
+
+            await page.locator('#agent-settings').click()
+            assert await page.locator('#library-agent').is_hidden()
+            assert await page.locator('#settings-menu').is_visible()
+            await page.locator('#ai-enabled').check()
+            await page.get_by_text('AI analysis enabled.', exact=True).wait_for()
+            if provider != 'claude_code':
+                await page.locator('#ai-access').select_option('claude_code')
+                await page.get_by_text('Model access saved.', exact=True).wait_for()
+            await page.locator('#btn-close-settings').click()
+            await page.locator('#btn-agent').click()
+            assert await page.locator('#agent-question').input_value() == 'Keep my question'
+            assert await page.locator('#agent-send').is_enabled()
+            assert await page.locator('#agent-settings').is_hidden()
+            await page.locator('#agent-send').click()
+            await page.get_by_text('Two papers agree.', exact=True).wait_for()
+            assert requests == [[{'role': 'user', 'content': 'Keep my question'}]]
+
+            # Settings changed in another window must also update the open chat,
+            # without replacing its draft or starting another model request.
+            await page.locator('#agent-question').fill('Another question')
+            config.set_ai_enabled(False)
+            await page.evaluate('pollOnce()')
+            assert await page.locator('#agent-send').is_disabled()
+            assert await page.locator('#agent-settings').is_visible()
+            assert 'Enable AI analysis' in await page.locator('#agent-status').inner_text()
+            assert await page.locator('#agent-question').input_value() == 'Another question'
+            assert len(requests) == 1
+            assert errors == []
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('source', ['url', 'storage'])
+def test_library_agent_waits_for_workspace_selection_before_opening(engine, source):
+    config.set_ai_provider('claude_code')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            held = asyncio.Event()
+            release = asyncio.Event()
+            requests = []
+
+            async def registry(route):
+                held.set()
+                await release.wait()
+                await route.continue_()
+
+            async def respond(route):
+                requests.append((route.request.headers['x-doxograph-workspace'],
+                                 route.request.post_data_json['messages']))
+                await route.fulfill(json={'answer': 'The default library.', 'assistant': 'Claude'})
+
+            if source == 'storage':
+                await page.add_init_script("localStorage.setItem('doxograph-workspace', 'missing')")
+            await page.route('**/api/workspaces', registry)
+            await page.route('**/api/agent/chat', respond)
+            await page.goto(url + ('/#ws=missing' if source == 'url' else ''),
+                            wait_until='domcontentloaded')
+            await asyncio.wait_for(held.wait(), timeout=10)
+            try:
+                assert await page.locator('#btn-agent').is_disabled()
+                await page.locator('#btn-agent').evaluate('button => button.click()')
+                assert await page.locator('#library-agent').is_hidden()
+            finally:
+                release.set()
+
+            await page.locator('#ai-enabled:enabled').wait_for(state='attached')
+            await page.locator('#btn-agent').click()
+            await page.locator('#agent-question').fill('Which library?')
+            await page.locator('#agent-close').click()
+            await page.locator('#btn-agent').click()
+            assert await page.locator('#agent-question').input_value() == 'Which library?'
+            await page.locator('#agent-send').click()
+            await page.get_by_text('The default library.', exact=True).wait_for()
+            assert requests == [('default', [{'role': 'user', 'content': 'Which library?'}])]
+
+    with _server() as url:
+        run_browser(check(url))

@@ -21,10 +21,21 @@ function renderAgentChat() {
   $('agent-question').value = chat.draft;
   $('agent-question').disabled = chat.busy;
   $('agent-clear').disabled = chat.busy;
+  syncAgentChatControls();
+}
+
+function syncAgentChatControls() {
+  const chat = activeAgentChat;
+  if (!chat) return;
+  const enabled = S.ai_enabled === true;
   const ready = S.ai_provider === 'claude_code';
-  $('agent-send').disabled = chat.busy || S.ai_enabled !== true || !ready;
-  $('agent-status').textContent = chat.busy ? 'Looking through the library…' : chat.error
-    || (ready ? '' : 'Choose Claude subscription in Settings → Model access to ask the library.');
+  const setup = [
+    ...(!enabled ? ['Enable AI analysis in Settings.'] : []),
+    ...(!ready ? ['Choose Claude subscription in Settings → Model access.'] : []),
+  ].join(' ');
+  $('agent-send').disabled = chat.busy || !enabled || !ready;
+  $('agent-settings').hidden = !setup;
+  $('agent-status').textContent = chat.busy ? 'Looking through the library…' : setup || chat.error;
 }
 
 $('btn-agent').addEventListener('click', () => {
@@ -35,6 +46,11 @@ $('btn-agent').addEventListener('click', () => {
 });
 $('agent-question').addEventListener('input', () => { if (activeAgentChat) activeAgentChat.draft = $('agent-question').value; });
 $('agent-close').addEventListener('click', () => $('library-agent').close());
+$('agent-settings').addEventListener('click', () => {
+  $('library-agent').close();
+  openSettings();
+  $(S.ai_enabled === true ? 'ai-access' : 'ai-enabled').focus();
+});
 $('agent-clear').addEventListener('click', () => {
   const chat = activeAgentChat;
   if (!chat || chat.busy) return;
