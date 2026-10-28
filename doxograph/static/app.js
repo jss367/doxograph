@@ -1180,7 +1180,7 @@ async function pull() {
   try {
     result = await workspaceClient.pull();
   } catch (error) {
-    if (workspace === workspaceClient.workspaceId) {
+    if (libraryInitialized && workspace === workspaceClient.workspaceId) {
       $('sync-message').textContent = `Library updates paused: ${error.message} Retrying automatically.`;
       $('sync-status').hidden = false;
     }
@@ -5356,10 +5356,13 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
+let libraryInitialized = false;
 const poller = createPoller({ run: updateFromPoll, isVisible: () => !document.hidden });
 // Manual reads wait out an older round so they see changes made after it began.
 const pollOnce = () => poller.afterCurrent();
-$('btn-refresh-library').addEventListener('click', () => pollOnce().catch(() => {}));
+$('btn-refresh-library').addEventListener('click', () => {
+  if (libraryInitialized) pollOnce().catch(() => {});
+});
 
 // One round of the background poll. Keeps settings current while editing; the
 // content guard preserves the editor DOM, draft text, focus, and selection.
@@ -5412,6 +5415,8 @@ async function boot() {
   if (V.view === 'research') renderContent();
   const noteId = new URLSearchParams(location.search).get('note');
   if (noteId) await ResearchNotes.open(noteId);
+  libraryInitialized = true;
+  $('btn-refresh-library').disabled = false;
   poller.start();
   // WKWebView can suspend timers while the Mac app is in the background.
   // Catch up as soon as the window returns, without rebuilding open editors.
