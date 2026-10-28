@@ -1,5 +1,7 @@
 """Evidence judgments are editable beside the claim and distinct from verification."""
 
+import re
+
 import pytest
 from playwright.async_api import expect
 
@@ -36,4 +38,30 @@ def test_manual_evidence_assessment(engine):
                 await page.reload()
                 await expect(page.locator('#content')).to_contain_text('Evaluation set A')
 
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_focused_assessment_fields_have_independent_accessible_labels(engine):
+    config.set_ai_enabled(False)
+    _paper('study', 'A study of monitoring')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-focus-review').click()
+                dialog = page.locator('#focused-review')
+                await dialog.get_by_role('button', name='Edit claim', exact=True).click()
+                await dialog.locator('.evidence-assessment > summary').click()
+                await dialog.get_by_label('Conditions (models, sample sizes, metrics)', exact=True).fill('One model')
+                await dialog.get_by_label('Limitations', exact=True).fill('One task')
+                await dialog.get_by_label('Evidence origin (dataset or experimental run)', exact=True).fill('Run A')
+                await dialog.get_by_role('combobox', name=re.compile('^Relationship to earlier evidence')).select_option('shared_data')
+                await expect(dialog.locator('[name="conditions"]')).to_have_value('One model')
+                await expect(dialog.locator('[name="limitations"]')).to_have_value('One task')
+                await expect(dialog.locator('[name="evidence_origin"]')).to_have_value('Run A')
+                await expect(dialog.locator('[name="evidence_relationship"]')).to_have_value('shared_data')
     run_browser(scenario())

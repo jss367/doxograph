@@ -118,6 +118,7 @@ window.FocusedReview = (() => {
     // The shared editor's labels predate explicit associations. Give this copy
     // associations, both for assistive technology and click-to-focus behavior.
     body.querySelectorAll('form label').forEach((label, i) => {
+      if (label.querySelector('textarea, select, input')) return;
       const field = label.parentElement.querySelector('textarea, select, input');
       if (field && field.type !== 'checkbox') { field.id = `focus-field-${i}`; label.htmlFor = field.id; }
     });
