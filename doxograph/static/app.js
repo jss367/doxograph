@@ -4441,11 +4441,9 @@ $('ai-access').addEventListener('change', async () => {
       body: JSON.stringify({ ai_provider: provider }),
     });
     S.ai_provider = settings.ai_provider;
-    if (S.ai_provider === 'codex') {
-      codexModelEdited = false;
-      showCodexModelFields();
-      if (!codexModelsLoaded) loadCodexModels();
-    }
+    // The open Settings panel already owns the draft, including custom-mode
+    // intent. Returning to Codex reveals it without replacing it with saved state.
+    if (S.ai_provider === 'codex' && !codexModelsLoaded) loadCodexModels();
     workspaceClient.invalidateState();
     $('ai-settings-status').textContent = 'Model access saved.';
   } catch (error) {
