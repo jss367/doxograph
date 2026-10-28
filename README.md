@@ -262,6 +262,17 @@ The header's **More workspace actions** menu also holds **Create workspace**,
 Active filters remain visible as removable chips after the controls close.
 Select claims or papers to reveal **Compare & organize** and **Clear selection**.
 
+The sidebar groups tools under **Library**, **Review**, and **Write**. The buttons
+at its top focus one group, or expand and collapse individual groups to suit
+your task; the browser remembers your choices.
+The paper list scrolls within the library so a large collection does not push
+the other tools out of reach. **Add papers** starts collapsed when the workspace
+already has papers; open it or use **Jump to… → Add papers** to import more.
+
+If startup fails, the app distinguishes a connection failure from an interface
+failure and offers **Reload library**, with technical details available separately.
+Reloading fetches fresh interface files after an update.
+
 Export HTML writes the file and then offers to open it or to copy its path. A
 reference that nothing identifies stays in the box and is named underneath it,
 so it is clear which line of a pasted list is the problem.

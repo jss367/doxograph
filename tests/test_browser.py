@@ -1935,6 +1935,7 @@ def test_a_reference_already_in_the_corpus_is_named_straight_away():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
+                await page.locator("#paper-import > summary").click()
                 await page.fill("#refs", "https://arxiv.org/abs/2602.06941v2")
                 await page.locator("#btn-add").click()
                 await page.locator("#toasts .toast",
@@ -5537,7 +5538,7 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window(engine):
                     content_type="text/css",
                 )
 
-            await page.route("**/app.css", bigger_root)
+            await page.route("**/app.css*", bigger_root)
             with _server() as url:
                 await page.goto(url)
                 side = page.locator("#side")

@@ -147,6 +147,28 @@ header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-le
 #side { width: var(--side-width); flex: 0 0 var(--side-width); border-right: 1px solid var(--line);
   height: 100%; overflow-y: auto; padding: 1.2rem 1rem; background: var(--panel); }
 #main { flex: 1; min-width: 0; height: 100%; overflow-y: auto; padding: 2rem 2.5rem 5rem; }
+.startup-error { margin: 1rem; padding: 1rem 1.25rem; border: 1px solid var(--accent);
+  border-radius: 10px; background: var(--panel); }
+.startup-error[hidden] { display: none; }
+.startup-error h2 { font-size: 1rem; margin: 0; }
+.startup-error p { margin: .5rem 0; }
+.startup-error details { margin-top: .75rem; font-size: .8rem; }
+.startup-error pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sidebar-focus { display: flex; gap: .25rem; position: sticky; top: -1.2rem; z-index: 2;
+  background: var(--panel); margin: -1.2rem -1rem .9rem; padding: .75rem 1rem;
+  border-bottom: 1px solid var(--line); }
+.sidebar-focus button { flex: 1; min-width: 0; padding: .4rem .25rem; font-size: .8rem;
+  background: transparent; border-color: transparent; color: var(--muted); }
+.sidebar-focus button:hover, .sidebar-focus button[aria-pressed=true] {
+  background: var(--sel); color: var(--accent); }
+.sidebar-group { padding-bottom: 1rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
+.sidebar-group > summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
+.sidebar-description { display: block; margin: .2rem 0 .8rem; font-size: .72rem;
+  font-weight: 400; color: var(--muted); }
+.sidebar-group > .sec { margin-top: 1rem; }
+.sidebar-group #paper-import { margin-top: .75rem; padding-bottom: .75rem; }
+.sidebar-group .research-tools-nav { margin-top: .5rem; }
+.paper-library .plist { max-height: 30dvh; overflow-y: auto; overscroll-behavior: contain; }
 .library-heading { margin-bottom: 1.75rem; }
 .eyebrow { margin: 0 0 .35rem; color: var(--accent); font-size: .7rem;
   font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
@@ -199,10 +221,10 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .row.right { justify-content: flex-end; }
 
 .sec { margin-top: 1.5rem; }
-.sec h2 { font-size: .68rem; text-transform: uppercase; letter-spacing: .08em;
+.sec :is(h2, h3) { font-size: .68rem; text-transform: uppercase; letter-spacing: .08em;
   color: var(--muted); margin: 0 0 .4rem; font-weight: 600; }
 .sechead { display: flex; align-items: baseline; justify-content: space-between; gap: .4rem; }
-.sechead h2 { margin-bottom: 0; }
+.sechead :is(h2, h3) { margin-bottom: 0; }
 .sechead select { font-size: .74rem; color: var(--muted); border: none; background: transparent; padding: 0; cursor: pointer; }
 .sec .sechead + .plist { margin-top: .4rem; }
 

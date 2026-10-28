@@ -10,6 +10,7 @@ import json
 import logging
 import functools
 import os
+import re
 import threading
 import traceback
 import uuid
@@ -985,86 +986,107 @@ class WorkspaceBody(BaseModel):
 
 # --- routes ---------------------------------------------------------------
 
+def _frontend_response(name: str, media_type: str) -> FileResponse:
+    # WebKit must not reuse one module from an earlier installation while
+    # loading app.js from the current one.
+    return FileResponse(STATIC / name, media_type=media_type,
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return (STATIC / "index.html").read_text(encoding="utf-8")
+def index() -> HTMLResponse:
+    source = (STATIC / "index.html").read_text(encoding="utf-8")
+    assets = sorted([*STATIC.glob("*.js"), *STATIC.glob("*.css")])
+    digest = hashlib.sha256(source.encode())
+    for asset in assets:
+        digest.update(asset.name.encode())
+        digest.update(asset.read_bytes())
+    version = digest.hexdigest()[:20]
+    # A new URL also bypasses previously cached responses that predate the
+    # no-store policy. Vendor assets keep their existing URLs.
+    source = re.sub(r'((?:src|href)="/)([\w-]+\.(?:js|css))"',
+                    lambda match: f'{match[1]}{match[2]}?v={version}"', source)
+    return HTMLResponse(source, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/app.css", response_class=PlainTextResponse)
-def app_css() -> PlainTextResponse:
-    return PlainTextResponse((STATIC / "app.css").read_text(encoding="utf-8"), media_type="text/css")
+def app_css() -> FileResponse:
+    return _frontend_response("app.css", "text/css")
 
 
 @app.get("/app.js", response_class=PlainTextResponse)
-def app_js() -> PlainTextResponse:
-    return PlainTextResponse(
-        (STATIC / "app.js").read_text(encoding="utf-8"), media_type="application/javascript"
-    )
+def app_js() -> FileResponse:
+    return _frontend_response("app.js", "application/javascript")
+
+
+@app.get("/startup.js")
+def startup_js() -> FileResponse:
+    return _frontend_response("startup.js", "text/javascript")
 
 
 @app.get("/research-tools.js")
 def research_tools_js() -> FileResponse:
-    return FileResponse(STATIC / "research-tools.js", media_type="text/javascript")
+    return _frontend_response("research-tools.js", "text/javascript")
 
 
 @app.get("/workspace-notes.js")
 def workspace_notes_js() -> FileResponse:
-    return FileResponse(STATIC / "workspace-notes.js", media_type="text/javascript")
+    return _frontend_response("workspace-notes.js", "text/javascript")
 
 
 @app.get("/research-tools.css")
 def research_tools_css() -> FileResponse:
-    return FileResponse(STATIC / "research-tools.css", media_type="text/css")
+    return _frontend_response("research-tools.css", "text/css")
 
 
 @app.get("/note-writing.js")
 def note_writing_js() -> FileResponse:
-    return FileResponse(STATIC / "note-writing.js", media_type="text/javascript")
+    return _frontend_response("note-writing.js", "text/javascript")
 
 
 @app.get("/research-notes.js")
 def research_notes_js() -> FileResponse:
-    return FileResponse(STATIC / "research-notes.js", media_type="text/javascript")
+    return _frontend_response("research-notes.js", "text/javascript")
 
 
 @app.get("/research-notes.css")
 def research_notes_css() -> FileResponse:
-    return FileResponse(STATIC / "research-notes.css", media_type="text/css")
+    return _frontend_response("research-notes.css", "text/css")
 
 
 @app.get("/agent-chat.js")
 def agent_chat_js():
-    return FileResponse(STATIC / "agent-chat.js", media_type="text/javascript")
+    return _frontend_response("agent-chat.js", "text/javascript")
 
 
 @app.get("/focused-review.js")
 def focused_review_js() -> FileResponse:
-    return FileResponse(STATIC / "focused-review.js", media_type="text/javascript")
+    return _frontend_response("focused-review.js", "text/javascript")
 
 
 @app.get("/appearance.js")
 def appearance_js() -> FileResponse:
-    return FileResponse(STATIC / "appearance.js", media_type="text/javascript")
+    return _frontend_response("appearance.js", "text/javascript")
 
 
 @app.get("/paper-map.js")
 def paper_map_js() -> FileResponse:
-    return FileResponse(STATIC / "paper-map.js", media_type="text/javascript")
+    return _frontend_response("paper-map.js", "text/javascript")
 
 
 @app.get("/workspace-client.js")
 def workspace_client_js() -> FileResponse:
-    return FileResponse(STATIC / "workspace-client.js", media_type="text/javascript")
+    return _frontend_response("workspace-client.js", "text/javascript")
 
 
 @app.get("/workspace-controller.js")
 def workspace_controller_js() -> FileResponse:
-    return FileResponse(STATIC / "workspace-controller.js", media_type="text/javascript")
+    return _frontend_response("workspace-controller.js", "text/javascript")
 
 
 @app.get("/poller.js")
 def poller_js() -> FileResponse:
-    return FileResponse(STATIC / "poller.js", media_type="text/javascript")
+    return _frontend_response("poller.js", "text/javascript")
 
 
 @app.get("/favicon.png")

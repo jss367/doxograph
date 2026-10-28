@@ -92,7 +92,7 @@ function layoutPanes(reading) {
   $('panes').classList.toggle('reading', Boolean(reading));
   if (Boolean(reading) !== wasReading) {
     $('main').scrollTop = 0;
-    $('paper-import').open = !reading;
+    if (reading) $('paper-import').open = false;
     document.body.classList.remove('library-collapsed', 'reading-filters-open');
     const narrow = reading && window.matchMedia('(max-width: 800px)').matches;
     setReadingLibrary(Boolean(narrow));
@@ -116,6 +116,7 @@ function setReadingFilters(open) {
 }
 
 function focusClaimSearch() {
+  revealSidebar($('papers'));
   if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
   if (readingPaper()) setReadingFilters(true);
   $('q').focus();
@@ -124,6 +125,7 @@ function focusClaimSearch() {
 
 function focusPaperImport() {
   if (readingPaper()) setReadingLibrary(false);
+  revealSidebar($('paper-import'));
   $('paper-import').open = true;
   $('refs').focus();
 }
@@ -229,6 +231,37 @@ function refuseWhileRemoving(paper, what) {
 }
 
 const $ = (id) => document.getElementById(id);
+
+function revealSidebar(target) {
+  const group = target?.closest('[data-sidebar-group]');
+  if (group) group.open = true;
+}
+
+function syncSidebarFocus() {
+  const open = [...document.querySelectorAll('[data-sidebar-group]')].filter(group => group.open);
+  document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
+    button.setAttribute('aria-pressed', String(open.length === 1 && open[0].dataset.sidebarGroup === button.dataset.sidebarFocus));
+  });
+}
+
+document.querySelectorAll('[data-sidebar-group]').forEach(group => {
+  const key = `doxograph-sidebar:${group.dataset.sidebarGroup}`;
+  try { group.open = localStorage.getItem(key) !== 'closed'; } catch (_) { /* optional */ }
+  group.addEventListener('toggle', () => {
+    try { localStorage.setItem(key, group.open ? 'open' : 'closed'); } catch (_) { /* optional */ }
+    syncSidebarFocus();
+  });
+});
+document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
+  button.addEventListener('click', () => {
+    document.querySelectorAll('[data-sidebar-group]').forEach(group => {
+      group.open = group.dataset.sidebarGroup === button.dataset.sidebarFocus;
+    });
+    syncSidebarFocus();
+    $('side').scrollTop = 0;
+  });
+});
+syncSidebarFocus();
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -1751,7 +1784,14 @@ function addedLabel(p) {
   return `<time datetime="${esc(p.added)}" title="added ${esc(p.added)}">${esc(day)}</time>`;
 }
 
+let importWorkspace = null, importPaperCount = 0;
 function renderPapers() {
+  if (!$('refs').value.trim()) {
+    if (importWorkspace !== workspaceClient.workspaceId) $('paper-import').open = S.papers.length === 0;
+    else if (!importPaperCount && S.papers.length) $('paper-import').open = false;
+  }
+  importWorkspace = workspaceClient.workspaceId;
+  importPaperCount = S.papers.length;
   const claims = V.view === 'claims';
   const byAdded = V.paperSort.startsWith('added');
   const matched = matchingPapers();
@@ -2665,6 +2705,9 @@ $('panes').addEventListener('submit', async (event) => {
 });
 
 function showView(view) {
+  const destination = {claims: 'papers', graph: 'graph-nav', research: 'research-nav',
+    tensions: 'tensions-nav', agreements: 'agreements-nav'}[view];
+  if (destination) revealSidebar($(destination));
   if (view === V.view) return;
   if (V.view === 'research') captureResearchDraft();
   // Neither the tensions view nor the map has an editor. Park any open one
@@ -4921,7 +4964,10 @@ const CommandPalette = (() => {
       `${b.entries.length} entries · Evidence board`, () => ResearchTools.openBoard(b.id)));
     add('all', 'Action', 'Show all papers', 'Browse every claim in this workspace', () => library(), 'library home');
     const click = (id, title, keywords = '') => {
-      if (!$(id).disabled) add(id, 'Action', title, '', () => $(id).click(), keywords);
+      if (!$(id).disabled) add(id, 'Action', title, '', () => {
+        revealSidebar($(id));
+        $(id).click();
+      }, keywords);
     };
     const view = (id, title, next) => add(id, 'Action', title, '', () => {
       if (V.view === next) return;
@@ -4935,7 +4981,11 @@ const CommandPalette = (() => {
     ['boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
       const titles = {boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
         connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
-      add(`tool:${tool}`, 'Action', titles[tool], '', () => document.querySelector(`[data-tool="${tool}"]`).click());
+      add(`tool:${tool}`, 'Action', titles[tool], '', () => {
+        const target = document.querySelector(`[data-tool="${tool}"]`);
+        revealSidebar(target);
+        target.click();
+      });
     });
     add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', focusPaperImport, 'import');
     add('search', 'Action', 'Search claims and PDF text', '', focusClaimSearch);
@@ -5235,9 +5285,13 @@ async function boot() {
   ResearchTools.connect(workspaceClient);
   window.FocusedReview.connect(workspaceClient);
   connectPaperMap(workspaceClient);
+  AppStartup.phase('connection');
   await loadWorkspaces();
   applyHash();
-  await refresh();
+  const changed = await pull();
+  AppStartup.phase('interface');
+  if (changed) corpusChanged();
+  render();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   // A filter the URL named that the corpus does not have is already gone: the
@@ -5255,7 +5309,4 @@ async function boot() {
   poller.start();
 }
 
-boot().catch((error) => {
-  document.getElementById('content').innerHTML =
-    `<p class="warn">Could not reach the server: ${esc(error.message)}</p>`;
-});
+AppStartup.run(boot);
