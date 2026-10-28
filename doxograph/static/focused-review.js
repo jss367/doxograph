@@ -70,6 +70,7 @@ window.FocusedReview = (() => {
             <span>${esc(item.strength)}</span></div>
           <h3>${esc(item.text)}</h3>
           <p class="hint">${esc((item.tags || []).map(tag => '#' + tag).join(' '))}</p>
+          ${evidenceQualityHtml(item)}
           ${item.evidence ? `<h4>Evidence</h4><p>${esc(item.evidence)}</p>` : ''}
           <h4>Quote ${item.quote_verified === false ? '<span class="qflag">not found in PDF</span>' : ''}</h4>
           ${item.quote ? `<blockquote>${esc(item.quote)}</blockquote>` : '<p class="hint">No quote recorded.</p>'}
@@ -117,6 +118,7 @@ window.FocusedReview = (() => {
     // The shared editor's labels predate explicit associations. Give this copy
     // associations, both for assistive technology and click-to-focus behavior.
     body.querySelectorAll('form label').forEach((label, i) => {
+      if (label.querySelector('textarea, select, input')) return;
       const field = label.parentElement.querySelector('textarea, select, input');
       if (field && field.type !== 'checkbox') { field.id = `focus-field-${i}`; label.htmlFor = field.id; }
     });

@@ -308,5 +308,6 @@ const ResearchNotes = (() => {
     if (file) { event.preventDefault(); event.stopPropagation(); run(() => upload(file)); }
   });
   window.addEventListener('beforeunload', event => { if (isDirty()) { event.preventDefault(); event.returnValue = ''; } });
-  return {connect(value) { client = value; }, open, beforeWorkspaceSwitch:async () => !el('research-notes').open || await close()};
+  return {connect(value) { client = value; }, open, hasUnsavedChanges: () => Boolean(isDirty() || busy),
+    beforeWorkspaceSwitch:async () => !el('research-notes').open || await close()};
 })();

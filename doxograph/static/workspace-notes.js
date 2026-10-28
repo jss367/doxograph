@@ -237,6 +237,7 @@ const WorkspaceNotes = (() => {
     });
   });
   return {connect(value) { client = value; }, sync, open, flush, reveal,
+    hasUnsavedChanges: () => Boolean(changed() || saving || upload || reloading),
     async beforeWorkspaceSwitch() {
       if (await flush()) return true;
       reveal();

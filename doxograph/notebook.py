@@ -13,7 +13,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Path
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 from . import config, storage, store
 
@@ -36,12 +36,32 @@ class Entry(Model):
     kind: Literal["claim", "heading", "note"]
     text: str = ""
     reference: Reference | None = None
+    stance: Literal["supporting", "opposing", "qualifying", "background"] = "background"
+
+
+def is_question(board: dict) -> bool:
+    return (board.get("kind") == "question"
+            or any(board.get(field) for field in ("question", "conclusion", "open_questions"))
+            or any(entry.get("kind") == "claim" and entry.get("stance", "background") != "background"
+                   for entry in board.get("entries", [])))
 
 
 class Board(Model):
+    kind: Literal["board", "question"] = "board"
     id: str
     title: str = Field(min_length=1, max_length=300)
     entries: list[Entry] = Field(default_factory=list)
+    question: str = Field(default="", max_length=20000)
+    conclusion: str = Field(default="", max_length=100000)
+    open_questions: str = Field(default="", max_length=100000)
+
+    @model_validator(mode="after")
+    def retain_question_identity(self) -> Board:
+        # Migrate earlier questions on read and keep their identity when text or
+        # stances are cleared in a later save. Ordinary boards remain boards.
+        if is_question(self.model_dump()):
+            self.kind = "question"
+        return self
 
 
 class SavedSearch(Model):
@@ -262,7 +282,8 @@ def bulk(body: Bulk) -> dict:
 def claim_fields(claim: dict) -> dict:
     defaults = {"text": "", "kind": "finding", "strength": "supporting", "tags": [],
                 "evidence": "", "quote": "", "locator": "", "ledger_links": [],
-                "note": "", "reviewed": False}
+                "note": "", "reviewed": False, "conditions": "", "limitations": "",
+                "evidence_origin": "", "evidence_relationship": "unassessed"}
     return {k: copy.deepcopy(claim.get(k, v)) for k, v in defaults.items()}
 
 
@@ -377,6 +398,16 @@ def export_selection(body: Selection) -> Response:
         if not board:
             raise HTTPException(404, "Board no longer exists")
         title, entries = board["title"], board["entries"]
+        if is_question(board):
+            entries = [
+                {"kind": "heading", "text": "Research question"},
+                {"kind": "note", "text": board["question"]},
+                {"kind": "heading", "text": "Working conclusion"},
+                {"kind": "note", "text": board["conclusion"]},
+                {"kind": "heading", "text": "Open questions"},
+                {"kind": "note", "text": board["open_questions"]},
+                *entries,
+            ]
     else:
         refs = [r.model_dump() for r in body.claims]
         seen = {(r["paper"], r["claim"]) for r in refs}
@@ -395,12 +426,14 @@ def export_selection(body: Selection) -> Response:
     lines = ["# " + md(title), ""]
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["Type", "Text", "Paper", "Authors", "Year", "Claim ID", "Quote", "Page or section", "Evidence", "Topics", "Claim note", "Paper note", "Commentary", "Source"])
+    header = ["Type", "Text", "Paper", "Authors", "Year", "Claim ID", "Quote", "Page or section", "Evidence", "Topics", "Claim note", "Paper note", "Commentary", "Source", "Conditions", "Limitations", "Evidence origin", "Replication assessment", "Bearing on question"]
+    writer.writerow(header)
     for entry in entries:
         kind, text = entry["kind"], entry.get("text", "")
+        stance = entry.get("stance", "background") if body.board and is_question(board) else ""
         if kind != "claim":
             lines.extend([("## " if kind == "heading" else "") + md(text), ""])
-            writer.writerow([kind, spreadsheet(text)] + [""] * 12)
+            writer.writerow([kind, spreadsheet(text)] + [""] * (len(header) - 2))
             continue
         try:
             row = resolve(entry["reference"])
@@ -409,13 +442,19 @@ def export_selection(body: Selection) -> Response:
                 raise
             text = f"Missing source: {entry['reference']['paper']} / {entry['reference']['claim']}\n{text}"
             lines.extend([md(text), ""])
-            writer.writerow(["missing", spreadsheet(text)] + [""] * 12)
+            if stance:
+                lines.extend(["Bearing on question: " + md(stance), ""])
+            writer.writerow(["missing", spreadsheet(text)] + [""] * (len(header) - 3) + [spreadsheet(stance)])
             continue
         source = row.get("source", {}).get("url", "")
         citation = f"{'; '.join(row['paper_authors'])} ({row['paper_year'] or 'year unknown'}). {row['paper_title']}. {row.get('locator', '')}"
         lines.extend(["### " + md(row.get("text", "")), "", md(citation), "",
                       "> " + md(row.get("quote", "")).replace("\n", "\n> "), ""])
         for label, value in (("Evidence", row.get("evidence")), ("Topics", ", ".join(row.get("tags", []))),
+                             ("Conditions", row.get("conditions")), ("Limitations", row.get("limitations")),
+                             ("Evidence origin", row.get("evidence_origin")),
+                             ("Replication assessment", row.get("evidence_relationship")),
+                             ("Bearing on question", stance),
                              ("My note", row.get("note")), ("Paper note", row["paper_notes"]),
                              ("Commentary", text), ("Source", source),
                              ("Reference", row["paper"] + " / " + row["id"])):
@@ -424,7 +463,9 @@ def export_selection(body: Selection) -> Response:
         writer.writerow([spreadsheet(v) for v in ["claim", row.get("text"), row["paper_title"],
             "; ".join(row["paper_authors"]), row["paper_year"], row["id"], row.get("quote"),
             row.get("locator"), row.get("evidence"), ", ".join(row.get("tags", [])), row.get("note"),
-            row["paper_notes"], text, source]])
+            row["paper_notes"], text, source, row.get("conditions"), row.get("limitations"),
+            row.get("evidence_origin"), row.get("evidence_relationship"),
+            stance]])
     is_csv = body.format == "csv"
     filename = (store.slugify(title) or "selected-research") + (".csv" if is_csv else ".md")
     return Response(output.getvalue() if is_csv else "\n".join(lines),

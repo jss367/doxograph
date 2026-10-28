@@ -15,7 +15,7 @@ QueryText = Annotated[str, Query(max_length=1000)]
 # A client that must not read the user's own writing (the in-app agent) asks for
 # the personal fields to be left out; nothing that serves it should match on them either.
 OmitNotes = Annotated[bool, Query()]
-PERSONAL_CLAIM_FIELDS = ("note", "ledger_links")
+PERSONAL_CLAIM_FIELDS = ("note", "ledger_links", "conditions", "limitations", "evidence_origin", "evidence_relationship")
 
 
 def matches(q: str, *values) -> bool:
