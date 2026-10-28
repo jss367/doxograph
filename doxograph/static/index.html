@@ -21,7 +21,7 @@
   <div class="actions">
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
-    <button type="button" id="btn-agent" data-ai-action disabled title="Ask questions across every paper in this library">Ask the library</button>
+    <button type="button" id="btn-agent" disabled title="Ask questions across every paper in this library">Ask the library</button>
     <button type="button" id="btn-export">Export HTML</button>
     <details id="workspace-actions" class="action-disclosure">
       <summary aria-label="More workspace actions" title="More workspace actions">•••</summary>
@@ -441,7 +441,8 @@
     <label for="agent-question">Question about the library</label>
     <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
     <p class="hint" id="agent-status" role="status"></p>
-    <div class="row right"><button type="button" id="agent-clear">New conversation</button>
+    <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
+      <button type="button" id="agent-clear">New conversation</button>
       <button type="submit" class="primary" id="agent-send">Send</button></div>
   </form>
 </dialog>

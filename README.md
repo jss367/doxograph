@@ -144,8 +144,10 @@ selected in Settings and is disabled when AI analysis is off.
 ## Ask the library
 
 **Ask the library** in the header opens a chat that answers across every paper in
-the workspace, where paper chat reads one PDF. It needs **Claude subscription
-(Claude Code)** selected in Settings → Model access. Claude looks things up
+the workspace, where paper chat reads one PDF. It needs AI analysis enabled and
+**Claude subscription (Claude Code)** selected in Settings → Model access. If
+either is missing, the dialog explains what to change and offers **Open Settings**.
+Claude looks things up
 through the [MCP server](#query-doxograph-from-agents) below, started with
 `--without-notes`: it can search papers, claims, and PDF text, read a paper,
 list topics, and read agreements, tensions, and syntheses. The line under each
