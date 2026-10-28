@@ -206,7 +206,9 @@ uploaded PDF, including after a relaunch. Interrupted imports return with
 shutdown may already have completed and can run again. Other interrupted
 analysis passes report the interruption and can be started again from their
 paper or topic. Successful imports offer **Open paper** and disappear after
-eight seconds, pausing while you hover over or focus the notification. Opening
+eight seconds, pausing while you hover over or focus the notification, or while
+the page is in the background. Reloading the page or returning to a workspace
+starts a fresh countdown for notifications still present. Opening
 the paper also dismisses its notification. Failed imports stay until dismissed
 or retried. You can dismiss a finished notification with **×** at any time;
 this keeps the paper in your library.

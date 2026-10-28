@@ -1,5 +1,6 @@
 """Successful import notices expire after time the reader can use them."""
 
+import asyncio
 import os
 from datetime import datetime, timezone
 
@@ -61,7 +62,15 @@ def test_import_timeout_pauses_for_hover_and_focus_and_preserves_failures(engine
                     "files": ("broken.pdf", b"not a PDF", "application/pdf"),
                 })
                 assert response.status_code == 200
-                await _poll(page)
+                # Upload acceptance precedes background PDF validation. With
+                # the browser clock frozen, keep polling explicitly until the
+                # worker publishes its failure instead of relying on a tick.
+                deadline = asyncio.get_running_loop().time() + 10
+                while asyncio.get_running_loop().time() < deadline:
+                    await _poll(page)
+                    if await page.locator('#jobs .job.error').count() == 2:
+                        break
+                    await asyncio.sleep(0.05)
                 await expect(page.locator('#jobs .job.error')).to_have_count(2)
                 await expect(open_paper).to_be_focused()
                 await page.clock.run_for(10000)
@@ -124,5 +133,117 @@ def test_import_timeout_only_counts_visible_cards_in_the_current_workspace(engin
                 await expect(notices).to_have_count(0)
                 assert httpx.get(url + "/api/jobs").json()["jobs"] == []
                 assert len(store.paper_keys()) == 7
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_import_timeout_cannot_dismiss_old_cards_while_workspace_loads(engine):
+    saved_notice(1)
+    other = config.create_workspace("Other research")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            await freeze_clock(page)
+            with _server() as url:
+                await page.goto(url)
+                notices = page.locator('#jobs [data-auto-dismiss]')
+                await expect(notices).to_have_count(1)
+                await page.clock.run_for(7000)
+                held, release = asyncio.Event(), asyncio.Event()
+                deletes = []
+                page.on("request", lambda request: deletes.append(request.headers)
+                        if request.method == "DELETE" and "/api/jobs/" in request.url else None)
+
+                async def hold_destination(route):
+                    if route.request.headers.get("x-doxograph-workspace") == other["id"]:
+                        held.set()
+                        await release.wait()
+                    await route.continue_()
+
+                await page.route("**/api/state", hold_destination)
+                try:
+                    await page.select_option('#workspace', other["id"])
+                    await asyncio.wait_for(held.wait(), timeout=10)
+                    await expect(notices).to_have_count(1)
+                    # The old DOM is connected after selection until the new
+                    # workspace's state arrives. Its timer must not act there.
+                    await page.clock.run_for(10000)
+                    assert deletes == []
+                    await notices.get_by_role("button", name="Dismiss notification for study-1").click()
+                    await page.mouse.move(0, 0)
+                    await page.wait_for_function("workspaceClient.pendingMutations === 0")
+                    assert deletes == []
+                    await expect(page.locator('#toasts')).not_to_contain_text("Job not found")
+                    assert len(httpx.get(url + "/api/jobs").json()["jobs"]) == 1
+                finally:
+                    release.set()
+                await expect(notices).to_have_count(0)
+                await page.select_option('#workspace', config.DEFAULT_WORKSPACE_ID)
+                await expect(notices).to_have_count(1)
+                await page.clock.run_for(8000)
+                await expect(notices).to_have_count(0)
+                assert [headers["x-doxograph-workspace"] for headers in deletes] == [config.DEFAULT_WORKSPACE_ID]
+                assert store.load_paper("study-1")["title"] == "Study 1"
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_reloading_an_unexpired_import_notice_starts_a_fresh_countdown(engine):
+    saved_notice(1)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            await freeze_clock(page)
+            with _server() as url:
+                await page.goto(url)
+                notices = page.locator('#jobs [data-auto-dismiss]')
+                await expect(notices).to_have_count(1)
+                await page.clock.run_for(3000)
+                await page.reload()
+                await expect(notices).to_have_count(1)
+                await page.clock.run_for(7999)
+                await expect(notices).to_have_count(1)
+                await page.clock.run_for(1)
+                await expect(notices).to_have_count(0)
+                assert httpx.get(url + "/api/jobs").json()["jobs"] == []
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_import_timeout_pauses_while_page_is_hidden(engine):
+    saved_notice(1)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            await freeze_clock(page)
+            with _server() as url:
+                await page.goto(url)
+                notices = page.locator('#jobs [data-auto-dismiss]')
+                await expect(notices).to_have_count(1)
+                await page.clock.run_for(3000)
+                await page.evaluate("""() => {
+                    Object.defineProperty(document, 'hidden', {configurable:true, value:true});
+                    document.dispatchEvent(new Event('visibilitychange'));
+                }""")
+                await page.clock.run_for(10000)
+                await expect(notices).to_have_count(1)
+                await page.evaluate("""() => {
+                    Object.defineProperty(document, 'hidden', {configurable:true, value:false});
+                    document.dispatchEvent(new Event('visibilitychange'));
+                }""")
+                await page.clock.run_for(4999)
+                await expect(notices).to_have_count(1)
+                await page.clock.run_for(1)
+                await expect(notices).to_have_count(0)
+                assert httpx.get(url + "/api/jobs").json()["jobs"] == []
 
     run_browser(scenario())

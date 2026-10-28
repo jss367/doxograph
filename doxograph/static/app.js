@@ -3102,13 +3102,15 @@ const pendingJobActions = new Set();
 const jobTimeouts = new Map();
 
 function jobTimeoutPaused(card) {
-  return card.matches(':hover') || card.contains(document.activeElement);
+  return document.hidden || card.matches(':hover') || card.contains(document.activeElement);
 }
 
 function syncJobTimeouts() {
+  const workspace = workspaceClient.workspaceId;
   const visible = new Set();
   for (const card of $('jobs').querySelectorAll('[data-auto-dismiss]')) {
     const key = card.dataset.jobKey;
+    if (!key.startsWith(`${workspace}:`)) continue;
     visible.add(key);
     if (!jobTimeouts.has(key)) {
       jobTimeouts.set(key, { remaining: 8000, timer: null, expired: false });
@@ -3126,7 +3128,7 @@ function syncJobTimeouts() {
       entry.timer = setTimeout(() => {
         entry.timer = null;
         entry.remaining = 0;
-        if (!entry.card.isConnected || !jobTimeouts.has(key)) return;
+        if (workspace !== workspaceClient.workspaceId || !entry.card.isConnected || !jobTimeouts.has(key)) return;
         if (jobTimeoutPaused(entry.card)) return;
         // Use the same persisted dismissal as the close button. On failure,
         // leave the card available for a manual retry instead of looping.
@@ -3148,6 +3150,7 @@ function syncJobTimeouts() {
 for (const type of ['focusin', 'focusout']) {
   $('jobs').addEventListener(type, () => queueMicrotask(syncJobTimeouts));
 }
+document.addEventListener('visibilitychange', syncJobTimeouts);
 
 function openPaper(paper) {
   captureOpenEditor();
@@ -3212,6 +3215,8 @@ $('jobs').addEventListener('click', async (event) => {
   if (!button || button.disabled) return;
   const workspace = workspaceClient.workspaceId;
   const actionKey = `${workspace}:${button.dataset.jobId}`;
+  // Selection changes before the destination read retires the previous DOM.
+  if (button.closest('.job').dataset.jobKey !== actionKey) return;
   if (pendingJobActions.has(actionKey)) return;
   pendingJobActions.add(actionKey);
   button.disabled = true;
