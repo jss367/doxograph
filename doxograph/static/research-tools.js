@@ -478,7 +478,7 @@ const ResearchTools = (() => {
     if (page.rendering || pageSelected(page)) return;
     for (const canvas of page.el.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
     page.el.innerHTML = ''; page.el.classList.add('pending'); page.renderedAt = 0;
-    page.text = null;
+    page.text = null; page.quoteIndex = null; page.quoteRects = null;
     page.pdfPage?.cleanup();
   }
   function pageNear(page) {
@@ -510,7 +510,8 @@ const ResearchTools = (() => {
       if (page.renderedAt === scale) { sizePage(page); return; }
       const viewport = pdfPage.getViewport({scale});
       const container = page.el;
-      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div>';
+      container.innerHTML = '<canvas></canvas><div class="highlightLayer"></div><div class="textLayer"></div><div class="annotationLayer"></div>';
+      page.quoteIndex = null; page.quoteRects = null; page.annotationMarkup = null;
       keepingView(() => {
         container.style.width = `${viewport.width}px`;
         container.style.height = `${viewport.height}px`;
@@ -528,6 +529,7 @@ const ResearchTools = (() => {
       if (reader?.generation !== generation || pageScale(page) !== scale) return;
       await new reader.pdfjs.TextLayer({textContentSource:content, container:container.querySelector('.textLayer'), viewport}).render();
       if (reader?.generation !== generation || pageScale(page) !== scale) return;
+      page.quoteRects = new Map();
       page.hasText = content.items.some(item => item.str?.trim());
       page.renderedAt = scale;
       container.classList.remove('pending');
@@ -563,12 +565,170 @@ const ResearchTools = (() => {
   function paperHighlights(paper) {
     return (client.state.notebook?.highlights || []).filter(h => h.paper === paper);
   }
+  // Match quotes.squash: NFKD decomposition, Unicode case folding, then
+  // letters/numbers only. These are the folds that differ from lowercase
+  // after decomposition; Cherokee folds to uppercase rather than lowercase.
+  const quoteFolds = {'ß':'ss', 'ẞ':'ss', 'ς':'σ', '\u0345':'ι',
+    'ᲀ':'в', 'ᲁ':'д', 'ᲂ':'о', 'ᲃ':'с', 'ᲄ':'т', 'ᲅ':'т', 'ᲆ':'ъ', 'ᲇ':'ѣ', 'ᲈ':'ꙋ'};
+  const quoteLetters = text => Array.from(text.normalize('NFKD'), char =>
+    /[\u13a0-\u13f5\u13f8-\u13fd\uab70-\uabbf]/u.test(char) ? char.toUpperCase() : quoteFolds[char] || char.toLowerCase()
+  ).join('').replace(/[^\p{L}\p{N}]/gu, '');
+  function loadQuoteText() {
+    const active = reader;
+    if (!active || active.quoteText || active.quoteTextTask) return;
+    // Text only, one page at a time: global ambiguity and page-break matches
+    // need every page, but offscreen canvases and DOM layers stay unloaded.
+    active.quoteTextTask = (async () => {
+      let text = '';
+      const pages = [];
+      for (const page of active.pages) {
+        const pdfPage = page.pdfPage || await active.document.getPage(page.number);
+        if (reader !== active) return;
+        const content = page.text || await pdfPage.getTextContent();
+        if (reader !== active) return;
+        const normalized = quoteLetters(content.items.map(item => item.str || '').join(''));
+        pages.push({start:text.length, text:normalized});
+        text += normalized;
+        if (page.pdfPage !== pdfPage && !page.rendering) pdfPage.cleanup();
+      }
+      active.quoteText = {text, pages};
+      active.quoteMatches = new Map();
+      redrawHighlights();
+    })().catch(error => {
+      if (reader === active) toast(`Could not locate claim passages: ${error.message}`, {tone:'warn'});
+    }).finally(() => { active.quoteTextTask = null; });
+  }
+  function annotationQuote(claim) {
+    const active = reader;
+    if (!active.quoteText || active.quoteText.text.includes(quoteLetters(claim.quote))) return claim.quote;
+    // The verifier also accepts small wording/OCR differences. Resolve only
+    // quotes missing from the exact index, using its matched span rather than
+    // a second approximate matcher that could choose different evidence.
+    active.quoteSources ||= new Map();
+    const key = JSON.stringify([claim.id, claim.quote]);
+    if (!active.quoteSources.has(key)) {
+      const source = {quote:null};
+      active.quoteSources.set(key, source);
+      client.request(`/api/papers/${encodeURIComponent(active.paper)}/claims/${encodeURIComponent(claim.id)}/quote-context`,
+        {headers:{'X-Doxograph-Workspace':active.workspace}}).then(async context => {
+        if (reader !== active) return;
+        // An edit may have overtaken this request. This is not a cached miss
+        // for the old quote: restoring it must be able to resolve it again.
+        if (context.quote !== claim.quote) {
+          if (active.quoteSources.get(key) === source) active.quoteSources.delete(key);
+          // Reconcile the saved quote before retrying. A redraw alone could
+          // repeatedly request A while the backend still holds B.
+          await refresh();
+          return;
+        }
+        source.quote = context.found && !context.repeated ? context.matched || null : null;
+        redrawHighlights();
+      }).catch(error => {
+        if (reader !== active) return;
+        // A failed request is not a negative match. Let a later poll/redraw
+        // retry, without immediately looping against an unavailable endpoint.
+        if (active.quoteSources.get(key) === source) active.quoteSources.delete(key);
+        toast(`Could not locate a saved quote: ${error.message}`, {tone:'warn'});
+      });
+    }
+    return active.quoteSources.get(key).quote;
+  }
+  // Captured claims already store their quote and page, including captures made
+  // before the reader showed annotations. Match against the rendered text so
+  // their marks follow zoom, line wrapping, and PDF.js's text positioning.
+  function claimRects(page, quote) {
+    const needle = quoteLetters(quote);
+    if (!needle || !reader.quoteText) return [];
+    if (page.quoteRects.has(quote)) return page.quoteRects.get(quote);
+    const documentText = reader.quoteText;
+    if (!reader.quoteMatches.has(needle)) {
+      const start = documentText.text.indexOf(needle);
+      reader.quoteMatches.set(needle, start !== -1 && documentText.text.indexOf(needle, start + 1) === -1
+        ? {start, end:start + needle.length} : null);
+    }
+    const match = reader.quoteMatches.get(needle), source = documentText.pages[page.number - 1];
+    if (!match) return [];
+    let start = Math.max(0, match.start - source.start);
+    let end = Math.min(source.text.length, match.end - source.start);
+    if (end <= start) return [];
+    if (!page.quoteIndex) {
+      let text = '';
+      const points = [], walker = document.createTreeWalker(page.el.querySelector('.textLayer'), NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        let offset = 0;
+        for (const char of node.textContent) {
+          const letters = quoteLetters(char);
+          text += letters;
+          // String indices are UTF-16 offsets, as are DOM Range offsets.
+          for (let i = 0; i < letters.length; i++) points.push({node, start:offset, end:offset + char.length});
+          offset += char.length;
+        }
+      }
+      page.quoteIndex = {text, points};
+    }
+    const {text, points} = page.quoteIndex;
+    if (text !== source.text) {
+      // If PDF.js's DOM text differs from its extracted page text, use only
+      // an unambiguous local match for this page's part of the global quote.
+      const part = source.text.slice(start, end);
+      start = text.indexOf(part);
+      end = start + part.length;
+      if (start === -1 || text.indexOf(part, start + 1) !== -1) return [];
+    }
+    let rects = [];
+    if (start < end) {
+      const first = points[start], last = points[end - 1];
+      const prefix = quote.trim().match(/^[^\p{L}\p{N}]+/u)?.[0] || '';
+      const suffix = quote.trim().match(/[^\p{L}\p{N}]+$/u)?.[0] || '';
+      const from = prefix && first.node.textContent.slice(Math.max(0, first.start - prefix.length), first.start) === prefix
+        ? first.start - prefix.length : first.start;
+      const to = suffix && last.node.textContent.slice(last.end, last.end + suffix.length) === suffix
+        ? last.end + suffix.length : last.end;
+      const range = document.createRange();
+      range.setStart(first.node, from); range.setEnd(last.node, to);
+      rects = selectionRects(range, page.el);
+    }
+    page.quoteRects.set(quote, rects);
+    return rects;
+  }
+  function drawPageAnnotations(page) {
+    const layer = page.el.querySelector('.annotationLayer');
+    if (!layer || !page.quoteRects) return;
+    const percent = value => `${(value * 100).toFixed(3)}%`;
+    const badges = [], passages = [];
+    const quoted = client.state.claims.filter(c => c.paper === reader.paper && c.quote?.trim() && c.quote_verified !== false);
+    if (quoted.length) loadQuoteText();
+    for (const h of paperHighlights(reader.paper).filter(h => h.page === page.number && h.note.trim())) {
+      badges.push({y:h.rects[0].y, action:`data-tool="show-highlight-note" data-highlight="${html(h.id)}"`, label:'Note', description:`Show note: ${h.note}`});
+    }
+    for (const claim of quoted) {
+      const quote = annotationQuote(claim);
+      if (!quote) continue;
+      const rects = claimRects(page, quote);
+      if (!rects.length) continue;
+      passages.push(...rects.map(r => `<div class="claim-passage" data-claim="${html(claim.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`));
+      badges.push({y:rects[0].y, action:`data-act="goto-claim" data-claim="${html(claim.id)}" data-paper="${html(reader.paper)}"`, label:claim.note?.trim() ? 'Note' : 'Claim', description:`Show claim: ${claim.text}${claim.note?.trim() ? ` — ${claim.note}` : ''}`});
+    }
+    // Keep nearby badges separate in the page margin, including several claims
+    // on the same passage. The text layer stays selectable beneath the marks.
+    let bottom = 0;
+    const buttons = badges.sort((a, b) => a.y - b.y).map(badge => {
+      const top = Math.max(badge.y * page.el.clientHeight, bottom);
+      bottom = top + 26;
+      return `<button type="button" class="pdf-annotation" ${badge.action} style="top:${top.toFixed(1)}px" title="${html(badge.description)}" aria-label="${html(badge.description)}">${badge.label}</button>`;
+    });
+    const markup = passages.join('') + buttons.join('');
+    // A poll with unchanged annotations must leave a keyboard-focused badge alone.
+    if (page.annotationMarkup !== markup) { layer.innerHTML = markup; page.annotationMarkup = markup; }
+  }
   function drawPageHighlights(page) {
     const layer = page.el.querySelector('.highlightLayer');
     if (!layer) return;
     const percent = value => `${(value * 100).toFixed(3)}%`;
     layer.innerHTML = paperHighlights(reader.paper).filter(h => h.page === page.number).flatMap(h => h.rects.map(r =>
       `<div class="highlight-${html(h.color)}${h.kind === 'figure' ? ' figure' : ''}${h.id === reader.focus ? ' focused' : ''}" data-highlight="${html(h.id)}" style="left:${percent(r.x)};top:${percent(r.y)};width:${percent(r.w)};height:${percent(r.h)}"></div>`)).join('');
+    drawPageAnnotations(page);
   }
   // A figure is the box dragged out on the page, in the same fractions as a passage's lines.
   function figureRect(drag, event) {
@@ -855,7 +1015,7 @@ const ResearchTools = (() => {
     scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
-    'highlight-page', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
+    'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
   async function readerAction(name, target) {
     const data = target.dataset;
     if (name === 'retry-reader') {
@@ -955,6 +1115,13 @@ const ResearchTools = (() => {
     const id = target.closest('[data-highlight]')?.dataset.highlight;
     const highlight = paperHighlights(V.paper).find(h => h.id === id);
     if (!highlight) throw new Error('This highlight is no longer here. It may have been removed in another window.');
+    if (name === 'show-highlight-note') {
+      if (reader) { reader.focus = id; redrawHighlights(); }
+      focusRailEntry(id);
+      const entry = document.querySelector(`.highlight-entry[data-highlight="${CSS.escape(id)}"]`);
+      if (entry) { entry.tabIndex = -1; entry.focus({preventScroll:true}); }
+      return;
+    }
     if (name === 'edit-highlight') {
       // One note is written at a time; the one half-written is not dropped for
       // another without asking.

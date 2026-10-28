@@ -241,6 +241,19 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#content .claim', has_text='Recovery is conditional.').wait_for()
                 claim = next(c for c in httpx.get(url+'/api/state').json()['claims'] if c['text'] == 'Recovery is conditional.')
                 assert claim['quote_verified'] is True and claim['locator'] == 'p. 1' and claim['note'] == 'Check the task differences.'
+                # Capturing a claim leaves its source visibly marked in the PDF.
+                source = page.locator(f'.annotationLayer .claim-passage[data-claim="{claim["id"]}"]')
+                await source.wait_for()
+                source_box = await source.bounding_box()
+                assert abs(source_box['x'] - bounds['x']) < 4 and abs(source_box['width'] - bounds['width']) < 4
+                badge = page.get_by_role('button', name='Show claim: Recovery is conditional. — Check the task differences.', exact=True)
+                await badge.click()
+                assert await page.locator(f'#content .claim[data-claim="{claim["id"]}"]').evaluate("e => e.classList.contains('sel')")
+                # The PDF indicates an attached highlight note and opens that note.
+                note_badge = page.get_by_role('button', name='Show note: Which conditions?', exact=True)
+                await note_badge.click()
+                await ready(page)
+                assert await rail.locator('.highlight-entry').evaluate("e => e === document.activeElement && e.classList.contains('focused')")
                 # It stays in place at another zoom.
                 await page.locator('#reader-zoom').select_option('2')
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
@@ -497,6 +510,8 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('long',title='A long paper',authors=['Ada Researcher'],year=2026))
     store.pdf_path('long').write_bytes(minimal_pdf([f'Page {n} of the long paper.' for n in range(1, 25)]))
+    # Exercise document-wide quote indexing while the reader releases offscreen pages.
+    store.add_claim('long', {'text':'Evidence on the last page', 'quote':'Page 24 of the long paper.', 'locator':'p. 24'})
     store.save_paper(store.new_paper('other',title='The other paper',authors=['Bo Writer'],year=2025))
     store.pdf_path('other').write_bytes(minimal_pdf(['The other paper.']))
     rect = {'x':.1,'y':.1,'w':.3,'h':.02}
@@ -523,6 +538,7 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                 await page.wait_for_function("document.querySelectorAll('#reader .pdf-page').length === 24")
                 await page.evaluate("document.querySelector('#pdf-scroll').scrollTo({top: document.querySelector('#pdf-scroll').scrollHeight})")
                 await page.locator('#reader .pdf-page[data-page="24"] .textLayer span').first.wait_for()
+                await page.locator('#reader .pdf-page[data-page="24"]').get_by_role('button', name='Show claim: Evidence on the last page', exact=True).wait_for()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '24'")
                 await page.wait_for_function("""(() => {
                     const first = document.querySelector('#reader .pdf-page[data-page="1"]');
