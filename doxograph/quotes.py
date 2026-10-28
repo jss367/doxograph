@@ -327,7 +327,8 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     that is nowhere near the paper still returns a result, with `found` false
     and nothing to show for it.
     """
-    needle = squash(quote)
+    wanted = build(quote)
+    needle = wanted.squashed
     if not needle:
         return None
     text = paper_text(pdf, cache, guard)
@@ -338,7 +339,7 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
     # sentence end inside it is the quote's own: "Yes. The model recovers" is
     # kept whole. Only an inexact alignment can have picked up a stray.
     if lo >= 0 and text.squashed[lo:hi] != needle:
-        score, lo, hi = _trim_strays(text, needle, score, lo, hi)
+        score, lo, hi = _trim_strays(text, wanted, score, lo, hi)
     result = {
         "found": score >= _COVERAGE,
         "coverage": round(score, 3),
@@ -387,7 +388,7 @@ def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict
 _STRAY = 6
 
 
-def _trim_strays(text: Text, needle: str, score: float, lo: int, hi: int) -> tuple[float, int, int]:
+def _trim_strays(text: Text, quote: Text, score: float, lo: int, hi: int) -> tuple[float, int, int]:
     """Cut a few matched characters that a sentence boundary separates from the rest.
 
     The alignment looks at a margin either side of where the quote would sit,
@@ -395,38 +396,47 @@ def _trim_strays(text: Text, needle: str, score: float, lo: int, hi: int) -> tup
     short word in that margin ("the", "a") can be matched in its place. The
     span then starts in the sentence before, or runs on into the one after,
     and the page, the matched passage and the suggested wording all follow it.
-    A quote does not start or stop a few letters across a sentence end, so a
-    boundary within the margin's reach of either edge marks a stray, and the
-    span is cut back to the quote's own sentence. The coverage is then what
-    the retained span earns on its own: a quote that only reached the mark
-    with the stray's help has not been found. Nothing moves when no such
-    boundary is there, or when what lies across it is more than a stray could
-    be: a span over a sentence end further in, or with a whole short sentence
-    of the quote's before it, is a quote that really runs over one.
+    A stray is a sentence end the paper has where the quote has none: a
+    boundary within the margin's reach of the span's edge, when the quote
+    itself has no sentence end that close to its own edge, and the span is
+    cut back to the quote's sentence. The coverage is then what the retained
+    span earns on its own: a quote that only reached the mark with the
+    stray's help has not been found. Nothing moves when the quote opens or
+    closes with a short sentence of its own ("Indeed. The model..."), when
+    the boundary is further in, or when what lies across it is more than a
+    stray could be: those are quotes that really run over a sentence end.
     """
+    needle = quote.squashed
     n = len(needle)
-    offsets = text.offsets
-    if hi - lo > _ANCHOR:
-        start, until = offsets[lo], offsets[lo + _ANCHOR]
-        cut = lo
-        for match in _SENTENCE_END.finditer(text.raw, start, until):
-            if _is_boundary(text.raw[max(0, match.start() - 40):match.start() + 1]):
-                cut = bisect.bisect_left(offsets, match.end())
-        if lo < cut < hi:
+    if hi - lo > _ANCHOR and _boundary_in(quote, 0, _ANCHOR, last=True) is None:
+        cut = _boundary_in(text, lo, lo + _ANCHOR, last=True)
+        if cut is not None and lo < cut < hi:
             kept = _matched(needle, text.squashed[cut:hi])
             if round(score * n) - kept <= _STRAY:
                 score, lo = kept / n, cut
-    if hi - lo > _ANCHOR:
-        start, until = offsets[hi - 1 - _ANCHOR], offsets[hi - 1] + 1
-        for match in _SENTENCE_END.finditer(text.raw, start, until):
-            if _is_boundary(text.raw[max(0, match.start() - 40):match.start() + 1]):
-                cut = bisect.bisect_left(offsets, match.start())
-                if lo < cut < hi:
-                    kept = _matched(needle, text.squashed[lo:cut])
-                    if round(score * n) - kept <= _STRAY:
-                        score, hi = kept / n, cut
-                break
+    if hi - lo > _ANCHOR and _boundary_in(quote, n - 1 - _ANCHOR, n - 1, last=False) is None:
+        cut = _boundary_in(text, hi - 1 - _ANCHOR, hi - 1, last=False)
+        if cut is not None and lo < cut < hi:
+            kept = _matched(needle, text.squashed[lo:cut])
+            if round(score * n) - kept <= _STRAY:
+                score, hi = kept / n, cut
     return score, lo, hi
+
+
+def _boundary_in(text: Text, lo: int, hi: int, *, last: bool) -> int | None:
+    """Where a sentence ends between squashed characters `lo` and `hi` of `text`.
+
+    The squashed index of the first character after the last such boundary,
+    or of the first character before the first one; None when there is none.
+    """
+    offsets = text.offsets
+    found = None
+    for match in _SENTENCE_END.finditer(text.raw, offsets[lo], offsets[hi]):
+        if _is_boundary(text.raw[max(0, match.start() - 40):match.start() + 1]):
+            found = bisect.bisect_left(offsets, match.end() if last else match.start())
+            if not last:
+                break
+    return found
 
 
 def _matched(quote: str, window: str) -> int:

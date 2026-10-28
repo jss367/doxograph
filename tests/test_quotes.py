@@ -585,6 +585,17 @@ def test_an_inexact_quote_keeps_a_short_sentence_of_its_own_across_a_boundary(tm
     assert found["suggestion"].startswith("Yes we did.")
 
 
+def test_an_inexact_quote_opening_with_a_very_short_sentence_keeps_it(tmp_path):
+    """A boundary the quote has itself is not a stray, however few letters sit before it."""
+    pdf = tmp_path / "indeed.pdf"
+    pdf.write_bytes(minimal_pdf("Indeed. Our model recovers in 46% of rollouts when steering is removed. So be it."))
+    found = quotes.locate(pdf, "Indeed. The model recovers in 46% of rollouts when steering is removed. So it is.")
+    assert found["found"] is True
+    assert found["matched"].startswith("Indeed. Our model")
+    assert found["matched"].endswith("So be it")
+    assert found["suggestion"] == "Indeed. Our model recovers in 46% of rollouts when steering is removed. So be it."
+
+
 def test_a_quote_found_only_with_a_strays_help_is_not_found(tmp_path):
     """The stray's letters do not count toward the quote once the span is cut."""
     pdf = tmp_path / "stray.pdf"
