@@ -149,3 +149,20 @@ def test_key_exhaustion_still_reports_clearly(monkeypatch):
         store.save_paper(store.new_paper("doe2026study" + suffix))
     with pytest.raises(RuntimeError, match="cannot find an unused key"):
         store.reserve_key("doe2026study")
+
+
+@pytest.mark.parametrize("key", ["%20", "doe2026study", "..", "%2e"])
+def test_removing_a_paper_that_is_not_there_retires_nothing(key):
+    from fastapi.testclient import TestClient
+    from doxograph import server
+
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.delete(f"/api/papers/{key}").status_code == 404
+    assert store.retired_keys() == set()
+    assert store.reserve_key("doe2026study", title="A Study") == "doe2026study"
+
+
+def test_a_blank_key_cannot_be_retired():
+    with pytest.raises(ValueError):
+        store.retire_key(" ")
+    assert store.retired_keys() == set()

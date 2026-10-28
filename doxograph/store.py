@@ -287,6 +287,10 @@ def retire_key(key: str) -> None:
     the paper lock, and a tag rename holds the vocabulary lock while taking paper
     locks, so sharing that lock would invert the order and deadlock.
     """
+    # The file's reader refuses a blank entry, so one written here would make
+    # every later key reservation and removal fail until it was edited out.
+    if not key.strip():
+        raise ValueError("a retired key must not be blank")
     with _reentrant_file_lock("retired", config.locks_dir() / "retired-keys.lock"):
         known = retired_keys()
         if key not in known:
@@ -1164,7 +1168,8 @@ def claim_rows(papers: list[dict] | None = None) -> list[dict]:
             row = dict(claim)
             row["paper"] = paper["key"]
             row["paper_title"] = paper.get("title", "")
-            row["paper_authors"] = paper.get("authors", [])
+            # Older imports record unknown authors as null; every reader takes a list.
+            row["paper_authors"] = paper.get("authors") or []
             row["paper_year"] = paper.get("year")
             # The labels travel with the claim so that a query matching a
             # paper matches its claims too, as the title and the year already
@@ -1235,7 +1240,7 @@ def summarize(paper: dict) -> dict:
     return {
         "key": paper["key"],
         "title": paper.get("title", ""),
-        "authors": paper.get("authors", []),
+        "authors": paper.get("authors") or [],
         "year": paper.get("year"),
         "venue": paper.get("venue", ""),
         "status": paper.get("status", "fetched"),
@@ -1316,6 +1321,28 @@ def _save_tensions(data: dict) -> None:
 def _pair(ids) -> tuple[str, str]:
     a, b = sorted(ids)
     return (a, b)
+
+
+def _live_claims() -> tuple[dict[str, dict], bool]:
+    """Every claim on disk by id, and whether any paper could not be read.
+
+    A merge prunes records against the corpus as it is now, and a claim whose
+    paper is unreadable is not gone: the file is there, and the reader refuses
+    it so a writer cannot replace it. Dropping the tensions and agreements
+    that rest on it would be the loss the reader guards against, so while a
+    paper cannot be read, a record with a claim that is not in `live` is left
+    exactly as the file has it. A claim id names its paper only by convention
+    (`next_claim_id`); an older or hand-written id need not, so the missing
+    claim cannot be told from the unreadable paper's, and neither is pruned.
+    """
+    issues: list[records.StorageIssue] = []
+    papers = all_papers(issues=issues)
+    return {c["id"]: c for c in claim_rows(papers)}, bool(issues)
+
+
+def _held_back(ids, live: dict[str, dict], unreadable: bool) -> bool:
+    """Whether a record's claims include one that cannot be seen right now."""
+    return unreadable and any(i not in live for i in ids)
 
 
 def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
@@ -1446,11 +1473,14 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
         data = _read_tensions()
         # Prune against the corpus as it is now, not as the prompt saw it: a
         # claim deleted during the call must not come back as half a tension.
-        live = {c["id"]: c for c in claim_rows()}
+        live, unreadable = _live_claims()
         existing = [t for t in data["tensions"]
-                    if len(t.get("claims", [])) == 2 and all(i in live for i in t["claims"])]
+                    if len(t.get("claims", [])) == 2
+                    and (all(i in live for i in t["claims"]) or _held_back(t["claims"], live, unreadable))]
         pruned: set[str] = set()
         for tension in existing:
+            if _held_back(tension["claims"], live, unreadable):
+                continue
             was = set(tension.get("topics") or [])
             tension["topics"] = _shared_topics(tension, live)
             pruned |= was - set(tension["topics"])
@@ -1913,10 +1943,13 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
     """
     with vocab_lock(), agreements_lock():
         data = _read_agreements()
-        live = {c["id"]: c for c in claim_rows()}
+        live, unreadable = _live_claims()
         existing = []
         pruned: set[str] = set()
         for record in data["agreements"]:
+            if _held_back(record.get("claims", []), live, unreadable):
+                existing.append(record)
+                continue
             ids = [i for i in record.get("claims", []) if i in live]
             if len(_agreement_papers(ids, live)) < 2:
                 continue
@@ -1943,9 +1976,13 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
             stale = any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids)
             # Every record the returned group covers, in file order; the first
             # is the one that stays. Failing that, a record that covers it.
-            contained = [r for r in existing if set(r["claims"]) <= wanted]
+            # A record held back for an unreadable paper is not on the table:
+            # its members are not all in `live`, and nothing can be decided
+            # about a group whose claims cannot be seen.
+            on_file = [r for r in existing if not _held_back(r["claims"], live, unreadable)]
+            contained = [r for r in on_file if set(r["claims"]) <= wanted]
             current = contained[0] if contained else next(
-                (r for r in existing if wanted < set(r["claims"])), None)
+                (r for r in on_file if wanted < set(r["claims"])), None)
             if current is not None and stale:
                 kept += 1
                 continue
@@ -2031,9 +2068,10 @@ def set_agreement_status(agreement_id: str, status: str) -> dict:
                 record["status"] = status
                 record["decided"] = now()
                 if status != "open":
-                    live = {c["id"]: c for c in claim_rows()}
+                    live, unreadable = _live_claims()
                     ids = [i for i in record.get("claims", []) if i in live]
-                    if len(_agreement_papers(ids, live)) >= 2:
+                    if not _held_back(record.get("claims", []), live, unreadable) \
+                            and len(_agreement_papers(ids, live)) >= 2:
                         record["claims"] = ids
                         record["fingerprints"] = {i: claim_fingerprint(live[i]) for i in ids}
                 _save_agreements(data)

@@ -154,7 +154,7 @@ def resolve(ref: dict) -> dict:
     except (KeyError, StopIteration):
         raise HTTPException(404, "A selected claim no longer exists. Refresh your selection.")
     return dict(claim, paper=paper["key"], paper_title=paper.get("title", ""),
-                paper_authors=paper.get("authors", []), paper_year=paper.get("year"),
+                paper_authors=paper.get("authors") or [], paper_year=paper.get("year"),
                 paper_notes=paper.get("notes", ""), source=paper.get("source", {}))
 
 

@@ -544,3 +544,76 @@ def test_a_word_split_at_the_foot_of_a_page_is_rejoined(tmp_path):
     ]))
     found = quotes.locate(pdf, "the transformation of steered activations")
     assert found["suggestion"] == "We measure the transformation of steered activations across scales."
+
+
+def test_a_stray_word_in_the_margin_does_not_drag_the_span_into_the_sentence_before(tmp_path):
+    """The model changed the quote's first word; "the" in the previous sentence
+    must not be matched in its place and carry the passage across a sentence end."""
+    pdf = tmp_path / "margin.pdf"
+    pdf.write_bytes(minimal_pdf([
+        "We report the results of the data.",
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss next. "
+        "The next section covers scaling.",
+    ]))
+    found = quotes.locate(pdf, "The model recovers in 46% of rollouts when steering is removed, which we discuss next")
+    assert found["found"] is True
+    assert found["page"] == 2
+    # The span is cut back to its own sentence, so the diff shows the word the
+    # paper has where the quote says "The", and not a sentence that is not there.
+    assert found["matched"] == "Our model recovers in 46% of rollouts when steering is removed, which we discuss next"
+    assert found["suggestion"] == (
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss next."
+    )
+
+
+def test_an_exact_quote_keeps_a_short_sentence_at_either_end(tmp_path):
+    pdf = tmp_path / "exact.pdf"
+    pdf.write_bytes(minimal_pdf("No effect. However recovery improved across all three model scales. Not so."))
+    found = quotes.locate(pdf, "No effect. However recovery improved across all three model scales. Not so.")
+    assert found["found"] is True
+    assert found["matched"] == "No effect. However recovery improved across all three model scales. Not so"
+    assert found["suggestion"] == "No effect. However recovery improved across all three model scales. Not so."
+
+
+def test_an_inexact_quote_keeps_a_short_sentence_of_its_own_across_a_boundary(tmp_path):
+    """What lies across the boundary is the quote's own sentence, not a stray."""
+    pdf = tmp_path / "own.pdf"
+    pdf.write_bytes(minimal_pdf("Yes we did. Our model recovers in 46% of rollouts when steering is removed."))
+    found = quotes.locate(pdf, "Yes we did. The model recovers in 46% of rollouts when steering is removed")
+    assert found["found"] is True
+    assert found["matched"].startswith("Yes we did. Our model")
+    assert found["suggestion"].startswith("Yes we did.")
+
+
+def test_an_inexact_quote_opening_with_a_very_short_sentence_keeps_it(tmp_path):
+    """A boundary the quote has itself is not a stray, however few letters sit before it."""
+    pdf = tmp_path / "indeed.pdf"
+    pdf.write_bytes(minimal_pdf("Indeed. Our model recovers in 46% of rollouts when steering is removed. So be it."))
+    found = quotes.locate(pdf, "Indeed. The model recovers in 46% of rollouts when steering is removed. So it is.")
+    assert found["found"] is True
+    assert found["matched"].startswith("Indeed. Our model")
+    assert found["matched"].endswith("So be it")
+    assert found["suggestion"] == "Indeed. Our model recovers in 46% of rollouts when steering is removed. So be it."
+
+
+def test_a_quote_found_only_with_a_strays_help_is_not_found(tmp_path):
+    """The stray's letters do not count toward the quote once the span is cut."""
+    pdf = tmp_path / "stray.pdf"
+    pdf.write_bytes(minimal_pdf("We looked at the data. Our model recovers in ten rollouts here."))
+    found = quotes.locate(pdf, "The model recovers in ten rollouts")
+    assert found["found"] is False
+    assert found["coverage"] < 0.9
+    assert found["suggestion"] == "Our model recovers in ten rollouts here."
+
+
+def test_a_stray_word_in_the_margin_does_not_run_the_span_into_the_sentence_after(tmp_path):
+    pdf = tmp_path / "margin.pdf"
+    pdf.write_bytes(minimal_pdf(
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss below. "
+        "The next section covers scaling."))
+    found = quotes.locate(pdf, "Our model recovers in 46% of rollouts when steering is removed, which we discuss next")
+    assert found["found"] is True
+    assert found["matched"] == "Our model recovers in 46% of rollouts when steering is removed, which we discuss below"
+    assert found["suggestion"] == (
+        "Our model recovers in 46% of rollouts when steering is removed, which we discuss below."
+    )
