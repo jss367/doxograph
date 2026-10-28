@@ -69,6 +69,8 @@ def read(path: Path) -> tuple[dict, bytes]:
         if not local(path):
             raise ValueError('symbolic link')
         saved = json.loads(path.read_text())
+        if not isinstance(saved, dict):
+            raise ValueError("backup root must be an object")
         if not all(isinstance(saved.get(k), str) for k in ('id', 'path', 'created', 'sha256', 'content')):
             raise ValueError('invalid backup fields')
         if saved['id'] != path.stem or not eligible(saved['path']):

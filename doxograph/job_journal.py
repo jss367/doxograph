@@ -89,6 +89,9 @@ def recover(issues: list[str] | None = None) -> list[dict]:
             if path.is_symlink():
                 raise ValueError('job journal is a symbolic link')
             data = json.loads(path.read_text())
+            if (not isinstance(data, dict) or not isinstance(data.get('job'), dict)
+                    or not isinstance(data.get('source', {}), dict)):
+                raise ValueError('journal, job, and retry source must be objects')
             if data['version'] not in (1, 2):
                 raise ValueError('unsupported job journal version')
             if type(data['pid']) is not int or data['pid'] <= 0:
