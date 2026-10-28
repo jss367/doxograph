@@ -137,6 +137,52 @@ test('an older answer cannot overwrite a newer refresh or its ETag', async () =>
   assert.equal(sentTags.at(-1), 'new-tag');
 });
 
+test('an older failure cannot replace a newer successful refresh', async () => {
+  const old = deferred();
+  let reads = 0;
+  const client = createClient({ fetch: async path => {
+    if (path === '/api/jobs') return json({ jobs: [] });
+    return ++reads === 1 ? old.promise : json({ papers: ['new'] }, 'new-tag');
+  } });
+  const first = client.pull();
+  await client.pull();
+  old.reject(new Error('Old request failed'));
+  assert.equal((await first).applied, false);
+  assert.deepEqual(client.state.papers, ['new']);
+});
+
+test('an older success cannot clear a newer failure or commit its ETag', async () => {
+  const old = deferred(), sentTags = [];
+  let reads = 0;
+  const client = createClient({ fetch: async (path, options) => {
+    if (path === '/api/jobs') return json({ jobs: [] });
+    sentTags.push(options.headers.get('If-None-Match'));
+    if (++reads === 1) return old.promise;
+    if (reads === 2) throw new Error('Current request failed');
+    return json({ papers: ['recovered'] }, 'new-tag');
+  } });
+  const first = client.pull();
+  await assert.rejects(client.pull(), /Current request failed/);
+  old.resolve(json({ papers: ['old'] }, 'old-tag'));
+  assert.equal((await first).applied, false);
+  assert.deepEqual(client.state.papers, []);
+  await client.pull();
+  assert.deepEqual(sentTags, [null, null, null]);
+  assert.deepEqual(client.state.papers, ['recovered']);
+});
+
+test('a failure from before leaving and returning to the same workspace is discarded', async () => {
+  const old = deferred();
+  const client = createClient({ workspaceId: 'first', fetch: async path =>
+    path === '/api/jobs' ? json({ jobs: [] }) : old.promise });
+  const first = client.pull();
+  client.select('second');
+  client.select('first');
+  old.reject(new Error('Old workspace request failed'));
+  assert.equal((await first).applied, false);
+  assert.deepEqual(client.state.papers, []);
+});
+
 test('a response from before leaving and returning to the same workspace is discarded', async () => {
   const old = deferred();
   const client = createClient({ workspaceId: 'first', fetch: async path =>

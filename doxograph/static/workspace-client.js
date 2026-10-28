@@ -8,7 +8,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     ledger: [], context: '', tensions: [], agreements: [], syntheses: [], kinds: [],
     strengths: [], relations: [], jobs: [], has_key: true });
   let state = emptyState(), workspaces = [], etag = null, epoch = 0;
-  let pendingMutations = 0, pullsAsked = 0, pullApplied = 0;
+  let pendingMutations = 0, pullsAsked = 0, pullSettled = 0;
 
   async function checkResponse(response) {
     if (!response.ok) {
@@ -81,15 +81,23 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
         })(),
         request('/api/jobs', { signal: controller.signal, cache: 'no-store' }),
       ]), deadline]);
+    } catch (error) {
+      // A newer success or failure owns the sync status. An older failure
+      // must not replace it, including after leaving and returning to a workspace.
+      if (requestedEpoch !== epoch || asked < pullSettled) {
+        return { applied: false, changed: false, registryChanged: false };
+      }
+      pullSettled = asked;
+      throw error;
     } finally {
       clearTimeout(timeout);
       controller.abort();
     }
     // The epoch also rejects a late answer after going A -> B -> A.
-    if (requestedEpoch !== epoch || asked < pullApplied) {
+    if (requestedEpoch !== epoch || asked < pullSettled) {
       return { applied: false, changed: false, registryChanged: false };
     }
-    pullApplied = asked;
+    pullSettled = asked;
     let registryChanged = false;
     if (next) {
       state = { ...next.state, jobs: jobs.jobs || [], job_recovery_issues: jobs.recovery_issues || [] };

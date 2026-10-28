@@ -1909,6 +1909,54 @@ def test_a_claim_links_to_its_own_page_of_the_pdf_and_the_paper_menu_has_a_butto
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("newer_fails", [False, True], ids=["newer-succeeded", "newer-failed"])
+def test_superseded_refresh_cannot_replace_current_sync_status(engine, newer_fails):
+    from playwright.async_api import expect
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
+                await page.evaluate("poller.stop()")
+                await page.evaluate("async () => { if (poller.running) await poller.once().catch(() => {}); }")
+                held, release = asyncio.Event(), asyncio.Event()
+                reads = 0
+
+                async def jobs(route):
+                    nonlocal reads
+                    reads += 1
+                    older = reads == 1
+                    if older:
+                        held.set()
+                        await release.wait()
+                    if (older and not newer_fails) or (not older and newer_fails):
+                        await route.fulfill(status=503, json={"detail": "Current request failed" if newer_fails else "Old request failed"})
+                    else:
+                        await route.fulfill(json={"jobs": []})
+
+                await page.route("**/api/jobs", jobs)
+                await page.evaluate("() => { window.olderPull = pull().catch(error => error.message); }")
+                await held.wait()
+                await page.evaluate("pull().catch(() => {})")
+                if newer_fails:
+                    await expect(page.locator("#sync-message")).to_contain_text("Current request failed")
+                else:
+                    await expect(page.locator("#sync-status")).to_be_hidden()
+                release.set()
+                await page.evaluate("window.olderPull")
+                if newer_fails:
+                    await expect(page.locator("#sync-status")).to_be_visible()
+                    await expect(page.locator("#sync-message")).to_contain_text("Current request failed")
+                else:
+                    await expect(page.locator("#sync-status")).to_be_hidden()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_refresh_failure_is_visible_and_returning_to_the_window_recovers(engine):
     from playwright.async_api import expect
 
