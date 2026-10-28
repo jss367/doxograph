@@ -111,7 +111,7 @@ def _file_lock(path: Path, *, blocking: bool = True):
 
 
 @contextlib.contextmanager
-def _reentrant_file_lock(path: Path) -> Iterator[None]:
+def _reentrant_file_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
     """Share thread serialization and reentrancy by the physical lock path.
 
     A paper and a document can use the same legacy lock filename. Every wrapper
@@ -121,7 +121,9 @@ def _reentrant_file_lock(path: Path) -> Iterator[None]:
     identity = str(path.resolve())
     with _locks_guard:
         lock = _locks.setdefault(identity, threading.RLock())
-    with lock:
+    if not lock.acquire(blocking=blocking):
+        raise BlockingIOError("The file lock is held by another thread")
+    try:
         held = getattr(_depth, "held", None)
         if held is None:
             held = _depth.held = {}
@@ -132,17 +134,19 @@ def _reentrant_file_lock(path: Path) -> Iterator[None]:
             finally:
                 held[identity] -= 1
             return
-        with _file_lock(path):
+        with _file_lock(path, blocking=blocking):
             held[identity] = 1
             try:
                 yield
             finally:
                 del held[identity]
+    finally:
+        lock.release()
 
 
-def document_lock(name: str) -> contextlib.AbstractContextManager[None]:
+def document_lock(name: str, *, blocking: bool = True) -> contextlib.AbstractContextManager[None]:
     """Serialize access to a workspace document across threads and processes."""
-    return _reentrant_file_lock(config.locks_dir() / f"{name}.lock")
+    return _reentrant_file_lock(config.locks_dir() / f"{name}.lock", blocking=blocking)
 
 
 # The tag vocabulary is a single shared file, so it gets one lock rather than
@@ -152,8 +156,8 @@ def document_lock(name: str) -> contextlib.AbstractContextManager[None]:
 
 
 @contextlib.contextmanager
-def paper_lock(key: str):
-    with _reentrant_file_lock(config.locks_dir() / f"{key}.lock"):
+def paper_lock(key: str, *, blocking: bool = True):
+    with _reentrant_file_lock(config.locks_dir() / f"{key}.lock", blocking=blocking):
         yield
 
 

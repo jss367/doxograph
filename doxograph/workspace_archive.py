@@ -50,6 +50,43 @@ def portable_links(text: str, notes: dict[str, str], prefix: str = '..') -> str:
     return research_notes.rewrite_research_links(text, replace)
 
 
+@contextlib.contextmanager
+def _snapshot_locks():
+    """Never wait for one legacy lock while holding another.
+
+    Paper keys can alias metadata lock filenames. Releasing the entire partial
+    set on contention breaks cross-thread/process cycles without changing the
+    filenames used by older clients. A busy workspace fails with a retry message
+    rather than hanging an export or indefinitely blocking writers.
+    """
+    deadline = time.monotonic() + 5
+    while True:
+        locks = contextlib.ExitStack()
+        try:
+            for name in ('vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
+                         'agreements', 'tensions', 'syntheses', 'retired-keys'):
+                locks.enter_context(store.document_lock(name, blocking=False))
+            keys = store.paper_keys()
+            for key in keys:
+                locks.enter_context(store.paper_lock(key, blocking=False))
+        except BlockingIOError:
+            locks.close()
+            if time.monotonic() >= deadline:
+                raise HTTPException(409, 'The workspace is busy. Try the archive again after current edits finish.')
+            time.sleep(0.01)
+            continue
+        except BaseException:
+            locks.close()
+            raise
+        break
+    with locks:
+        # Recovering a pending tag rewrite could acquire locks outside this set.
+        # Leave that work to normal storage recovery, never start it mid-export.
+        if store.tag_change_path().exists():
+            raise HTTPException(409, 'A topic change needs recovery. Reload the library before exporting.')
+        yield keys
+
+
 def build() -> Path:
     root = config.data_dir()
     handle = tempfile.NamedTemporaryFile(prefix='doxograph-workspace-', suffix='.zip', delete=False)
@@ -58,15 +95,11 @@ def build() -> Path:
     manifest = {'format': 'doxograph-workspace', 'version': 1, 'workspace': config.get_workspace(),
                 'created': store.now(), 'files': {}, 'skipped': []}
     try:
-        with store.vocab_lock(), contextlib.ExitStack() as locks:
+        with _snapshot_locks() as keys:
             for name in [*backups.DOCUMENTS, research_notes.REVISION_FILE, 'papers', 'pdfs', 'note-images']:
                 if (root / name).is_symlink():
                     raise HTTPException(409, f'The archive cannot include symbolic links: {name}')
-            for name in ('notebook', 'research-notes', 'context', 'ledger', 'agreements', 'tensions', 'syntheses', 'retired'):
-                locks.enter_context(store.document_lock(name))
-            keys = store.paper_keys()
             for key in keys:
-                locks.enter_context(store.paper_lock(key))
                 if store.paper_path(key).is_symlink():
                     raise HTTPException(409, f'The archive cannot include a symbolic link: papers/{key}.json')
             keys = [key for key in keys if store.paper_path(key).is_file()]
