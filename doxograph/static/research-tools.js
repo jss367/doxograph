@@ -1218,9 +1218,14 @@ const ResearchTools = (() => {
     if (name === 'close') { await close({duringOperation:true}); return; }
     if (name === 'tab' || name === 'reload') {
       if (!await discardDrafts()) return;
+      const nextTab = data.tab || (tab === 'history' ? 'compare' : tab);
       epoch++;
+      if (nextTab === 'reading') {
+        el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
+        await flushReadingProgress();
+      }
       notebook = await request();
-      tab = data.tab || (tab === 'history' ? 'compare' : tab); render(); return;
+      tab = nextTab; render(); return;
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
     if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
