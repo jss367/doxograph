@@ -1910,6 +1910,156 @@ def test_a_claim_links_to_its_own_page_of_the_pdf_and_the_paper_menu_has_a_butto
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("newer_fails", [False, True], ids=["newer-succeeded", "newer-failed"])
+def test_superseded_refresh_cannot_replace_current_sync_status(engine, newer_fails):
+    from playwright.async_api import expect
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
+                await page.evaluate("poller.stop()")
+                await page.evaluate("async () => { if (poller.running) await poller.once().catch(() => {}); }")
+                held, release = asyncio.Event(), asyncio.Event()
+                reads = 0
+
+                async def jobs(route):
+                    nonlocal reads
+                    reads += 1
+                    older = reads == 1
+                    if older:
+                        held.set()
+                        await release.wait()
+                    if (older and not newer_fails) or (not older and newer_fails):
+                        await route.fulfill(status=503, json={"detail": "Current request failed" if newer_fails else "Old request failed"})
+                    else:
+                        await route.fulfill(json={"jobs": []})
+
+                await page.route("**/api/jobs", jobs)
+                await page.evaluate("() => { window.olderPull = pull().catch(error => error.message); }")
+                await held.wait()
+                await page.evaluate("pull().catch(() => {})")
+                if newer_fails:
+                    await expect(page.locator("#sync-message")).to_contain_text("Current request failed")
+                else:
+                    await expect(page.locator("#sync-status")).to_be_hidden()
+                release.set()
+                await page.evaluate("window.olderPull")
+                if newer_fails:
+                    await expect(page.locator("#sync-status")).to_be_visible()
+                    await expect(page.locator("#sync-message")).to_contain_text("Current request failed")
+                else:
+                    await expect(page.locator("#sync-status")).to_be_hidden()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_refresh_failure_is_visible_and_returning_to_the_window_recovers(engine):
+    from playwright.async_api import expect
+
+    _paper("study", "A study", "recovery")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('[data-act="edit"][data-claim="study-c1"]').click()
+                draft = page.locator('form[data-form="study-c1"] textarea[name="text"]')
+                await draft.fill("Keep my unsaved claim edit.")
+
+                async def unavailable(route):
+                    await route.fulfill(status=503, json={"detail": "Temporarily unavailable"})
+
+                await page.route("**/api/jobs", unavailable)
+                await page.evaluate("poller.once().catch(() => {})")
+                await expect(page.locator("#sync-status")).to_be_visible()
+                await expect(page.locator("#sync-message")).to_contain_text("Retrying automatically")
+                assert await draft.input_value() == "Keep my unsaved claim edit."
+
+                store.save_paper(store.new_paper("monitoringbench", title="MonitoringBench"))
+                await page.unroute("**/api/jobs", unavailable)
+                # Returning to the Mac window resumes reads immediately; it
+                # does not wait for a throttled background timer to catch up.
+                await page.evaluate("window.dispatchEvent(new Event('focus'))")
+                await expect(page.locator('#papers [data-paper="monitoringbench"]')).to_be_visible()
+                await expect(page.locator("#sync-status")).to_be_hidden()
+                assert await draft.input_value() == "Keep my unsaved claim edit."
+
+                await page.route("**/api/jobs", unavailable)
+                await page.evaluate("poller.once().catch(() => {})")
+                await expect(page.locator("#sync-status")).to_be_visible()
+                await page.unroute("**/api/jobs", unavailable)
+                await page.get_by_role("button", name="Retry now", exact=True).click()
+                await expect(page.locator("#sync-status")).to_be_hidden()
+                assert await draft.input_value() == "Keep my unsaved claim edit."
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_import_feedback_starts_before_the_request_finishes(engine):
+    from doxograph import config
+    from playwright.async_api import expect
+
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await expect(page.locator("#import-analysis-status")).to_be_visible()
+                accepted, release = asyncio.Event(), asyncio.Event()
+                requests = []
+
+                async def ingest(route):
+                    requests.append(route.request.post_data_json)
+                    accepted.set()
+                    await release.wait()
+                    await route.fulfill(json={"queued": 1, "known": [], "unknown": []})
+
+                await page.route("**/api/ingest", ingest)
+                await page.fill("#refs", "2605.09684")
+                await page.locator("#btn-add").click()
+                await accepted.wait()
+                await expect(page.locator("#btn-add")).to_have_text("Adding…")
+                await expect(page.locator("#btn-add")).to_be_disabled()
+                await expect(page.locator("#import-status")).to_have_text("Submitting references…")
+                await page.locator("#refs").press("Control+Enter")
+                assert len(requests) == 1
+                assert requests[0]["extract"] is False
+
+                # Typing the next reference while this one submits must not
+                # lose it when the accepted request comes back.
+                await page.fill("#refs", "2610.24052")
+                release.set()
+                await expect(page.locator("#btn-add")).to_be_enabled()
+                await expect(page.locator("#import-status")).to_contain_text("Import started for 1 paper")
+                await expect(page.locator("#refs")).to_have_value("2610.24052")
+
+                job = {"id": 1, "kind": "import", "state": "done", "key": "monitoringbench",
+                       "label": "monitoringbench", "detail": "",
+                       "explanation": "PDF saved. AI analysis is off, so no claims were extracted."}
+                await page.route("**/api/jobs", lambda route: route.fulfill(json={"jobs": [job]}))
+                store.save_paper(store.new_paper("monitoringbench", title="MonitoringBench"))
+                await page.evaluate("pollOnce()")
+                await expect(page.locator('#papers [data-paper="monitoringbench"]')).to_be_visible()
+                await expect(page.locator("#jobs .lbl")).to_have_text("MonitoringBench")
+                await expect(page.locator("#jobs .job-explanation")).to_contain_text("AI analysis is off")
+                await page.get_by_role("button", name="Open paper", exact=True).click()
+                await expect(page.locator(".paperhead h2")).to_have_text("MonitoringBench")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_references_that_could_not_be_read_are_named_where_they_were_pasted():
     async def scenario():
         async with browser_session("chromium") as browser:

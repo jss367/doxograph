@@ -1175,8 +1175,19 @@ window.addEventListener('popstate', async () => {
 const api = (path, options) => workspaceClient.request(path, options);
 
 async function pull() {
-  const result = await workspaceClient.pull();
+  const workspace = workspaceClient.workspaceId;
+  let result;
+  try {
+    result = await workspaceClient.pull();
+  } catch (error) {
+    if (libraryInitialized && workspace === workspaceClient.workspaceId) {
+      $('sync-message').textContent = `Library updates paused: ${error.message} Retrying automatically.`;
+      $('sync-status').hidden = false;
+    }
+    throw error;
+  }
   if (!result.applied) return false;
+  $('sync-status').hidden = true;
   S = workspaceClient.state;
   if (result.registryChanged) renderWorkspacePicker();
   pruneTrashed();   // a delete that has not been sent yet is already gone here
@@ -1273,6 +1284,7 @@ function renderWorkspacePicker() {
 
 function resetWorkspaceView() {
   S = workspaceClient.state;
+  $('sync-status').hidden = true;
   Object.assign(V, {
     paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
@@ -1291,6 +1303,7 @@ function resetWorkspaceView() {
   $('only-unreviewed').checked = false;
   $('only-unverified').checked = false;
   $('group-by-tag').checked = true;
+  $('import-status').hidden = true;
   closePaperMenu();
 }
 
@@ -3174,14 +3187,16 @@ function renderJobs() {
   const next = document.createElement('div');
   next.innerHTML = (S.job_recovery_issues || []).map(issue => `<div class="job error"><span class="lbl">Previous imports</span><p class="job-explanation">${esc(issue)}</p></div>`).join('') + active.slice(0, 6).map((j) => {
     const disabled = pendingJobActions.has(`${workspaceClient.workspaceId}:${j.id}`) ? 'disabled' : '';
-    const explained = j.state === 'error' && j.explanation;
+    const explained = Boolean(j.explanation);
+    const label = S.papers.find((paper) => paper.key === j.key)?.title || j.label;
     const status = j.kind === 'import' ? (importStates[j.state] || j.state) : j.state;
     return `
     <div class="job ${j.state === 'error' ? 'error' : ''}" data-job-key="${esc(workspaceClient.workspaceId)}:${j.id}"
       ${j.state === 'done' && j.kind === 'import' ? 'data-auto-dismiss' : ''}>
-      <span class="lbl" title="${esc(j.label)}">${esc(j.label)}</span>
+      <span class="lbl" title="${esc(label)}">${esc(label)}</span>
       <span class="st">${esc(status)}${j.detail && !explained ? ': ' + esc(j.detail) : ''}</span>
-      ${explained ? `<p class="job-explanation">${esc(j.explanation)}</p>
+      ${explained ? `<p class="job-explanation">${esc(j.explanation)}</p>` : ''}
+      ${explained && j.state === 'error' ? `
         <details class="job-details" data-job-id="${j.id}" ${expanded.has(String(j.id)) ? 'open' : ''}>
           <summary>Technical details</summary>${esc(j.detail)}</details>` : ''}
       ${j.state === 'error' && j.retryable ? `<div class="job-actions">
@@ -3189,7 +3204,7 @@ function renderJobs() {
       ${j.state === 'done' && j.kind === 'import' && j.key ? `<div class="job-actions">
         <button type="button" class="open-job" data-job-id="${j.id}" data-paper="${esc(j.key)}" ${disabled}>Open paper</button></div>` : ''}
       ${['done', 'error'].includes(j.state) ? `<button type="button" class="dismiss-job" data-job-id="${j.id}"
-        aria-label="Dismiss notification for ${esc(j.label)}" title="Dismiss notification" ${disabled}>×</button>` : ''}
+        aria-label="Dismiss notification for ${esc(label)}" title="Dismiss notification" ${disabled}>×</button>` : ''}
     </div>`;
   }).join('');
   // Keep unchanged cards in place so polling and other jobs completing do not
@@ -4445,6 +4460,7 @@ function syncAnalysisControls() {
   $('ai-action-status').hidden = enabled;
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;
+  $('import-analysis-status').hidden = S.ai_enabled !== false;
   document.querySelectorAll('[data-ai-action]').forEach((button) => {
     button.disabled = !enabled;
   });
@@ -4806,9 +4822,18 @@ $('btn-workspace-add').addEventListener('click', async () => {
   }
 });
 
+let addingReferences = false;
+
 async function addReferences() {
+  if (addingReferences) return;
   const text = $('refs').value.trim();
   if (!text) return;
+  const workspace = workspaceClient.workspaceId;
+  addingReferences = true;
+  $('btn-add').disabled = true;
+  $('btn-add').textContent = 'Adding…';
+  $('import-status').hidden = false;
+  $('import-status').textContent = 'Submitting references…';
   let result;
   try {
     result = await api('/api/ingest', {
@@ -4819,15 +4844,30 @@ async function addReferences() {
     // What was pasted stays in the box either way: a refused request is a
     // reason to try again, not a reason to lose the list.
     toast(`Could not add these references: ${error.message}`, { tone: 'warn' });
+    $('import-status').textContent = `Could not add these references: ${error.message}`;
     return;
+  } finally {
+    addingReferences = false;
+    $('btn-add').disabled = false;
+    $('btn-add').textContent = 'Add';
   }
+  // A request can finish after a workspace switch. Its notices belong to the
+  // workspace it was submitted in, as do the references it would clear.
+  if (workspace !== workspaceClient.workspaceId) return;
   const unknown = result.unknown || [];
-  $('refs').value = unknown.join('\n');
+  if ($('refs').value.trim() === text) $('refs').value = unknown.join('\n');
+  $('import-status').hidden = !result.queued;
+  if (result.queued) $('import-status').textContent =
+    `Import started for ${result.queued} ${result.queued === 1 ? 'paper' : 'papers'}. Progress appears in the notifications.`;
   // Which lines failed, not how many: a count leaves the reader to work out
   // for themselves which of what they pasted is the problem.
   showRefWarning(unknown);
   reportKnown(result);
-  await refresh();
+  try {
+    await refresh();
+  } catch (error) {
+    toast(`References submitted, but the library could not refresh: ${error.message}`, { tone: 'warn' });
+  }
 }
 
 // References the server recognised without fetching anything. They never
@@ -5387,9 +5427,13 @@ document.addEventListener('drop', async (event) => {
 
 // --- boot -----------------------------------------------------------------
 
+let libraryInitialized = false;
 const poller = createPoller({ run: updateFromPoll, isVisible: () => !document.hidden });
 // Manual reads wait out an older round so they see changes made after it began.
 const pollOnce = () => poller.afterCurrent();
+$('btn-refresh-library').addEventListener('click', () => {
+  if (libraryInitialized) pollOnce().catch(() => {});
+});
 
 // One round of the background poll. Keeps settings current while editing; the
 // content guard preserves the editor DOM, draft text, focus, and selection.
@@ -5445,7 +5489,14 @@ async function boot() {
   if (V.view === 'research') renderContent();
   const noteId = new URLSearchParams(location.search).get('note');
   if (noteId) await ResearchNotes.open(noteId);
+  libraryInitialized = true;
+  $('btn-refresh-library').disabled = false;
   poller.start();
+  // WKWebView can suspend timers while the Mac app is in the background.
+  // Catch up as soon as the window returns, without rebuilding open editors.
+  const resume = () => { if (!document.hidden) poller.once().catch(() => {}); };
+  window.addEventListener('focus', resume);
+  document.addEventListener('visibilitychange', resume);
 }
 
 AppStartup.run(boot);

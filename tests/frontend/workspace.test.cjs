@@ -67,6 +67,38 @@ test('a failed jobs read cannot commit the ETag of an unseen state', async () =>
   assert.equal(headers.at(-1), null);
 });
 
+for (const stalledPath of ['/api/state', '/api/jobs']) {
+  for (const stage of ['headers', 'body']) {
+    test(`a stalled ${stalledPath} ${stage} read times out and polling recovers`, async () => {
+      let stall = true;
+      const signals = [], tags = [];
+      const client = createClient({ readTimeout: 20, fetch: async (path, options) => {
+        assert.equal(options.cache, 'no-store');
+        signals.push(options.signal);
+        if (path === '/api/state') tags.push(options.headers.get('If-None-Match'));
+        if (stall && path === stalledPath) {
+          // Simulate a web view request or body that never settles, even after
+          // abort. The deadline still has to release the scheduler's guard.
+          if (stage === 'headers') return new Promise(() => {});
+          return { ok: true, status: 200, headers: new Headers(), json: () => new Promise(() => {}) };
+        }
+        return path === '/api/jobs' ? json({ jobs: [{ id: 1, state: 'done' }] })
+          : json({ papers: ['monitoringbench'] }, 'saved-tag');
+      } });
+      const poller = createPoller({ run: () => client.pull() });
+      await assert.rejects(poller.once(), /refresh timed out/);
+      assert.equal(poller.running, false);
+      assert.deepEqual(client.state.papers, []);
+      assert.ok(signals.every(signal => signal.aborted));
+      stall = false;
+      await poller.once();
+      assert.deepEqual(client.state.papers, ['monitoringbench']);
+      assert.deepEqual(client.state.jobs, [{ id: 1, state: 'done' }]);
+      assert.deepEqual(tags, [null, null]);
+    });
+  }
+}
+
 test('binary exports retain their destination, content, and download headers', async () => {
   const held = deferred();
   let destination;
@@ -103,6 +135,52 @@ test('an older answer cannot overwrite a newer refresh or its ETag', async () =>
   assert.deepEqual(client.state.papers, ['new']);
   await client.pull();
   assert.equal(sentTags.at(-1), 'new-tag');
+});
+
+test('an older failure cannot replace a newer successful refresh', async () => {
+  const old = deferred();
+  let reads = 0;
+  const client = createClient({ fetch: async path => {
+    if (path === '/api/jobs') return json({ jobs: [] });
+    return ++reads === 1 ? old.promise : json({ papers: ['new'] }, 'new-tag');
+  } });
+  const first = client.pull();
+  await client.pull();
+  old.reject(new Error('Old request failed'));
+  assert.equal((await first).applied, false);
+  assert.deepEqual(client.state.papers, ['new']);
+});
+
+test('an older success cannot clear a newer failure or commit its ETag', async () => {
+  const old = deferred(), sentTags = [];
+  let reads = 0;
+  const client = createClient({ fetch: async (path, options) => {
+    if (path === '/api/jobs') return json({ jobs: [] });
+    sentTags.push(options.headers.get('If-None-Match'));
+    if (++reads === 1) return old.promise;
+    if (reads === 2) throw new Error('Current request failed');
+    return json({ papers: ['recovered'] }, 'new-tag');
+  } });
+  const first = client.pull();
+  await assert.rejects(client.pull(), /Current request failed/);
+  old.resolve(json({ papers: ['old'] }, 'old-tag'));
+  assert.equal((await first).applied, false);
+  assert.deepEqual(client.state.papers, []);
+  await client.pull();
+  assert.deepEqual(sentTags, [null, null, null]);
+  assert.deepEqual(client.state.papers, ['recovered']);
+});
+
+test('a failure from before leaving and returning to the same workspace is discarded', async () => {
+  const old = deferred();
+  const client = createClient({ workspaceId: 'first', fetch: async path =>
+    path === '/api/jobs' ? json({ jobs: [] }) : old.promise });
+  const first = client.pull();
+  client.select('second');
+  client.select('first');
+  old.reject(new Error('Old workspace request failed'));
+  assert.equal((await first).applied, false);
+  assert.deepEqual(client.state.papers, []);
 });
 
 test('a response from before leaving and returning to the same workspace is discarded', async () => {

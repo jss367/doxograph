@@ -3,12 +3,12 @@
 // Owns transport and corpus identity. Rendering and editor drafts stay with
 // the UI; features receive this interface instead of reading app.js globals.
 function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalThis.fetch,
-  rememberWorkspace = () => {}, onWorkspaceChange = () => {} } = {}) {
+  rememberWorkspace = () => {}, onWorkspaceChange = () => {}, readTimeout = 15000 } = {}) {
   const emptyState = () => ({ papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {},
     ledger: [], context: '', tensions: [], agreements: [], syntheses: [], kinds: [],
     strengths: [], relations: [], jobs: [], has_key: true });
   let state = emptyState(), workspaces = [], etag = null, epoch = 0;
-  let pendingMutations = 0, pullsAsked = 0, pullApplied = 0;
+  let pendingMutations = 0, pullsAsked = 0, pullSettled = 0;
 
   async function checkResponse(response) {
     if (!response.ok) {
@@ -58,20 +58,46 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     const requestedEpoch = epoch, asked = ++pullsAsked;
     const headers = new Headers({ 'X-Doxograph-Workspace': workspaceId });
     if (etag) headers.set('If-None-Match', etag);
-    const [next, jobs] = await Promise.all([
-      (async () => {
-        const response = await send('/api/state', { headers });
-        return response.status === 304 ? null : {
-          state: await readJSON(await checkResponse(response)), etag: response.headers.get('ETag'),
-        };
-      })(),
-      request('/api/jobs'),
-    ]);
+    // A stalled request must not keep the poller's overlap guard held forever.
+    // Include body reads in the deadline, and abort both requests on failure.
+    const controller = new AbortController();
+    let timeout;
+    const deadline = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error('The library refresh timed out.'));
+        controller.abort();
+      }, readTimeout);
+    });
+    let next, jobs;
+    try {
+      [next, jobs] = await Promise.race([Promise.all([
+        (async () => {
+          // ETags are managed here. Do not let the web view's HTTP cache serve
+          // an older snapshot or import status instead of asking the server.
+          const response = await send('/api/state', { headers, signal: controller.signal, cache: 'no-store' });
+          return response.status === 304 ? null : {
+            state: await readJSON(await checkResponse(response)), etag: response.headers.get('ETag'),
+          };
+        })(),
+        request('/api/jobs', { signal: controller.signal, cache: 'no-store' }),
+      ]), deadline]);
+    } catch (error) {
+      // A newer success or failure owns the sync status. An older failure
+      // must not replace it, including after leaving and returning to a workspace.
+      if (requestedEpoch !== epoch || asked < pullSettled) {
+        return { applied: false, changed: false, registryChanged: false };
+      }
+      pullSettled = asked;
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
     // The epoch also rejects a late answer after going A -> B -> A.
-    if (requestedEpoch !== epoch || asked < pullApplied) {
+    if (requestedEpoch !== epoch || asked < pullSettled) {
       return { applied: false, changed: false, registryChanged: false };
     }
-    pullApplied = asked;
+    pullSettled = asked;
     let registryChanged = false;
     if (next) {
       state = { ...next.state, jobs: jobs.jobs || [], job_recovery_issues: jobs.recovery_issues || [] };

@@ -172,7 +172,7 @@ def test_import_timeout_cannot_dismiss_old_cards_while_workspace_loads(engine):
                     # workspace's state arrives. Its timer must not act there.
                     await page.clock.run_for(10000)
                     assert deletes == []
-                    await notices.get_by_role("button", name="Dismiss notification for study-1").click()
+                    await notices.get_by_role("button", name="Dismiss notification for Study 1").click()
                     await page.mouse.move(0, 0)
                     await page.wait_for_function("workspaceClient.pendingMutations === 0")
                     assert deletes == []

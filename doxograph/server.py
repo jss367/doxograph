@@ -451,7 +451,14 @@ def _finish(job: dict, key: str) -> None:
              explanation="The paper's details were saved, but its PDF is unavailable. "
                          "Retry to check again, or upload the PDF yourself.")
         return
-    _set(job, state="done")
+    explanation = ""
+    source = job.get("_import", {})
+    if source and store.needs_extraction(key):
+        if not config.ai_enabled():
+            explanation = "PDF saved. AI analysis is off, so no claims were extracted."
+        elif not source.get("extract"):
+            explanation = "PDF saved without analysis because Read on arrival was off."
+    _set(job, state="done", explanation=explanation)
     _forget_import(job)
 
 
