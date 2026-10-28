@@ -24,4 +24,3 @@ def test_archive_copies_only_the_initial_locked_paper_set(monkeypatch):
             assert not any('late' in name for name in archive.namelist())
     finally:
         path.unlink()
-

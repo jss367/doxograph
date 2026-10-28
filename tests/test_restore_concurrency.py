@@ -63,4 +63,3 @@ def test_restore_keeps_current_pdf_error_state_and_recomputes_status():
     assert restored['status'] == 'extracted'
     assert restored['error'] == ''
     assert restored['extraction'] == current['extraction']
-

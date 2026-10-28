@@ -336,7 +336,7 @@ def render(title: str = "Doxograph") -> str:
         body.append(
             '<div class="paper">'
             f'<div class="title">{heading}</div>'
-            f'<div class="authors">{_e(_authors(paper.get("authors", [])))}'
+            f'<div class="authors">{_e(_authors(paper.get("authors") or []))}'
             + (f' · {_e(paper.get("year"))}' if paper.get("year") else "")
             + (f' · {_e(paper.get("venue"))}' if paper.get("venue") else "")
             + f' · <code>{_e(paper["key"])}</code></div>'

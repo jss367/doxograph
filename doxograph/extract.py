@@ -22,7 +22,7 @@ import anthropic
 
 from . import claude_code, codex_cli, config, providers, quotes, store
 from .analysis_types import JSONSchema, Message, MessageClient, ModelResponse, normalize_response
-from .model_errors import InputTooLargeError, ModelInputError, ProviderResponseError
+from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError, ProviderResponseError
 
 SYSTEM = """\
 You are building a doxography: a record of what each paper claims, arranged so \
@@ -355,6 +355,13 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     return uploaded.id
 
 
+_UPLOAD_CLEANUP_NEEDS_KEY = (
+    "Removing this paper requires Anthropic API credentials to delete the PDF it "
+    "uploaded for analysis. Set ANTHROPIC_API_KEY or add it to ~/.credentials, "
+    "then remove the paper again."
+)
+
+
 @config.bind_model_access
 def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
     """Delete a paper's remote uploads before removing its local metadata."""
@@ -377,11 +384,18 @@ def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
             nonlocal api
             if file_ids:
                 api = api or (api_client() if config.ai_provider() != "api" else client())
+                # The SDK only finds out it has no credentials when it sends,
+                # and reports that as a bare TypeError. The paper is kept for
+                # a retry either way; this says what the retry needs.
+                if isinstance(api, anthropic.Anthropic) and api.api_key is None and api.auth_token is None:
+                    raise ModelSetupError(_UPLOAD_CLEANUP_NEEDS_KEY)
             for file_id in file_ids:
                 try:
                     api.files.delete(file_id)
                 except anthropic.NotFoundError:
                     pass
+                except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+                    raise ModelSetupError(_UPLOAD_CLEANUP_NEEDS_KEY) from exc
 
         store.delete_paper(key, before_remove=cleanup_uploads)
 
