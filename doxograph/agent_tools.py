@@ -24,7 +24,7 @@ DEFINITIONS = [
     ("search_claims", "Find claims whose text, quote, or topics contain every word of the query. Case-insensitive.",
      {"query": {"type": "string", "minLength": 1, "maxLength": 200}}),
     ("list_topics", "List topics with how many claims and papers each has, and whether a synthesis exists.", {}),
-    ("get_topic", "Read one topic: its synthesis, its claims, and the agreements and tensions found in it.",
+    ("get_topic", "Read one topic: its synthesis (synthesis_stale means claims changed after it was written), its claims, and the agreements and tensions found in it. Groups with stale true were judged before a claim changed.",
      {"name": {"type": "string"}}),
 ]
 OPTIONAL = {"start"}
@@ -44,7 +44,8 @@ class Library:
         self.papers = {p["key"]: p for p in snapshot.get("papers", [])}
         self.claims = {c["id"]: (c, p) for p in self.papers.values() for c in p.get("claims", [])}
         self.topics = {t["name"]: t for t in snapshot.get("topics", [])}
-        self.syntheses = snapshot.get("syntheses", {})
+        self.syntheses = {t: s if isinstance(s, dict) else {"text": s, "stale": False}
+                          for t, s in snapshot.get("syntheses", {}).items()}
         self.agreements = snapshot.get("agreements", [])
         self.tensions = snapshot.get("tensions", [])
 
@@ -55,6 +56,7 @@ class Library:
         ids = [i for i in record.get("claims", []) if i in self.claims]
         return {"id": record.get("id"), "kind": record.get("kind"), "note": record.get("note", ""),
                 "status": record.get("status"), "claims": ids,
+                "topics": record.get("topics", []), "stale": bool(record.get("stale")),
                 "papers": sorted({self.claims[i][1]["key"] for i in ids})}
 
     def call(self, name: str, arguments: dict) -> dict:
@@ -106,14 +108,15 @@ class Library:
             topic = arguments.get("name")
             if topic not in self.topics:
                 raise ValueError("Choose a topic name from list_topics.")
-            ids = {c["id"] for c in self._topic_claims(topic)}
+            synthesis = self.syntheses.get(topic, {})
             return {
                 "name": topic,
                 "description": self.topics[topic].get("description", ""),
-                "synthesis": self.syntheses.get(topic, ""),
+                "synthesis": synthesis.get("text", ""),
+                "synthesis_stale": bool(synthesis.get("stale")),
                 "claims": self._topic_claims(topic),
-                "agreements": [self._group(a) for a in self.agreements if ids & set(a.get("claims", []))],
-                "tensions": [self._group(t) for t in self.tensions if ids & set(t.get("claims", []))],
+                "agreements": [self._group(a) for a in self.agreements if topic in a.get("topics", [])],
+                "tensions": [self._group(t) for t in self.tensions if topic in t.get("topics", [])],
             }
         raise ValueError("Unknown library tool.")
 

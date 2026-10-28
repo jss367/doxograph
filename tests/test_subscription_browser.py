@@ -157,3 +157,26 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups():
 
     with _server() as url:
         asyncio.run(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('provider', ['api', 'codex'])
+def test_library_agent_cannot_send_outside_claude_subscription_mode(provider):
+    config.set_ai_provider(provider)
+
+    async def check(url):
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            requests = []
+            await page.route('**/api/agent/chat', lambda route: requests.append(route))
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            await page.locator('#agent-question').fill('Anything?')
+            assert await page.locator('#agent-send').is_disabled()
+            assert 'Claude subscription' in await page.locator('#agent-status').text_content()
+            assert requests == []
+            await browser.close()
+
+    with _server() as url:
+        asyncio.run(check(url))

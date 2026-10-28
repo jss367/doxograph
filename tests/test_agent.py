@@ -49,6 +49,47 @@ def test_tools_search_and_read_topic():
         library.call("get_paper", {"key": "../etc/passwd"})
 
 
+def two_paper_topics():
+    """Topics A and B, with a relationship found only under B and a claim tagged A and B."""
+    store.save_tags([{"name": "a", "description": ""}, {"name": "b", "description": ""}])
+    ids = {}
+    for key, tags in (("p1", ["a", "b"]), ("p2", ["b"]), ("p3", ["a"])):
+        store.save_paper(store.new_paper(key, title=key))
+        ids[key] = store.add_claim(key, {"text": f"{key} claim", "tags": tags, "reviewed": True})["id"]
+    live = {r["id"]: r for r in store.claim_rows()}
+    store.record_agreements("b", [{"claims": [ids["p1"], ids["p2"]], "note": "same"}], live)
+    store.record_tensions("b", [{"claims": [ids["p1"], ids["p2"]], "kind": "tension", "note": "differ"}], live)
+    return ids, live
+
+
+def test_topic_lists_only_relationships_found_under_that_topic():
+    two_paper_topics()
+    library = agent_tools.Library(agent.snapshot())
+    assert library.call("get_topic", {"name": "a"})["agreements"] == []
+    assert library.call("get_topic", {"name": "a"})["tensions"] == []
+    assert len(library.call("get_topic", {"name": "b"})["agreements"]) == 1
+    assert len(library.call("get_topic", {"name": "b"})["tensions"]) == 1
+
+
+def test_agreement_losing_a_paper_is_not_shown_and_an_edit_marks_it_stale():
+    ids, live = two_paper_topics()
+    store.update_claim("p2", ids["p2"], {"text": "p2 claim, reworded"})
+    group = agent_tools.Library(agent.snapshot()).call("get_topic", {"name": "b"})["agreements"][0]
+    assert group["stale"] is True
+    store.delete_paper("p2")
+    assert agent_tools.Library(agent.snapshot()).call("get_topic", {"name": "b"})["agreements"] == []
+
+
+def test_synthesis_reports_when_claims_changed_after_it_was_written():
+    claim = seed()
+    live = {r["id"]: r for r in store.claim_rows()}
+    store.record_synthesis("steering", "Recovery happens.", live)
+    topic = lambda: agent_tools.Library(agent.snapshot()).call("get_topic", {"name": "steering"})
+    assert topic()["synthesis"] == "Recovery happens." and topic()["synthesis_stale"] is False
+    store.update_claim("doe2026", claim["id"], {"text": "Models rarely recover from steering."})
+    assert topic()["synthesis_stale"] is True
+
+
 def test_tool_server_speaks_mcp_over_stdio(tmp_path):
     seed()
     manifest = tmp_path / "library.json"

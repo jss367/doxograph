@@ -21,8 +21,10 @@ function renderAgentChat() {
   $('agent-question').value = chat.draft;
   $('agent-question').disabled = chat.busy;
   $('agent-clear').disabled = chat.busy;
-  $('agent-send').disabled = chat.busy || S.ai_enabled !== true;
-  $('agent-status').textContent = chat.busy ? 'Looking through the library…' : chat.error || '';
+  const ready = S.ai_provider === 'claude_code';
+  $('agent-send').disabled = chat.busy || S.ai_enabled !== true || !ready;
+  $('agent-status').textContent = chat.busy ? 'Looking through the library…' : chat.error
+    || (ready ? '' : 'Choose Claude subscription in Settings → Model access to ask the library.');
 }
 
 $('btn-agent').addEventListener('click', () => {
@@ -42,7 +44,7 @@ $('agent-clear').addEventListener('click', () => {
 $('agent-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const chat = activeAgentChat;
-  if (!chat || chat.busy || S.ai_enabled !== true || !chat.draft.trim()) return;
+  if (!chat || chat.busy || S.ai_enabled !== true || S.ai_provider !== 'claude_code' || !chat.draft.trim()) return;
   const messages = [...chat.messages, { role: 'user', content: chat.draft.trim() }];
   const lengths = messages.map((message) => Array.from(message.content).length);
   if (messages.length > 40 || lengths.some((length) => length > 32000)

@@ -29,6 +29,13 @@ _VERBS = {"list_papers": "Listed papers", "get_paper": "Read paper", "search_cla
           "list_topics": "Listed topics", "get_topic": "Read topic"}
 
 
+def _group(record: dict) -> dict:
+    """An agreement or tension as live rows: surviving claims, the topics all of them
+    still carry, and whether an edit since it was judged made it stale."""
+    return {**{k: record.get(k) for k in ("id", "kind", "note", "status", "topics", "stale")},
+            "claims": [c["id"] for c in record["claims"]]}
+
+
 def snapshot() -> dict:
     """The library as the agent may see it, copied field by field.
 
@@ -46,11 +53,10 @@ def snapshot() -> dict:
                        for claim in paper.get("claims", [])],
         } for paper in papers],
         "topics": [{"name": t["name"], "description": t.get("description", "")} for t in store.load_tags()],
-        "syntheses": {r["topic"]: r.get("text", "") for r in store.synthesis_rows(rows)},
-        "agreements": [{k: a.get(k) for k in ("id", "kind", "note", "status", "claims")}
-                       for a in store.load_agreements()],
-        "tensions": [{**{k: t.get(k) for k in ("id", "kind", "note", "status")},
-                      "claims": [c["id"] for c in t["claims"]]} for t in store.tension_rows(rows)],
+        "syntheses": {r["topic"]: {"text": r.get("text", ""), "stale": bool(r.get("stale"))}
+                      for r in store.synthesis_rows(rows)},
+        "agreements": [_group(a) for a in store.agreement_rows(rows)],
+        "tensions": [_group(t) for t in store.tension_rows(rows)],
     }
 
 
