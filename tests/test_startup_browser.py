@@ -4,6 +4,7 @@ import pytest
 from playwright.async_api import expect
 
 from browser_support import browser_session, run_browser
+from doxograph import store
 from test_browser import _paper, _server
 
 
@@ -61,5 +62,56 @@ def test_startup_failure_and_reload_recovery(engine, failure):
                 await expect(page.locator("#startup-error")).to_be_hidden()
                 await expect(page.locator("#content")).to_contain_text("A claim from")
                 await expect(page.locator("#selection-count")).to_have_text("1 claim")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("failure", ["error", "timeout"])
+def test_initial_refresh_failure_requires_full_reload_before_refresh_only_retry(engine, failure):
+    _paper("oversight", "Understanding model oversight")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            broken = True
+            state_reads = 0
+
+            async def initial_state(route):
+                nonlocal state_reads
+                state_reads += 1
+                if broken:
+                    if failure == "error":
+                        await route.fulfill(status=503, json={"detail": "Temporarily unavailable"})
+                    # A request with no response reaches the client's normal
+                    # deadline. It must offer the same full startup recovery.
+                    return
+                await route.continue_()
+
+            await page.route("**/api/state", initial_state)
+            with _server() as url:
+                await page.goto(f"{url}/#paper=oversight&kind=finding")
+                await expect(page.locator("#startup-error")).to_be_visible(timeout=20000)
+                await expect(page.locator("#startup-title")).to_have_text("The library could not connect")
+                await expect(page.locator("#sync-status")).to_be_hidden()
+                await expect(page.locator("#btn-refresh-library")).to_be_disabled()
+                assert await page.evaluate("libraryInitialized") is False
+                before_retry = state_reads
+                await page.locator("#btn-refresh-library").dispatch_event("click")
+                assert state_reads == before_retry
+
+                broken = False
+                await page.get_by_role("button", name="Reload library").click()
+                await expect(page.locator("#startup-error")).to_be_hidden()
+                await expect(page.locator("#kind")).to_have_value("finding")
+                await expect(page.locator('.paperhead h2')).to_have_text("Understanding model oversight")
+                await expect(page.locator("#btn-refresh-library")).to_be_enabled()
+                assert await page.evaluate("libraryInitialized") is True
+
+                # Recovery must start ongoing polling, rather than stopping
+                # after drawing the snapshot fetched by the retry itself.
+                store.save_paper(store.new_paper("newsource", title="A newly imported source"))
+                await expect(page.locator('#papers [data-paper="newsource"]')).to_be_visible(timeout=10000)
 
     run_browser(scenario())

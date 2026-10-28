@@ -198,6 +198,35 @@ def test_retry_respects_analysis_disabled_since_failure(client, monkeypatch, imm
 
     assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
     assert job["state"] == "done"
+    assert job["explanation"] == "PDF saved. AI analysis is off, so no claims were extracted."
+
+
+@pytest.mark.parametrize("upload", [False, True], ids=["reference", "upload"])
+@pytest.mark.parametrize("ai_enabled", [False, True], ids=["analysis-off", "read-on-arrival-off"])
+def test_import_explains_why_analysis_was_skipped(
+        client, monkeypatch, immediate_worker, upload, ai_enabled):
+    config.set_ai_enabled(ai_enabled)
+    store.save_paper(store.new_paper("study", title="A study"))
+    body = minimal_pdf("A study")
+    store.pdf_path("study").write_bytes(body)
+    monkeypatch.setattr(ingest, "already_stored", lambda ref: None)
+    monkeypatch.setattr(ingest, "already_uploaded", lambda staged: None)
+    monkeypatch.setattr(ingest, "ingest_ref", lambda ref: ("study", True))
+    monkeypatch.setattr(ingest, "ingest_staged_pdf", lambda *args: ("study", True))
+    monkeypatch.setattr(extract, "extract_paper", lambda key: pytest.fail("analysis was not requested"))
+
+    if upload:
+        result = client.post("/api/upload?extract_now=false",
+                             files={"files": ("study.pdf", body, "application/pdf")})
+    else:
+        result = client.post("/api/ingest", json={"text": "2602.06941", "extract": False})
+    assert result.json()["queued"] == 1
+    [job] = client.get("/api/jobs").json()["jobs"]
+    assert job["state"] == "done"
+    assert job["key"] == "study"
+    assert job["explanation"] == (
+        "PDF saved without analysis because Read on arrival was off." if ai_enabled
+        else "PDF saved. AI analysis is off, so no claims were extracted.")
 
 
 @pytest.mark.parametrize("state", ["queued", "fetching", "reading", "done", "error"])

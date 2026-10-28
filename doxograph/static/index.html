@@ -195,6 +195,8 @@
           <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
           <button type="button" id="btn-add" class="primary" style="margin-left:auto">Add</button>
         </div>
+        <p class="hint" id="import-analysis-status" hidden>AI analysis is off. Papers will be saved without extracting claims.</p>
+        <p class="hint" id="import-status" role="status" hidden></p>
         <p class="warn" id="ref-warn" hidden></p>
       </details>
       <div class="sec paper-library">
@@ -275,6 +277,10 @@
     title="Drag to resize the side pane — double-click to put it back"></div>
 
   <section id="main">
+    <aside id="sync-status" class="storage-warning" role="status" hidden>
+      <span id="sync-message"></span>
+      <button type="button" id="btn-refresh-library" disabled>Retry now</button>
+    </aside>
     <aside id="storage-warning" class="storage-warning" role="status" hidden></aside>
     <div class="library-heading">
       <p class="eyebrow">Your workspace</p>
