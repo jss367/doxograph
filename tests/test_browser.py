@@ -6075,6 +6075,10 @@ def test_escape_outside_the_claim_form_leaves_its_draft_alone():
                 # Escape in the sidebar's new-topic box and in the add-papers
                 # textarea leaves those fields; the editor and its draft stay.
                 for selector in ("#new-tag", "#refs"):
+                    if selector == "#refs":
+                        await page.locator("#btn-command-palette").click()
+                        await page.locator("#command-query").fill("Add papers")
+                        await page.keyboard.press("Enter")
                     field = page.locator(selector)
                     await field.fill("typed and abandoned")
                     await field.press("Escape")
