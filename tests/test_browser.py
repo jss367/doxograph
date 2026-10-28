@@ -338,6 +338,8 @@ def test_failed_import_can_be_retried_and_opened_after_success():
                 await page.keyboard.press("Enter")
                 await page.locator(".paperhead h2", has_text="recovered study").wait_for()
                 assert await page.evaluate("V.paper") == finished["key"]
+                await page.locator("#jobs .job").wait_for(state="detached")
+                assert httpx.get(f"{url}/api/jobs").json()["jobs"] == []
                 assert len(httpx.get(f"{url}/api/state").json()["papers"]) == 1
 
 
