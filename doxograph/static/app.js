@@ -4296,6 +4296,7 @@ function syncAnalysisControls() {
   document.querySelectorAll('[data-ai-action]').forEach((button) => {
     button.disabled = !enabled;
   });
+  if (typeof syncAgentChatControls === 'function') syncAgentChatControls();
 }
 
 $('ai-enabled').addEventListener('change', async () => {
