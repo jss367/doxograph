@@ -121,6 +121,7 @@ def test_answer_surfaces_a_failed_run(monkeypatch):
 
 def test_endpoint_calls_back_on_its_own_port_in_the_current_workspace(monkeypatch):
     config.set_ai_provider("claude_code")
+    monkeypatch.setattr(server, "_reachable", lambda url: True)
     seen = fake_claude(monkeypatch, stream({"type": "result", "result": "Ok."}))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]}).json()["answer"] == "Ok."
@@ -134,17 +135,55 @@ def test_endpoint_calls_back_on_its_own_port_in_the_current_workspace(monkeypatc
 def test_agent_calls_back_on_the_address_the_request_arrived_on(monkeypatch, host, expected):
     config.set_ai_provider("claude_code")
     urls = []
+    monkeypatch.setattr(server, "_reachable", lambda url: True)
     monkeypatch.setattr(agent, "answer", lambda messages, url, focus=None: urls.append(url) or {"answer": "Ok."})
     with TestClient(server.app, base_url=f"http://{host}:8765") as client:
         assert client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]}).status_code == 200
     assert urls == [expected]
 
 
-def test_callback_url_falls_back_to_loopback_for_other_addresses():
+def test_callback_url_falls_back_to_loopback_for_other_addresses(monkeypatch):
+    monkeypatch.setattr(server, "_reachable", lambda url: True)
     request = SimpleNamespace(scope={"server": ("192.168.1.5", 9000)})
     assert server._callback_url(request) == "http://127.0.0.1:9000"
     assert server._callback_url(SimpleNamespace(scope={"server": ("::1", 9000)})) == "http://[::1]:9000"
     assert server._callback_url(SimpleNamespace(scope={})) == "http://127.0.0.1:8765"
+
+
+def test_unreachable_callback_is_rejected_with_setup_guidance_before_any_model_call(monkeypatch):
+    config.set_ai_provider("claude_code")
+    probed = []
+    monkeypatch.setattr(server, "_reachable", lambda url: probed.append(url) or False)
+    monkeypatch.setattr(agent, "answer", lambda *a, **k: pytest.fail("the agent ran without a reachable callback"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]})
+    assert response.status_code == 502
+    assert "loopback" in response.json()["detail"] and "--host 127.0.0.1" in response.json()["detail"]
+    assert probed == ["http://127.0.0.1:8765"]
+
+
+def test_reachable_checks_the_health_route_of_a_real_server():
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    port = sock.getsockname()[1]
+    http = uvicorn.Server(uvicorn.Config(server.app, log_level="error", lifespan="off"))
+    thread = threading.Thread(target=lambda: http.run(sockets=[sock]), daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 10
+        while not http.started and time.time() < deadline:
+            time.sleep(0.05)
+        assert server._reachable(f"http://127.0.0.1:{port}")
+    finally:
+        http.should_exit = True
+        thread.join(timeout=10)
+    assert not server._reachable(f"http://127.0.0.1:{port}")
 
 
 def test_endpoint_maps_setup_errors_and_the_off_switch():

@@ -150,8 +150,9 @@ through the [MCP server](#query-doxograph-from-agents) below, started with
 `--without-notes`: it can search papers, claims, and PDF text, read a paper,
 list topics, and read agreements, tensions, and syntheses. The line under each
 answer lists the lookups it made. Claude Code reaches the library through the
-app that is serving the page, so the app has to be running, which it is when you
-use this.
+app that is serving the page, over a loopback address (the default; `--host 0.0.0.0`
+also works). If the app is bound only to another address, the chat says so
+instead of failing partway through an answer.
 
 It has no file, shell, web, or write access, and it does not receive the PDFs.
 `--without-notes` leaves out your paper and workspace notes, your claim notes, and

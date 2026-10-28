@@ -1547,11 +1547,20 @@ def paper_chat(key: str, body: ChatBody) -> dict:
             raise HTTPException(404, f"no paper {key}")
 
 
-def _callback_url(request: Request) -> str:
-    """Where the agent's tools reach this server: the loopback address this request arrived on.
+def _reachable(url: str) -> bool:
+    try:
+        return httpx.get(f"{url}/api/health", timeout=3, trust_env=False, follow_redirects=False).is_success
+    except httpx.HTTPError:
+        return False
 
-    A server bound to one address (127.0.0.2, ::1) does not answer on 127.0.0.1. The MCP adapter
-    only talks to loopback, so any other address falls back to 127.0.0.1, which a wildcard bind answers.
+
+def _callback_url(request: Request) -> str:
+    """Where the agent's tools reach this server: a loopback address that answers.
+
+    The MCP adapter talks only to loopback, so it never gets a LAN address. Prefer the loopback
+    address this request arrived on (127.0.0.2, ::1); otherwise try 127.0.0.1, which a wildcard
+    bind answers. A server bound to one non-loopback address answers on neither, so the check
+    fails with setup guidance rather than handing the agent a URL it cannot reach.
     """
     host, port = (request.scope.get("server") or (None, 8765))[:2]
     try:
@@ -1559,7 +1568,12 @@ def _callback_url(request: Request) -> str:
     except ValueError:
         loopback = host == "localhost"
     host = host if loopback else "127.0.0.1"
-    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+    url = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+    if not _reachable(url):
+        raise ModelSetupError(
+            f"Ask the library needs Doxograph to answer on a loopback address, and {url} did not respond. "
+            "Start the app with `doxograph serve --host 127.0.0.1` (the default) or `--host 0.0.0.0`.")
+    return url
 
 
 class AgentBody(ChatBody):
