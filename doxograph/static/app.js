@@ -1294,6 +1294,18 @@ function resetWorkspaceView() {
   closePaperMenu();
 }
 
+function hasWorkspaceDrafts() {
+  return Boolean(V.editing || V.synthEditing || V.noteEditing || V.newClaim
+    || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
+    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty()
+    || WorkspaceNotes.hasUnsavedChanges() || ResearchNotes.hasUnsavedChanges() || ResearchTools.hasUnsavedChanges());
+}
+
+function canRestoreSavedVersion() {
+  return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
+    && !V.synthSaving && !V.noteSaving && !V.researchSaving && !trash.size;
+}
+
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
     return await WorkspaceNotes.beforeWorkspaceSwitch()
@@ -1308,10 +1320,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     return true;
   },
   async confirmLeave() {
-    const hasDraft = V.editing || V.synthEditing || V.noteEditing || V.newClaim
-      || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
-      || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty();
-    return !hasDraft || await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
+    return !hasWorkspaceDrafts() || await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
                                            { ok: 'Discard and switch' });
   },
   beforeLeave: flushTrash,

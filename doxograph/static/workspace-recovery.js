@@ -61,9 +61,17 @@
     const version = versions.find(v => v.id === (target.dataset.backupDownload || target.dataset.backupRestore));
     if (!version) return;
     if (target.dataset.backupDownload) { download(`/api/workspace/backups/${version.id}`, owner); return; }
+    if (!canRestoreSavedVersion()) {
+      $('backups-status').textContent = 'Save or cancel unsaved edits and let pending changes finish before restoring a saved version.';
+      return;
+    }
     busy = true;
     try {
       if (!await confirmDialog(`Restore the earlier version of “${title(version)}”? Its current saved version will be kept as a backup.`, {ok:'Restore version'})) return;
+      if (!canRestoreSavedVersion()) {
+        $('backups-status').textContent = 'The workspace has unsaved or pending changes. Save or cancel them before restoring.';
+        return;
+      }
       await api(`/api/workspace/backups/${version.id}/restore`, {method:'POST',
         headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':owner}, body:JSON.stringify({expected:version.expected})});
       workspaceClient.invalidateState();

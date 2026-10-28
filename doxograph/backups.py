@@ -1,6 +1,7 @@
 """Local document versions, captured before an atomic replacement."""
 
 import base64
+import contextlib
 import hashlib
 import json
 import re
@@ -128,7 +129,8 @@ def restore(identifier: str, body: Restore) -> dict:
         raise HTTPException(409, 'Download this metadata version to inspect it before repairing related files together.')
     target = config.data_dir() / relative
     lock = store.paper_lock(target.stem) if relative.startswith('papers/') else store.document_lock(target.stem)
-    with store.vocab_lock(), lock:
+    extraction = store.extraction_lock(target.stem) if relative.startswith('papers/') else contextlib.nullcontext()
+    with extraction, store.vocab_lock(), lock:
         if (not local(target)
                 or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != body.expected):
             raise HTTPException(409, 'This document changed or was removed. Reload the backup list before restoring.')
@@ -147,11 +149,12 @@ def restore(identifier: str, body: Restore) -> dict:
                 store.ensure_claim_seq(previous)
                 restored = paper.model_dump(exclude_unset=True)
                 restored['claim_seq'] = max(previous['claim_seq'], restored.get('claim_seq', 0))
-                for field in ('pdf_file', 'pdf_upload', 'extraction', 'source'):
+                for field in ('pdf_file', 'pdf_upload', 'extraction', 'source', 'error'):
                     if field in previous:
                         restored[field] = previous[field]
                 for claim in restored.get('claims', []):
                     store.check_quote(target.stem, claim)
+                store.refresh_status(restored)
                 store.save_paper(restored)
                 return {'restored': relative}
             elif relative == 'notebook.json':

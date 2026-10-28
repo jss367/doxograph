@@ -11,7 +11,7 @@ from playwright.async_api import expect
 from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
-from test_browser import _answer, _server
+from test_browser import _answer, _paper, _server
 
 
 @pytest.mark.browser
@@ -79,5 +79,41 @@ server._set(job, state='fetching')
                 await expect(page.locator('.job .open-job')).to_be_visible()
                 assert len(store.paper_keys()) == 1
                 assert list(config.pdfs_dir().glob('.incoming-*')) == []
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('editor', ['claim', 'research'])
+def test_restore_refuses_unsaved_editor_without_losing_the_draft(engine, editor):
+    config.set_ai_enabled(False)
+    if editor == 'claim':
+        _paper('study', 'Synthetic paper')
+        store.update_claim('study', 'study-c1', {'text': 'Latest saved claim'})
+    else:
+        store.save_context('Earlier context')
+        store.save_context('Latest saved context')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                if editor == 'claim':
+                    await page.locator('[data-act="edit"]').first.click()
+                    field = page.locator('form[data-form] [name="text"]')
+                else:
+                    await page.locator('#research-nav [data-view="research"]').click()
+                    field = page.locator('#research-context')
+                await field.fill('An unsaved synthetic draft')
+                await page.locator('#workspace-actions > summary').click()
+                await page.locator('#btn-workspace-backups').click()
+                await page.locator('[data-backup-restore]').first.click()
+                await expect(page.locator('#backups-status')).to_contain_text('Save or cancel unsaved edits')
+                await expect(page.locator('#ask')).not_to_be_visible()
+                await page.locator('#backups-close').click()
+                await expect(field).to_have_value('An unsaved synthetic draft')
+                assert (store.load_paper('study')['claims'][0]['text'] if editor == 'claim' else store.load_context()) == ('Latest saved claim' if editor == 'claim' else 'Latest saved context')
 
     run_browser(scenario())
