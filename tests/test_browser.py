@@ -667,8 +667,12 @@ def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
                 await menu.wait_for(state="hidden")
                 assert await textarea.input_value() == draft_text
 
-                # With the menu closed, Escape reaches the editor as before.
+                # Right-clicking a paper moves focus to its sidebar control.
+                # Refocus the editor: Escape on an unrelated control keeps drafts.
+                assert await page.locator("#papers").evaluate("element => element === document.activeElement")
                 await page.keyboard.press("Escape")
+                assert await textarea.input_value() == draft_text
+                await textarea.press("Escape")
                 await textarea.wait_for(state="detached")
 
     run_browser(scenario())
