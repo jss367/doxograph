@@ -217,7 +217,7 @@ const ResearchTools = (() => {
       ${board ? `${input(questioning ? 'Question title' : 'Board title', 'board-title', board.title)}
         ${(questioning || isQuestion(board)) ? `${area('Research question', 'board-question', board.question || '')}${area('Working conclusion', 'board-conclusion', board.conclusion || '')}${area('Open questions and next steps', 'board-open_questions', board.open_questions || '')}${questionOverview(board)}` : ''}
         <div class="tool-actions">${button('board-add-selection','Add selected claims')}${button('board-heading','Add heading')}${button('board-note','Add commentary')}
-        ${button('save-board',questioning ? 'Save question' : 'Save board')}${button('export-board','Export Markdown','data-format="markdown"')}${button('export-board','Export CSV','data-format="csv"')}</div>
+        ${!isQuestion(board) ? button('question-board','Turn into research question') : ''}${button('save-board',questioning ? 'Save question' : 'Save board')}${button('export-board','Export Markdown','data-format="markdown"')}${button('export-board','Export CSV','data-format="csv"')}</div>
         <div class="board-entries">${board.entries.map((entry,i) => `<article class="board-entry" data-entry="${html(entry.id)}">
           <div class="entry-actions"><span class="hint">${i+1} · ${html(entry.kind === 'note' ? 'commentary' : entry.kind)}</span>
           ${button('entry-up','↑', `aria-label="Move entry ${i+1} up" ${i === 0 ? 'disabled' : ''}`)}${button('entry-down','↓', `aria-label="Move entry ${i+1} down" ${i === board.entries.length-1 ? 'disabled' : ''}`)}${button('entry-remove','Remove')}</div>
@@ -1284,6 +1284,11 @@ const ResearchTools = (() => {
     }
     if (name === 'board-heading' || name === 'board-note') {
       currentBoard().entries.push({id:uid(),kind:name === 'board-heading' ? 'heading' : 'note',text:'',reference:null}); dirty = true; renderBoards(); return;
+    }
+    if (name === 'question-board') {
+      const board = currentBoard();
+      board.kind = 'question'; board.question ||= board.title; dirty = true;
+      await save(); renderBoards(); return;
     }
     if (name === 'save-board' || name === 'save-connection') { await save(); return; }
     if (name === 'delete-board') {
