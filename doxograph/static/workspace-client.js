@@ -3,7 +3,7 @@
 // Owns transport and corpus identity. Rendering and editor drafts stay with
 // the UI; features receive this interface instead of reading app.js globals.
 function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalThis.fetch,
-  rememberWorkspace = () => {}, onWorkspaceChange = () => {} } = {}) {
+  rememberWorkspace = () => {}, onWorkspaceChange = () => {}, readTimeout = 15000 } = {}) {
   const emptyState = () => ({ papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {},
     ledger: [], context: '', tensions: [], agreements: [], syntheses: [], kinds: [],
     strengths: [], relations: [], jobs: [], has_key: true });
@@ -58,15 +58,33 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     const requestedEpoch = epoch, asked = ++pullsAsked;
     const headers = new Headers({ 'X-Doxograph-Workspace': workspaceId });
     if (etag) headers.set('If-None-Match', etag);
-    const [next, jobs] = await Promise.all([
-      (async () => {
-        const response = await send('/api/state', { headers });
-        return response.status === 304 ? null : {
-          state: await readJSON(await checkResponse(response)), etag: response.headers.get('ETag'),
-        };
-      })(),
-      request('/api/jobs').then(result => result.jobs || []),
-    ]);
+    // A stalled request must not keep the poller's overlap guard held forever.
+    // Include body reads in the deadline, and abort both requests on failure.
+    const controller = new AbortController();
+    let timeout;
+    const deadline = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error('The library refresh timed out.'));
+        controller.abort();
+      }, readTimeout);
+    });
+    let next, jobs;
+    try {
+      [next, jobs] = await Promise.race([Promise.all([
+        (async () => {
+          // ETags are managed here. Do not let the web view's HTTP cache serve
+          // an older snapshot or import status instead of asking the server.
+          const response = await send('/api/state', { headers, signal: controller.signal, cache: 'no-store' });
+          return response.status === 304 ? null : {
+            state: await readJSON(await checkResponse(response)), etag: response.headers.get('ETag'),
+          };
+        })(),
+        request('/api/jobs', { signal: controller.signal, cache: 'no-store' }).then(result => result.jobs || []),
+      ]), deadline]);
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
     // The epoch also rejects a late answer after going A -> B -> A.
     if (requestedEpoch !== epoch || asked < pullApplied) {
       return { applied: false, changed: false, registryChanged: false };

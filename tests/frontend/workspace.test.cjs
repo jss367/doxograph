@@ -67,6 +67,38 @@ test('a failed jobs read cannot commit the ETag of an unseen state', async () =>
   assert.equal(headers.at(-1), null);
 });
 
+for (const stalledPath of ['/api/state', '/api/jobs']) {
+  for (const stage of ['headers', 'body']) {
+    test(`a stalled ${stalledPath} ${stage} read times out and polling recovers`, async () => {
+      let stall = true;
+      const signals = [], tags = [];
+      const client = createClient({ readTimeout: 20, fetch: async (path, options) => {
+        assert.equal(options.cache, 'no-store');
+        signals.push(options.signal);
+        if (path === '/api/state') tags.push(options.headers.get('If-None-Match'));
+        if (stall && path === stalledPath) {
+          // Simulate a web view request or body that never settles, even after
+          // abort. The deadline still has to release the scheduler's guard.
+          if (stage === 'headers') return new Promise(() => {});
+          return { ok: true, status: 200, headers: new Headers(), json: () => new Promise(() => {}) };
+        }
+        return path === '/api/jobs' ? json({ jobs: [{ id: 1, state: 'done' }] })
+          : json({ papers: ['monitoringbench'] }, 'saved-tag');
+      } });
+      const poller = createPoller({ run: () => client.pull() });
+      await assert.rejects(poller.once(), /refresh timed out/);
+      assert.equal(poller.running, false);
+      assert.deepEqual(client.state.papers, []);
+      assert.ok(signals.every(signal => signal.aborted));
+      stall = false;
+      await poller.once();
+      assert.deepEqual(client.state.papers, ['monitoringbench']);
+      assert.deepEqual(client.state.jobs, [{ id: 1, state: 'done' }]);
+      assert.deepEqual(tags, [null, null]);
+    });
+  }
+}
+
 test('binary exports retain their destination, content, and download headers', async () => {
   const held = deferred();
   let destination;
