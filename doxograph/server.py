@@ -1548,10 +1548,13 @@ def paper_chat(key: str, body: ChatBody) -> dict:
 
 
 def _reachable(url: str) -> bool:
+    """Whether this very process answers at `url`, not another service or another Doxograph on that port."""
     try:
-        return httpx.get(f"{url}/api/health", timeout=3, trust_env=False, follow_redirects=False).is_success
-    except httpx.HTTPError:
+        response = httpx.get(f"{url}/api/health", timeout=3, trust_env=False, follow_redirects=False)
+        health = response.json() if response.is_success else {}
+    except (httpx.HTTPError, ValueError):
         return False
+    return isinstance(health, dict) and health.get("app") == "doxograph" and health.get("instance") == fingerprint.INSTANCE
 
 
 def _callback_url(request: Request) -> str:
@@ -1585,7 +1588,7 @@ def agent_chat(body: AgentBody, request: Request) -> dict:
     _require_analysis()
     with _chat_errors("Library agent"):
         return agent.answer([message.model_dump() for message in body.messages],
-                            _callback_url(request), body.paper)
+                            lambda: _callback_url(request), body.paper)
 
 
 @app.post("/api/papers/{key}/review")

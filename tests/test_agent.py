@@ -100,7 +100,7 @@ def test_answer_reports_the_lookups_it_made(monkeypatch):
             {"type": "tool_use", "name": "mcp__doxograph__search_claims", "input": {"q": "steering"}},
             {"type": "tool_use", "name": "mcp__doxograph__read_evidence", "input": {"kind": "tensions"}}]}},
         {"type": "result", "result": "One paper reports recovery."}))
-    reply = agent.answer([{"role": "user", "content": "What recovers?"}], "http://127.0.0.1:8765")
+    reply = agent.answer([{"role": "user", "content": "What recovers?"}], lambda: "http://127.0.0.1:8765")
     assert reply["answer"] == "One paper reports recovery."
     assert reply["activity"] == ["Searched claims steering", "Read tensions"]
     assert "What recovers?" in seen["prompt"]
@@ -109,14 +109,14 @@ def test_answer_reports_the_lookups_it_made(monkeypatch):
 def test_answer_needs_a_claude_subscription():
     config.set_ai_provider("codex")
     with pytest.raises(ModelSetupError, match="Claude subscription"):
-        agent.answer([{"role": "user", "content": "Hi"}], "http://127.0.0.1:8765")
+        agent.answer([{"role": "user", "content": "Hi"}], lambda: "http://127.0.0.1:8765")
 
 
 def test_answer_surfaces_a_failed_run(monkeypatch):
     config.set_ai_provider("claude_code")
     fake_claude(monkeypatch, stream({"type": "result", "is_error": True, "result": "usage limit"}), returncode=1)
     with pytest.raises(RuntimeError, match="usage limit"):
-        agent.answer([{"role": "user", "content": "Hi"}], "http://127.0.0.1:8765")
+        agent.answer([{"role": "user", "content": "Hi"}], lambda: "http://127.0.0.1:8765")
 
 
 def test_endpoint_calls_back_on_its_own_port_in_the_current_workspace(monkeypatch):
@@ -136,7 +136,7 @@ def test_agent_calls_back_on_the_address_the_request_arrived_on(monkeypatch, hos
     config.set_ai_provider("claude_code")
     urls = []
     monkeypatch.setattr(server, "_reachable", lambda url: True)
-    monkeypatch.setattr(agent, "answer", lambda messages, url, focus=None: urls.append(url) or {"answer": "Ok."})
+    monkeypatch.setattr(agent, "answer", lambda messages, callback_url, focus=None: urls.append(callback_url()) or {"answer": "Ok."})
     with TestClient(server.app, base_url=f"http://{host}:8765") as client:
         assert client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]}).status_code == 200
     assert urls == [expected]
@@ -154,7 +154,8 @@ def test_unreachable_callback_is_rejected_with_setup_guidance_before_any_model_c
     config.set_ai_provider("claude_code")
     probed = []
     monkeypatch.setattr(server, "_reachable", lambda url: probed.append(url) or False)
-    monkeypatch.setattr(agent, "answer", lambda *a, **k: pytest.fail("the agent ran without a reachable callback"))
+    fake_claude(monkeypatch, "")
+    monkeypatch.setattr(claude_code, "_run", lambda *a, **k: pytest.fail("Claude Code ran without a reachable callback"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]})
     assert response.status_code == 502
@@ -186,7 +187,29 @@ def test_reachable_checks_the_health_route_of_a_real_server():
     assert not server._reachable(f"http://127.0.0.1:{port}")
 
 
-def test_endpoint_maps_setup_errors_and_the_off_switch():
+def test_the_provider_is_checked_before_the_callback_is_probed(monkeypatch):
+    config.set_ai_provider("codex")
+    monkeypatch.setattr(server, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]})
+    assert response.status_code == 502 and "Claude subscription" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("payload", [{"app": "doxograph", "instance": "someone-else"},
+                                     {"app": "other", "instance": None},
+                                     ["not", "a", "dict"]])
+def test_reachable_requires_this_process_to_answer(monkeypatch, payload):
+    from doxograph import fingerprint
+    payload = payload if not isinstance(payload, dict) or payload.get("instance") is not None else {**payload, "instance": fingerprint.INSTANCE}
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=payload, request=httpx.Request("GET", a[0])))
+    assert server._reachable("http://127.0.0.1:1") is False
+    good = {"app": "doxograph", "instance": fingerprint.INSTANCE}
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=good, request=httpx.Request("GET", a[0])))
+    assert server._reachable("http://127.0.0.1:1") is True
+
+
+def test_endpoint_maps_setup_errors_and_the_off_switch(monkeypatch):
+    monkeypatch.setattr(server, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
     body = {"messages": [{"role": "user", "content": "Hi"}], "paper": "doe2026"}
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         config.set_ai_provider("codex")

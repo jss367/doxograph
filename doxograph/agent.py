@@ -10,6 +10,7 @@ never reach it, for the same reason paper chat leaves them out.
 import json
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from . import claude_code, config
@@ -69,7 +70,8 @@ def activity(events: list[dict]) -> list[str]:
 
 
 @config.bind_model_access
-def answer(messages: list[dict], url: str, focus: str | None = None) -> dict:
+def answer(messages: list[dict], callback_url: Callable[[], str], focus: str | None = None) -> dict:
+    """`callback_url` is called once the cheap checks pass, since it probes the running app."""
     config.require_ai_enabled()
     if config.ai_provider() != "claude_code":
         raise ModelSetupError("The library agent needs a Claude subscription. Choose it in Settings → Model access.")
@@ -78,7 +80,7 @@ def answer(messages: list[dict], url: str, focus: str | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="doxograph-agent-") as cwd:
         claude_code.require_subscription([binary, "--setting-sources", ""], env, cwd)
         config.require_ai_enabled()
-        result = claude_code._run(command(binary, url, config.workspace_id(), focus), env=env, cwd=cwd,
+        result = claude_code._run(command(binary, callback_url(), config.workspace_id(), focus), env=env, cwd=cwd,
                                   input=prompt, timeout=TIMEOUT)
     try:
         events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
