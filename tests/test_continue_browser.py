@@ -1,5 +1,7 @@
 """Resume reading and review from the library without a model call."""
 
+import asyncio
+
 import httpx
 import pytest
 from playwright.async_api import expect
@@ -71,6 +73,76 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('entry', ['direct', 'tab', 'reload'])
+def test_reading_queue_waits_for_pending_page_saves(engine, entry):
+    config.set_ai_enabled(False)
+    for key in ['one', 'two']:
+        store.save_paper(store.new_paper(key, title=key.title()))
+        store.pdf_path(key).write_bytes(minimal_pdf(['First page.', 'Second page.']))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['reading'] = [{'paper': 'one', 'status': 'reading', 'page': 1, 'bookmarks': []}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="one"]').click()
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
+                if entry == 'reload':
+                    await page.get_by_role('button', name='Reading queue', exact=True).click()
+                    await ready(page)
+                    await expect(page.locator('#research-body [data-tool="reader"]')).to_have_text('Resume at page 1')
+                held, release = asyncio.Event(), asyncio.Event()
+
+                async def hold_progress(route):
+                    if route.request.method == 'PUT' and not held.is_set():
+                        held.set()
+                        await release.wait()
+                    await route.continue_()
+
+                await page.route('**/api/notebook', hold_progress)
+                try:
+                    if entry == 'reload':
+                        # Layout changes can move the reader behind an open
+                        # dialog. Exercise its ordinary scroll/progress path.
+                        await page.evaluate("""() => {
+                            const scroller = document.getElementById('pdf-scroll');
+                            scroller.scrollTop = scroller.querySelector('[data-page="2"]').offsetTop - 8;
+                        }""")
+                    else:
+                        await page.get_by_role('button', name='Next page', exact=True).click()
+                        await ready(page)
+                    await expect(page.locator('#reader-page')).to_have_value('2')
+                    if entry != 'reload':
+                        await page.locator('#papers li[data-paper="two"]').click()
+                    await asyncio.wait_for(held.wait(), timeout=10)
+                    if entry == 'tab':
+                        await page.locator('.research-tools-nav [data-tool="boards"]').click()
+                        await ready(page)
+                        await page.locator('#research-tabs [data-tab="reading"]').click()
+                    elif entry == 'reload':
+                        await page.locator('#research-tabs [data-tool="reload"]').click()
+                    else:
+                        await page.get_by_role('button', name='Reading queue', exact=True).click()
+                    await _poll(page)
+                    await expect(page.locator('#research-tools')).to_have_attribute('aria-busy', 'true')
+                    await expect(page.locator('#research-body')).to_contain_text('Loading your research')
+                    await expect(page.locator('#research-body [data-tool="reader"]')).to_have_count(0)
+                finally:
+                    release.set()
+                await ready(page)
+                await page.locator('#research-body').get_by_role('button', name='Resume at page 2').click()
+                await ready(page)
+                await expect(page.locator('.paperhead h2')).to_have_text('One')
+                await expect(page.locator('#reader-page')).to_have_value('2')
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_continue_review_clears_filters_and_handles_missing_sources(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('one', title='A study without a PDF'))
@@ -89,6 +161,7 @@ def test_continue_review_clears_filters_and_handles_missing_sources(engine):
                 await expect(card).to_contain_text('No PDF available')
                 assert not await card.locator('[data-tool="reader"]').count()
                 await page.locator('#q').fill('nothing matches')
+                await page.locator("#claim-filter-options > summary").click()
                 await page.locator('#only-unverified').check()
                 await card.get_by_role('button', name='Next unreviewed claim').click()
                 await expect(page.locator(f'.claim.sel[data-claim="{claims[0]["id"]}"]')).to_be_visible()

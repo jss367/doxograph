@@ -250,10 +250,17 @@ separate. The existing corpus is the Default workspace; creating a workspace
 makes an empty, independent corpus with its own papers, topics, research
 context, ledger, tensions, syntheses, and exports. The last selected workspace
 is restored when the page is reopened, unless the address names another one.
-Use **Rename** beside the picker to change any workspace's name, including the
-Default workspace. Its papers, claims, notes, and exports stay in place.
+Use **More workspace actions → Rename workspace** in the header to change any
+workspace's name, including the Default workspace. Its papers, claims, notes,
+and exports stay in place.
 Papers dropped on the Mac app's Dock icon go to the workspace currently shown
 in its window.
+
+The header's **More workspace actions** menu also holds **Create workspace**,
+**Export BibTeX**, **Retag all**, and **Keyboard shortcuts**. Beside claim search,
+**Filters** opens the claim kind, review, quote verification, and grouping controls.
+Active filters remain visible as removable chips after the controls close.
+Select claims or papers to reveal **Compare & organize** and **Clear selection**.
 
 Export HTML writes the file and then offers to open it or to copy its path. A
 reference that nothing identifies stays in the box and is named underneath it,
@@ -304,9 +311,11 @@ The divider between the lists and the claims can be dragged, so a session spent
 reading papers can give the side pane more of the window and a session spent
 reading claims can give it less. Focus the divider and the left and right arrow
 keys move it too, with Shift for a bigger step and Home to put it back.
-Double-clicking it also puts it back. It goes no wider than half the window,
-it starts at 20rem so a browser set to a larger default font size gets a wider
-pane, and the width is remembered in this browser.
+Double-clicking it also puts it back. Beside the content, it goes no wider than
+half the window. It starts at 20rem so a browser set to a larger default font
+size gets a wider pane, and the width is remembered in this browser.
+In narrow windows, the library stacks above the content at full width and the
+divider is hidden. Widening the window restores the saved sidebar width.
 
 Deleting a claim, an agreement, or a synthesis is not confirmed first. It is
 undone instead: the row leaves the page at once and the request is held until

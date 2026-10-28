@@ -69,10 +69,22 @@ const ResearchTools = (() => {
     claims = new Set([...claims].filter(k => available.has(k)));
     papers = new Set([...papers].filter(k => client.state.papers.some(p => p.key === k)));
     remember();
-    el('selection-count').textContent = `${claims.size} claims · ${papers.size} papers selected`;
+    syncSelectionControls();
     document.querySelectorAll('[data-select-claim]').forEach(c => c.checked = claims.has(c.dataset.selectClaim));
     document.querySelectorAll('[data-select-paper]').forEach(c => c.checked = papers.has(c.dataset.selectPaper));
     redrawHighlights();
+  }
+  function syncSelectionControls() {
+    const selected = claims.size + papers.size > 0;
+    el('selection-tools').classList.toggle('has-selection', selected);
+    el('selection-tools').hidden = !selected && !client.state.claims.length;
+    el('selection-tools').querySelectorAll('[data-needs-selection]').forEach(button => { button.hidden = !selected; });
+    const visible = visibleClaims().length;
+    el('selection-tools').querySelector('[data-tool="select-visible"]').hidden = !visible;
+    el('btn-focus-review').hidden = !visible;
+    el('selection-count').textContent = selected
+      ? `${claims.size} claims · ${papers.size} papers selected`
+      : `${visible} claim${visible === 1 ? '' : 's'}`;
   }
   function claimCheckbox(row) {
     const key = refKey(row);
@@ -123,6 +135,7 @@ const ResearchTools = (() => {
     el('research-tools').showModal();
     el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
     message('');
+    if (next === 'reading') await flushReadingProgress();
     notebook = await request();
     if (requestedBoard !== null) {
       boardId = requestedBoard;
@@ -823,6 +836,19 @@ const ResearchTools = (() => {
   // One chain of saves per paper and workspace, shared by a reader torn down
   // and the reader opened on the same paper after it, so they land in order.
   const progressChains = new Map();
+  async function flushReadingProgress() {
+    if (reader) {
+      clearTimeout(reader.progressTimer);
+      if (reader.wantedPage !== null && reader.wantedPage !== reader.savedPage) queueProgressSave(reader);
+    }
+    // Unmounts flush asynchronously. The queue must read after those saves,
+    // including a retry or successor save appended while this one finishes.
+    let pending;
+    do {
+      pending = [...progressChains.values()];
+      await Promise.all(pending);
+    } while ([...progressChains.values()].some((chain, i) => chain !== pending[i]));
+  }
   function queueProgressSave(active) {
     const {paper, workspace:ws, key} = active;
     const chain = (progressChains.get(key) || Promise.resolve()).then(async () => {
@@ -1192,9 +1218,14 @@ const ResearchTools = (() => {
     if (name === 'close') { await close({duringOperation:true}); return; }
     if (name === 'tab' || name === 'reload') {
       if (!await discardDrafts()) return;
+      const nextTab = data.tab || (tab === 'history' ? 'compare' : tab);
       epoch++;
+      if (nextTab === 'reading') {
+        el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
+        await flushReadingProgress();
+      }
       notebook = await request();
-      tab = data.tab || (tab === 'history' ? 'compare' : tab); render(); return;
+      tab = nextTab; render(); return;
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
     if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
@@ -1431,6 +1462,6 @@ const ResearchTools = (() => {
     // switch leaves the note where it was.
     return true;
   }
-  return {connect(value) { client = value; }, sync,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+  return {connect(value) { client = value; }, sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     openBoard: id => run(() => open('boards', id))};
 })();
