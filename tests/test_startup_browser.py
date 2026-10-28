@@ -9,7 +9,7 @@ from test_browser import _paper, _server
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-@pytest.mark.parametrize("failure", ["module", "connection", "script"])
+@pytest.mark.parametrize("failure", ["module", "connection", "script", "late-script"])
 def test_startup_failure_and_reload_recovery(engine, failure):
     _paper("oversight", "Understanding model oversight")
 
@@ -27,6 +27,14 @@ def test_startup_failure_and_reload_recovery(engine, failure):
                 source = (await response.text()).replace("sync,syncSelectionControls,", "sync,")
                 await route.fulfill(response=response, body=source)
 
+            async def late_script(route):
+                if broken:
+                    # A post-app script fails after boot has rendered the corpus.
+                    await page.locator('#content .claim').first.wait_for()
+                    await route.abort()
+                else:
+                    await route.continue_()
+
             async def connection(route):
                 if broken:
                     await route.fulfill(status=503, json={"detail": "Temporarily unavailable"})
@@ -35,6 +43,8 @@ def test_startup_failure_and_reload_recovery(engine, failure):
 
             if failure == "connection":
                 await page.route("**/api/state", connection)
+            elif failure == "late-script":
+                await page.route("**/workspace-recovery.js*", late_script)
             else:
                 await page.route("**/research-tools.js*", module)
             with _server() as url:

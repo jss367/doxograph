@@ -29,6 +29,10 @@ window.AppStartup = (() => {
       try {
         if (failed) return;
         await start();
+        if (document.readyState !== 'complete') {
+          await new Promise(resolve => window.addEventListener('load', resolve, { once: true }));
+        }
+        if (failed) return;
         ready = true;
       } catch (error) { fail(error); }
     },
