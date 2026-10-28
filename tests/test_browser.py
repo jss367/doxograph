@@ -667,8 +667,12 @@ def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
                 await menu.wait_for(state="hidden")
                 assert await textarea.input_value() == draft_text
 
-                # With the menu closed, Escape reaches the editor as before.
+                # Right-clicking a paper moves focus to its sidebar control.
+                # Refocus the editor: Escape on an unrelated control keeps drafts.
+                assert await page.locator("#papers").evaluate("element => element === document.activeElement")
                 await page.keyboard.press("Escape")
+                assert await textarea.input_value() == draft_text
+                await textarea.press("Escape")
                 await textarea.wait_for(state="detached")
 
     run_browser(scenario())
@@ -1935,6 +1939,10 @@ def test_a_reference_already_in_the_corpus_is_named_straight_away():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
+                await page.locator('#papers [data-paper="doe2026study"]').wait_for()
+                panel = page.locator("#paper-import")
+                if not await panel.evaluate("element => element.open"):
+                    await panel.locator("summary").click()
                 await page.fill("#refs", "https://arxiv.org/abs/2602.06941v2")
                 await page.locator("#btn-add").click()
                 await page.locator("#toasts .toast",
@@ -5537,7 +5545,7 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window(engine):
                     content_type="text/css",
                 )
 
-            await page.route("**/app.css", bigger_root)
+            await page.route("**/app.css*", bigger_root)
             with _server() as url:
                 await page.goto(url)
                 side = page.locator("#side")
@@ -6074,6 +6082,10 @@ def test_escape_outside_the_claim_form_leaves_its_draft_alone():
                 # Escape in the sidebar's new-topic box and in the add-papers
                 # textarea leaves those fields; the editor and its draft stay.
                 for selector in ("#new-tag", "#refs"):
+                    if selector == "#refs":
+                        await page.locator("#btn-command-palette").click()
+                        await page.locator("#command-query").fill("Add papers")
+                        await page.keyboard.press("Enter")
                     field = page.locator(selector)
                     await field.fill("typed and abandoned")
                     await field.press("Escape")

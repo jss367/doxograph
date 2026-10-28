@@ -142,3 +142,48 @@ def test_filter_changes_update_claim_controls_without_polling(engine):
                 await expect(page.locator('[data-tool="compare"]')).to_be_visible()
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_sidebar_groups_preserve_drafts_and_import_remains_discoverable(engine):
+    _paper("oversight", "Understanding model oversight")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1200, "height": 900})
+            with _server() as url:
+                await page.goto(url)
+                library = page.locator('[data-sidebar-group="library"]')
+                review = page.locator('[data-sidebar-group="review"]')
+                write = page.locator('[data-sidebar-group="write"]')
+                await expect(page.locator("#paper-import")).not_to_have_attribute("open", "")
+                await page.locator("#workspace-notes").fill("Keep this research question.")
+                await expect(page.locator("#workspace-notes-status")).to_have_text("Saved")
+                await write.locator(":scope > summary").click()
+                await review.locator(":scope > summary").click()
+                await _poll(page)
+                await expect(write).not_to_have_attribute("open", "")
+                await expect(review).not_to_have_attribute("open", "")
+                await page.reload()
+                await expect(write).not_to_have_attribute("open", "")
+                await expect(review).not_to_have_attribute("open", "")
+                await expect(page.locator("#workspace-notes")).to_have_value("Keep this research question.")
+                await library.locator(":scope > summary").click()
+                await page.locator("#btn-command-palette").click()
+                await page.locator("#command-query").fill("Add papers")
+                await page.keyboard.press("Enter")
+                await expect(library).to_have_attribute("open", "")
+                await expect(page.locator("#refs")).to_be_focused()
+                await page.locator("#refs").fill("A reference I am still typing")
+                await _poll(page)
+                await expect(page.locator("#refs")).to_have_value("A reference I am still typing")
+                await page.locator('[data-sidebar-focus="write"]').click()
+                await expect(write).to_have_attribute("open", "")
+                await expect(library).not_to_have_attribute("open", "")
+                await expect(page.locator('[data-sidebar-focus="write"]')).to_have_attribute("aria-pressed", "true")
+                await expect(page.locator("#workspace-notes")).to_have_value("Keep this research question.")
+                await page.locator('[data-sidebar-focus="library"]').click()
+                await expect(page.locator("#refs")).to_have_value("A reference I am still typing")
+
+    run_browser(scenario())

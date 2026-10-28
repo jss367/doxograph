@@ -22,7 +22,7 @@
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-agent" title="Ask questions across every paper in this library">Ask the library</button>
-    <button type="button" id="btn-export" class="primary">Export HTML</button>
+    <button type="button" id="btn-export">Export HTML</button>
     <details id="workspace-actions" class="action-disclosure">
       <summary aria-label="More workspace actions" title="More workspace actions">•••</summary>
       <div class="action-popover">
@@ -31,6 +31,8 @@
         <button type="button" id="btn-workspace-rename" disabled>Rename workspace</button>
         <hr>
         <button type="button" id="btn-bib">Export BibTeX</button>
+        <button type="button" id="btn-workspace-archive">Download workspace archive</button>
+        <button type="button" id="btn-workspace-backups">Previous document versions</button>
         <button type="button" id="btn-retag" data-ai-action disabled title="Reassign tags on every paper against the current vocabulary">Retag all</button>
         <hr>
         <button type="button" id="btn-help" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Keyboard shortcuts <kbd>?</kbd></button>
@@ -169,84 +171,103 @@
   </div>
 </header>
 
+<section id="startup-error" class="startup-error" role="alert" hidden>
+  <h2 id="startup-title"></h2>
+  <p id="startup-message"></p>
+  <button type="button" id="startup-reload">Reload library</button>
+  <details><summary>Technical details</summary><pre id="startup-detail"></pre></details>
+</section>
+
 <div id="layout">
   <aside id="side">
-    <details id="paper-import" open><summary>Add papers</summary>
-      <div class="drop" id="drop">Drop PDFs anywhere on this page</div>
-      <textarea id="refs" placeholder="Paste arXiv IDs, arXiv or DOI links, PDF URLs, or LessWrong posts — one per line"></textarea>
-      <div class="row">
-        <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
-        <button type="button" id="btn-add" class="primary" style="margin-left:auto">Add</button>
+    <nav class="sidebar-focus" aria-label="Workspace tools">
+      <button type="button" data-sidebar-focus="library" aria-controls="sidebar-library" aria-pressed="false">Library</button>
+      <button type="button" data-sidebar-focus="review" aria-controls="sidebar-review" aria-pressed="false">Review</button>
+      <button type="button" data-sidebar-focus="write" aria-controls="sidebar-write" aria-pressed="false">Write</button>
+    </nav>
+    <p id="ai-action-status" class="hint" hidden>AI analysis is off. Read and annotate locally, or enable analysis in Settings.</p>
+    <details id="sidebar-library" class="sidebar-group" data-sidebar-group="library" open>
+      <summary><span>Library</span><span class="sidebar-description">Find and read sources</span></summary>
+      <details id="paper-import" open><summary>Add papers</summary>
+        <div class="drop" id="drop">Drop PDFs anywhere on this page</div>
+        <textarea id="refs" placeholder="Paste arXiv IDs, arXiv or DOI links, PDF URLs, or LessWrong posts — one per line"></textarea>
+        <div class="row">
+          <label class="hint"><input type="checkbox" id="auto-extract" checked> read on arrival</label>
+          <button type="button" id="btn-add" class="primary" style="margin-left:auto">Add</button>
+        </div>
+        <p class="warn" id="ref-warn" hidden></p>
+      </details>
+      <div class="sec paper-library">
+        <div class="sechead">
+          <h3>Papers</h3>
+          <select id="paper-sort" aria-label="Sort papers">
+            <option value="added-desc">newest added</option>
+            <option value="added-asc">oldest added</option>
+            <option value="year-desc">newest year</option>
+            <option value="year-asc">oldest year</option>
+            <option value="title">title</option>
+          </select>
+        </div>
+        <ul class="plist" id="papers" tabindex="0" aria-label="Papers in this workspace"></ul>
       </div>
-      <p class="warn" id="ref-warn" hidden></p>
+      <div class="sec research-tools-nav">
+        <button type="button" data-tool="searches"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg>Saved searches</button>
+      </div>
+      <div class="sec" id="labels-sec" hidden>
+        <h3>Labels</h3>
+        <ul class="taglist" id="labels"></ul>
+      </div>
+      <div class="sec">
+        <h3>Map</h3>
+        <ul class="plist" id="graph-nav"></ul>
+      </div>
+      <div class="sec">
+        <h3>Topics</h3>
+        <ul class="taglist" id="tags"></ul>
+        <div class="row">
+          <input id="new-tag" placeholder="new topic" style="flex:1">
+          <button type="button" id="btn-tag">Add</button>
+        </div>
+        <div class="row right">
+          <button type="button" id="btn-synth" data-ai-action disabled title="Ask the model what the papers, taken together, hold on each topic with two or more papers">Synthesize topics</button>
+        </div>
+      </div>
     </details>
-
-    <div class="sec paper-library">
-      <div class="sechead">
-        <h2>Papers</h2>
-        <select id="paper-sort" aria-label="Sort papers">
-          <option value="added-desc">newest added</option>
-          <option value="added-asc">oldest added</option>
-          <option value="year-desc">newest year</option>
-          <option value="year-asc">oldest year</option>
-          <option value="title">title</option>
-        </select>
+    <details id="sidebar-review" class="sidebar-group" data-sidebar-group="review" open>
+      <summary><span>Review</span><span class="sidebar-description">Check and compare evidence</span></summary>
+      <div class="sec research-tools-nav">
+        <button type="button" data-tool="reading"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Reading queue</button>
+        <button type="button" data-tool="marks"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4Z"/></svg>Marks and questions</button>
+        <button type="button" data-tool="connections"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 10 7-4 M8 14l7 4"/></svg>Claim connections</button>
       </div>
-      <ul class="plist" id="papers"></ul>
-    </div>
-
-    <div class="sec research-tools-nav">
-      <h2>Your research tools</h2>
-      <button type="button" data-tool="notes" title="Questions, working conclusions, and next steps for this workspace"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5Z M14 3v5h5 M8 12h8 M8 16h6"/></svg>Workspace notes</button>
-      <button type="button" id="btn-research-notes" title="Long-form documents for arguments, reviews, and plans"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-3H4Z M13 7a3 3 0 0 1 3-3h5v14h-4a4 4 0 0 0-4 3"/></svg>Research notes</button>
-      <button type="button" data-tool="boards"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16 M9 11h12 M15 11v9"/></svg>Evidence boards</button>
-      <button type="button" data-tool="reading"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Reading queue</button>
-      <button type="button" data-tool="marks"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4Z"/></svg>Marks and questions</button>
-      <button type="button" data-tool="searches"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg>Saved searches</button>
-      <button type="button" data-tool="connections"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 10 7-4 M8 14l7 4"/></svg>Claim connections</button>
-    </div>
-    <div class="sec" id="labels-sec" hidden>
-      <h2>Labels</h2>
-      <ul class="taglist" id="labels"></ul>
-    </div>
-
-    <div class="sec">
-      <h2>Tensions</h2>
-      <ul class="plist" id="tensions-nav"></ul>
-      <div class="row right">
-        <button type="button" id="btn-tensions" data-ai-action disabled title="Ask the model which claims in each topic pull against each other">Find tensions</button>
+      <div class="sec">
+        <h3>Tensions</h3>
+        <ul class="plist" id="tensions-nav"></ul>
+        <div class="row right">
+          <button type="button" id="btn-tensions" data-ai-action disabled title="Ask the model which claims in each topic pull against each other">Find tensions</button>
+        </div>
       </div>
-    </div>
-
-    <div class="sec">
-      <h2>Agreements</h2>
-      <ul class="plist" id="agreements-nav"></ul>
-      <div class="row right">
-        <button type="button" id="btn-agreements" data-ai-action disabled title="Ask the model which claims in each topic assert the same finding">Find agreements</button>
+      <div class="sec">
+        <h3>Agreements</h3>
+        <ul class="plist" id="agreements-nav"></ul>
+        <div class="row right">
+          <button type="button" id="btn-agreements" data-ai-action disabled title="Ask the model which claims in each topic assert the same finding">Find agreements</button>
+        </div>
       </div>
-    </div>
-
-    <div class="sec">
-      <h2>Research</h2>
-      <ul class="plist" id="research-nav"></ul>
-    </div>
-
-    <div class="sec">
-      <h2>Map</h2>
-      <ul class="plist" id="graph-nav"></ul>
-    </div>
-
-    <div class="sec">
-      <h2>Topics</h2>
-      <ul class="taglist" id="tags"></ul>
-      <div class="row">
-        <input id="new-tag" placeholder="new topic" style="flex:1">
-        <button type="button" id="btn-tag">Add</button>
+    </details>
+    <details id="sidebar-write" class="sidebar-group" data-sidebar-group="write" open>
+      <summary><span>Write</span><span class="sidebar-description">Develop your conclusions</span></summary>
+      <div class="sec research-tools-nav">
+        <button type="button" data-tool="notes" title="Questions, working conclusions, and next steps for this workspace"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5Z M14 3v5h5 M8 12h8 M8 16h6"/></svg>Workspace notes</button>
+        <button type="button" id="btn-research-notes" title="Long-form documents for arguments, reviews, and plans"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-3H4Z M13 7a3 3 0 0 1 3-3h5v14h-4a4 4 0 0 0-4 3"/></svg>Research notes</button>
+        <button type="button" data-tool="questions">Research questions</button>
+        <button type="button" data-tool="boards"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16 M9 11h12 M15 11v9"/></svg>Evidence boards</button>
       </div>
-      <div class="row right">
-        <button type="button" id="btn-synth" data-ai-action disabled title="Ask the model what the papers, taken together, hold on each topic with two or more papers">Synthesize topics</button>
+      <div class="sec">
+        <h3>Research context</h3>
+        <ul class="plist" id="research-nav"></ul>
       </div>
-    </div>
+    </details>
   </aside>
 
   <div id="side-resize" role="separator" aria-orientation="vertical" tabindex="0"
@@ -338,6 +359,13 @@
 </div>
 
 <div class="jobs" id="jobs"></div>
+<dialog id="workspace-backups" class="sheet" aria-labelledby="backups-title">
+  <div class="sheet-head"><h2 id="backups-title">Previous document versions</h2>
+    <button type="button" id="backups-close" aria-label="Close previous versions">×</button></div>
+  <p class="hint">Doxograph keeps the previous 20 versions of each research document before edits. These local copies share this computer's disk; download a workspace archive to keep a separate copy.</p>
+  <p id="backups-status" role="status"></p>
+  <div id="backup-versions"></div>
+</dialog>
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <ul class="ctxmenu" id="ctxmenu" hidden></ul>
 
@@ -450,6 +478,7 @@
   </div>
   <div id="focus-body"></div>
 </dialog>
+<script src="/startup.js"></script>
 <script src="/vendor/marked.umd.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script src="/vendor/katex.min.js"></script>
@@ -465,5 +494,6 @@
 <script src="/focused-review.js"></script>
 <script src="/app.js"></script>
 <script src="/agent-chat.js"></script>
+<script src="/workspace-recovery.js"></script>
 </body>
 </html>

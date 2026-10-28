@@ -168,6 +168,9 @@ and then relaunching the app.
   gets the warning too, worded for not knowing: a silent server may be a busy
   one. A refused connection does not, since a server that is already gone has
   nothing left to lose. Quitting anyway is always on offer.
+  Imported references and uploaded PDFs are retained for retry after relaunch.
+  **Resume import** retries interrupted work explicitly; a model request sent
+  before shutdown may already have completed and can run again on resume.
 - **Native dialogs** for the page's `confirm()` and `alert()` calls, which a web
   view otherwise answers "no" to without asking.
 - **External links go to the browser.** arXiv and DOI links open in your default

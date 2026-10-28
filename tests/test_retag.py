@@ -107,7 +107,8 @@ def test_retag_reads_the_vocabulary_while_holding_its_lock(monkeypatch):
     real_tag_names = store.tag_names
 
     def watched_tag_names():
-        held.append(store._vocab._is_owned())
+        identity = str((store.config.locks_dir() / 'vocabulary.lock').resolve())
+        held.append(bool(getattr(store._depth, 'held', {}).get(identity)))
         return real_tag_names()
 
     class Client:

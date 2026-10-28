@@ -256,7 +256,7 @@ def test_reading_a_healthy_library_does_not_require_write_access(monkeypatch):
     store.save_paper(store.new_paper("healthy"))
 
     @contextmanager
-    def denied(path):
+    def denied(path, **kwargs):
         raise PermissionError("Lock directory is read-only")
         yield
 
@@ -274,7 +274,7 @@ def test_recovery_lock_failure_is_reported_without_hiding_the_library(monkeypatc
     })
 
     @contextmanager
-    def denied(path):
+    def denied(path, **kwargs):
         raise PermissionError("Lock directory is read-only")
         yield
 

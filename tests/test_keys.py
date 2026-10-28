@@ -98,7 +98,8 @@ def test_reserving_a_key_holds_the_retirement_lock(monkeypatch):
     real = store.retired_keys
 
     def watched():
-        held.append(bool(getattr(store._depth, "held", {}).get("retired")))
+        identity = str((store.config.locks_dir() / 'retired-keys.lock').resolve())
+        held.append(bool(getattr(store._depth, "held", {}).get(identity)))
         return real()
 
     monkeypatch.setattr(store, "retired_keys", watched)
