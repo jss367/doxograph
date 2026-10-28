@@ -5178,10 +5178,16 @@ function scrollToSelected() {
 // A text drag over a field is the browser's: a sentence selected in the reader
 // and dragged into the quote box must land there, not be read as papers to
 // add. Files are the page's wherever they are dropped.
+const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'url', 'email', 'tel', 'password', 'number']);
+
 function dropBelongsToField(event) {
   const types = [...(event.dataTransfer?.types || [])];
   if (types.includes('Files')) return false;
-  return Boolean(event.target.closest?.('input, textarea, [contenteditable]:not([contenteditable="false"])'));
+  const field = event.target.closest?.('input, textarea, [contenteditable]:not([contenteditable="false"])');
+  if (!field) return false;
+  // A checkbox, a range slider or a file picker takes no text, so a drop on
+  // one is a drop on the page.
+  return field.tagName !== 'INPUT' || TEXT_INPUT_TYPES.has((field.getAttribute('type') || '').toLowerCase());
 }
 
 ['dragenter', 'dragover'].forEach((type) => document.addEventListener(type, (event) => {

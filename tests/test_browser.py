@@ -6140,4 +6140,10 @@ def test_text_dropped_into_a_field_is_the_fields_and_not_papers_to_add():
                 assert prevented is True
                 assert len(ingests) == 1
 
+                # A checkbox takes no text, so a drop on one is a drop on the page.
+                prevented = await page.evaluate(drop, ["#auto-extract", "2602.06941"])
+                await page.wait_for_timeout(300)
+                assert prevented is True
+                assert len(ingests) == 2
+
     run_browser(scenario())
