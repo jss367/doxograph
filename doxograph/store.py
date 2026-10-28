@@ -60,7 +60,7 @@ except ImportError:
 
 
 @contextlib.contextmanager
-def _file_lock(path: Path):
+def _file_lock(path: Path, *, blocking: bool = True):
     """Hold an exclusive lock on `path` for the duration of the block.
 
     Silently doing nothing when no locking primitive exists would be worse than
@@ -74,7 +74,7 @@ def _file_lock(path: Path):
     if fcntl is not None:
         handle = open(path, "a+")
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
             try:
                 yield
             finally:
@@ -89,9 +89,11 @@ def _file_lock(path: Path):
             handle.seek(0)
             while True:
                 try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
                     break
-                except OSError:
+                except OSError as exc:
+                    if not blocking:
+                        raise BlockingIOError('The file lock is held by another process') from exc
                     time.sleep(0.05)   # LK_LOCK retries ten times then raises
             try:
                 yield

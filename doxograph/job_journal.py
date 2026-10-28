@@ -1,15 +1,57 @@
 """Durable notifications and retry inputs; resuming always requires a click."""
 
 import dataclasses
+import contextlib
 import json
 import logging
 import os
+import re
+import threading
 from pathlib import Path
 
-from . import config, ingest, store
+from . import config, fingerprint, ingest, store
 
 logger = logging.getLogger(__name__)
 _paths: dict[int, Path] = {}
+_leases: dict[Path, contextlib.AbstractContextManager[None]] = {}
+_lease_guard = threading.Lock()
+
+
+def _hold_owner_lease(folder: Path) -> None:
+    # Keep the descriptor alive for the process lifetime, including background
+    # workers finishing after the server lifespan exits.
+    path = folder / f'.owner-{fingerprint.INSTANCE}.lock'
+    with _lease_guard:
+        if path not in _leases:
+            if path.is_symlink():
+                raise OSError('Job ownership markers cannot be symbolic links')
+            lease = store._file_lock(path)
+            lease.__enter__()
+            _leases[path] = lease
+
+
+def _owner_alive(data: dict, folder: Path) -> bool:
+    if data['version'] == 1:
+        # Journals written before instance leases cannot distinguish PID reuse.
+        # Keep conservative compatibility with a possibly live older server.
+        try:
+            os.kill(data['pid'], 0)
+        except ProcessLookupError:
+            return False
+        return True
+    owner = data.get('owner')
+    if not isinstance(owner, str) or not re.fullmatch(r'[a-f0-9]{32}', owner):
+        raise ValueError('invalid job owner instance')
+    path = folder / f'.owner-{owner}.lock'
+    if path.is_symlink():
+        raise ValueError('job ownership marker is a symbolic link')
+    if not path.exists():
+        return False
+    try:
+        with store._file_lock(path, blocking=False):
+            return False
+    except BlockingIOError:
+        return True
 
 
 def save(job: dict) -> None:
@@ -20,12 +62,13 @@ def save(job: dict) -> None:
     path = _paths.setdefault(job['id'], config.data_dir() / '.jobs' / f'{job["id"]}.json')
     if path.is_symlink() or path.parent.is_symlink():
         raise OSError('Job journals must be stored inside their workspace')
+    _hold_owner_lease(path.parent)
     source = dict(job.get('_import') or {})
     if source.get('ref') is not None:
         source['ref'] = dataclasses.asdict(source['ref'])
     if source.get('staged') is not None:
         source['staged'] = source['staged'].name
-    store.write_json(path, {'version': 1, 'pid': os.getpid(),
+    store.write_json(path, {'version': 2, 'pid': os.getpid(), 'owner': fingerprint.INSTANCE,
         'job': {k: v for k, v in job.items() if not k.startswith('_')}, 'source': source})
 
 
@@ -46,17 +89,13 @@ def recover(issues: list[str] | None = None) -> list[dict]:
             if path.is_symlink():
                 raise ValueError('job journal is a symbolic link')
             data = json.loads(path.read_text())
-            if data['version'] != 1:
+            if data['version'] not in (1, 2):
                 raise ValueError('unsupported job journal version')
             if type(data['pid']) is not int or data['pid'] <= 0:
                 raise ValueError('invalid job owner')
             # Another server may still own its requests. Never turn its live
             # operation into a retry in this process.
-            try:
-                os.kill(data['pid'], 0)
-            except ProcessLookupError:
-                pass
-            else:
+            if _owner_alive(data, path.parent):
                 continue
             job = {k: v for k, v in data['job'].items() if not k.startswith('_')}
             if (type(job['id']) is not int or job['id'] <= 0
