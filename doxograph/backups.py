@@ -160,9 +160,9 @@ def restore(identifier: str, body: Restore) -> dict:
                 text = json.dumps(restored, ensure_ascii=False)
             elif relative == 'research-notes.json':
                 restored = research_notes.SavedNotes.model_validate_json(text).model_dump()
-                revision = max([n['revision'] for n in research_notes.load()] + [n['revision'] for n in restored] + [0]) + 1
+                research_notes.remember_revisions(research_notes.load())
                 for note in restored:
-                    note.update(revision=revision, updated=store.now())
+                    note.update(revision=research_notes.next_revision(note['id'], note['revision']), updated=store.now())
                 text = json.dumps(restored, ensure_ascii=False)
         except ValueError as exc:
             raise HTTPException(409, f'This version cannot safely be restored: {exc}') from exc

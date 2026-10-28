@@ -59,7 +59,7 @@ def build() -> Path:
                 'created': store.now(), 'files': {}, 'skipped': []}
     try:
         with store.vocab_lock(), contextlib.ExitStack() as locks:
-            for name in [*backups.DOCUMENTS, 'papers', 'pdfs', 'note-images']:
+            for name in [*backups.DOCUMENTS, research_notes.REVISION_FILE, 'papers', 'pdfs', 'note-images']:
                 if (root / name).is_symlink():
                     raise HTTPException(409, f'The archive cannot include symbolic links: {name}')
             for name in ('notebook', 'research-notes', 'context', 'ledger', 'agreements', 'tensions', 'syntheses', 'retired'):
@@ -91,7 +91,7 @@ def build() -> Path:
                             digest.update(chunk)
                     manifest['files'][name] = digest.hexdigest()
 
-                for name in sorted(backups.DOCUMENTS):
+                for name in sorted(backups.DOCUMENTS | {research_notes.REVISION_FILE}):
                     copy(root / name, 'data/' + name)
                 for folder, suffix in (('papers', '.json'), ('pdfs', '.pdf'), ('note-images', '')):
                     directory = root / folder

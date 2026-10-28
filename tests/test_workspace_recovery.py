@@ -149,3 +149,36 @@ finally:
     path.unlink()
 '''
     subprocess.run([sys.executable, '-c', script], env=os.environ.copy(), check=True, timeout=10)
+
+
+def test_restoring_a_deleted_note_does_not_reuse_a_stale_editors_revision():
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        created = client.post('/api/research-notes', json={'title': 'Synthetic note', 'body': 'Version one'}).json()
+        identifier = created['id']
+        note = created
+        for revision in range(2, 11):
+            note = client.put('/api/research-notes/' + identifier, json={
+                'title': 'Synthetic note', 'body': f'Version {revision}', 'revision': note['revision']}).json()
+        assert note['revision'] == 10
+        client.delete(f'/api/research-notes/{identifier}?revision=10').raise_for_status()
+        old = next(v for v in client.get('/api/workspace/backups').json()['versions']
+            if v['path'] == 'research-notes.json'
+            and any(n['revision'] == 1 for n in client.get('/api/workspace/backups/' + v['id']).json()))
+        client.post(f'/api/workspace/backups/{old["id"]}/restore', json={'expected': old['expected']}).raise_for_status()
+        [restored] = client.get('/api/research-notes').json()['notes']
+        assert restored['revision'] > 10
+        stale = client.put('/api/research-notes/' + identifier, json={
+            'title': 'Stale editor', 'body': 'Do not overwrite the restored note', 'revision': 2})
+        assert stale.status_code == 409
+        assert client.get('/api/research-notes').json()['notes'][0]['body'] == 'Version one'
+
+
+def test_deleting_a_legacy_note_remembers_its_revision_floor():
+    from doxograph import research_notes
+
+    identifier = 'a' * 32
+    store.write_json(config.data_dir() / 'research-notes.json', [dict(id=identifier, title='Legacy note', body='',
+        revision=10, created=store.now(), updated=store.now())])
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        client.delete(f'/api/research-notes/{identifier}?revision=10').raise_for_status()
+    assert research_notes.next_revision(identifier, 1) == 11

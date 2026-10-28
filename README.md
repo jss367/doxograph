@@ -653,6 +653,7 @@ syntheses.json       what the papers hold on each topic
 ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 research-notes.json  your long-form Markdown notes, with per-note revisions
+research-note-revisions.json  revision counters retained across note deletion and restoration
 note-images/        local images embedded in workspace and research notes
 backups/            previous versions captured before document edits
 .jobs/              background job journals and retained retry references
