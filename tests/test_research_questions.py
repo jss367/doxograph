@@ -58,6 +58,9 @@ def test_csv_preserves_evidence_assessments_and_question_stance():
     store.delete_paper('study')
     missing = rows(notebook.Selection(board='q', format='csv'))
     assert missing[-1][0] == 'missing' and all(len(row) == len(missing[0]) for row in missing)
+    assert dict(zip(missing[0], missing[-1], strict=True))['Bearing on question'] == 'qualifying'
+    markdown = bytes(notebook.export_selection(notebook.Selection(board='q')).body).decode()
+    assert 'Missing source: study' in markdown and 'Bearing on question: qualifying' in markdown
 
 
 def test_cleared_question_keeps_conclusion_open_questions_and_stance_in_exports():

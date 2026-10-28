@@ -430,6 +430,7 @@ def export_selection(body: Selection) -> Response:
     writer.writerow(header)
     for entry in entries:
         kind, text = entry["kind"], entry.get("text", "")
+        stance = entry.get("stance", "background") if body.board and is_question(board) else ""
         if kind != "claim":
             lines.extend([("## " if kind == "heading" else "") + md(text), ""])
             writer.writerow([kind, spreadsheet(text)] + [""] * (len(header) - 2))
@@ -441,7 +442,9 @@ def export_selection(body: Selection) -> Response:
                 raise
             text = f"Missing source: {entry['reference']['paper']} / {entry['reference']['claim']}\n{text}"
             lines.extend([md(text), ""])
-            writer.writerow(["missing", spreadsheet(text)] + [""] * (len(header) - 2))
+            if stance:
+                lines.extend(["Bearing on question: " + md(stance), ""])
+            writer.writerow(["missing", spreadsheet(text)] + [""] * (len(header) - 3) + [spreadsheet(stance)])
             continue
         source = row.get("source", {}).get("url", "")
         citation = f"{'; '.join(row['paper_authors'])} ({row['paper_year'] or 'year unknown'}). {row['paper_title']}. {row.get('locator', '')}"
@@ -451,7 +454,7 @@ def export_selection(body: Selection) -> Response:
                              ("Conditions", row.get("conditions")), ("Limitations", row.get("limitations")),
                              ("Evidence origin", row.get("evidence_origin")),
                              ("Replication assessment", row.get("evidence_relationship")),
-                             ("Bearing on question", entry.get("stance") if body.board and is_question(board) else ""),
+                             ("Bearing on question", stance),
                              ("My note", row.get("note")), ("Paper note", row["paper_notes"]),
                              ("Commentary", text), ("Source", source),
                              ("Reference", row["paper"] + " / " + row["id"])):
@@ -462,7 +465,7 @@ def export_selection(body: Selection) -> Response:
             row.get("locator"), row.get("evidence"), ", ".join(row.get("tags", [])), row.get("note"),
             row["paper_notes"], text, source, row.get("conditions"), row.get("limitations"),
             row.get("evidence_origin"), row.get("evidence_relationship"),
-            entry.get("stance") if body.board and is_question(board) else ""]])
+            stance]])
     is_csv = body.format == "csv"
     filename = (store.slugify(title) or "selected-research") + (".csv" if is_csv else ".md")
     return Response(output.getvalue() if is_csv else "\n".join(lines),
