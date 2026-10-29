@@ -614,6 +614,8 @@ def delete_workspace(value: str) -> bool:
     if not value or value != _workspace_slug(value):
         raise KeyError(value)
     with workspace_activity(value, exclusive=True), _workspaces_lock, _workspace_file_lock():
+        from . import job_journal
+
         records = _read_workspace_records()
         if get_workspace(value) is None:
             raise KeyError(value)
@@ -624,6 +626,7 @@ def delete_workspace(value: str) -> bool:
         # crash afterward leaves an already deleted, permanently retired id.
         if folder.is_symlink() or folder.parent.is_symlink():
             raise ValueError("Workspace directories cannot be symbolic links")
+        job_journal.check_workspace_owners(folder)
         retired = [{"id": value, "deleted": True} if isinstance(item, dict) and item.get("id") == value
                    else item for item in records]
         _write_workspace_records(retired)
@@ -643,14 +646,15 @@ def delete_workspace(value: str) -> bool:
                 # so that even this failure cannot expose partially erased data.
                 logging.getLogger(__name__).exception("Could not sync workspace retirement; corpus kept at %s", folder)
                 return False
-    if folder.exists():
-        try:
-            shutil.rmtree(folder)
-        except OSError:
-            # The retirement already committed. Keep the retired corpus
-            # directory on cleanup failure rather than report a false failure
-            # or put a partially removed corpus back in the picker.
-            logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", folder)
+        job_journal.release_workspace_owner(folder)
+        if folder.exists():
+            try:
+                shutil.rmtree(folder)
+            except OSError:
+                # The retirement already committed. Keep the retired corpus
+                # directory on cleanup failure rather than report a false failure
+                # or put a partially removed corpus back in the picker.
+                logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", folder)
     return True
 
 

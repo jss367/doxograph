@@ -80,6 +80,65 @@ def _pause_foreign_deletion(data_dir, workspace, ready, release):
     config.delete_workspace(workspace)
 
 
+def _hold_foreign_job_owner(data_dir, workspace, ready, release):
+    os.environ["DOXOGRAPH_DATA"] = data_dir
+    with config.use_workspace(workspace):
+        job = server._new_job("Finished import in another server")
+        server._set(job, state="done")
+        ready.set()
+        assert release.wait(10)
+
+
+def test_delete_refuses_live_foreign_journal_owner_then_removes_corpus():
+    target = config.create_workspace("Research")
+    context = multiprocessing.get_context("spawn")
+    ready, release = context.Event(), context.Event()
+    child = context.Process(target=_hold_foreign_job_owner,
+                            args=(str(config.base_data_dir()), target["id"], ready, release))
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    child.start()
+    try:
+        assert ready.wait(10)
+        response = client.delete(f"/api/workspaces/{target['id']}")
+        assert response.status_code == 409
+        assert "Close that server" in response.json()["detail"]
+        assert config.get_workspace(target["id"]) == target
+        release.set()
+        child.join(timeout=10)
+        assert child.exitcode == 0
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
+        assert not (config.base_data_dir() / "workspaces" / target["id"]).exists()
+    finally:
+        release.set()
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=5)
+
+
+def test_deletion_releases_local_owner_handles_after_retirement_before_removal(monkeypatch):
+    target = config.create_workspace("Research")
+    with config.use_workspace(target["id"]):
+        job = server._new_job("Finished import")
+        server._set(job, state="done")
+        folder = config.data_dir()
+    assert any(path.parent == folder / '.jobs' for path in server.job_journal._leases)
+    rmtree = config.shutil.rmtree
+
+    def require_closed_handles(path):
+        assert config.get_workspace(target["id"]) is None
+        assert not any(lease.parent == folder / '.jobs' for lease in server.job_journal._leases)
+        # Keep other requests excluded through the final filesystem cleanup.
+        with pytest.raises(BlockingIOError):
+            with config.workspace_activity(target["id"]):
+                pytest.fail("Deletion released its activity lease before cleanup")
+        rmtree(path)
+
+    monkeypatch.setattr(config.shutil, "rmtree", require_closed_handles)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
+    assert not folder.exists()
+
+
 @pytest.mark.parametrize("mode", ["request", "worker", "queued"])
 def test_delete_waits_for_activity_in_another_server_process(mode):
     target = config.create_workspace("Research")

@@ -54,6 +54,30 @@ def _owner_alive(data: dict, folder: Path) -> bool:
         return True
 
 
+def check_workspace_owners(folder: Path) -> None:
+    """Refuse deletion while another live server owns journals in this corpus.
+
+    Its handles cannot be closed here, and on Windows they prevent unlinking.
+    This also protects workers running in an older server's lease protocol.
+    The caller holds exclusive workspace activity until deletion has finished.
+    """
+    with _lease_guard:
+        for path in (folder / '.jobs').glob('.owner-*.lock'):
+            if path in _leases:
+                continue
+            if path.is_symlink():
+                raise ValueError('Job ownership markers cannot be symbolic links')
+            with store._file_lock(path, blocking=False):
+                pass
+
+
+def release_workspace_owner(folder: Path) -> None:
+    """Close this process's handles after retirement and before corpus removal."""
+    with _lease_guard:
+        for path in [path for path in _leases if path.parent == folder / '.jobs']:
+            _leases.pop(path).__exit__(None, None, None)
+
+
 def save(job: dict) -> None:
     # Internal workers can also run with an ephemeral context rather than a
     # notification accepted by _new_job (for example from an integration).

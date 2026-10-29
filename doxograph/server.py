@@ -1594,7 +1594,7 @@ def delete_workspace(workspace_id: str) -> dict:
         except ValueError as exc:
             raise HTTPException(422, str(exc))
         except BlockingIOError:
-            raise HTTPException(409, "This workspace is busy in another server. Wait for its activity to finish, then try again.")
+            raise HTTPException(409, "This workspace is busy in another server. Close that server or wait for its activity to finish, then try again.")
         except OSError as exc:
             raise HTTPException(503, "The workspace could not be deleted. Check that its data directory is writable.") from exc
         with _jobs_lock:
