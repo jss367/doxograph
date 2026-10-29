@@ -58,6 +58,13 @@ def test_setting_labels_replaces_what_was_there():
     assert store.load_paper("doe2026study")["labels"] == []
 
 
+def test_setting_a_label_with_a_comma_rejects_it_without_changing_the_paper():
+    _paper("doe2026study", labels=["reading list"])
+    with pytest.raises(ValueError, match="Labels cannot contain commas"):
+        store.set_labels("doe2026study", ["open source", "theory, review"])
+    assert store.load_paper("doe2026study")["labels"] == ["reading list"]
+
+
 def test_label_counts_count_papers_commonest_first():
     _paper("a", labels=["open-source", "huggingface"])
     _paper("b", labels=["open-source"])
@@ -115,6 +122,21 @@ def test_query_filters_and_searches_multiword_labels():
             assert [paper["key"] for paper in response.json()["items"]] == expected
 
 
+@pytest.mark.parametrize("bulk", [False, True])
+def test_api_rejects_comma_in_label_without_writing_any_labels(bulk):
+    _paper("one", labels=["reading list"])
+    _paper("two", labels=["read later"])
+    with client() as c:
+        values = ["open source", "theory, review"]
+        response = (c.post("/api/notebook/bulk", json={
+            "papers": ["one", "two"], "field": "labels", "values": values,
+        }) if bulk else c.patch("/api/papers/one", json={"labels": values}))
+    assert response.status_code == 422
+    assert "Labels cannot contain commas" in response.text
+    assert store.load_paper("one")["labels"] == ["reading list"]
+    assert store.load_paper("two")["labels"] == ["read later"]
+
+
 def test_a_null_clears_the_labels_rather_than_writing_one():
     # `label_counts` and the page both walk the field; None would leave a paper
     # neither of them can read.
@@ -168,6 +190,14 @@ def test_label_command_reports_a_paper_that_is_not_there(capsys):
     args = __main__.build_parser().parse_args(["label", "nobody2026"])
     assert args.func(args) == 1
     assert "no paper nobody2026" in capsys.readouterr().err
+
+
+def test_label_command_reports_a_comma_in_a_label(capsys):
+    _paper("doe2026study", labels=["reading list"])
+    args = __main__.build_parser().parse_args(["label", "doe2026study", "theory, review"])
+    assert args.func(args) == 1
+    assert "Labels cannot contain commas" in capsys.readouterr().err
+    assert store.load_paper("doe2026study")["labels"] == ["reading list"]
 
 
 # --- the export -----------------------------------------------------------

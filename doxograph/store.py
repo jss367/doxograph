@@ -1192,8 +1192,11 @@ def normalize_labels(values: list[str]) -> list[str]:
     """Lowercase labels with spaces preserved and whitespace normalized.
 
     Each value is one label. Existing hyphenated labels keep their names;
-    deduplication lets the sidebar count a label once per paper.
+    deduplication lets the sidebar count a label once per paper. Commas are
+    reserved for separating labels in the editor.
     """
+    if any("," in value for value in values):
+        raise ValueError("Labels cannot contain commas. Provide each label separately.")
     return sorted({label for value in values if (label := " ".join(value.lower().split()))})
 
 

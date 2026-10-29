@@ -322,7 +322,11 @@ def cmd_label(args) -> int:
         print(f"no paper {args.key}", file=sys.stderr)
         return 1
     if args.labels or args.clear:
-        paper = store.set_labels(args.key, [] if args.clear else args.labels)
+        try:
+            paper = store.set_labels(args.key, [] if args.clear else args.labels)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     print(", ".join(paper.get("labels") or []))
     return 0
 

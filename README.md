@@ -752,6 +752,7 @@ text, and nothing in a paper's text says it is on your reading list. So no
 pass writes a label, `retag` cannot take one off, and labelling a paper does
 not stale its syntheses. Labels can contain spaces, such as `open source` or
 `reading list`. They are stored in lowercase with extra whitespace removed.
+Commas separate labels in the editor and cannot be part of a label's name.
 Existing hyphenated labels keep their names. Topics still use hyphenated slugs.
 
 Labels are searched along with everything else, so `huggingface` in the search

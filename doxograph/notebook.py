@@ -243,8 +243,11 @@ class Bulk(Model):
 
 @router.post("/bulk")
 def bulk(body: Bulk) -> dict:
-    values = (store.normalize_labels(body.values) if body.field == "labels" else
-              sorted({slug for value in body.values if (slug := store.slugify(value))}))
+    try:
+        values = (store.normalize_labels(body.values) if body.field == "labels" else
+                  sorted({slug for value in body.values if (slug := store.slugify(value))}))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     refs = [r.model_dump() for r in body.claims]
     keys = sorted(set(body.papers) | ({r["paper"] for r in refs} if body.field == "tags" else set()))
     if not keys or any(not key or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in key) for key in keys):
