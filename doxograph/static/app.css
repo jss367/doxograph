@@ -509,6 +509,9 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .label-choice[aria-pressed="true"] { border-color: var(--label-color);
   background: hsl(var(--label-hue, 210) 65% 50% / .28); }
 .label-choice[aria-pressed="true"]::after { content: '✓'; }
+.plist .label { min-width: 0; max-width: 100%; }
+.plist .label[aria-pressed="true"] { border-color: var(--label-color);
+  background: hsl(var(--label-hue, 210) 65% 50% / .28); }
 
 /* A form whose save is in flight: read-only until the request settles. */
 form[data-form].saving, #research-form.saving { opacity: .6; }
