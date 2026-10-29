@@ -9,6 +9,7 @@ changed.
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,9 +44,9 @@ def test_a_paper_written_before_labels_existed_reads_as_unlabelled():
     assert store.label_counts(store.all_papers()) == {}
 
 
-def test_labels_are_slugged_and_deduplicated():
-    assert store.normalize_labels(["Open Source", "open-source", "  ", "Hugging Face"]) == [
-        "hugging-face", "open-source",
+def test_labels_preserve_spaces_and_deduplicate_normalized_whitespace():
+    assert store.normalize_labels(["Open Source", " open  source\t", "open-source", "  ", "Hugging Face"]) == [
+        "hugging face", "open source", "open-source",
     ]
 
 
@@ -55,6 +56,13 @@ def test_setting_labels_replaces_what_was_there():
     assert store.load_paper("doe2026study")["labels"] == ["huggingface"]
     store.set_labels("doe2026study", [])
     assert store.load_paper("doe2026study")["labels"] == []
+
+
+def test_setting_a_label_with_a_comma_rejects_it_without_changing_the_paper():
+    _paper("doe2026study", labels=["reading list"])
+    with pytest.raises(ValueError, match="Labels cannot contain commas"):
+        store.set_labels("doe2026study", ["open source", "theory, review"])
+    assert store.load_paper("doe2026study")["labels"] == ["reading list"]
 
 
 def test_label_counts_count_papers_commonest_first():
@@ -96,10 +104,37 @@ def test_renaming_a_topic_leaves_labels_alone():
 def test_patching_a_paper_sets_its_labels():
     _paper("doe2026study")
     with client() as c:
-        response = c.patch("/api/papers/doe2026study", json={"labels": ["Open Source", "open-source"]})
+        response = c.patch("/api/papers/doe2026study", json={"labels": ["Open Source", " open  source ", "open-source"]})
         assert response.status_code == 200
-        assert response.json()["labels"] == ["open-source"]
-    assert store.load_paper("doe2026study")["labels"] == ["open-source"]
+        assert response.json()["labels"] == ["open source", "open-source"]
+    assert store.load_paper("doe2026study")["labels"] == ["open source", "open-source"]
+
+
+def test_query_filters_and_searches_multiword_labels():
+    _paper("one")
+    _paper("two", labels=["open-source"])
+    store.set_labels("one", ["Open Source"])
+    with client() as c:
+        for params, expected in (({"label": "open source"}, ["one"]),
+                                 ({"q": "open source"}, ["one", "two"])):
+            response = c.get("/api/query/papers", params=params)
+            assert response.status_code == 200
+            assert [paper["key"] for paper in response.json()["items"]] == expected
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_api_rejects_comma_in_label_without_writing_any_labels(bulk):
+    _paper("one", labels=["reading list"])
+    _paper("two", labels=["read later"])
+    with client() as c:
+        values = ["open source", "theory, review"]
+        response = (c.post("/api/notebook/bulk", json={
+            "papers": ["one", "two"], "field": "labels", "values": values,
+        }) if bulk else c.patch("/api/papers/one", json={"labels": values}))
+    assert response.status_code == 422
+    assert "Labels cannot contain commas" in response.text
+    assert store.load_paper("one")["labels"] == ["reading list"]
+    assert store.load_paper("two")["labels"] == ["read later"]
 
 
 def test_a_null_clears_the_labels_rather_than_writing_one():
@@ -136,15 +171,15 @@ def test_label_command_sets_reads_and_lists(capsys):
 
     args = parser.parse_args(["label", "doe2026study", "Open Source", "huggingface"])
     assert args.func(args) == 0
-    assert capsys.readouterr().out.strip() == "huggingface open-source"
+    assert capsys.readouterr().out.strip() == "huggingface, open source"
 
     args = parser.parse_args(["label", "doe2026study"])
     assert args.func(args) == 0
-    assert capsys.readouterr().out.strip() == "huggingface open-source"
+    assert capsys.readouterr().out.strip() == "huggingface, open source"
 
     args = parser.parse_args(["label"])
     assert args.func(args) == 0
-    assert capsys.readouterr().out.split() == ["1", "huggingface", "1", "open-source"]
+    assert capsys.readouterr().out.splitlines() == ["   1 huggingface", "   1 open source"]
 
     args = parser.parse_args(["label", "doe2026study", "--clear"])
     assert args.func(args) == 0
@@ -157,16 +192,24 @@ def test_label_command_reports_a_paper_that_is_not_there(capsys):
     assert "no paper nobody2026" in capsys.readouterr().err
 
 
+def test_label_command_reports_a_comma_in_a_label(capsys):
+    _paper("doe2026study", labels=["reading list"])
+    args = __main__.build_parser().parse_args(["label", "doe2026study", "theory, review"])
+    assert args.func(args) == 1
+    assert "Labels cannot contain commas" in capsys.readouterr().err
+    assert store.load_paper("doe2026study")["labels"] == ["reading list"]
+
+
 # --- the export -----------------------------------------------------------
 
 def test_the_export_shows_a_papers_labels_and_searches_on_them():
-    _paper("doe2026study", labels=["open-source"])
+    _paper("doe2026study", labels=["open source"])
     store.add_claim("doe2026study", {"text": "A holds."})
     html = export.render()
-    assert '<span class="label">open-source</span>' in html
+    assert '<span class="label">open source</span>' in html
     # The claim's own row carries them too, so filtering the export by a label
     # finds the claims of the papers that carry it.
-    assert "open-source" in html.split('data-hay="')[1].split('"')[0]
+    assert "open source" in html.split('data-hay="')[1].split('"')[0]
 
 
 # --- the browser ----------------------------------------------------------
@@ -188,21 +231,32 @@ def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
 
                 await page.locator('#papers [data-paper="open2026model"]').click()
                 await page.get_by_role("button", name="Labels").click()
-                await _answer(page, "OK", "Open-Source, huggingface")
-                await page.locator('.paperhead .label', has_text="open-source").wait_for()
+                await _answer(page, "OK", "Open Source, huggingface, reading-list")
+                await page.locator('.paperhead .label', has_text="open source").wait_for()
+
+                # Reopening and saving must retain three distinct labels,
+                # including both the multiword and existing hyphenated names.
+                await page.get_by_role("button", name="Labels").click()
+                await page.locator('#ask').wait_for(state="visible")
+                assert await page.locator('#ask-input').input_value() == 'huggingface, open source, reading-list'
+                await _answer(page, "OK")
+                await page.locator('.paperhead .label', has_text="open source").wait_for()
+                assert await page.locator('.paperhead .label').all_text_contents() == [
+                    'huggingface', 'open source', 'reading-list',
+                ]
 
                 # The sidebar arrives with the first label and filters on click.
-                await page.locator('#labels [data-label="open-source"]').click()
+                await page.locator('#labels [data-label="open source"]').click()
                 await page.locator('#papers [data-paper="closed2026model"]').wait_for(state="detached")
-                assert "label=open-source" in page.url
+                assert parse_qs(urlparse(page.url).fragment)["label"] == ["open source"]
 
                 await page.reload()
                 await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
-                await page.locator('#labels [data-label="open-source"].active').wait_for()
+                await page.locator('#labels [data-label="open source"].active').wait_for()
                 assert await page.locator('#papers [data-paper="closed2026model"]').count() == 0
 
                 # Clicking it again is the way back out.
-                await page.locator('#labels [data-label="open-source"]').click()
+                await page.locator('#labels [data-label="open source"]').click()
                 await page.locator('#papers [data-paper="closed2026model"]').wait_for()
 
     run_browser(scenario())

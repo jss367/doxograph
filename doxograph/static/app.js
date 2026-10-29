@@ -2215,13 +2215,13 @@ async function editLabels(key) {
   if (!paper) return;
   const inUse = Object.keys(S.label_counts || {});
   const answer = await askText(`Labels for ${paper.title || key}`, {
-    note: 'Separate labels with spaces or commas; a label of several words is written with hyphens.'
+    note: 'Separate labels with commas. Spaces are allowed within a label.'
       + (inUse.length ? ` In use: ${inUse.join(', ')}` : ''),
-    placeholder: 'open-source huggingface',
-    value: (paper.labels || []).join(' '),
+    placeholder: 'open source, reading list',
+    value: (paper.labels || []).join(', '),
   });
   if (answer === null) return;   // cancelled: not the same as clearing them
-  const labels = answer.split(/[\s,]+/).map((l) => l.trim()).filter(Boolean);
+  const labels = answer.split(',').map((l) => l.trim()).filter(Boolean);
   try {
     await api(`/api/papers/${encodeURIComponent(key)}`, {
       method: 'PATCH',

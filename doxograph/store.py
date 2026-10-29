@@ -1189,13 +1189,15 @@ def claim_rows(papers: list[dict] | None = None) -> list[dict]:
 
 
 def normalize_labels(values: list[str]) -> list[str]:
-    """Labels as they are stored: slugs, deduplicated, in one order.
+    """Lowercase labels with spaces preserved and whitespace normalized.
 
-    Written by hand in one text field, so "Open Source, open-source" arrives
-    as one label rather than three, and the sidebar counts a label once per
-    paper however it was typed.
+    Each value is one label. Existing hyphenated labels keep their names;
+    deduplication lets the sidebar count a label once per paper. Commas are
+    reserved for separating labels in the editor.
     """
-    return sorted({slug for slug in (slugify(v) for v in values) if slug})
+    if any("," in value for value in values):
+        raise ValueError("Labels cannot contain commas. Provide each label separately.")
+    return sorted({label for value in values if (label := " ".join(value.lower().split()))})
 
 
 def set_labels(key: str, labels: list[str]) -> dict:

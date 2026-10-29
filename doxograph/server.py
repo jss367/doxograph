@@ -990,7 +990,7 @@ class PaperPatch(BaseModel):
 
     @field_validator("labels")
     @classmethod
-    def _slug_labels(cls, value: list[str] | None) -> list[str] | None:
+    def _normalize_labels(cls, value: list[str] | None) -> list[str] | None:
         # A null clears them. Every reader of the field treats it as a list —
         # `label_counts` walks it, the page joins it — and writing None would
         # leave a paper none of them can read.

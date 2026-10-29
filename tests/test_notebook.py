@@ -235,9 +235,24 @@ def test_bulk_validates_all_sources_before_writing_and_records_history(client):
     body.update(claims=[one], values=['undeclared-topic'])
     assert client.post('/api/notebook/bulk', json=body).status_code == 422
     assert client.post('/api/notebook/bulk', json={'papers':['one','two'],'field':'labels','values':['Read Next']}).status_code == 200
-    assert store.load_paper('one')['labels'] == ['read-next']
+    assert store.load_paper('one')['labels'] == ['read next']
+    assert client.post('/api/notebook/bulk', json={'papers':['one'],'field':'labels','mode':'remove','values':['Read  Next']}).json() == {'changed':1}
+    assert store.load_paper('one')['labels'] == []
+    assert store.load_paper('two')['labels'] == ['read next']
+    assert client.post('/api/notebook/bulk', json={'papers':['one'],'field':'labels','mode':'replace','values':['Reading List']}).status_code == 200
+    assert store.load_paper('one')['labels'] == ['reading list']
     assert client.post('/api/notebook/bulk', json={'papers':['one'],'field':'labels','mode':'replace','values':[]}).status_code == 200
     assert store.load_paper('one')['labels'] == []
+
+
+def test_bulk_topics_still_normalize_multiword_names_to_slugs(client):
+    one = seed()
+    store.add_tag('read next')
+    response = client.post('/api/notebook/bulk', json={
+        'claims':[one], 'field':'tags', 'values':['Read Next', 'read-next'],
+    })
+    assert response.status_code == 200
+    assert store.load_paper('one')['claims'][0]['tags'] == ['read-next', 'testing']
 
 
 def test_selective_exports_preserve_board_order_citations_notes_and_missing_sources(client):

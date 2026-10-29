@@ -195,6 +195,7 @@ doxograph list                        # what is in the corpus
 doxograph tags                        # topics and their use counts
 doxograph label                       # labels in use, and how many papers carry each
 doxograph label <key> open-source     # label one paper, replacing the labels it has
+doxograph label <key> "open source" "reading list"  # quote labels containing spaces
 doxograph export --out notes.html     # one self-contained HTML file
 doxograph bibtex --out refs.bib
 ```
@@ -754,15 +755,17 @@ than re-reading them and leaves hand-edited claim text alone.
 A topic is about a claim and comes out of the model. A label is about the
 paper and is put on by hand: that it is open source, that a model of it is on
 HuggingFace, that it is worth rereading. **Labels** in a paper's header opens
-a field for them, separated by spaces or commas, and they appear as a Labels
+a field for them, separated by commas, and they appear as a Labels
 list in the sidebar that filters the corpus to the papers carrying one.
 
 They are deliberately not part of the topic vocabulary. The vocabulary goes
 into the extraction prompt as the list of things to look for in a paper's
 text, and nothing in a paper's text says it is on your reading list. So no
 pass writes a label, `retag` cannot take one off, and labelling a paper does
-not stale its syntheses. Labels are slugs: several words are written with
-hyphens, as topics are.
+not stale its syntheses. Labels can contain spaces, such as `open source` or
+`reading list`. They are stored in lowercase with extra whitespace removed.
+Commas separate labels in the editor and cannot be part of a label's name.
+Existing hyphenated labels keep their names. Topics still use hyphenated slugs.
 
 Labels are searched along with everything else, so `huggingface` in the search
 box finds the papers carrying it and their claims. `doxograph label` reads and
