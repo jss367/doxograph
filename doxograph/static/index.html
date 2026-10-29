@@ -19,6 +19,7 @@
     <select id="workspace" aria-label="Workspace"></select>
   </span>
   <div class="actions">
+    <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide claims</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-agent" disabled title="Ask questions across every paper in this library">Ask the library</button>
@@ -374,6 +375,9 @@
     <div id="panes">
       <div id="paperhead"></div>
       <div id="reader" hidden></div>
+      <div id="claims-resize" role="separator" aria-orientation="vertical" tabindex="0"
+        aria-controls="claim-column" aria-label="Width of the claims pane"
+        title="Drag to resize the claims pane — double-click to put it back"></div>
       <div id="claim-column">
         <div id="workspace-notes-reading"></div>
         <div id="content"></div>
