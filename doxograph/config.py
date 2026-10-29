@@ -339,6 +339,43 @@ def workspaces_path() -> Path:
 
 
 @contextlib.contextmanager
+def workspace_activity(value: str, *, exclusive: bool = False):
+    """Nonblocking corpus lease shared by every server using this data root.
+
+    Lock files live outside the corpus and remain after deletion, so a late
+    request cannot lock a new inode and bypass an in-progress deletion.
+    """
+    if value == DEFAULT_WORKSPACE_ID:
+        yield
+        return
+    if not value or value != _workspace_slug(value):
+        raise KeyError(value)
+    path = base_data_dir() / "locks" / f"workspace-{value}.activity.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        if fcntl is not None:
+            mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+            fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        elif msvcrt is not None:  # pragma: no cover - Windows only
+            # Windows conservatively serializes activity as well as deletion.
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise BlockingIOError("This workspace is busy") from exc
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:  # pragma: no cover
+            raise RuntimeError("no file-locking primitive available for workspace activity")
+
+
+@contextlib.contextmanager
 def _workspace_file_lock():
     """Serialize registry read-modify-write sequences across processes."""
     path = base_data_dir() / "locks" / "workspaces.lock"
@@ -530,7 +567,7 @@ def delete_workspace(value: str) -> None:
         raise ValueError("The default workspace cannot be deleted")
     if not value or value != _workspace_slug(value):
         raise KeyError(value)
-    with _workspaces_lock, _workspace_file_lock():
+    with workspace_activity(value, exclusive=True), _workspaces_lock, _workspace_file_lock():
         records = _read_workspace_records()
         if get_workspace(value) is None:
             raise KeyError(value)
@@ -548,7 +585,7 @@ def delete_workspace(value: str) -> None:
         try:
             shutil.rmtree(folder)
         except OSError:
-            # The retirement already committed. Keep an inaccessible staged
+            # The retirement already committed. Keep the retired corpus
             # directory on cleanup failure rather than report a false failure
             # or put a partially removed corpus back in the picker.
             logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", folder)

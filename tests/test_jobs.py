@@ -1,5 +1,7 @@
 """Import retries and finished notifications stay within their workspace."""
 
+from concurrent.futures import Future
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -56,7 +58,12 @@ def test_job_cannot_be_dismissed_from_another_workspace(client):
 
 @pytest.fixture
 def immediate_worker(monkeypatch):
-    monkeypatch.setattr(server._pool, "submit", lambda fn, *args: fn(*args))
+    def submit(fn, *args):
+        future = Future()
+        future.set_result(fn(*args))
+        return future
+
+    monkeypatch.setattr(server._pool, "submit", submit)
 
 
 @pytest.fixture
@@ -156,7 +163,7 @@ def test_retry_is_atomic_and_workspace_scoped(client, monkeypatch):
                                      ref=ingest.Ref("arxiv", "2602.06941", "2602.06941"))
         server._set(job, state="error", detail="offline", explanation="Check your connection.")
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
+    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args) or Future())
     path = f"/api/jobs/{job['id']}/retry"
     assert client.post(path).status_code == 404
     headers = {"X-Doxograph-Workspace": other["id"]}

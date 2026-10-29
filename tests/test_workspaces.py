@@ -33,6 +33,103 @@ def _interrupt_deletion(data_dir: str, workspace: str, committed: bool) -> None:
     config.delete_workspace(workspace)
 
 
+def _hold_workspace_in_another_server(data_dir, workspace, mode, ready, release):
+    os.environ["DOXOGRAPH_DATA"] = data_dir
+    with config.use_workspace(workspace):
+        if mode == "request":
+            with server._using_workspace(workspace):
+                ready.set()
+                assert release.wait(10)
+        elif mode == "worker":
+            @server._workspace_job
+            def work(job):
+                server._set(job, state="done")
+                ready.set()
+                assert release.wait(10)
+                store.save_context("Worker finished")
+
+            work(server._new_job("Finishing worker"))
+        else:
+            with ThreadPoolExecutor(1) as pool:
+                server._pool = pool
+                blocker = pool.submit(release.wait, 10)
+
+                @server._workspace_job
+                def work(job):
+                    store.save_context("Queued worker finished")
+                    server._set(job, state="done")
+
+                future = server._submit_job(work, server._new_job("Queued worker"))
+                ready.set()
+                assert blocker.result(timeout=10)
+                future.result(timeout=10)
+
+
+def _pause_foreign_deletion(data_dir, workspace, ready, release):
+    os.environ["DOXOGRAPH_DATA"] = data_dir
+    original = config._write_workspace_records
+
+    def paused(records):
+        ready.set()
+        assert release.wait(10)
+        original(records)
+
+    config._write_workspace_records = paused
+    config.delete_workspace(workspace)
+
+
+@pytest.mark.parametrize("mode", ["request", "worker", "queued"])
+def test_delete_waits_for_activity_in_another_server_process(mode):
+    target = config.create_workspace("Research")
+    context = multiprocessing.get_context("spawn")
+    ready, release = context.Event(), context.Event()
+    child = context.Process(target=_hold_workspace_in_another_server,
+                            args=(str(config.base_data_dir()), target["id"], mode, ready, release))
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    child.start()
+    try:
+        assert ready.wait(10)
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 409
+        assert config.get_workspace(target["id"]) == target
+        release.set()
+        child.join(timeout=10)
+        assert child.exitcode == 0
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
+        assert not (config.base_data_dir() / "workspaces" / target["id"]).exists()
+    finally:
+        release.set()
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=5)
+
+
+def test_foreign_deletion_refuses_new_requests_and_does_not_recreate_corpus():
+    target = config.create_workspace("Research")
+    context = multiprocessing.get_context("spawn")
+    ready, release = context.Event(), context.Event()
+    child = context.Process(target=_pause_foreign_deletion,
+                            args=(str(config.base_data_dir()), target["id"], ready, release))
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    headers = {"X-Doxograph-Workspace": target["id"]}
+    child.start()
+    try:
+        assert ready.wait(10)
+        assert client.get("/api/state", headers=headers).status_code == 409
+        assert client.post("/api/ingest", headers=headers, json={"text": "anything"}).status_code == 409
+        assert client.delete(f"/api/workspaces/{target['id']}", headers=headers).status_code == 409
+        assert client.get("/api/state").status_code == 200
+        release.set()
+        child.join(timeout=10)
+        assert child.exitcode == 0
+        assert client.get("/api/state", headers=headers).status_code == 404
+        assert not (config.base_data_dir() / "workspaces" / target["id"]).exists()
+    finally:
+        release.set()
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=5)
+
+
 @pytest.mark.parametrize("committed", [False, True])
 def test_abrupt_deletion_keeps_uncommitted_corpus_at_original_path(committed):
     target = config.create_workspace("Research")
