@@ -3,7 +3,7 @@
 // "Ask the library": a conversation with the selected subscription agent, which reads this
 // workspace through read-only tools. Conversations are scoped by workspace and live only in
 // this tab. Answers can be kept as workspace-local research notes.
-// Loaded after app.js, which owns `$`, `api`, `esc`, `paragraphs`, and `S`.
+// Loaded after app.js, which owns `$`, `api`, `esc`, `paragraphs`, `sendOnEnter`, and `S`.
 const agentChats = new Map();
 let activeAgentChat = null;
 
@@ -123,6 +123,7 @@ $('btn-agent').addEventListener('click', () => {
   $('library-agent').showModal();
   $('agent-question').focus();
 });
+sendOnEnter($('agent-question'));
 $('agent-question').addEventListener('input', () => { if (activeAgentChat) activeAgentChat.draft = $('agent-question').value; });
 $('agent-close').addEventListener('click', () => $('library-agent').close());
 $('agent-settings').addEventListener('click', () => {
