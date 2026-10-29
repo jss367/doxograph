@@ -33,6 +33,8 @@ _workspace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "doxograph_workspace", default=DEFAULT_WORKSPACE_ID
 )
 _workspaces_lock = threading.RLock()
+_windows_activity_guard = threading.RLock()
+_windows_activity_leases: dict[Path, dict] = {}
 _settings_lock = threading.RLock()
 _analysis_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar("analysis_provider", default=None)
 _codex_model: contextvars.ContextVar[str | None] = contextvars.ContextVar("codex_model", default=None)
@@ -339,6 +341,46 @@ def workspaces_path() -> Path:
 
 
 @contextlib.contextmanager
+def _windows_workspace_activity(path: Path, *, exclusive: bool):
+    """Share one byte-range lock across requests and worker threads here.
+
+    Windows locks conflict even between handles in the same process. Retain
+    one handle until every shared user has left, including users whose lease
+    was acquired by a request and released by a future's completion callback.
+    """
+    path = path.resolve()
+    with _windows_activity_guard:
+        lease = _windows_activity_leases.get(path)
+        if lease is not None:
+            if exclusive or lease["exclusive"]:
+                raise BlockingIOError("This workspace is busy")
+            lease["users"] += 1
+        else:
+            handle = path.open("a+")
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                handle.close()
+                raise BlockingIOError("This workspace is busy") from exc
+            lease = {"handle": handle, "users": 1, "exclusive": exclusive}
+            _windows_activity_leases[path] = lease
+    try:
+        yield
+    finally:
+        with _windows_activity_guard:
+            lease["users"] -= 1
+            if not lease["users"]:
+                del _windows_activity_leases[path]
+                handle = lease["handle"]
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                finally:
+                    handle.close()
+
+
+@contextlib.contextmanager
 def workspace_activity(value: str, *, exclusive: bool = False):
     """Nonblocking corpus lease shared by every server using this data root.
 
@@ -352,27 +394,20 @@ def workspace_activity(value: str, *, exclusive: bool = False):
         raise KeyError(value)
     path = base_data_dir() / "locks" / f"workspace-{value}.activity.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as handle:
-        if fcntl is not None:
+    if fcntl is not None:
+        with path.open("a+") as handle:
             mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
             fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
             try:
                 yield
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        elif msvcrt is not None:  # pragma: no cover - Windows only
-            # Windows conservatively serializes activity as well as deletion.
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as exc:
-                raise BlockingIOError("This workspace is busy") from exc
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:  # pragma: no cover
-            raise RuntimeError("no file-locking primitive available for workspace activity")
+    elif msvcrt is not None:
+        # Other Windows servers are conservatively excluded during activity.
+        with _windows_workspace_activity(path, exclusive=exclusive):
+            yield
+    else:  # pragma: no cover
+        raise RuntimeError("no file-locking primitive available for workspace activity")
 
 
 @contextlib.contextmanager
