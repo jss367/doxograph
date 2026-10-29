@@ -6,8 +6,10 @@ import contextlib
 import contextvars
 import functools
 import json
+import logging
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -31,6 +33,8 @@ _workspace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "doxograph_workspace", default=DEFAULT_WORKSPACE_ID
 )
 _workspaces_lock = threading.RLock()
+_windows_activity_guard = threading.RLock()
+_windows_activity_leases: dict[Path, dict] = {}
 _settings_lock = threading.RLock()
 _analysis_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar("analysis_provider", default=None)
 _codex_model: contextvars.ContextVar[str | None] = contextvars.ContextVar("codex_model", default=None)
@@ -337,6 +341,97 @@ def workspaces_path() -> Path:
 
 
 @contextlib.contextmanager
+def _windows_workspace_activity(path: Path, *, exclusive: bool):
+    """Share one byte-range lock across requests and worker threads here.
+
+    Windows locks conflict even between handles in the same process. Retain
+    one handle until every shared user has left, including users whose lease
+    was acquired by a request and released by a future's completion callback.
+    """
+    path = path.resolve()
+    with _windows_activity_guard:
+        lease = _windows_activity_leases.get(path)
+        if lease is not None:
+            if exclusive or lease["exclusive"]:
+                raise BlockingIOError("This workspace is busy")
+            lease["users"] += 1
+        else:
+            handle = path.open("a+")
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                handle.close()
+                raise BlockingIOError("This workspace is busy") from exc
+            lease = {"handle": handle, "users": 1, "exclusive": exclusive}
+            _windows_activity_leases[path] = lease
+    try:
+        yield
+    finally:
+        with _windows_activity_guard:
+            lease["users"] -= 1
+            if not lease["users"]:
+                del _windows_activity_leases[path]
+                handle = lease["handle"]
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                finally:
+                    handle.close()
+
+
+@contextlib.contextmanager
+def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool = False):
+    """Nonblocking corpus lease shared by every server using this data root.
+
+    POSIX leases lock the existing corpus directory through a read-only handle,
+    keeping healthy read-only libraries browsable. Windows uses counted handles
+    on a separate lock file. Every request validates retirement after locking.
+    """
+    if value == DEFAULT_WORKSPACE_ID:
+        yield True
+        return
+    if not value or value != _workspace_slug(value):
+        raise KeyError(value)
+    if fcntl is not None:
+        folder = base_data_dir() / "workspaces" / value
+        corpus_locked = True
+        try:
+            descriptor = os.open(folder, os.O_RDONLY)
+        except FileNotFoundError:
+            # Preserve the registry error instead of disguising damaged
+            # registry contents as a missing workspace when no directory exists.
+            _read_workspace_records()
+            if not missing_ok:
+                raise KeyError(value)
+            # Only registry retirement is permitted without a corpus lease.
+            # A restored directory must not be removed through this fallback.
+            descriptor = os.open(base_data_dir(), os.O_RDONLY)
+            corpus_locked = False
+        try:
+            mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+            fcntl.flock(descriptor, mode | fcntl.LOCK_NB)
+            try:
+                yield corpus_locked
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+    elif msvcrt is not None:
+        # Other Windows servers are conservatively excluded during activity.
+        path = base_data_dir() / "locks" / f"workspace-{value}.activity.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _windows_workspace_activity(path, exclusive=exclusive):
+            corpus_locked = (base_data_dir() / "workspaces" / value).exists()
+            if not corpus_locked and not missing_ok:
+                _read_workspace_records()
+                raise KeyError(value)
+            yield corpus_locked
+    else:  # pragma: no cover
+        raise RuntimeError("no file-locking primitive available for workspace activity")
+
+
+@contextlib.contextmanager
 def _workspace_file_lock():
     """Serialize registry read-modify-write sequences across processes."""
     path = base_data_dir() / "locks" / "workspaces.lock"
@@ -400,6 +495,8 @@ def list_workspaces() -> list[dict]:
     seen = {DEFAULT_WORKSPACE_ID}
     for item in saved:
         if not isinstance(item, dict):
+            continue
+        if item.get("deleted"):
             continue
         key = item.get("id")
         name = item.get("name")
@@ -484,7 +581,11 @@ def create_workspace(name: str) -> dict:
     clean = _clean_workspace_name(name)
     with _workspaces_lock, _workspace_file_lock():
         records = _read_workspace_records()
-        used = {item["id"] for item in list_workspaces()}
+        # Deleted ids stay retired: an old window or link must never address a
+        # different corpus created later with the same display name.
+        used = {item["id"] for item in records
+                if isinstance(item, dict) and isinstance(item.get("id"), str)}
+        used.add(DEFAULT_WORKSPACE_ID)
         base = _workspace_slug(clean)
         key = base
         suffix = 2
@@ -504,16 +605,74 @@ def create_workspace(name: str) -> dict:
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         try:
+            # Initialize before publishing the id. Deletion takes the same
+            # registry locks and cannot remove a half-initialized corpus.
+            with use_workspace(key):
+                ensure_dirs()
             records.append(record)
             _write_workspace_records(records)
         except BaseException:
-            # The directory is new and still empty here; avoid leaving an
-            # unregistered workspace when writing the small registry fails.
-            workspace_dir.rmdir()
+            # No request can use this unpublished id; remove any partially
+            # initialized directories when setup or the registry write fails.
+            shutil.rmtree(workspace_dir)
             raise
-    with use_workspace(key):
-        ensure_dirs()
     return record
+
+
+def delete_workspace(value: str) -> bool:
+    """Retire a workspace; return whether durable retirement allows cleanup."""
+    if value == DEFAULT_WORKSPACE_ID:
+        raise ValueError("The default workspace cannot be deleted")
+    if not value or value != _workspace_slug(value):
+        raise KeyError(value)
+    with (workspace_activity(value, exclusive=True, missing_ok=True) as corpus_locked,
+          _workspaces_lock, _workspace_file_lock()):
+        from . import job_journal
+
+        records = _read_workspace_records()
+        if get_workspace(value) is None:
+            raise KeyError(value)
+        folder = base_data_dir() / "workspaces" / value
+        if not corpus_locked and folder.exists():
+            raise BlockingIOError("The workspace directory was restored; retry deletion")
+        # Refuse links rather than following a hand-edited filesystem outside
+        # the corpus. Commit retirement before touching corpus files: a crash
+        # before this commit leaves the live corpus at its original path; a
+        # crash afterward leaves an already deleted, permanently retired id.
+        if folder.is_symlink() or folder.parent.is_symlink():
+            raise ValueError("Workspace directories cannot be symbolic links")
+        job_journal.check_workspace_owners(folder)
+        retired = [{"id": value, "deleted": True} if isinstance(item, dict) and item.get("id") == value
+                   else item for item in records]
+        _write_workspace_records(retired)
+        # File fsync precedes os.replace in _write_json; persist that directory
+        # entry too before destroying any corpus data (as store.write_atomic
+        # does for other durable writes on POSIX).
+        if os.name == "posix":
+            try:
+                descriptor = os.open(workspaces_path().parent, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            except OSError:
+                # The registry is retired in the running system, but a crash
+                # might restore its old entry. Leave the original corpus intact
+                # so that even this failure cannot expose partially erased data.
+                logging.getLogger(__name__).exception("Could not sync workspace retirement; corpus kept at %s", folder)
+                return False
+        job_journal.release_workspace_owner(folder)
+        if not corpus_locked:
+            return False  # Retire the registry only; never erase a restored directory.
+        if folder.exists():
+            try:
+                shutil.rmtree(folder)
+            except OSError:
+                # The retirement already committed. Keep the retired corpus
+                # directory on cleanup failure rather than report a false failure
+                # or put a partially removed corpus back in the picker.
+                logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", folder)
+    return True
 
 
 def papers_dir() -> Path:
