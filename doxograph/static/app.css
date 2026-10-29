@@ -588,8 +588,31 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .sheet::backdrop { background: rgba(0, 0, 0, .35); }
 .paper-chat { width: min(46rem, 92vw); max-width: 46rem; }
 #chat-messages, #agent-messages { max-height: 45vh; overflow-y: auto; margin: 1rem 0; }
-#chat-messages p, #agent-messages p { white-space: pre-wrap; }
-#agent-messages .activity { margin: .25rem 0 0; font-size: .85em; opacity: .7; }
+#chat-messages p { white-space: pre-wrap; }
+/* Keep the question and actions visible while reading a long library answer. */
+#library-agent { width: min(56rem, 92vw); max-width: 56rem; height: min(54rem, calc(100dvh - 2rem));
+  max-height: calc(100dvh - 2rem); overflow: hidden; }
+#library-agent[open] { display: flex; flex-direction: column; }
+#library-agent > .row, #library-agent > .hint, #agent-form { flex-shrink: 0; }
+#agent-messages { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: .5rem; }
+.agent-message { padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 9px; margin-bottom: .8rem; }
+.agent-question { background: var(--panel); }
+.agent-message-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-bottom: .65rem; }
+.agent-message .who { display: block; color: var(--muted);
+  font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.agent-question p { margin: 0; white-space: pre-wrap; }
+.agent-content { font-size: .95rem; overflow-wrap: anywhere; }
+#agent-messages .note-prose p { white-space: normal; margin: .65rem 0; }
+.agent-content > :last-child { margin-bottom: 0; }
+.agent-content :is(ul,ol) { padding-left: 1.5rem; }
+.agent-content li + li { margin-top: .35rem; }
+.agent-content hr { border: 0; border-top: 1px solid var(--line); margin: 1.3rem 0; }
+.agent-content table { display: block; overflow-x: auto; }
+.agent-answer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; font-size: .82rem; }
+#library-agent .agent-answer-actions .hint { margin: 0; }
+#agent-messages .activity { margin-top: .75rem; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+#agent-messages .activity summary { cursor: pointer; }
+#agent-messages .activity ul { padding-left: 1.25rem; }
 #chat-form, #agent-form { margin-top: 1rem; }
 #chat-form .row, #agent-form .row { margin-top: .75rem; }
 .sheet h2 { font-size: 1rem; margin: 0 0 .5rem; }

@@ -164,11 +164,13 @@ const WorkspaceNotes = (() => {
     if (mode === 'preview') mode = 'write';
     if (scope.paper && scope.view === 'claims') keep = true;
     remember(); update();
+    if (document.body.classList.contains('reading-paper')) setReadingClaims(false);
     el('workspace-notes-panel').scrollIntoView({block:'nearest'});
     el('workspace-notes').focus({preventScroll:true});
   }
   function reveal() {
     forced = true; expanded = true; update();
+    if (document.body.classList.contains('reading-paper')) setReadingClaims(false);
     el('workspace-notes-panel').scrollIntoView({block:'nearest'});
   }
   document.addEventListener('input', event => {

@@ -10,7 +10,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import agent, claude_code, config, mcp_server, server, store
+from doxograph import agent, claude_code, codex_cli, config, mcp_server, server, store
 from doxograph.model_errors import ModelSetupError
 
 PRIVATE = "PRIVATE-NOTE-SENTINEL"
@@ -72,7 +72,7 @@ def test_command_allows_only_library_tools_and_runs_this_codes_server():
     assert "doe2026" in system and "workspace='default'" in system
     entry = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["doxograph"]
     assert entry["command"] == sys.executable
-    assert entry["args"][-3:] == ["--url", "http://127.0.0.1:9", "--without-notes"]
+    assert entry["args"][-5:] == ["--url", "http://127.0.0.1:9", "--without-notes", "--workspace", "default"]
     assert Path(entry["env"]["PYTHONPATH"], "doxograph", "agent.py").is_file()
 
 
@@ -106,8 +106,119 @@ def test_answer_reports_the_lookups_it_made(monkeypatch):
     assert "What recovers?" in seen["prompt"]
 
 
-def test_answer_needs_a_claude_subscription():
+def fake_codex(monkeypatch, stdout, *, answer="Two papers agree.", auth="Logged in using ChatGPT", returncode=0):
+    monkeypatch.setattr(codex_cli, "executable", lambda: "codex")
+    monkeypatch.setattr(codex_cli, "environment", lambda: {})
+    seen = {}
+
+    def run(args, *, env, cwd, input=None, timeout=600):
+        if "status" in args:
+            return SimpleNamespace(stdout=auth, stderr="", returncode=0)
+        seen["args"], seen["prompt"] = args, input
+        seen["instructions"] = Path(next(a.split("=", 1)[1].strip('"') for a in args
+                                         if a.startswith("model_instructions_file="))).read_text()
+        if answer is not None:
+            Path(args[args.index("--output-last-message") + 1]).write_text(answer)
+        return SimpleNamespace(stdout=stdout, stderr="", returncode=returncode)
+
+    monkeypatch.setattr(codex_cli, "_run", run)
+    return seen
+
+
+def test_codex_library_uses_selected_model_and_only_the_notes_free_library_tools(monkeypatch):
+    import tomllib
+
     config.set_ai_provider("codex")
+    config.save_codex_model("chosen-model")
+    seen = fake_codex(monkeypatch, stream(
+        {"type": "item.started", "item": {"type": "mcp_tool_call", "server": "doxograph", "tool": "search_claims"}},
+        {"type": "item.completed", "item": {"type": "mcp_tool_call", "server": "doxograph",
+                                            "tool": "search_claims", "arguments": {"q": "steering"}}},
+        {"type": "item.completed", "item": {"type": "mcp_tool_call", "server": "doxograph",
+                                            "tool": "read_evidence", "arguments": {"kind": "tensions"}}},
+        {"type": "turn.completed"}))
+    other = config.create_workspace("Other")
+    messages = [{"role": "user", "content": "What agrees?"},
+                {"role": "assistant", "content": "Two papers."},
+                {"role": "user", "content": "And disagrees?"}]
+    with config.use_workspace(other["id"]):
+        reply = agent.answer(messages, lambda: "http://127.0.0.1:9000", focus="doe2026")
+    assert reply == {"answer": "Two papers agree.", "activity": ["Searched claims steering", "Read tensions"],
+                     "model": "chosen-model", "assistant": "ChatGPT"}
+    assert all(message["content"] in seen["prompt"] for message in messages)
+    assert f"workspace='{other['id']}'" in seen["instructions"] and "doe2026" in seen["instructions"]
+    args = seen["args"]
+    assert args[args.index("--model") + 1] == "chosen-model"
+    overrides = tomllib.loads("\n".join(args[i + 1] for i, arg in enumerate(args) if arg == "-c"))
+    entry = overrides["mcp_servers"]["doxograph"]
+    assert entry["command"] == sys.executable
+    assert entry["args"] == ["-m", "doxograph", "mcp", "--url", "http://127.0.0.1:9000",
+                             "--without-notes", "--workspace", other["id"]]
+    assert entry["enabled_tools"] == list(agent.TOOLS) and entry["required"]
+    assert Path(entry["env"]["PYTHONPATH"], "doxograph", "agent.py").is_file()
+    assert "--ignore-user-config" in args and "--ephemeral" in args
+    assert overrides["tools"]["view_image"] is False
+    assert "shell_tool" in args and "multi_agent" in args
+
+
+@pytest.mark.parametrize("status", ["Not logged in", "Logged in using an API key"])
+def test_codex_library_checks_chatgpt_login_before_callback(monkeypatch, status):
+    config.set_ai_provider("codex")
+    seen = fake_codex(monkeypatch, "", auth=status)
+    with pytest.raises(ModelSetupError, match="will not fall back"):
+        agent.answer([], lambda: pytest.fail("probed without ChatGPT login"))
+    assert seen == {}
+
+
+def test_codex_library_keeps_provider_and_model_if_settings_change_during_request(monkeypatch):
+    config.set_ai_provider("codex")
+    config.save_codex_model("submitted-model")
+    seen = fake_codex(monkeypatch, stream({"type": "turn.completed"}))
+
+    def callback():
+        config.set_ai_provider("claude_code")
+        config.save_codex_model("next-model")
+        return "http://127.0.0.1:8765"
+
+    reply = agent.answer([], callback)
+    assert reply["model"] == "submitted-model" and reply["assistant"] == "ChatGPT"
+    assert seen["args"][seen["args"].index("--model") + 1] == "submitted-model"
+    assert config.ai_provider() == "claude_code" and config.codex_model() == "next-model"
+
+
+@pytest.mark.parametrize("stdout,answer", [
+    (stream({"type": "turn.failed", "error": {"message": "Usage limit"}}), "partial"),
+    (stream({"type": "turn.started"}), "partial"),
+    ("invalid JSON", "answer"),
+    (stream({"type": "turn.completed"}), None),
+    (stream({"type": "turn.completed"}), ""),
+])
+def test_codex_library_rejects_failed_or_incomplete_answers(monkeypatch, stdout, answer):
+    config.set_ai_provider("codex")
+    fake_codex(monkeypatch, stdout, answer=answer)
+    with pytest.raises(RuntimeError, match="Codex"):
+        agent.answer([], lambda: "http://127.0.0.1:8765")
+
+
+def test_codex_endpoint_checks_callback_and_the_ai_off_switch(monkeypatch):
+    config.set_ai_provider("codex")
+    seen = fake_codex(monkeypatch, stream({"type": "turn.completed"}))
+    monkeypatch.setattr(server, "_reachable", lambda url: False)
+    body = {"messages": [{"role": "user", "content": "Hi"}]}
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/agent/chat", json=body)
+        assert response.status_code == 502 and "loopback" in response.json()["detail"]
+        assert seen == {}
+        monkeypatch.setattr(server, "_reachable", lambda url: True)
+        response = client.post("/api/agent/chat", json=body)
+        assert response.status_code == 200 and response.json()["assistant"] == "ChatGPT"
+        config.set_ai_enabled(False)
+        monkeypatch.setattr(codex_cli, "_run", lambda *a, **kw: pytest.fail("Codex ran with AI off"))
+        assert client.post("/api/agent/chat", json=body).status_code == 403
+
+
+def test_answer_needs_a_subscription():
+    config.set_ai_provider("api")
     with pytest.raises(ModelSetupError, match="Claude subscription"):
         agent.answer([{"role": "user", "content": "Hi"}], lambda: "http://127.0.0.1:8765")
 
@@ -188,7 +299,7 @@ def test_reachable_checks_the_health_route_of_a_real_server():
 
 
 def test_the_provider_is_checked_before_the_callback_is_probed(monkeypatch):
-    config.set_ai_provider("codex")
+    config.set_ai_provider("api")
     monkeypatch.setattr(server, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]})
@@ -212,7 +323,7 @@ def test_endpoint_maps_setup_errors_and_the_off_switch(monkeypatch):
     monkeypatch.setattr(server, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
     body = {"messages": [{"role": "user", "content": "Hi"}], "paper": "doe2026"}
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
-        config.set_ai_provider("codex")
+        config.set_ai_provider("api")
         response = client.post("/api/agent/chat", json=body)
         assert response.status_code == 502 and "Claude subscription" in response.json()["detail"]
         config.set_ai_enabled(False)

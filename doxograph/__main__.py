@@ -322,8 +322,12 @@ def cmd_label(args) -> int:
         print(f"no paper {args.key}", file=sys.stderr)
         return 1
     if args.labels or args.clear:
-        paper = store.set_labels(args.key, [] if args.clear else args.labels)
-    print(" ".join(paper.get("labels") or []))
+        try:
+            paper = store.set_labels(args.key, [] if args.clear else args.labels)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    print(", ".join(paper.get("labels") or []))
     return 0
 
 
@@ -355,7 +359,7 @@ def cmd_mcp(args) -> int:
     from .mcp_server import run
 
     try:
-        run(args.url, without_notes=args.without_notes)
+        run(args.url, without_notes=args.without_notes, workspace=args.workspace)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -403,6 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--url", default="http://127.0.0.1:8765", help="local Doxograph server URL")
     p.add_argument("--without-notes", action="store_true",
                    help="leave out personal notes, claim notes, and links to your own claims")
+    p.add_argument("--workspace", help="restrict all tools to this workspace ID")
     p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("serve", help="run the web app")
@@ -473,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("label", help="read or set a paper's labels, or list the ones in use")
     p.add_argument("key", nargs="?", help="the paper to read or label")
-    p.add_argument("labels", nargs="*", help="the labels it should carry, replacing the ones it has")
+    p.add_argument("labels", nargs="*", help="the labels it should carry, replacing the ones it has; quote labels containing spaces")
     p.add_argument("--clear", action="store_true", help="take every label off the paper")
     p.set_defaults(func=cmd_label)
 

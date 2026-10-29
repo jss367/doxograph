@@ -79,22 +79,22 @@ Choose model access in **Settings → Model access**:
   resolves on its own (including an `ant auth login` profile).
 - **Claude subscription (Claude Code)**: install the [Claude Code CLI](https://code.claude.com/docs/en/setup),
   run `claude auth login` in Terminal, and sign in with your Claude account.
-  Extraction, retagging, synthesis, agreements, tensions, and paper chat then
-  run through the installed CLI using that account. Usage follows your plan's
+  Extraction, retagging, synthesis, agreements, tensions, paper chat, and Ask the
+  library run through the installed CLI using that account. Usage follows your plan's
   limits and credits; this does not include a subscription with Doxograph.
   Doxograph ignores inherited API credentials for these requests and refuses
   to fall back to API billing. If Claude Code isn't on the app's PATH, set
   `DOXOGRAPH_CLAUDE_PATH` to its executable's absolute path.
 - **ChatGPT subscription (Codex)**: install the [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode)
   and run `codex login` in Terminal to sign in with ChatGPT. The same analysis
-  features and paper chat use your saved ChatGPT login and its plan limits or
-  credits. Doxograph ignores inherited API credentials and refuses to fall back
+  features, paper chat, and Ask the library use your saved ChatGPT login and its
+  plan limits or credits. Doxograph ignores inherited API credentials and refuses to fall back
   to API billing. Set `DOXOGRAPH_CODEX_PATH` if the executable is installed in an
   unusual location. Choose **Settings → AI analysis → ChatGPT model**, select a
   model, and click **Save model**. The list comes from the installed Codex CLI;
   you can refresh it or enter a custom model ID. The selection is saved across
-  restarts and workspaces and applies to new analysis and paper chat. **Codex
-  default (automatic)** lets Codex choose its recommended model. Until you save
+  restarts and workspaces and applies to new analysis, paper chat, and Ask the
+  library. **Codex default (automatic)** lets Codex choose its recommended model. Until you save
   a choice, `DOXOGRAPH_CODEX_MODEL` can supply a model available to your account;
   a saved choice takes precedence over that environment variable.
 
@@ -111,8 +111,9 @@ a temporary directory with shell commands, browsing, hooks, plugins, apps, and
 delegation disabled. User `config.toml` settings and project instructions are
 excluded, and the run is ephemeral. **Codex still loads global instructions**
 from `AGENTS.override.md` or `AGENTS.md` in its home directory and sends that
-guidance along with the paper request. This is disclosed in Settings and paper
-chat. Choose a Claude option if you want requests without global Codex guidance.
+guidance along with the request. This is disclosed in Settings, paper chat,
+and Ask the library. Choose a Claude option if you want requests without global
+Codex guidance.
 Neither subscription option includes a paid plan with Doxograph.
 
 Choose a provider and model in **Settings → AI analysis**. Anthropic is the
@@ -123,8 +124,8 @@ See [Model](#model) for setup and the differences in PDF handling.
 To turn off model use, open **Settings** and uncheck **Enable AI analysis**.
 The preference survives restarts and applies to every workspace and the CLI
 using the same data directory. While off, imports skip extraction, and
-extraction, retagging, agreements, tensions, synthesis, and paper chat cannot start new
-model calls or upload PDFs for analysis. Requests already sent may finish.
+extraction, retagging, agreements, tensions, synthesis, paper chat, and Ask the
+library cannot start new model calls or upload PDFs for analysis. Requests already sent may finish.
 Browsing, manual editing, quote checks, and exports remain available. With
 Anthropic or a subscription selected, removing a paper still deletes its
 previously uploaded Anthropic copies. With another API or local provider
@@ -150,23 +151,31 @@ selected in Settings and is disabled when AI analysis is off.
 
 **Ask the library** in the header opens a chat that answers across every paper in
 the workspace, where paper chat reads one PDF. It needs AI analysis enabled and
-**Claude subscription (Claude Code)** selected in Settings → Model access. If
+**Claude subscription (Claude Code)** or **ChatGPT subscription (Codex)** selected
+in Settings → Model access. It uses the model selected for that provider. If
 either is missing, the dialog explains what to change and offers **Open Settings**.
-Claude looks things up
+The selected assistant looks things up
 through the [MCP server](#query-doxograph-from-agents) below, started with
 `--without-notes`: it can search papers, claims, and PDF text, read a paper,
-list topics, and read agreements, tensions, and syntheses. The line under each
-answer lists the lookups it made. Claude Code reaches the library through the
+list topics, and read agreements, tensions, and syntheses. Expand **Library lookups**
+below an answer to see what it looked up. Answers render Markdown headings, lists, tables,
+links, code, and equations. **Save as research note** keeps an answer in this
+workspace's **Research notes**, along with its question, assistant, timestamp,
+and source lookups. **Open saved note** lets you rename, edit, or export it as
+Markdown. Saved notes survive reloads and new conversations; unsaved chat stays
+only for this page session. Both assistants reach the library through the
 app that is serving the page, over a loopback address (the default; `--host 0.0.0.0`
 also works). If the app is bound only to another address, the chat says so
 instead of failing partway through an answer.
 
 It has no file, shell, web, or write access, and it does not receive the PDFs.
+The Codex option includes your global Codex instructions, as disclosed in the dialog.
 `--without-notes` leaves out your paper and workspace notes, your claim notes, and
 the links from claims to your own claims, and a search cannot match text inside
-them. Your research context is not exposed by any tool. It can read every
-workspace by ID, but it is asked to stay in the one you are viewing. Answers can
-be wrong; check them against the papers.
+them. Your research context is not exposed by any tool. Ask the library is
+restricted to the workspace captured when you send a question, even
+if the model requests another workspace. Answers can be wrong; check them
+against the papers.
 
 ## Use
 
@@ -191,6 +200,7 @@ doxograph list                        # what is in the corpus
 doxograph tags                        # topics and their use counts
 doxograph label                       # labels in use, and how many papers carry each
 doxograph label <key> open-source     # label one paper, replacing the labels it has
+doxograph label <key> "open source" "reading list"  # quote labels containing spaces
 doxograph export --out notes.html     # one self-contained HTML file
 doxograph bibtex --out refs.bib
 ```
@@ -361,6 +371,14 @@ half the window. It starts at 20rem so a browser set to a larger default font
 size gets a wider pane, and the width is remembered in this browser.
 In narrow windows, the library stacks above the content at full width and the
 divider is hidden. Widening the window restores the saved sidebar width.
+
+While reading a PDF, drag the divider on either side of the document to resize
+the library or claims pane. Each width is remembered in this browser. The
+dividers support the same arrow keys, Shift, Home, and double-click controls.
+Use **Hide library** and **Hide claims** in the top bar to give the document
+more room; each button switches to **Show** so you can bring its pane back.
+Hiding a pane keeps the PDF and unsaved edits in place. In narrow windows, the
+claims stack below the PDF and the resize handles are hidden.
 
 Deleting a claim, an agreement, or a synthesis is not confirmed first. It is
 undone instead: the row leaves the page at once and the request is held until
@@ -742,15 +760,17 @@ than re-reading them and leaves hand-edited claim text alone.
 A topic is about a claim and comes out of the model. A label is about the
 paper and is put on by hand: that it is open source, that a model of it is on
 HuggingFace, that it is worth rereading. **Labels** in a paper's header opens
-a field for them, separated by spaces or commas, and they appear as a Labels
+a field for them, separated by commas, and they appear as a Labels
 list in the sidebar that filters the corpus to the papers carrying one.
 
 They are deliberately not part of the topic vocabulary. The vocabulary goes
 into the extraction prompt as the list of things to look for in a paper's
 text, and nothing in a paper's text says it is on your reading list. So no
 pass writes a label, `retag` cannot take one off, and labelling a paper does
-not stale its syntheses. Labels are slugs: several words are written with
-hyphens, as topics are.
+not stale its syntheses. Labels can contain spaces, such as `open source` or
+`reading list`. They are stored in lowercase with extra whitespace removed.
+Commas separate labels in the editor and cannot be part of a label's name.
+Existing hyphenated labels keep their names. Topics still use hyphenated slugs.
 
 Labels are searched along with everything else, so `huggingface` in the search
 box finds the papers carrying it and their claims. `doxograph label` reads and
