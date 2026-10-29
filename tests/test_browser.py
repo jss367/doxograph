@@ -241,7 +241,7 @@ def test_workspace_delete_confirmation_and_return_to_default(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(f"{url}/#ws={workspace['id']}")
+                await page.goto(f"{url}/#ws={workspace['id']}&view=claims")
                 await expect(page.locator("#workspace")).to_have_value(workspace["id"])
                 await page.locator('[data-act="edit"][data-claim="remove-c1"]').click()
                 draft = page.locator('form[data-form="remove-c1"] textarea[name="text"]')
@@ -292,7 +292,7 @@ def test_failed_workspace_delete_keeps_workspace_and_drafts():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(f"{url}/#ws={workspace['id']}")
+                await page.goto(f"{url}/#ws={workspace['id']}&view=claims")
                 await page.locator('[data-act="edit"][data-claim="mind-c1"]').click()
                 draft = page.locator('form[data-form="mind-c1"] textarea[name="text"]')
                 await draft.fill("Keep my draft")
