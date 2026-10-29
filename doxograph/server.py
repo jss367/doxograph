@@ -29,7 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import (__version__, agent, bib, chat, cites, config, export, extract, fingerprint, ingest, pairs,
+from . import (__version__, agent, bib, chat, cites, codex_cli, config, export, extract, fingerprint, ingest, pairs,
                search, store, notebook, records, research_notes, storage, providers, query, job_journal,
                backups, workspace_archive)
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
@@ -807,6 +807,7 @@ class SettingsBody(BaseModel):
     provider: str | None = None
     model: str | None = None
     base_url: str | None = None
+    codex_model: str | None = Field(default=None, max_length=200)
 
 
 class ProviderBody(BaseModel):
@@ -1288,6 +1289,7 @@ def _build_state() -> dict:
         **config.analysis_settings(),
         "model": config.model(),
         "ai_provider": config.ai_provider(),
+        "codex_model": config.codex_model(),
         "ai_enabled": config.ai_enabled(),
     }
 
@@ -1311,7 +1313,8 @@ def state(request: Request) -> Response:
     # Credentials and installation settings live outside the corpus, but
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
-    settings_signature = hashlib.sha256(json.dumps(config.analysis_settings(), sort_keys=True).encode()).hexdigest()
+    settings_signature = hashlib.sha256(json.dumps(
+        {**config.analysis_settings(), "codex_model": config.codex_model()}, sort_keys=True).encode()).hexdigest()
     workspace_record = config.get_workspace()
     name_signature = hashlib.sha1(workspace_record["name"].encode()).hexdigest()
     signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}-{config.ai_provider()}-{name_signature}"
@@ -1341,6 +1344,11 @@ def state(request: Request) -> Response:
 
 @app.put("/api/settings")
 def update_settings(body: SettingsBody) -> dict:
+    if body.codex_model is not None:
+        try:
+            config.save_codex_model(body.codex_model)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     changing_provider = any(value is not None for value in (body.provider, body.model, body.base_url))
     if changing_provider:
         current = config.analysis_config()
@@ -1358,7 +1366,17 @@ def update_settings(body: SettingsBody) -> dict:
         config.set_ai_enabled(body.ai_enabled)
     if changing_provider:
         return {"ai_enabled": config.ai_enabled(), **config.analysis_settings()}
+    if body.codex_model is not None:
+        return {"ai_enabled": config.ai_enabled(), "codex_model": config.codex_model(), "model": config.model()}
     return {"ai_enabled": config.ai_enabled()}
+
+
+@app.get("/api/settings/codex/models")
+def codex_models() -> dict:
+    try:
+        return {"models": codex_cli.models()}
+    except (ModelSetupError, RuntimeError) as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.put("/api/settings/provider")

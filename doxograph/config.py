@@ -33,6 +33,7 @@ _workspace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 _workspaces_lock = threading.RLock()
 _settings_lock = threading.RLock()
 _analysis_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar("analysis_provider", default=None)
+_codex_model: contextvars.ContextVar[str | None] = contextvars.ContextVar("codex_model", default=None)
 
 try:
     import fcntl
@@ -233,8 +234,25 @@ def ai_provider() -> str:
 
 def model() -> str:
     if ai_provider() == "codex":
-        return os.environ.get("DOXOGRAPH_CODEX_MODEL") or "Codex default"
+        return codex_model() or "Codex default"
     return MODEL if ai_provider() == "claude_code" else analysis_config().model
+
+
+def codex_model(settings: dict | None = None) -> str:
+    if (bound := _codex_model.get()) is not None:
+        return bound
+    settings = _settings() if settings is None else settings
+    saved = settings.get("codex_model")
+    # An explicitly saved empty string selects automatic model choice, even
+    # when the launch environment supplies a legacy override.
+    return saved if isinstance(saved, str) else os.environ.get("DOXOGRAPH_CODEX_MODEL", "")
+
+
+def save_codex_model(model: str) -> None:
+    model = model.strip()
+    if model and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model):
+        raise ValueError("Enter a model ID of at most 200 characters without spaces, or choose Codex default.")
+    _update_settings(codex_model=model)
 
 
 def bind_model_access(work):
@@ -255,11 +273,14 @@ def use_model_access():
         saved = settings.get("ai_provider")
         access = saved if saved in ("claude_code", "codex") else "api"
     selected = analysis_config(settings)
+    selected_codex_model = codex_model(settings)
     access_token = _analysis_provider.set(access)
     analysis_token = _analysis.set(selected)
+    codex_token = _codex_model.set(selected_codex_model)
     try:
         yield
     finally:
+        _codex_model.reset(codex_token)
         _analysis.reset(analysis_token)
         _analysis_provider.reset(access_token)
 

@@ -37,6 +37,8 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
                                         body=json.dumps({'answer': 'Twenty adults (p. 1).', 'model': 'test', 'assistant': assistant}))
 
             await page.route('**/api/papers/study/chat', respond)
+            await page.route('**/api/settings/codex/models', lambda route: route.fulfill(
+                content_type='application/json', body='{"models":[]}'))
             await page.goto(url)
             await page.locator('#btn-settings').click()
             await page.locator('#ai-access').select_option(provider)

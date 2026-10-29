@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from fastapi.testclient import TestClient
 
 from doxograph import __main__, chat, codex_cli, config, extract, ingest, quotes, server, store
 
@@ -102,6 +103,111 @@ def test_model_changes_with_provider_and_respects_codex_override(monkeypatch):
     config.set_ai_provider('claude_code')
     assert config.model() == 'claude-test'
     assert config.ai_enabled() is False
+
+
+def test_saved_codex_model_persists_and_invalidates_state_in_every_workspace(codex, monkeypatch):
+    monkeypatch.setenv('DOXOGRAPH_CODEX_MODEL', 'launch-model')
+    other = config.create_workspace('Other')
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        initial = client.get('/api/state')
+        assert initial.json()['codex_model'] == 'launch-model'
+        response = client.put('/api/settings', json={'codex_model': ' selected-model '})
+        assert response.status_code == 200
+        assert response.json()['model'] == 'selected-model'
+        changed = client.get('/api/state', headers={'If-None-Match': initial.headers['etag']})
+        assert changed.status_code == 200
+        assert changed.json()['model'] == 'selected-model'
+        assert client.get('/api/state', headers={'X-Doxograph-Workspace': other['id']}).json()['codex_model'] == 'selected-model'
+        assert json.loads((config.base_data_dir() / 'settings.json').read_text())['codex_model'] == 'selected-model'
+        config.set_ai_provider('api')
+        config.set_ai_provider('codex')
+        assert config.model() == 'selected-model'
+        assert client.put('/api/settings', json={'codex_model': ''}).status_code == 200
+        assert config.model() == 'Codex default'
+
+
+@pytest.mark.parametrize('model', ['bad model', '--model', 'x' * 201, 'model\ninvalid'])
+def test_invalid_codex_model_keeps_saved_choice(codex, model):
+    config.save_codex_model('saved-model')
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        assert client.put('/api/settings', json={'codex_model': model}).status_code == 422
+    assert config.model() == 'saved-model'
+
+
+def test_saved_model_reaches_codex_and_chat_provenance(codex, monkeypatch):
+    config.save_codex_model('chosen-model')
+    store.save_paper(store.new_paper('paper'))
+    store.pdf_path('paper').write_bytes(b'%PDF')
+    monkeypatch.setattr(quotes, 'paper_text', lambda *a, **kw: quotes.build('Page one'))
+
+    def run(args, **options):
+        if 'status' in args:
+            return subprocess.CompletedProcess(args, 0, '', 'Logged in using ChatGPT')
+        assert args[args.index('--model') + 1] == 'chosen-model'
+        # Changing Settings while Codex works must not relabel the answer.
+        config.save_codex_model('next-model')
+        Path(args[args.index('--output-last-message') + 1]).write_text('{"answer":"Answer (p. 1)."}')
+        return subprocess.CompletedProcess(args, 0, '{"type":"turn.completed"}', '')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    answer = chat.answer('paper', [{'role': 'user', 'content': 'Question?'}])
+    assert answer['model'] == 'chosen-model'
+    assert config.model() == 'next-model'
+
+
+def test_queued_analysis_keeps_model_selected_at_submission(codex, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    config.save_codex_model('queued-model')
+    started, release = Event(), Event()
+    seen = []
+
+    def work(job):
+        started.set()
+        assert release.wait(timeout=5)
+        with config.use_model_access():
+            seen.append(config.model())
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(server, '_pool', pool)
+        future = server._submit_job(work, server._new_job('analysis'))
+        try:
+            assert started.wait(timeout=5)
+            config.save_codex_model('next-model')
+        finally:
+            release.set()
+        future.result(timeout=5)
+    assert seen == ['queued-model']
+    assert config.model() == 'next-model'
+
+
+def test_model_discovery_filters_and_orders_catalog_without_starting_a_turn(codex, monkeypatch):
+    catalog = {'models': [
+        {'slug': 'second', 'display_name': 'Second', 'visibility': 'list', 'priority': 2},
+        {'slug': 'hidden', 'visibility': 'hide', 'priority': 0},
+        {'slug': 'first', 'visibility': 'list', 'priority': 1},
+    ]}
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(catalog), ''))
+    monkeypatch.setattr(subprocess, 'run', run)
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.get('/api/settings/codex/models')
+    assert response.json() == {'models': [{'id': 'first', 'name': 'first'}, {'id': 'second', 'name': 'Second'}]}
+    args = run.call_args.args[0]
+    assert args[-2:] == ['debug', 'models']
+    assert run.call_count == 1
+    assert run.call_args.kwargs['timeout'] == 15
+
+
+@pytest.mark.parametrize('output', ['not json', 'null', '{}', '{"models":{}}', '{"models":[null]}'])
+def test_unavailable_catalog_reports_error_without_losing_saved_model(codex, monkeypatch, output):
+    config.save_codex_model('saved-model')
+    monkeypatch.setattr(subprocess, 'run', Mock(return_value=subprocess.CompletedProcess([], 0, output, '')))
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.get('/api/settings/codex/models')
+    assert response.status_code == 503
+    assert 'custom model ID' in response.json()['detail']
+    assert config.model() == 'saved-model'
 
 
 def test_provider_switch_invalidates_passes_and_preserves_inflight_access(codex):

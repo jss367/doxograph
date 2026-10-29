@@ -69,11 +69,13 @@ header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-le
   border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .2); }
 .settings-menu[hidden] { display: none; }
-#ai-provider-form { display: grid; gap: .35rem; margin-top: .65rem; }
-#ai-provider-form[hidden] { display: none; }
-#ai-provider-form label { font-size: .82rem; }
-#ai-provider-form input, #ai-provider-form select { width: 100%; box-sizing: border-box; }
-#ai-endpoint-row label { display: block; margin-bottom: .35rem; }
+#ai-provider-form, #codex-model-form { display: grid; gap: .35rem; margin-top: .65rem; }
+#ai-provider-form[hidden], #codex-model-form[hidden] { display: none; }
+#ai-provider-form label, #codex-model-form label { font-size: .82rem; }
+#ai-provider-form input, #ai-provider-form select,
+#codex-model-form input, #codex-model-form select { width: 100%; box-sizing: border-box; }
+#ai-endpoint-row label, #codex-custom-model-row label { display: block; margin-bottom: .35rem; }
+#codex-model-form .hint { margin: .25rem 0; }
 #ai-provider-save { justify-self: start; }
 .settings-head { display: flex; align-items: center; justify-content: space-between;
   margin-bottom: .65rem; }

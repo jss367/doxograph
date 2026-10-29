@@ -4434,6 +4434,11 @@ $('btn-synth').addEventListener('click', async () => {
 
 let savingAnalysisSetting = false;
 let savingProviderSetting = false;
+let savingCodexModel = false;
+let loadingCodexModels = false;
+let codexModelsLoaded = false;
+let codexModels = [];
+let codexModelEdited = false;
 let readOnArrival = $('auto-extract').checked;
 $('auto-extract').addEventListener('change', () => { readOnArrival = $('auto-extract').checked; });
 
@@ -4442,7 +4447,7 @@ function syncAnalysisControls() {
   const toggle = $('ai-enabled');
   toggle.disabled = savingAnalysisSetting || typeof S.ai_enabled !== 'boolean';
   if (!savingAnalysisSetting) toggle.checked = enabled;
-  $('ai-access').disabled = savingProviderSetting || !S.ai_provider;
+  $('ai-access').disabled = savingProviderSetting || savingCodexModel || !S.ai_provider;
   if (!savingProviderSetting) $('ai-access').value = S.ai_provider || 'api';
   const providerHelp = {
     api: 'Uses the API or local provider configured below.',
@@ -4456,6 +4461,12 @@ function syncAnalysisControls() {
       ? 'The selected API or local model receives page-labeled PDF text; images are unavailable.'
       : 'Claude receives the PDF, including its page images.';
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
+  $('codex-model-form').hidden = S.ai_provider !== 'codex';
+  $('codex-model').disabled = savingCodexModel;
+  $('codex-custom-model').disabled = savingCodexModel;
+  $('codex-model-save').disabled = savingCodexModel || savingProviderSetting;
+  $('codex-model-refresh').disabled = loadingCodexModels;
+  $('codex-current-model').textContent = `Current model: ${S.codex_model || 'Codex default (automatic)'}`;
   $('chat-send').disabled = !enabled || Boolean(activeChat && activeChat.busy);
   $('ai-action-status').hidden = enabled;
   $('auto-extract').disabled = !enabled;
@@ -4500,6 +4511,9 @@ $('ai-access').addEventListener('change', async () => {
       body: JSON.stringify({ ai_provider: provider }),
     });
     S.ai_provider = settings.ai_provider;
+    // The open Settings panel already owns the draft, including custom-mode
+    // intent. Returning to Codex reveals it without replacing it with saved state.
+    if (S.ai_provider === 'codex' && !codexModelsLoaded) loadCodexModels();
     workspaceClient.invalidateState();
     $('ai-settings-status').textContent = 'Model access saved.';
   } catch (error) {
@@ -4508,6 +4522,77 @@ $('ai-access').addEventListener('change', async () => {
     savingProviderSetting = false;
     syncAnalysisControls();
     renderStats();
+  }
+});
+
+function selectedCodexModel() {
+  return $('codex-model').value === 'custom' ? $('codex-custom-model').value : $('codex-model').value;
+}
+
+function showCodexModelFields(model = S.codex_model || '',
+  custom = Boolean(model && !codexModels.some((item) => item.id === model))) {
+  const picker = $('codex-model');
+  picker.innerHTML = '<option value="">Codex default (automatic)</option>'
+    + codexModels.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} (${esc(item.id)})</option>`).join('')
+    + '<option value="custom">Custom model…</option>';
+  picker.value = custom ? 'custom' : model;
+  $('codex-custom-model').value = custom ? model : '';
+  syncCodexCustomField();
+}
+
+function syncCodexCustomField() {
+  const custom = $('codex-model').value === 'custom';
+  $('codex-custom-model-row').hidden = !custom;
+  $('codex-custom-model').required = custom;
+}
+
+async function loadCodexModels() {
+  if (loadingCodexModels) return;
+  loadingCodexModels = true;
+  $('codex-models-status').textContent = 'Loading models…';
+  syncAnalysisControls();
+  try {
+    const result = await api('/api/settings/codex/models');
+    codexModels = result.models;
+    codexModelsLoaded = true;
+    // Keep a draft typed or selected while discovery was in flight.
+    showCodexModelFields(selectedCodexModel(),
+      codexModelEdited && $('codex-model').value === 'custom' ? true : undefined);
+    $('codex-models-status').textContent = codexModels.length ? '' : 'No models listed. You can enter a custom model ID.';
+  } catch (error) {
+    $('codex-models-status').textContent = `${error.message} You can still select Codex default or enter a custom model ID.`;
+  } finally {
+    loadingCodexModels = false;
+    syncAnalysisControls();
+  }
+}
+
+$('codex-model').addEventListener('change', () => {
+  codexModelEdited = true;
+  syncCodexCustomField();
+});
+$('codex-custom-model').addEventListener('input', () => { codexModelEdited = true; });
+$('codex-model-refresh').addEventListener('click', loadCodexModels);
+$('codex-model-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const model = selectedCodexModel().trim();
+  savingCodexModel = true;
+  syncAnalysisControls();
+  $('ai-settings-status').textContent = 'Saving…';
+  try {
+    const settings = await api('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codex_model: model }),
+    });
+    Object.assign(S, settings);
+    workspaceClient.invalidateState();
+    $('ai-settings-status').textContent = 'Model saved. New analysis uses this selection.';
+    renderStats();
+  } catch (error) {
+    $('ai-settings-status').textContent = `Could not save: ${error.message}`;
+  } finally {
+    savingCodexModel = false;
+    syncAnalysisControls();
   }
 });
 
@@ -4642,6 +4727,9 @@ function openSettings() {
   editingProvider = S.provider || 'anthropic';
   $('ai-provider').value = editingProvider;
   showProviderFields();
+  codexModelEdited = false;
+  showCodexModelFields();
+  if (S.ai_provider === 'codex' && !codexModelsLoaded) loadCodexModels();
   $('settings-menu').hidden = false;
   $('btn-settings').setAttribute('aria-expanded', 'true');
 }

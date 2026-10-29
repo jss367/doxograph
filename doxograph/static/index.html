@@ -58,6 +58,24 @@
             <option value="codex">ChatGPT subscription (Codex)</option>
           </select>
           <p class="hint" id="ai-access-help">Uses the API or local provider configured below.</p>
+          <form id="codex-model-form" hidden>
+            <label for="codex-model">ChatGPT model</label>
+            <select id="codex-model" aria-describedby="codex-model-help">
+              <option value="">Codex default (automatic)</option>
+              <option value="custom">Custom model…</option>
+            </select>
+            <div id="codex-custom-model-row" hidden>
+              <label for="codex-custom-model">Custom model ID</label>
+              <input id="codex-custom-model" type="text" maxlength="200" placeholder="Exact model ID">
+            </div>
+            <p class="hint" id="codex-current-model"></p>
+            <p class="hint" id="codex-model-help">Select a model to use for new paper analysis and chat. Codex default lets Codex choose automatically. Model availability depends on your ChatGPT plan.</p>
+            <p class="hint" id="codex-models-status" role="status"></p>
+            <div class="row">
+              <button type="submit" id="codex-model-save">Save model</button>
+              <button type="button" id="codex-model-refresh">Refresh models</button>
+            </div>
+          </form>
           <form id="ai-provider-form">
             <label for="ai-provider">Provider</label>
             <select id="ai-provider">

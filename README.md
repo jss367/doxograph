@@ -90,8 +90,13 @@ Choose model access in **Settings → Model access**:
   features and paper chat use your saved ChatGPT login and its plan limits or
   credits. Doxograph ignores inherited API credentials and refuses to fall back
   to API billing. Set `DOXOGRAPH_CODEX_PATH` if the executable is installed in an
-  unusual location. It uses Codex's default model unless `DOXOGRAPH_CODEX_MODEL`
-  names another model available to your account.
+  unusual location. Choose **Settings → AI analysis → ChatGPT model**, select a
+  model, and click **Save model**. The list comes from the installed Codex CLI;
+  you can refresh it or enter a custom model ID. The selection is saved across
+  restarts and workspaces and applies to new analysis and paper chat. **Codex
+  default (automatic)** lets Codex choose its recommended model. Until you save
+  a choice, `DOXOGRAPH_CODEX_MODEL` can supply a model available to your account;
+  a saved choice takes precedence over that environment variable.
 
 The Claude subscription route sends PDFs directly to Claude Code, with a 7 MB PDF
 limit and a combined input limit for the PDF and conversation. It runs without
