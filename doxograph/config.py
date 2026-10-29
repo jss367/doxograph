@@ -14,7 +14,6 @@ import tempfile
 import threading
 import time
 import unicodedata
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -537,30 +536,22 @@ def delete_workspace(value: str) -> None:
             raise KeyError(value)
         folder = base_data_dir() / "workspaces" / value
         # Refuse links rather than following a hand-edited filesystem outside
-        # the corpus. Stage the directory so a failed registry write can roll
-        # back without losing any papers or notes.
+        # the corpus. Commit retirement before touching corpus files: a crash
+        # before this commit leaves the live corpus at its original path; a
+        # crash afterward leaves an already deleted, permanently retired id.
         if folder.is_symlink() or folder.parent.is_symlink():
             raise ValueError("Workspace directories cannot be symbolic links")
-        staged = folder.with_name(f".deleted-{value}-{uuid.uuid4().hex}")
-        moved = folder.exists()
-        if moved:
-            folder.rename(staged)
+        retired = [{"id": value, "deleted": True} if isinstance(item, dict) and item.get("id") == value
+                   else item for item in records]
+        _write_workspace_records(retired)
+    if folder.exists():
         try:
-            retired = [{"id": value, "deleted": True} if isinstance(item, dict) and item.get("id") == value
-                       else item for item in records]
-            _write_workspace_records(retired)
-        except BaseException:
-            if moved:
-                staged.rename(folder)
-            raise
-    if moved:
-        try:
-            shutil.rmtree(staged)
+            shutil.rmtree(folder)
         except OSError:
             # The retirement already committed. Keep an inaccessible staged
             # directory on cleanup failure rather than report a false failure
             # or put a partially removed corpus back in the picker.
-            logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", staged)
+            logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", folder)
 
 
 def papers_dir() -> Path:

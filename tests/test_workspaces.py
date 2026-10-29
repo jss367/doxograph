@@ -20,6 +20,49 @@ def _create_workspace_in_process(data_dir: str, start, results) -> None:
         results.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
+def _interrupt_deletion(data_dir: str, workspace: str, committed: bool) -> None:
+    os.environ["DOXOGRAPH_DATA"] = data_dir
+    original = config._write_workspace_records
+
+    def interrupted(records):
+        if committed:
+            original(records)
+        os._exit(17)
+
+    config._write_workspace_records = interrupted
+    config.delete_workspace(workspace)
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_abrupt_deletion_keeps_uncommitted_corpus_at_original_path(committed):
+    target = config.create_workspace("Research")
+    with config.use_workspace(target["id"]):
+        store.save_paper(store.new_paper("keep", title="Keep this paper"))
+        path = store.paper_path("keep")
+        before = path.read_bytes()
+    child = multiprocessing.get_context("spawn").Process(
+        target=_interrupt_deletion,
+        args=(str(config.base_data_dir()), target["id"], committed),
+    )
+    child.start()
+    child.join(timeout=10)
+    try:
+        assert not child.is_alive()
+        assert child.exitcode == 17
+        assert path.read_bytes() == before
+        assert not list(path.parent.parent.parent.glob(".deleted-*"))
+        assert (config.get_workspace(target["id"]) is None) == committed
+        if committed:
+            assert config.create_workspace("Research")["id"] == "research-2"
+        else:
+            with config.use_workspace(target["id"]):
+                assert store.load_paper("keep")["title"] == "Keep this paper"
+    finally:
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=5)
+
+
 def test_existing_corpus_is_the_default_and_new_workspaces_are_isolated():
     store.save_paper(store.new_paper("shared-key", title="A consciousness paper"))
 
