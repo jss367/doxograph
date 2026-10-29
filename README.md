@@ -291,11 +291,16 @@ is restored when the page is reopened, unless the address names another one.
 Use **More workspace actions → Rename workspace** in the header to change any
 workspace's name, including the Default workspace. Its papers, claims, notes,
 and exports stay in place.
+Use **More workspace actions → Delete workspace** to permanently remove the
+selected workspace and its papers, PDFs, claims, notes, and exports. Confirming
+returns you to the Default workspace. Wait for active imports and other activity
+to finish before deleting. The built-in Default workspace cannot be deleted.
 Papers dropped on the Mac app's Dock icon go to the workspace currently shown
 in its window.
 
-The header's **More workspace actions** menu also holds **Create workspace**,
-**Export BibTeX**, **Retag all**, and **Keyboard shortcuts**. Beside claim search,
+Use the **+** button beside the workspace picker to create a workspace.
+The header's **More workspace actions** menu also holds **Export BibTeX**,
+**Retag all**, and **Keyboard shortcuts**. Beside claim search,
 **Filters** opens the claim kind, review, quote verification, and grouping controls.
 Active filters remain visible as removable chips after the controls close.
 Select claims or papers to reveal **Compare & organize** and **Clear selection**.

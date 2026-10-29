@@ -412,7 +412,11 @@ const ResearchTools = (() => {
       // Fit width follows the column as the window or the side pane is resized.
       reader.resizer = new ResizeObserver(() => {
         if (reader?.generation !== generation || reader.zoom !== 'fit' || reader.resizeTimer) return;
-        reader.resizeTimer = setTimeout(() => { reader.resizeTimer = null; if (reader?.generation === generation) run(() => setZoom('fit')); }, 150);
+        reader.resizeTimer = setTimeout(() => {
+          if (reader?.generation !== generation) return;
+          reader.resizeTimer = null;
+          if (reader.zoom === 'fit') run(() => setZoom('fit'));
+        }, 150);
       });
       reader.resizer.observe(scroller);
       scroller.addEventListener('scroll', () => {
@@ -931,6 +935,8 @@ const ResearchTools = (() => {
   }
   async function setZoom(zoom) {
     if (!reader?.pages.length || !ZOOMS.includes(zoom)) return;
+    clearTimeout(reader.resizeTimer);
+    reader.resizeTimer = null;
     const scale = scaleFor(zoom, reader.pages[0].base);
     const same = zoom === reader.zoom && scale === reader.scale;
     reader.zoom = zoom;

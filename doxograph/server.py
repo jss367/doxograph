@@ -102,6 +102,41 @@ _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 _job_counter = time.time_ns() // 1000  # Below JavaScript's integer limit; survives process restarts.
 _job_recovery_issues: dict[str, list[str]] = {}
+_workspace_activity_lock = threading.RLock()
+_workspace_activity: dict[tuple[str, str], int] = {}
+_deleting_workspaces: set[tuple[str, str]] = set()
+
+
+def _workspace_identity(value: str) -> tuple[str, str]:
+    return (str(config.base_data_dir().resolve()), value)
+
+
+@contextlib.contextmanager
+def _using_workspace(value: str):
+    """Keep deletion out of requests and the entire lifetime of worker calls."""
+    identity = _workspace_identity(value)
+    with contextlib.ExitStack() as leases:
+        with _workspace_activity_lock:
+            if identity in _deleting_workspaces:
+                raise HTTPException(409, "This workspace is being deleted")
+            try:
+                leases.enter_context(config.workspace_activity(value))
+            except BlockingIOError:
+                raise HTTPException(409, "This workspace is busy or being deleted")
+            except KeyError:
+                raise HTTPException(404, f"no workspace {value}")
+            if config.get_workspace(value) is None:
+                raise HTTPException(404, f"no workspace {value}")
+            _workspace_activity[identity] = _workspace_activity.get(identity, 0) + 1
+        try:
+            yield
+        finally:
+            with _workspace_activity_lock:
+                remaining = _workspace_activity[identity] - 1
+                if remaining:
+                    _workspace_activity[identity] = remaining
+                else:
+                    del _workspace_activity[identity]
 
 #: Methods that cannot make work, and so are not counted. Everything else is.
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -414,18 +449,29 @@ class SelectWorkspace:
         if not selected:
             query = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace"))
             selected = (query.get("workspace") or [config.DEFAULT_WORKSPACE_ID])[0]
+        # Deletion takes an exclusive lease in config.delete_workspace. Taking
+        # a shared request lease here would make it conflict with itself.
+        if scope.get("method") == "DELETE" and re.fullmatch(r"/api/workspaces/[^/]+", scope.get("path", "")):
+            with config.use_workspace(selected):
+                return await self.app(scope, receive, send)
         try:
-            known = config.get_workspace(selected)
+            # Acquire before validation so deletion cannot slip between the
+            # registry lookup and the first read or write of corpus files.
+            usage = _using_workspace(selected)
+            usage.__enter__()
+        except HTTPException as exc:
+            response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            return await response(scope, receive, send)
         except ValueError as exc:
             # The default tolerates a broken registry and keeps its corpus
             # accessible under the built-in display name.
             response = JSONResponse({"detail": _broken_registry(exc)}, status_code=500)
             return await response(scope, receive, send)
-        if known is None:
-            response = JSONResponse({"detail": f"no workspace {selected}"}, status_code=404)
-            return await response(scope, receive, send)
-        with config.use_workspace(selected):
-            return await self.app(scope, receive, send)
+        try:
+            with config.use_workspace(selected):
+                return await self.app(scope, receive, send)
+        finally:
+            usage.__exit__(None, None, None)
 
 
 app.add_middleware(CountArrivingRequests)
@@ -505,10 +551,16 @@ def _forget_import(job: dict) -> None:
 
 def _close_import_session() -> None:
     """Leave retry inputs and the latest notification available after relaunch."""
-    with _jobs_lock:
+    with _workspace_activity_lock, _jobs_lock:
         for job in _jobs.values():
-            if job.get("_import"):
-                job_journal.save(job)
+            if (job.get("_import")
+                    and _workspace_identity(job["workspace"]) not in _deleting_workspaces):
+                try:
+                    with config.use_workspace(job["workspace"]), _using_workspace(job["workspace"]):
+                        job_journal.save(job)
+                except HTTPException as exc:
+                    if exc.status_code not in (404, 409):
+                        raise
 
 
 def _recover_jobs() -> None:
@@ -517,20 +569,23 @@ def _recover_jobs() -> None:
         workspaces = config.list_workspaces()
     except ValueError:
         workspaces = [{"id": config.DEFAULT_WORKSPACE_ID}]
-    with _jobs_lock:
+    with _workspace_activity_lock, _jobs_lock:
         for workspace in workspaces:
             with config.use_workspace(workspace["id"]):
                 issues = []
                 try:
                     # Browsing a healthy, read-only library needs no lock file.
                     if any((config.data_dir() / '.jobs').glob('*.json')):
-                        with store.document_lock("job-recovery"):
+                        with _using_workspace(workspace["id"]), store.document_lock("job-recovery"):
                             for job in job_journal.recover(issues):
                                 if job["id"] not in _jobs:
                                     _jobs[job["id"]] = job
                                     _job_counter = max(_job_counter, job["id"])
                 except OSError as exc:
                     issues.append(f'Previous imports could not be recovered: {exc}. Their saved inputs were left in place.')
+                except HTTPException as exc:
+                    if exc.status_code not in (404, 409):
+                        raise
                 _job_recovery_issues[str(config.data_dir())] = issues
 
 
@@ -570,21 +625,43 @@ def _import_failed(job: dict, exc: Exception) -> None:
 
 
 def _prune_jobs() -> None:
-    removed = []
+    # Pruning visits notifications outside the calling worker's workspace.
+    # Finish those writes before deletion, and skip a corpus being removed.
+    with _workspace_activity_lock:
+        _prune_workspace_jobs()
+
+
+def _prune_workspace_jobs() -> None:
     with _jobs_lock:
         by_workspace: dict[str, list[dict]] = {}
         for job in _jobs.values():
             if job["state"] not in ("done", "error") or (job.get("interrupted") and job.get("retryable")):
                 continue
             workspace = job.get("workspace", config.DEFAULT_WORKSPACE_ID)
+            if _workspace_identity(workspace) in _deleting_workspaces:
+                continue
             by_workspace.setdefault(workspace, []).append(job)
-        for done in by_workspace.values():
-            for job in sorted(done, key=lambda item: item["id"])[:-40]:
-                _jobs.pop(job["id"], None)
-                removed.append(job)
-    for job in removed:
-        _forget_import(job)
-        job_journal.remove(job)
+    for workspace, done in by_workspace.items():
+        candidates = sorted(done, key=lambda item: item["id"])[:-40]
+        if not candidates:
+            continue
+        try:
+            with config.use_workspace(workspace), _using_workspace(workspace):
+                # A refused lease must leave notifications and retry inputs
+                # together, so a later pruning pass can actually clean them up.
+                removed = []
+                with _jobs_lock:
+                    for job in candidates:
+                        if (_jobs.get(job["id"]) is job
+                                and job["state"] in ("done", "error")
+                                and not (job.get("interrupted") and job.get("retryable"))):
+                            removed.append(_jobs.pop(job["id"]))
+                for job in removed:
+                    _forget_import(job)
+                    job_journal.remove(job)
+        except HTTPException as exc:
+            if exc.status_code not in (404, 409):
+                raise
 
 
 def _submit_job(function, job: dict, *args):
@@ -593,11 +670,24 @@ def _submit_job(function, job: dict, *args):
         # Queue submission is the acceptance point for both selections.
         _set(job, ai_provider=config.ai_provider())
         context = contextvars.copy_context()
+    workspace = job.get("workspace", config.workspace_id())
+    usage = _using_workspace(workspace) if workspace != config.DEFAULT_WORKSPACE_ID else None
+    if usage is not None:
+        usage.__enter__()
     try:
-        return _pool.submit(functools.partial(context.run, function), job, *args)
+        future = _pool.submit(functools.partial(context.run, function), job, *args)
     except Exception as exc:
-        _set(job, state="error", detail=str(exc), explanation="The operation could not start. Retry to try again.")
+        try:
+            _set(job, state="error", detail=str(exc), explanation="The operation could not start. Retry to try again.")
+        finally:
+            if usage is not None:
+                usage.__exit__(None, None, None)
         raise
+    # Hold the lease while queued and until the entire callable returns, even
+    # after its notification becomes terminal; cancellation releases it too.
+    if usage is not None:
+        future.add_done_callback(lambda _: usage.__exit__(None, None, None))
+    return future
 
 
 def _workspace_job(function):
@@ -608,6 +698,7 @@ def _workspace_job(function):
         with (
             config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)),
             config.use_ai_provider(job.get("ai_provider", config.ai_provider())),
+            _using_workspace(config.workspace_id()),
         ):
             return function(job, *args, **kwargs)
     return wrapped
@@ -1479,6 +1570,49 @@ def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict:
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return {"workspace": workspace, "workspaces": config.list_workspaces()}
+
+
+@app.delete("/api/workspaces/{workspace_id}")
+def delete_workspace(workspace_id: str) -> dict:
+    if workspace_id == config.DEFAULT_WORKSPACE_ID:
+        raise HTTPException(422, "The default workspace cannot be deleted")
+    identity = _workspace_identity(workspace_id)
+    with _workspace_activity_lock, _jobs_lock:
+        # Deletion requests do not take shared leases themselves. Every other
+        # request and any queued job must settle before taking the exclusive one.
+        if (identity in _deleting_workspaces
+                or _workspace_activity.get(identity, 0) > 0
+                or any(job.get("workspace") == workspace_id and job["state"] not in ("done", "error")
+                       for job in _jobs.values())):
+            raise HTTPException(409, "This workspace is busy. Wait for its imports and other activity to finish, then try again.")
+        _deleting_workspaces.add(identity)
+    try:
+        try:
+            cleanup_allowed = config.delete_workspace(workspace_id)
+        except KeyError:
+            raise HTTPException(404, f"no workspace {workspace_id}")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        except BlockingIOError:
+            raise HTTPException(409, "This workspace is busy in another server. Close that server or wait for its activity to finish, then try again.")
+        except OSError as exc:
+            raise HTTPException(503, "The workspace could not be deleted. Check that its data directory is writable.") from exc
+        with _jobs_lock:
+            for key in [key for key, job in _jobs.items() if job.get("workspace") == workspace_id]:
+                job = _jobs.pop(key)
+                try:
+                    job_journal.remove(job, keep_file=not cleanup_allowed)
+                except OSError:
+                    # Retirement is already committed. Cleanup must not turn
+                    # that success into a failure that strands the old UI.
+                    logger.exception("Could not remove journal for deleted workspace job %s", key)
+        with _state_cache_lock:
+            _state_cache.pop(workspace_id, None)
+        _job_recovery_issues.pop(str(config.base_data_dir() / "workspaces" / workspace_id), None)
+        return {"workspaces": config.list_workspaces()}
+    finally:
+        with _workspace_activity_lock:
+            _deleting_workspaces.discard(identity)
 
 
 def _settled(key: str | None, do_extract: bool) -> str | None:

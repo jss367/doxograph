@@ -1412,6 +1412,8 @@ function renderWorkspacePicker() {
   $('workspace').value = workspaceClient.workspaceId || 'default';
   const selected = currentWorkspace();
   $('btn-workspace-rename').disabled = !selected;
+  $('btn-workspace-delete').disabled = !selected || selected.id === 'default';
+  $('btn-workspace-delete').title = selected?.id === 'default' ? 'The default workspace cannot be deleted.' : '';
   document.title = selected ? `${selected.name} — Doxograph` : 'Doxograph';
   window.doxographWorkspaceId = workspaceClient.workspaceId || 'default';
 }
@@ -1460,6 +1462,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   },
   showCurrent: renderWorkspacePicker,
   canLeave() {
+    if (deletingWorkspace) return false;
     if (workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || V.noteSaving || V.researchSaving) {
       toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
       return false;
@@ -5181,6 +5184,42 @@ $('tags').addEventListener('click', (event) => {
 });
 
 $('workspace').addEventListener('change', (event) => switchWorkspace(event.target.value));
+
+let deletingWorkspace = false;
+$('btn-workspace-delete').addEventListener('click', async () => {
+  const workspace = currentWorkspace();
+  if (!workspace || workspace.id === 'default' || deletingWorkspace || workspaceController.pending) return;
+  const confirmed = await confirmDialog(`Delete “${workspace.name}”?`, {
+    note: 'This permanently deletes this workspace and all of its papers, PDFs, claims, notes, and exports, including unsaved edits. This cannot be undone. You will return to the default workspace.',
+    ok: 'Delete workspace',
+  });
+  if (!confirmed || workspace.id !== workspaceClient.workspaceId) return;
+  if (workspaceClient.pendingMutations) {
+    toast('Wait for the current change to finish before deleting this workspace.', { tone: 'warn' });
+    return;
+  }
+  deletingWorkspace = true;
+  // Keep editors and navigation still until the destructive request settles.
+  // On failure, the current view and all drafts remain available.
+  document.body.inert = true;
+  const notice = toast('Deleting workspace…', { timeout: 0 });
+  try {
+    await api(`/api/workspaces/${encodeURIComponent(workspace.id)}`, { method: 'DELETE' });
+    workspaceClient.select('default');
+    // A fresh page also retires autosave timers, held paper deletions, and
+    // feature editors whose data belonged to the removed corpus.
+    // Deletion already confirmed discarding these editors' unsaved changes.
+    window.addEventListener('beforeunload', event => event.stopImmediatePropagation(), { capture: true, once: true });
+    location.replace('/#ws=default');
+    location.reload();
+  } catch (error) {
+    toast(`Could not delete workspace: ${error.message}`, { tone: 'warn' });
+  } finally {
+    notice.close();
+    document.body.inert = false;
+    deletingWorkspace = false;
+  }
+});
 
 $('btn-workspace-rename').addEventListener('click', async () => {
   const workspace = currentWorkspace();

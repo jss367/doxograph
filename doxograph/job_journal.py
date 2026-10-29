@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 _paths: dict[int, Path] = {}
 _leases: dict[Path, contextlib.AbstractContextManager[None]] = {}
 _lease_guard = threading.Lock()
+_WINDOWS = os.name == 'nt'
 
 
 def _hold_owner_lease(folder: Path) -> None:
@@ -30,15 +31,37 @@ def _hold_owner_lease(folder: Path) -> None:
             _leases[path] = lease
 
 
+def _pid_alive(pid: int) -> bool:
+    if _WINDOWS:
+        import _winapi
+        fingerprint.snapshot()
+
+        try:
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+        except OSError as exc:
+            if exc.winerror == 87:  # ERROR_INVALID_PARAMETER: no such process.
+                return False
+            if exc.winerror == 5:  # ERROR_ACCESS_DENIED: conservatively live.
+                return True
+            raise
+        try:
+            return _winapi.WaitForSingleObject(handle, 0) != _winapi.WAIT_OBJECT_0
+        finally:
+            _winapi.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _owner_alive(data: dict, folder: Path) -> bool:
     if data['version'] == 1:
         # Journals written before instance leases cannot distinguish PID reuse.
-        # Keep conservative compatibility with a possibly live older server.
-        try:
-            os.kill(data['pid'], 0)
-        except ProcessLookupError:
-            return False
-        return True
+        # Query Windows handles instead of sending a console control signal.
+        return _pid_alive(data['pid'])
     owner = data.get('owner')
     if not isinstance(owner, str) or not re.fullmatch(r'[a-f0-9]{32}', owner):
         raise ValueError('invalid job owner instance')
@@ -52,6 +75,46 @@ def _owner_alive(data: dict, folder: Path) -> bool:
             return False
     except BlockingIOError:
         return True
+
+
+def check_workspace_owners(folder: Path) -> None:
+    """Refuse deletion while another live server owns journals in this corpus.
+
+    Its handles cannot be closed here, and on Windows they prevent unlinking.
+    This also protects workers running in an older server's lease protocol.
+    The caller holds exclusive workspace activity until deletion has finished.
+    """
+    with _lease_guard:
+        for path in (folder / '.jobs').glob('*.json'):
+            if path.is_symlink():
+                continue
+            try:
+                data = json.loads(path.read_text())
+            except (ValueError, UnicodeError):
+                continue  # Malformed notifications do not identify a live owner.
+            if (not isinstance(data, dict) or data.get('version') != 1
+                    or type(data.get('pid')) is not int or data['pid'] <= 0):
+                continue
+            try:
+                alive = _owner_alive(data, path.parent)
+            except PermissionError:
+                alive = True  # An inaccessible live process is not a dead owner.
+            if alive:
+                raise BlockingIOError('A legacy server still owns this workspace')
+        for path in (folder / '.jobs').glob('.owner-*.lock'):
+            if path in _leases:
+                continue
+            if path.is_symlink():
+                raise ValueError('Job ownership markers cannot be symbolic links')
+            with store._file_lock(path, blocking=False):
+                pass
+
+
+def release_workspace_owner(folder: Path) -> None:
+    """Close this process's handles after retirement and before corpus removal."""
+    with _lease_guard:
+        for path in [path for path in _leases if path.parent == folder / '.jobs']:
+            _leases.pop(path).__exit__(None, None, None)
 
 
 def save(job: dict) -> None:
@@ -72,9 +135,9 @@ def save(job: dict) -> None:
         'job': {k: v for k, v in job.items() if not k.startswith('_')}, 'source': source})
 
 
-def remove(job: dict) -> None:
+def remove(job: dict, *, keep_file: bool = False) -> None:
     path = _paths.pop(job['id'], None)
-    if path:
+    if path and not keep_file:
         path.unlink(missing_ok=True)
 
 
