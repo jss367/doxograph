@@ -247,7 +247,7 @@ def test_sidebar_labels_can_be_edited_without_opening_the_paper(engine):
                 # The ellipsis opens the same editor and preserves existing labels.
                 await target.locator(".pmenu").click()
                 await menu.get_by_role("button", name="Edit labels…").click()
-                await expect(page.locator("#ask-input")).to_have_value("open-source read-next")
+                await expect(page.locator("#ask-input")).to_have_value("open-source, read-next")
                 await _answer(page, "Cancel", "discard-me")
                 await expect(chip).to_be_visible()
                 assert store.load_paper("open2026model")["labels"] == ["open-source", "read-next"]
