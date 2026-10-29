@@ -227,6 +227,90 @@ def test_workspace_rename_persists_and_reaches_another_window_with_a_draft(named
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_workspace_delete_confirmation_and_return_to_default(engine):
+    from doxograph import config
+    from playwright.async_api import expect
+
+    _paper("keep", "Default paper")
+    workspace = config.create_workspace("Temporary research")
+    with config.use_workspace(workspace["id"]):
+        _paper("remove", "Temporary paper")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#ws={workspace['id']}")
+                await expect(page.locator("#workspace")).to_have_value(workspace["id"])
+                await page.locator('[data-act="edit"][data-claim="remove-c1"]').click()
+                draft = page.locator('form[data-form="remove-c1"] textarea[name="text"]')
+                await draft.fill("My unsaved draft")
+                await page.locator("#workspace-actions > summary").click()
+                await page.locator("#btn-workspace-delete").click()
+                await expect(page.locator("#ask-title")).to_have_text('Delete “Temporary research”?')
+                await expect(page.locator("#ask-note")).to_contain_text("This cannot be undone")
+                await _answer(page, "Cancel")
+                assert config.get_workspace(workspace["id"]) == workspace
+                assert await draft.input_value() == "My unsaved draft"
+
+                # A failed autosave leaves a native unload guard. The explicit
+                # deletion confirmation also covers discarding these notes.
+                await page.route("**/api/notebook/notes", lambda route: route.fulfill(
+                    status=503, content_type="application/json", json={"detail": "Autosave unavailable"}))
+                await page.locator("#workspace-notes").fill("Unsaved workspace notes")
+                await page.evaluate("WorkspaceNotes.flush()")
+                await page.locator("#workspace-actions > summary").click()
+                await page.locator("#btn-workspace-delete").click()
+                await _answer(page, "Delete workspace")
+                await expect(page.locator("#workspace")).to_have_value("default")
+                await expect(page).to_have_title("Default workspace — Doxograph")
+                await expect(page.locator('#papers [data-paper="keep"]').first).to_be_visible()
+                assert await page.locator(f'#workspace option[value="{workspace["id"]}"]').count() == 0
+                assert await page.evaluate("localStorage.getItem('doxograph-workspace')") == "default"
+                assert config.get_workspace(workspace["id"]) is None
+                await page.locator("#workspace-actions > summary").click()
+                await expect(page.locator("#btn-workspace-delete")).to_be_disabled()
+
+                # A bookmarked address to the deleted corpus also falls back.
+                await page.goto(f"{url}/#ws={workspace['id']}")
+                await expect(page.locator("#workspace")).to_have_value("default")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+def test_failed_workspace_delete_keeps_workspace_and_drafts():
+    from doxograph import config
+    from playwright.async_api import expect
+
+    workspace = config.create_workspace("Research")
+    with config.use_workspace(workspace["id"]):
+        _paper("mind", "Research paper")
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#ws={workspace['id']}")
+                await page.locator('[data-act="edit"][data-claim="mind-c1"]').click()
+                draft = page.locator('form[data-form="mind-c1"] textarea[name="text"]')
+                await draft.fill("Keep my draft")
+                await page.route(f"**/api/workspaces/{workspace['id']}", lambda route: route.fulfill(
+                    status=409, content_type="application/json", json={"detail": "An import is still running"}))
+                await page.locator("#workspace-actions > summary").click()
+                await page.locator("#btn-workspace-delete").click()
+                await _answer(page, "Delete workspace")
+                await expect(page.locator("#toasts")).to_contain_text("An import is still running")
+                await expect(page.locator("#workspace")).to_have_value(workspace["id"])
+                assert await draft.input_value() == "Keep my draft"
+                await draft.fill("Still editable")
+                assert config.get_workspace(workspace["id"]) == workspace
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
     async def scenario():
         async with browser_session("chromium") as browser:
@@ -512,7 +596,6 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
                 assert await page.locator("#workspace").input_value() == animal["id"]
                 assert "A consciousness paper" not in await papers.inner_text()
 
-                await page.locator("#workspace-actions > summary").click()
                 await page.locator("#btn-workspace-add").click()
                 await _answer(page, "OK", "Embodied cognition")
                 await page.locator("#workspace").select_option(label="Embodied cognition")

@@ -17,6 +17,7 @@
   <span class="workspace-control">
     <label for="workspace">Workspace</label>
     <select id="workspace" aria-label="Workspace"></select>
+    <button type="button" id="btn-workspace-add" aria-label="Create workspace" title="Create workspace"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14 M5 12h14"/></svg></button>
   </span>
   <div class="actions">
     <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide claims</button>
@@ -28,8 +29,8 @@
       <summary aria-label="More workspace actions" title="More workspace actions">•••</summary>
       <div class="action-popover">
         <p class="menu-label">Workspace</p>
-        <button type="button" id="btn-workspace-add">Create workspace</button>
         <button type="button" id="btn-workspace-rename" disabled>Rename workspace</button>
+        <button type="button" id="btn-workspace-delete" class="danger" disabled>Delete workspace</button>
         <hr>
         <button type="button" id="btn-bib">Export BibTeX</button>
         <button type="button" id="btn-workspace-archive">Download workspace archive</button>

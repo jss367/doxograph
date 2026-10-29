@@ -2,6 +2,8 @@
 
 import multiprocessing
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -107,6 +109,201 @@ def test_duplicate_workspace_names_receive_distinct_stable_ids():
 
     assert first["id"] == "consciousness"
     assert second["id"] == "consciousness-2"
+
+
+def test_delete_removes_only_selected_corpus_and_retires_its_id():
+    store.save_paper(store.new_paper("keep", title="Default paper"))
+    config.set_ai_enabled(False)
+    target = config.create_workspace("Research")
+    other = config.create_workspace("Other research")
+    with config.use_workspace(target["id"]):
+        store.save_paper(store.new_paper("remove", title="Deleted paper"))
+        store.pdf_path("remove").write_bytes(b"%PDF-1.4\n")
+        store.save_context("Private research notes")
+        folder = config.data_dir()
+        finished = server._new_job("Finished import")
+        server._set(finished, state="done")
+    with config.use_workspace(other["id"]):
+        store.save_paper(store.new_paper("other", title="Other paper"))
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    headers = {"X-Doxograph-Workspace": target["id"]}
+    assert client.get("/api/state", headers=headers).status_code == 200
+
+    response = client.delete(f"/api/workspaces/{target['id']}", headers=headers)
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["workspaces"]] == ["default", other["id"]]
+    assert not folder.exists()
+    assert not list(folder.parent.glob(".deleted-*"))
+    assert config.get_workspace(target["id"]) is None
+    assert finished["id"] not in server._jobs
+    assert target["id"] not in server._state_cache
+    assert client.get("/api/state", headers=headers).status_code == 404
+    assert client.post("/api/ingest", headers=headers, json={"text": "anything"}).status_code == 404
+    assert [p["key"] for p in store.all_papers()] == ["keep"]
+    assert not config.ai_enabled()
+    with config.use_workspace(other["id"]):
+        assert [p["key"] for p in store.all_papers()] == ["other"]
+    assert config.create_workspace("Research")["id"] == "research-2"
+    assert client.get("/api/state", headers=headers).status_code == 404
+
+
+def test_delete_rejects_default_and_missing_workspace():
+    store.save_paper(store.new_paper("keep", title="Default paper"))
+    config.rename_workspace("default", "My library")
+    before = config.workspaces_path().read_bytes()
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.delete("/api/workspaces/default").status_code == 422
+    assert client.delete("/api/workspaces/missing").status_code == 404
+    assert config.workspaces_path().read_bytes() == before
+    assert store.load_paper("keep")["title"] == "Default paper"
+
+
+def test_delete_rolls_back_corpus_if_registry_write_fails(monkeypatch):
+    target = config.create_workspace("Research")
+    with config.use_workspace(target["id"]):
+        store.save_paper(store.new_paper("keep", title="Keep this paper"))
+        path = store.paper_path("keep")
+        before = path.read_bytes()
+    registry = config.workspaces_path().read_bytes()
+
+    def fail(records):
+        raise OSError("Read-only registry")
+
+    monkeypatch.setattr(config, "_write_workspace_records", fail)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.delete(f"/api/workspaces/{target['id']}").status_code == 503
+    assert path.read_bytes() == before
+    assert config.workspaces_path().read_bytes() == registry
+    assert config.get_workspace(target["id"]) == target
+
+
+def test_delete_rejects_broken_registry_without_touching_data():
+    target = config.create_workspace("Research")
+    folder = config.base_data_dir() / "workspaces" / target["id"]
+    config.workspaces_path().write_text("{invalid json")
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.delete(f"/api/workspaces/{target['id']}").status_code == 422
+    assert folder.is_dir()
+    assert config.workspaces_path().read_text() == "{invalid json"
+
+
+@pytest.mark.parametrize("state", ["queued", "fetching", "reading"])
+def test_delete_waits_for_queued_and_running_jobs(state):
+    target = config.create_workspace("Research")
+    with config.use_workspace(target["id"]):
+        job = server._new_job("Active import", state=state)
+    try:
+        client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 409
+        assert config.get_workspace(target["id"]) == target
+        server._set(job, state="done")
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
+    finally:
+        server._jobs.pop(job["id"], None)
+
+
+def test_delete_waits_for_inflight_requests(monkeypatch):
+    target = config.create_workspace("Research")
+    held, release = threading.Event(), threading.Event()
+    original = server._build_state
+
+    def paused():
+        held.set()
+        assert release.wait(5)
+        return original()
+
+    monkeypatch.setattr(server, "_build_state", paused)
+    server._state_cache.pop(target["id"], None)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(client.get, "/api/state", headers={"X-Doxograph-Workspace": target["id"]})
+        try:
+            assert held.wait(5)
+            assert client.delete(f"/api/workspaces/{target['id']}").status_code == 409
+        finally:
+            release.set()
+        assert pending.result(timeout=5).status_code == 200
+    assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
+
+
+def test_new_requests_are_refused_while_deletion_is_in_progress(monkeypatch):
+    target = config.create_workspace("Research")
+    held, release = threading.Event(), threading.Event()
+    original = config.delete_workspace
+
+    def paused(value):
+        held.set()
+        assert release.wait(5)
+        return original(value)
+
+    monkeypatch.setattr(config, "delete_workspace", paused)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    headers = {"X-Doxograph-Workspace": target["id"]}
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(client.delete, f"/api/workspaces/{target['id']}")
+        try:
+            assert held.wait(5)
+            assert client.post("/api/ingest", headers=headers, json={"text": "anything"}).status_code == 409
+            assert client.delete(f"/api/workspaces/{target['id']}").status_code == 409
+            assert client.get("/api/state").status_code == 200
+        finally:
+            release.set()
+        assert pending.result(timeout=5).status_code == 200
+    assert client.get("/api/state", headers=headers).status_code == 404
+
+
+def test_delete_refuses_symbolic_link_to_another_corpus(tmp_path):
+    target = config.create_workspace("Research")
+    folder = config.base_data_dir() / "workspaces" / target["id"]
+    outside = tmp_path / "outside"
+    folder.rename(outside)
+    marker = outside / "keep.txt"
+    marker.write_text("Keep this data")
+    folder.symlink_to(outside, target_is_directory=True)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    assert client.delete(f"/api/workspaces/{target['id']}").status_code == 422
+    assert marker.read_text() == "Keep this data"
+    assert config.get_workspace(target["id"]) == target
+
+
+@pytest.mark.parametrize("value", ["", ".", "..", "../outside", "Research"])
+def test_delete_rejects_invalid_ids_without_removing_workspaces(value):
+    target = config.create_workspace("Research")
+    before = config.workspaces_path().read_bytes()
+    with pytest.raises(KeyError):
+        config.delete_workspace(value)
+    assert config.workspaces_path().read_bytes() == before
+    assert config.get_workspace(target["id"]) == target
+    assert (config.base_data_dir() / "workspaces" / target["id"]).is_dir()
+
+
+def test_delete_waits_until_worker_returns_even_after_terminal_state():
+    target = config.create_workspace("Research")
+    held, release = threading.Event(), threading.Event()
+
+    @server._workspace_job
+    def worker(job):
+        server._set(job, state="done")
+        held.set()
+        assert release.wait(5)
+        store.save_paper(store.new_paper("last-write", title="Final cleanup"))
+
+    with config.use_workspace(target["id"]):
+        job = server._new_job("Finishing import")
+    try:
+        client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+        with ThreadPoolExecutor(1) as pool:
+            pending = pool.submit(worker, job)
+            try:
+                assert held.wait(5)
+                assert client.delete(f"/api/workspaces/{target['id']}").status_code == 409
+            finally:
+                release.set()
+            pending.result(timeout=5)
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
+    finally:
+        server._jobs.pop(job["id"], None)
 
 
 @pytest.mark.parametrize("named", [False, True], ids=["default", "named"])

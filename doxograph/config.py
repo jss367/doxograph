@@ -6,12 +6,15 @@ import contextlib
 import contextvars
 import functools
 import json
+import logging
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
 import unicodedata
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -401,6 +404,8 @@ def list_workspaces() -> list[dict]:
     for item in saved:
         if not isinstance(item, dict):
             continue
+        if item.get("deleted"):
+            continue
         key = item.get("id")
         name = item.get("name")
         if not isinstance(key, str) or not isinstance(name, str) or key in seen:
@@ -484,7 +489,11 @@ def create_workspace(name: str) -> dict:
     clean = _clean_workspace_name(name)
     with _workspaces_lock, _workspace_file_lock():
         records = _read_workspace_records()
-        used = {item["id"] for item in list_workspaces()}
+        # Deleted ids stay retired: an old window or link must never address a
+        # different corpus created later with the same display name.
+        used = {item["id"] for item in records
+                if isinstance(item, dict) and isinstance(item.get("id"), str)}
+        used.add(DEFAULT_WORKSPACE_ID)
         base = _workspace_slug(clean)
         key = base
         suffix = 2
@@ -514,6 +523,44 @@ def create_workspace(name: str) -> dict:
     with use_workspace(key):
         ensure_dirs()
     return record
+
+
+def delete_workspace(value: str) -> None:
+    """Retire a named workspace and remove its corpus, preserving shared data."""
+    if value == DEFAULT_WORKSPACE_ID:
+        raise ValueError("The default workspace cannot be deleted")
+    if not value or value != _workspace_slug(value):
+        raise KeyError(value)
+    with _workspaces_lock, _workspace_file_lock():
+        records = _read_workspace_records()
+        if get_workspace(value) is None:
+            raise KeyError(value)
+        folder = base_data_dir() / "workspaces" / value
+        # Refuse links rather than following a hand-edited filesystem outside
+        # the corpus. Stage the directory so a failed registry write can roll
+        # back without losing any papers or notes.
+        if folder.is_symlink() or folder.parent.is_symlink():
+            raise ValueError("Workspace directories cannot be symbolic links")
+        staged = folder.with_name(f".deleted-{value}-{uuid.uuid4().hex}")
+        moved = folder.exists()
+        if moved:
+            folder.rename(staged)
+        try:
+            retired = [{"id": value, "deleted": True} if isinstance(item, dict) and item.get("id") == value
+                       else item for item in records]
+            _write_workspace_records(retired)
+        except BaseException:
+            if moved:
+                staged.rename(folder)
+            raise
+    if moved:
+        try:
+            shutil.rmtree(staged)
+        except OSError:
+            # The retirement already committed. Keep an inaccessible staged
+            # directory on cleanup failure rather than report a false failure
+            # or put a partially removed corpus back in the picker.
+            logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", staged)
 
 
 def papers_dir() -> Path:
