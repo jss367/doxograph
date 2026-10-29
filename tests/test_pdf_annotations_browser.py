@@ -16,6 +16,51 @@ from test_research_tools_browser import ready, select_first_line
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_explicit_zoom_survives_a_pending_fit_width_resize(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Zoomed annotations'))
+    store.pdf_path('paper').write_bytes(minimal_pdf('Recovery depends on conditions.'))
+    claim = store.add_claim('paper', {
+        'text': 'Saved annotation', 'quote': 'Recovery depends on conditions.', 'locator': 'p. 1',
+    })
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            await page.add_init_script("""(() => {
+              const schedule = window.setTimeout.bind(window);
+              window.setTimeout = (task, delay, ...args) => {
+                if (delay === 150 && typeof task === 'function' && String(task).includes("setZoom('fit')")) {
+                  window.pendingFitResize = () => task(...args);
+                  return schedule(() => {}, 60000);
+                }
+                return schedule(task, delay, ...args);
+              };
+            })();""")
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                source = page.locator(f'.claim-passage[data-claim="{claim["id"]}"]')
+                await source.wait_for(state='visible')
+                await page.wait_for_function('typeof window.pendingFitResize === "function"')
+                await page.locator('#reader-zoom').select_option('2')
+                await ready(page)
+                await source.wait_for(state='visible')
+                before = await source.bounding_box()
+                assert before is not None
+                await page.evaluate('window.pendingFitResize()')
+                await ready(page)
+                await source.wait_for(state='visible')
+                after = await source.bounding_box()
+                assert after is not None
+                assert abs(after['width'] - before['width']) < 1
+                assert await page.locator('#reader-zoom').input_value() == '2'
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_existing_claim_annotations_follow_the_pdf_and_saved_changes(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('paper', title='Reading notes on recovery'))
