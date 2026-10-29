@@ -300,6 +300,15 @@ The paper list scrolls within the library so a large collection does not push
 the other tools out of reach. **Add papers** starts collapsed when the workspace
 already has papers; open it or use **Jump to… → Add papers** to import more.
 
+**All papers** shows one card per paper with its title, authors, year, summary,
+topics, and reading status, including papers without extracted claims. Click a
+card to open the paper. Reading status comes from the reading queue: papers
+start **Unread**, then show **Queued**, **Reading**, or **Finished**. Search
+matches paper metadata, summaries, claims, and PDF text; matching passages stay
+under their paper. The sidebar's sort order also controls the cards.
+Choose **Extracted claims** to browse and review claims across papers, or
+**Papers** to return to the library. Saved searches remember this choice.
+
 If startup fails, the app distinguishes a connection failure from an interface
 failure and offers **Reload library**, with technical details available separately.
 Reloading fetches fresh interface files after an update.
@@ -327,7 +336,7 @@ reference that nothing identifies stays in the box and is named underneath it,
 so it is clear which line of a pasted list is the problem.
 
 The Tensions entry in the sidebar shows where papers disagree; `Escape`
-returns to the claims. The Map entry draws the papers as a graph: each
+returns to the library. The Map entry draws the papers as a graph: each
 paper is a circle sized by its claims and colored by its most frequent
 topic, papers whose claims share a topic are joined, a paper that cites
 another is joined to it by a blue arrow, disagreements are drawn

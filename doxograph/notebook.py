@@ -67,6 +67,7 @@ class Board(Model):
 class SavedSearch(Model):
     id: str
     name: str = Field(min_length=1, max_length=300)
+    view: Literal["library", "claims"] = "claims"
     # Store filter values, never executable query fragments or URLs.
     q: str = ""
     paper: str | None = None

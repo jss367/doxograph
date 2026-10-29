@@ -288,7 +288,7 @@ def _pattern(term: str) -> re.Pattern:
     return re.compile(rf"(?<!{_IN_WORD})({folded}{_IN_WORD}*)", re.UNICODE)
 
 
-def search_papers(query: str, limit: int = 20) -> list[dict]:
+def search_papers(query: str, limit: int = 20, offset: int = 0) -> list[dict]:
     """The papers whose text holds every term, best first.
 
     Each hit carries where the terms are: a couple of passages with the page
@@ -348,7 +348,7 @@ def search_papers(query: str, limit: int = 20) -> list[dict]:
             "occurrences": sum(counts[key]),
             "passages": _passages(paper_text(key) or "", patterns),
         }
-        for score, key in ranked[:limit]
+        for score, key in ranked[max(0, offset):max(0, offset) + limit]
     ]
 
 

@@ -101,6 +101,7 @@ def test_restore_refuses_unsaved_editor_without_losing_the_draft(engine, editor)
             with _server() as url:
                 await page.goto(url)
                 if editor == 'claim':
+                    await page.locator('#btn-claims-view').click()
                     await page.locator('[data-act="edit"]').first.click()
                     field = page.locator('form[data-form] [name="text"]')
                 else:

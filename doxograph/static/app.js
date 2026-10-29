@@ -31,8 +31,8 @@ const NEW_CLAIM_ID = '__new__';
 // list. Without it a re-render redraws from the unchanged server row and
 // silently discards the edit. A map rather than one slot, so opening a second
 // claim's editor does not throw away the first one's draft.
-// view is 'claims', 'tensions', 'agreements', 'research', or 'graph'. Only
-// the first has a claim editor, so switching away closes any open one (keeping
+// view is 'library', 'claims', 'tensions', 'agreements', 'research', or 'graph'. Only
+// claims has a claim editor, so switching away closes any open one (keeping
 // its draft) and lets the background poll run. graph holds the map's display
 // choices, reset with the rest when the workspace changes; the layout itself
 // is in GRAPH below.
@@ -61,7 +61,7 @@ const NEW_CLAIM_ID = '__new__';
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
 const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
-            drafts: {}, error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+            drafts: {}, error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
             graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
@@ -131,7 +131,7 @@ function setReadingFilters(open) {
 
 function focusClaimSearch() {
   revealSidebar($('papers'));
-  if (V.view !== 'claims') { showView('claims'); syncHash(true); renderAll(); }
+  if (!['library', 'claims'].includes(V.view)) { showView('library'); syncHash(true); renderAll(); }
   if (readingPaper()) setReadingFilters(true);
   $('q').focus();
   $('q').select();
@@ -1018,7 +1018,7 @@ window.addEventListener('pagehide', () => {
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['claims', 'tensions', 'agreements', 'research', 'graph'];
+const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -1027,7 +1027,7 @@ function hashParams() {
 function currentHash() {
   const params = new URLSearchParams();
   if (workspaceClient.workspaceId && workspaceClient.workspaceId !== 'default') params.set('ws', workspaceClient.workspaceId);
-  if (V.view !== 'claims') params.set('view', V.view);
+  params.set('view', V.view);
   if (V.paper) params.set('paper', V.paper);
   if (V.tag) params.set('tag', V.tag);
   if (V.label) params.set('label', V.label);
@@ -1209,9 +1209,11 @@ function dropMissingFilters() {
 // than no filter at all.
 function applyHash() {
   const params = hashParams();
-  const view = params.get('view') || 'claims';
-  V.view = HASH_VIEWS.includes(view) ? view : 'claims';
-  V.paper = params.get('paper') || null;
+  // Preserve older links into claim review while making the library home.
+  const legacyClaims = ['paper', 'sel', 'tag', 'q', 'label', 'kind', 'unreviewed', 'unverified', 'group'].some(key => params.has(key));
+  const view = params.get('view') || (legacyClaims ? 'claims' : 'library');
+  V.view = HASH_VIEWS.includes(view) ? view : 'library';
+  V.paper = V.view === 'library' ? null : params.get('paper') || null;
   V.tag = params.get('tag') || null;
   V.label = params.get('label') || null;
   V.q = params.get('q') || '';
@@ -1422,7 +1424,7 @@ function resetWorkspaceView() {
   Object.assign(V, {
     paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
-    error: null, view: 'claims', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+    error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
     graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
@@ -1653,35 +1655,35 @@ function queryPatterns(query) {
 function haystack(row) {
   return [row.text, row.evidence, row.quote, row.note, row.paper, row.paper_title,
           row.paper_year, (row.paper_authors || []).join(' '),
-          paperNoteFor(row.paper), (row.tags || []).join(' '),
+          paperSearchTextFor(row.paper), (row.tags || []).join(' '),
           (row.paper_labels || []).join(' ')]
     .join(' ').toLowerCase();
 }
 
-// The paper's note, for its claims' haystacks: a query matching only the note
-// would otherwise list the paper and then show it as empty, which is the one
+// Paper summaries and notes, for their claims' haystacks: a query matching only
+// those fields must not list the paper and then show it as empty, which is the one
 // thing `haystack` carries the paper's fields to prevent.
 //
 // Cached against the array `S.papers` currently is. That array is replaced
 // wholesale whenever the corpus is read and never edited in place, so the
 // identity check rebuilds the map exactly when it has to.
-let paperNotes = { from: null, byKey: new Map() };
+let paperSearchText = { from: null, byKey: new Map() };
 
-function paperNoteFor(key) {
-  if (paperNotes.from !== S.papers) {
-    paperNotes = {
+function paperSearchTextFor(key) {
+  if (paperSearchText.from !== S.papers) {
+    paperSearchText = {
       from: S.papers,
-      byKey: new Map((S.papers || []).map((p) => [p.key, p.notes || ''])),
+      byKey: new Map((S.papers || []).map((p) => [p.key, [p.summary, p.notes].join(' ')])),
     };
   }
-  return paperNotes.byKey.get(key) || '';
+  return paperSearchText.byKey.get(key) || '';
 }
 
 // A paper's own text, for the query. `haystack` covers a paper through its
 // claims; this covers one that has none yet, which is exactly the paper a
 // title search is most likely to be looking for.
 function paperHaystack(paper) {
-  return [paper.title, paper.key, (paper.authors || []).join(' '), paper.year,
+  return [paper.title, paper.key, (paper.authors || []).join(' '), paper.year, paper.summary,
           paper.notes, (paper.labels || []).join(' ')]
     .join(' ').toLowerCase();
 }
@@ -1735,6 +1737,7 @@ function rerunTextSearch() {
 async function runTextSearch(query, quiet = false) {
   const seq = ++textSearchSeq;
   const workspace = workspaceClient.workspaceId;
+  const library = V.view === 'library';
   if (!quiet) {
     captureOpenEditor();   // the redraw rebuilds any open form from state
     V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
@@ -1742,8 +1745,18 @@ async function runTextSearch(query, quiet = false) {
   }
   let next;
   try {
-    const found = await api(`/api/search?q=${encodeURIComponent(query)}`);
-    next = { q: query, loading: false, papers: found.papers || [], terms: found.terms || [], error: null };
+    const papers = new Map();
+    let offset = 0, found;
+    do {
+      found = await api(`/api/search?q=${encodeURIComponent(query)}&limit=${library ? 100 : 20}&offset=${offset}`);
+      if (seq !== textSearchSeq || workspace !== workspaceClient.workspaceId) return;
+      for (const hit of found.papers || []) papers.set(hit.key, hit);
+      if (found.next_offset != null) {
+        if (!Number.isInteger(found.next_offset) || found.next_offset <= offset) throw new Error('Search returned an invalid next page.');
+        offset = found.next_offset;
+      }
+    } while (library && found.next_offset != null);
+    next = { q: query, loading: false, papers: [...papers.values()], terms: found.terms || [], complete: found.next_offset == null, error: null };
   } catch (error) {
     next = { q: query, loading: false, papers: [], terms: [], error: error.message };
   }
@@ -1761,6 +1774,7 @@ async function runTextSearch(query, quiet = false) {
 // which is how typing into the replacement gets thrown away when the save
 // lands. `render` stands off the research view for the same reason.
 function drawSearchProgress() {
+  if (V.view === 'library') renderPapers();
   if (V.view !== 'research') renderContent();
 }
 
@@ -1775,7 +1789,78 @@ function matchingPapers() {
   const owners = new Set(S.claims
     .filter((row) => matches(haystack(row)))
     .map((row) => row.paper));
+  if (V.view === 'library' && V.textSearch?.q === V.q.trim()) {
+    for (const hit of V.textSearch.papers || []) owners.add(hit.key);
+  }
   return within.filter((p) => owners.has(p.key) || matches(paperHaystack(p)));
+}
+
+// A paper appears once, even when several of its claims match. Papers without
+// extracted claims still belong in the library and can match their metadata.
+function visiblePapers() {
+  const claimFilters = V.tag || V.kind || V.unreviewed || V.unverified;
+  const owners = claimFilters ? new Set(S.claims.filter(row =>
+    (!V.tag || (row.tags || []).includes(V.tag))
+    && (!V.kind || row.kind === V.kind)
+    && (!V.unreviewed || !row.reviewed)
+    && (!V.unverified || row.quote_verified === false)).map(row => row.paper)) : null;
+  const matched = new Set(matchingPapers().map(p => p.key));
+  return sortedPapers(S.papers.filter(p =>
+    (!V.label || (p.labels || []).includes(V.label))
+    && (!owners || owners.has(p.key))
+    && matched.has(p.key)), V.paperSort);
+}
+
+let libraryHTML = null;
+function renderLibrary() {
+  const papers = visiblePapers();
+  const topics = new Map();
+  for (const claim of S.claims) {
+    if (!topics.has(claim.paper)) topics.set(claim.paper, new Set());
+    for (const tag of claim.tags || []) topics.get(claim.paper).add(tag);
+  }
+  const progress = new Map((S.notebook?.reading || []).map(entry => [entry.paper, entry]));
+  const statuses = {queued: 'Queued', reading: 'Reading', finished: 'Finished'};
+  const found = V.textSearch?.q === V.q.trim() ? V.textSearch : null;
+  const hits = new Map((found?.papers || []).map(hit => [hit.key, hit]));
+  const cards = papers.map(p => {
+    const entry = progress.get(p.key);
+    const status = statuses[entry?.status] || 'Unread';
+    const tags = [...(topics.get(p.key) || [])].sort((a, b) => a.localeCompare(b));
+    const params = new URLSearchParams({ws: workspaceClient.workspaceId, paper: p.key});
+    const passages = (hits.get(p.key)?.passages || []).slice(0, 2);
+    return `<article class="library-paper" data-library-paper="${esc(p.key)}">
+      <div class="library-paper-heading">
+        ${ResearchTools.paperCheckbox(p)}
+        <h3><a class="library-paper-link" href="#${esc(params.toString())}" data-act="library-open-paper" data-paper="${esc(p.key)}">${esc(p.title || p.key)}</a></h3>
+        <span class="reading-status ${esc(entry?.status || 'unread')}">${status}</span>
+      </div>
+      <p class="library-paper-meta">${esc((p.authors || []).join(', ') || 'Authors unknown')} · ${esc(p.year || 'Year unknown')}${entry?.status === 'reading' && entry.page ? ` · Page ${esc(entry.page)}` : ''}</p>
+      <p class="library-paper-summary${p.summary ? '' : ' hint'}">${esc(p.summary || 'No summary yet.')}</p>
+      <div class="library-paper-topics" aria-label="Topics">${tags.length
+        ? tags.map(tag => `<button type="button" class="tag" data-tag="${esc(tag)}">${esc(tag)}</button>`).join(' ')
+        : '<span class="hint">No topics yet</span>'}</div>
+      ${passages.map(passage => `<p class="library-paper-passage"><span class="hint">PDF · p. ${esc(passage.page)}</span> …${mark(passage)}…</p>`).join('')}
+    </article>`;
+  }).join('');
+  const searchStatus = !found ? '' : found.loading ? 'Searching paper text…'
+    : found.error ? `Could not search paper text: ${found.error}` : '';
+  const html = `<section class="paper-library" aria-labelledby="paper-library-title">
+    <div class="paper-library-heading"><h2 id="paper-library-title">${V.tag ? esc(V.tag) : 'All papers'}</h2>
+      <span class="hint">${papers.length} ${papers.length === 1 ? 'paper' : 'papers'}${papers.length < S.papers.length ? ` of ${S.papers.length}` : ''}</span></div>
+    ${V.error ? `<p class="warn">${esc(V.error)}</p>` : ''}
+    ${searchStatus ? `<p class="hint" role="status">${esc(searchStatus)}</p>` : ''}
+    ${cards || `<p class="empty">${S.papers.length ? 'No papers match these filters.' : 'Your library is empty. Paste an arXiv ID or drop a PDF to add your first paper.'}</p>`}
+  </section>`;
+  // Keep focused links and checkboxes intact across unchanged background polls.
+  if (libraryHTML === html && $('content').querySelector('.paper-library')) return;
+  libraryHTML = html;
+  const focused = document.activeElement;
+  const key = focused.closest('[data-library-paper]')?.dataset.libraryPaper;
+  const selector = focused.matches('[data-select-paper]') ? '[data-select-paper]'
+    : focused.matches('[data-tag]') ? `[data-tag="${CSS.escape(focused.dataset.tag)}"]` : '.library-paper-link';
+  $('content').innerHTML = html;
+  if (key) $('content').querySelector(`[data-library-paper="${CSS.escape(key)}"] ${selector}`)?.focus({preventScroll: true});
 }
 
 // A destination the label filter excludes arrives empty: a paper's header
@@ -1963,8 +2048,8 @@ function renderPapers() {
   // with no explanation reads as papers having gone missing.
   const meta = matched.length < S.papers.length
     ? `${matched.length} of ${S.papers.length} match`
-    : `${S.claims.length} claims`;
-  const all = `<li class="${claims && V.paper === null ? 'active' : ''}" data-paper="">
+    : `${S.papers.length} ${S.papers.length === 1 ? 'paper' : 'papers'}`;
+  const all = `<li class="${(claims || V.view === 'library') && V.paper === null ? 'active' : ''}" data-paper="">
     <span class="pt">All papers</span>
     <span class="pm">${meta}</span></li>`;
   $('papers').innerHTML = all + sortedPapers(shown, V.paperSort).map((p) => `
@@ -2895,7 +2980,7 @@ $('panes').addEventListener('submit', async (event) => {
 });
 
 function showView(view) {
-  const destination = {claims: 'papers', graph: 'graph-nav', research: 'research-nav',
+  const destination = {library: 'papers', claims: 'papers', graph: 'graph-nav', research: 'research-nav',
     tensions: 'tensions-nav', agreements: 'agreements-nav'}[view];
   if (destination) revealSidebar($(destination));
   if (view === V.view) return;
@@ -2908,7 +2993,14 @@ function showView(view) {
   parkSynthEditor();
   parkNoteEditor();
   V.error = null;
+  if (view === 'library') {
+    parkNewClaimForNavigation(null);
+    V.paper = null;
+    V.selectedId = null;
+  }
   V.view = view;
+  // A query started in claim review may only have fetched its first PDF page.
+  if (view === 'library' && V.textSearch && !V.textSearch.complete) rerunTextSearch();
   if (view !== 'tensions') V.tensionFocus = null;
   if (view !== 'agreements') V.agreementFocus = null;
 }
@@ -3109,9 +3201,16 @@ function restoreNoteCursor(cursor) {
 function drawContent() {
   const reading = readingPaper();
   layoutPanes(reading);
+  const library = V.view === 'library';
+  document.body.classList.toggle('paper-library-view', library);
+  $('library-view-switch').hidden = Boolean(V.paper) || !['library', 'claims'].includes(V.view);
+  $('btn-library-view').setAttribute('aria-pressed', String(library));
+  $('btn-claims-view').setAttribute('aria-pressed', String(V.view === 'claims'));
+  $('q').placeholder = library ? 'Search papers…' : 'Search claims, quotes, and papers…';
   if (V.view !== 'claims') $('paperhead').innerHTML = '';
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
+  if (library) { renderLibrary(); return; }
   if (V.view === 'tensions') { renderTensions(); return; }
   if (V.view === 'research') { renderResearch(); return; }
   if (V.view === 'agreements') { renderAgreements(); return; }
@@ -3861,7 +3960,7 @@ async function saveClaim(wrap, patch) {
     // may have moved to another paper or filter while the request ran, and an
     // editor the list cannot render is an editor nobody can reach — it would
     // also stop the background poll, which stands down whenever one is open.
-    const onScreen = visibleClaims().some((row) => row.id === id);
+    const onScreen = V.view === 'claims' && visibleClaims().some((row) => row.id === id);
     if (onScreen && (!V.editing || V.editing === id)) V.editing = id;
     V.error = onScreen
       ? `Could not save the claim: ${error.message}`
@@ -4147,6 +4246,20 @@ $('panes').addEventListener('click', async (event) => {
       await deleteLater('claim', claim,
                         `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
                         'the claim', { paper });
+      return;
+    }
+    if (act === 'library-open-paper') {
+      // Preserve the anchor's native open-in-new-tab behavior.
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      V.pdfHidden = false;
+      storePdfHidden();
+      V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
+      $('q').value = ''; $('kind').value = '';
+      $('only-unreviewed').checked = false; $('only-unverified').checked = false;
+      dropTextSearch();
+      openPaper(paper);
+      $('main').scrollTop = 0;
       return;
     }
     if (act === 'open-paper') {
@@ -4500,11 +4613,12 @@ $('papers').addEventListener('click', (event) => {
   const li = event.target.closest('[data-paper]');
   if (!li) return;
   const next = li.dataset.paper || null;
+  const view = next ? 'claims' : 'library';
   // Clicking the paper already selected is not navigation. It used to run the
   // whole abandon path anyway, which threw away a new claim being written.
   // From the tensions view it is navigation: back to that paper's claims.
-  if (next === V.paper && V.view === 'claims') return;
-  if (next === V.paper) { showView('claims'); syncHash(true); renderAll(); return; }
+  if (next === V.paper && V.view === view) return;
+  if (next === V.paper) { showView(view); syncHash(true); renderAll(); return; }
   // Keep an existing claim's edits, but still abandon a new unsaved claim:
   // that one was never persisted and belongs to the paper being left. A
   // synthesis being edited is parked too: `render` skips the list while one
@@ -4515,7 +4629,7 @@ $('papers').addEventListener('click', (event) => {
   // The note editor belongs to the paper being left, and `render` below skips
   // the list while one is open, so it would never be drawn away.
   parkNoteEditor();
-  showView('claims');
+  showView(view);
   V.paper = next;
   V.selectedId = null;
   V.editing = null;
@@ -5363,11 +5477,21 @@ $('paper-sort').addEventListener('change', (e) => {
   V.paperSort = PAPER_SORTS.includes(e.target.value) ? e.target.value : PAPER_SORTS[0];
   try { localStorage.setItem(PAPER_SORT_KEY, V.paperSort); } catch (error) { /* preference remains for this page */ }
   renderPapers();
+  if (V.view === 'library') renderContent();
 });
 $('paper-sort').value = V.paperSort;
 $('only-unreviewed').addEventListener('change', (e) => { captureOpenEditor(); V.unreviewed = e.target.checked; renderContent(); });
 $('only-unverified').addEventListener('change', (e) => { captureOpenEditor(); V.unverified = e.target.checked; renderContent(); });
 $('group-by-tag').addEventListener('change', (e) => { captureOpenEditor(); V.group = e.target.checked; renderContent(); });
+
+for (const [id, view] of [['btn-library-view', 'library'], ['btn-claims-view', 'claims']]) {
+  $(id).addEventListener('click', () => {
+    showView(view);
+    V.selectedId = null;
+    syncHash(true);
+    renderAll();
+  });
+}
 
 // --- keyboard -------------------------------------------------------------
 
@@ -5420,7 +5544,7 @@ const CommandPalette = (() => {
     parkNewClaimForNavigation(paper);
     parkSynthEditor();
     parkNoteEditor();
-    showView('claims');
+    showView(paper || tag ? 'claims' : 'library');
     Object.assign(V, {paper, tag, label: null, q: '', kind: '', unreviewed: false,
       unverified: false, editing: null, selectedId: null});
     $('q').value = ''; $('kind').value = '';
@@ -5663,7 +5787,7 @@ document.addEventListener('keydown', async (event) => {
     return;
   }
   if (V.view !== 'claims') {
-    if (event.key === 'Escape') { showView('claims'); syncHash(true); renderAll(); }
+    if (event.key === 'Escape' && V.view !== 'library') { showView('library'); syncHash(true); renderAll(); }
     return;
   }
   const rows = visibleClaims();

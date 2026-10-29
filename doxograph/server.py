@@ -1867,18 +1867,21 @@ def citations() -> dict:
 
 
 @app.get("/api/search")
-def search_text(q: str = "", limit: int = 20) -> dict:
+def search_text(q: str = "", limit: int = 20, offset: int = 0) -> dict:
     """The papers whose own text holds every word of the query.
 
     The claims are searched in the page, which needs no server at all. This is
     the other half: a word in a paper that no claim mentions, and a paper
     nothing has been extracted from yet.
     """
-    hits = search.search_papers(q, limit=max(1, min(limit, 100)))
+    page_size = max(1, min(limit, 100))
+    start = max(0, offset)
+    hits = search.search_papers(q, limit=page_size + 1, offset=start)
     known = {paper["key"]: paper for paper in store.all_papers()}
     return {
         "q": q,
         "terms": search.terms(q),
+        "next_offset": start + page_size if len(hits) > page_size else None,
         "papers": [
             {
                 **hit,
@@ -1886,7 +1889,7 @@ def search_text(q: str = "", limit: int = 20) -> dict:
                 "authors": known[hit["key"]].get("authors") or [],
                 "year": known[hit["key"]].get("year"),
             }
-            for hit in hits if hit["key"] in known
+            for hit in hits[:page_size] if hit["key"] in known
         ],
     }
 

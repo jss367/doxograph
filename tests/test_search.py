@@ -93,6 +93,24 @@ def test_the_search_route_ranks_papers_and_names_them():
         assert client.get("/api/search", params={"q": ""}).json()["papers"] == []
 
 
+def test_search_pages_keep_all_matches_beyond_the_response_limit():
+    for index in range(105):
+        key = f"study-{index:03d}"
+        store.save_paper(store.new_paper(key, title=f"Study {index}"))
+        store.text_path(key).write_text("A strawberry passage.", encoding="utf-8")
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        default = client.get("/api/search", params={"q": "strawberry"}).json()
+        assert len(default["papers"]) == 20
+        assert default["next_offset"] == 20
+        first = client.get("/api/search", params={"q": "strawberry", "limit": 1000}).json()
+        assert len(first["papers"]) == 100
+        assert first["next_offset"] == 100
+        last = client.get("/api/search", params={"q": "strawberry", "limit": 100, "offset": first["next_offset"]}).json()
+        assert len(last["papers"]) == 5
+        assert last["next_offset"] is None
+        assert len({hit["key"] for hit in first["papers"] + last["papers"]}) == 105
+
+
 def test_the_search_command_prints_the_passages(capsys):
     a_corpus()
     assert __main__.main(["search", "sandbagging"]) == 0

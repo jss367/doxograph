@@ -56,7 +56,7 @@ def test_an_editor_keeps_its_draft_when_a_topic_was_renamed(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('[data-act="edit"][data-claim="paper-c1"]').click()
                 form = page.locator('form[data-form="paper-c1"]')
                 await form.locator('[name="text"]').fill("My unsaved wording")
