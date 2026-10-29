@@ -31,10 +31,14 @@ def test_notebook_workspace_isolation_and_conflict(client):
     data['boards'] = [{'id': 'board', 'title': 'A research question', 'entries': [
         {'id': 'heading', 'kind': 'heading', 'text': 'Evidence'},
         {'id': 'claim', 'kind': 'claim', 'reference': ref, 'text': 'My interpretation'}]}]
-    data['searches'] = [{'id': 'search', 'name': 'Unreviewed evidence', 'unreviewed': True}]
+    data['searches'] = [
+        {'id': 'search', 'name': 'Unreviewed evidence', 'unreviewed': True},
+        {'id': 'papers', 'name': 'Papers about oversight', 'view': 'library', 'q': 'oversight'},
+    ]
     data['reading'] = [{'paper': 'one', 'status': 'reading', 'page': 3, 'bookmarks': [3, 1, 3]}]
     response = client.put('/api/notebook', json=data)
     assert response.status_code == 200
+    assert [search['view'] for search in response.json()['searches']] == ['claims', 'library']
     assert response.json()['reading'][0]['bookmarks'] == [1, 3]
     assert client.put('/api/notebook', json=data).status_code == 409
     workspace = config.create_workspace('Other research')

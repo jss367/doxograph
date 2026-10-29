@@ -44,7 +44,7 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
             page.on('request', lambda request: external.append(request.url)
                     if not request.url.startswith(('http://127.0.0.1:', 'blob:')) else None)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tags [data-tag="recovery"]').click()
                 await page.locator("#claim-filter-options > summary").click()
                 await page.locator('#only-unreviewed').check()
@@ -121,7 +121,7 @@ def test_focused_review_updates_when_the_pdf_arrives_without_a_claim_change(engi
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#content .claim').wait_for()
                 await page.locator('#btn-focus-review').click()
                 dialog = page.locator('#focused-review')
@@ -181,7 +181,7 @@ def test_focused_review_ignores_late_passages_and_failed_review_stays_put(engine
                     await route.fulfill(response=response)
 
                 await page.route(f'**/api/papers/a/claims/{first["id"]}/quote-context', delay)
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'#content .claim[data-claim="{first["id"]}"]').click()
                 await page.locator('#btn-focus-review').click()
                 await asyncio.wait_for(started.wait(), timeout=10)
@@ -235,8 +235,9 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#workspace').select_option(other['id'])
+                await page.locator('#btn-claims-view').click()
                 await expect(page.locator('#content')).to_contain_text('A claim to edit.')
                 await page.locator('#btn-focus-review').click()
                 dialog = page.locator('#focused-review')
@@ -293,6 +294,8 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
                 await page.locator('#btn-focus-review').click()
                 await dialog.get_by_role('button', name='Edit claim', exact=True).click()
                 await dialog.get_by_label('Claim', exact=True).fill('A draft belonging to the other workspace.')
+                await page.go_back()
+                await page.wait_for_function("V.view === 'library'")
                 await page.go_back()
                 await _answer(page, 'Discard and switch')
                 await expect(page.locator('#workspace')).to_have_value('default')

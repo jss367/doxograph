@@ -154,7 +154,7 @@ def test_answering_one_dialog_keeps_the_next_question_open(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
                 await page.evaluate("""() => {
                     window.answers = [];
@@ -191,7 +191,7 @@ def test_workspace_rename_persists_and_reaches_another_window_with_a_draft(named
             page = await browser.new_page()
             observer = await browser.new_page()
             with _server() as url:
-                address = f"{url}/#ws={workspace['id']}"
+                address = f"{url}/#view=claims&ws={workspace['id']}"
                 await page.goto(address)
                 await observer.goto(address)
                 await observer.locator('[data-act="edit"][data-claim="mind-c1"]').click()
@@ -238,7 +238,7 @@ def test_failed_job_can_be_dismissed_and_stays_gone_after_reload():
                     files={"files": ("broken.pdf", b"not a PDF", "application/pdf")},
                 )
                 assert response.status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#jobs .job.error").wait_for()
                 assert await page.get_by_role("button", name="Retry", exact=True).count() == 0
                 dismiss = page.get_by_role("button", name="Dismiss notification for broken.pdf")
@@ -299,7 +299,7 @@ def test_failed_import_can_be_retried_and_opened_after_success():
                     "extract": False,
                 })
                 assert response.status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 failed = page.locator("#jobs .job.error")
                 await failed.wait_for()
                 assert "PDF is unavailable" in await failed.inner_text()
@@ -365,7 +365,7 @@ def test_proposed_topic_cache_is_isolated_between_workspaces():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('.proposed .pn', has_text="consciousness").wait_for()
 
@@ -401,7 +401,7 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
 
             await page.route("**/api/papers/shared", delay_delete)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.get_by_role("button", name="Remove", exact=True).click()
                 await _answer(page, "Remove")
@@ -415,7 +415,7 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
                 release_delete.set()
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
                 await page.locator("#workspace").select_option(label="Animal locomotion")
-                await page.get_by_text("Animal paper", exact=True).wait_for()
+                await page.locator("#papers").get_by_text("Animal paper", exact=True).wait_for()
 
     run_browser(scenario())
 
@@ -462,7 +462,7 @@ def test_a_second_workspace_selection_waits_for_the_one_already_running():
             await page.route("**/api/papers/*/claims/*", arm_on_delete)
             await page.route("**/api/state", hold_read)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="delete").click()
@@ -478,7 +478,7 @@ def test_a_second_workspace_selection_waits_for_the_one_already_running():
                 await page.locator("#workspace").select_option(label="Embodied cognition")
                 release_read.set()
 
-                await page.get_by_text("An embodied cognition paper", exact=True).wait_for()
+                await page.locator("#papers").get_by_text("An embodied cognition paper", exact=True).wait_for()
                 assert await page.locator("#workspace").input_value() == embodied["id"]
                 assert "An animal locomotion paper" not in await page.locator("#papers").inner_text()
 
@@ -498,17 +498,17 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 papers = page.locator("#papers")
                 assert "A consciousness paper" in await papers.inner_text()
                 assert "An animal locomotion paper" not in await papers.inner_text()
 
                 await page.locator("#workspace").select_option(label="Animal locomotion")
-                await page.get_by_text("An animal locomotion paper", exact=True).wait_for()
+                await page.locator("#papers").get_by_text("An animal locomotion paper", exact=True).wait_for()
                 assert "A consciousness paper" not in await papers.inner_text()
 
                 await page.reload()
-                await page.get_by_text("An animal locomotion paper", exact=True).wait_for()
+                await page.locator("#papers").get_by_text("An animal locomotion paper", exact=True).wait_for()
                 assert await page.locator("#workspace").input_value() == animal["id"]
                 assert "A consciousness paper" not in await papers.inner_text()
 
@@ -516,7 +516,7 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
                 await page.locator("#btn-workspace-add").click()
                 await _answer(page, "OK", "Embodied cognition")
                 await page.locator("#workspace").select_option(label="Embodied cognition")
-                await page.get_by_text("Nothing here yet", exact=False).wait_for()
+                await page.get_by_text("Your library is empty", exact=False).wait_for()
                 assert "An animal locomotion paper" not in await papers.inner_text()
 
     run_browser(scenario())
@@ -542,7 +542,7 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
 
             await page.route("**/api/papers/paper-a/claims", fail_after_navigation)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.get_by_role("button", name="Add claim by hand").click()
                 await page.locator('form[data-form="__new__"] textarea[name="text"]').fill(draft_text)
@@ -571,7 +571,7 @@ def test_theme_settings_apply_immediately_and_survive_a_reload():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.get_by_role("button", name="Settings").click()
                 settings = page.get_by_role("dialog", name="Settings")
                 await settings.get_by_label("Dark").check()
@@ -612,7 +612,7 @@ def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 menu = page.locator("#ctxmenu")
                 paper_a = page.locator('#papers [data-paper="paper-a"]')
                 paper_b = page.locator('#papers [data-paper="paper-b"]')
@@ -656,7 +656,7 @@ def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 menu = page.locator("#ctxmenu")
                 textarea = page.locator('form[data-form="paper-b-c1"] textarea[name="text"]')
                 await page.locator('[data-act="edit"][data-claim="paper-b-c1"]').click()
@@ -691,7 +691,7 @@ def test_removing_another_paper_from_the_menu_redraws_around_an_open_editor():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 menu = page.locator("#ctxmenu")
                 textarea = page.locator('form[data-form="paper-b-c1"] textarea[name="text"]')
                 cards_a = page.locator('#content .claim[data-paper="paper-a"]')
@@ -729,7 +729,7 @@ def test_a_stale_confirmed_tension_can_be_confirmed_again_without_reopening():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tensions-nav [data-view="tensions"]').click()
                 card = page.locator(f'.tcard[data-tension="{tid}"]')
                 stale = card.locator(".stale")
@@ -765,7 +765,7 @@ def test_a_synthesis_sits_under_its_topic_cites_claims_and_can_be_corrected_by_h
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 synth = page.locator('.synth[data-topic="recovery"]')
                 await synth.wait_for(state="visible")
                 # Under the topic heading, above the claims.
@@ -834,7 +834,7 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 recovery = page.locator('.synth[data-topic="recovery"]')
                 scaling = page.locator('.synth[data-topic="scaling"]')
                 fields = page.locator("textarea[data-synth]")
@@ -849,6 +849,7 @@ def test_a_synthesis_draft_survives_navigation_and_opening_another_topics_editor
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="hidden")
                 assert await fields.count() == 0
                 await page.click('#papers [data-paper=""]')
+                await page.locator('#btn-claims-view').click()
                 await recovery.wait_for(state="visible")
                 assert await fields.count() == 0
 
@@ -888,7 +889,7 @@ def test_a_claim_being_edited_keeps_its_text_when_a_synthesis_editor_is_cancelle
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 synth = page.locator('.synth[data-topic="recovery"]')
                 synth_field = page.locator('textarea[data-synth="recovery"]')
                 claim_field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
@@ -928,7 +929,7 @@ def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redr
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 synth = page.locator('.synth[data-topic="recovery"]')
                 synth_field = page.locator('textarea[data-synth="recovery"]')
                 claim_form = page.locator('form[data-form="paper-a-c1"]')
@@ -985,7 +986,7 @@ def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_
         async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 800})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
                 # Let the layout settle before reading positions.
@@ -1051,7 +1052,7 @@ def test_map_timeline_uses_publication_year_and_keeps_it_when_dragging_or_pollin
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 900})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 axis = page.get_by_label("X axis", exact=True)
                 assert await axis.input_value() == "connections"
@@ -1120,7 +1121,7 @@ def test_map_timeline_handles_empty_undated_and_single_year_corpora(years):
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.get_by_label("X axis", exact=True).select_option("year")
                 await page.wait_for_function("window.doxographGraph().alpha === 0")
@@ -1145,7 +1146,7 @@ def test_the_map_repaints_on_a_theme_change_omits_independent_links_and_clamps_t
         async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 800})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
                 await page.wait_for_function("window.doxographGraph().alpha === 0")
@@ -1184,7 +1185,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 nav = page.locator('#research-nav [data-view="research"]')
                 await nav.get_by_text("1 claims of my own", exact=False).wait_for()
                 await nav.click()
@@ -1269,7 +1270,7 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 nav = page.locator('#research-nav [data-view="research"]')
                 await nav.get_by_text("2 claims of my own", exact=False).wait_for()
                 await nav.click()
@@ -1311,7 +1312,7 @@ def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 # The claim card says how many other papers agree, and the
                 # marker opens the agreements view focused on that claim.
                 marker = page.locator('.claim[data-claim="paper-a-c1"] .amark')
@@ -1341,7 +1342,7 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 nav = page.locator('#research-nav [data-view="research"]')
                 await nav.wait_for(state="visible")
                 await nav.click()
@@ -1378,7 +1379,7 @@ def test_paper_sort_orders_the_list_and_survives_a_reload():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 rows = page.locator("#papers li[data-paper]:not([data-paper=''])")
                 await rows.first.wait_for()
 
@@ -1422,7 +1423,7 @@ def test_analysis_setting_survives_reload_and_disables_actions():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="example"]').click()
                 await page.get_by_role("button", name="Settings", exact=True).click()
                 toggle = page.get_by_label("Enable AI analysis")
@@ -1468,13 +1469,13 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
             page = await context.new_page()
             other_page = await context.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'#{view}-nav [data-view="{view}"]').click()
                 await page.get_by_role("button", name="Settings", exact=True).click()
                 toggle = page.get_by_label("Enable AI analysis")
                 await expect(toggle).to_be_checked()
 
-                await other_page.goto(url)
+                await other_page.goto(f"{url}/#view=claims")
                 await other_page.get_by_role("button", name="Settings", exact=True).click()
                 other_toggle = other_page.get_by_label("Enable AI analysis")
                 for enabled in [False, True]:
@@ -1509,7 +1510,7 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
             page = await context.new_page()
             other_page = await context.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 if editor == "claim":
                     await page.locator('#papers [data-paper="paper-a"]').click()
                     await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
@@ -1525,7 +1526,7 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
                 await page.get_by_role("button", name="Settings", exact=True).click()
                 toggle = page.get_by_label("Enable AI analysis")
 
-                await other_page.goto(url)
+                await other_page.goto(f"{url}/#view=claims")
                 await other_page.get_by_role("button", name="Settings", exact=True).click()
                 for enabled in [False, True]:
                     await other_page.get_by_label("Enable AI analysis").set_checked(enabled)
@@ -1555,7 +1556,7 @@ def test_the_query_filters_the_paper_list_and_says_how_many_match():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="ling2025gait"]').wait_for()
                 meta = page.locator('#papers [data-paper=""] .pm')
 
@@ -1592,7 +1593,7 @@ def test_a_paper_found_by_its_key_or_year_shows_that_paper_s_claims():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="survey"]').wait_for()
 
                 await page.locator("#q").fill("han2026reports")
@@ -1618,7 +1619,7 @@ def test_a_claim_citation_carries_its_paper_title():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 cite = page.locator('.claim .cmeta [data-act="open-paper"]').first
                 await cite.wait_for()
                 assert await cite.get_attribute("title") == "Introspection in language models"
@@ -1646,7 +1647,7 @@ def test_reviewing_by_keyboard_advances_and_n_jumps_to_the_next_unreviewed():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
 
                 await page.keyboard.press("r")
@@ -1707,7 +1708,7 @@ def test_reviewing_leaves_a_claim_picked_while_the_review_was_in_flight():
 
             await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
 
                 await page.keyboard.press("r")
@@ -1737,7 +1738,7 @@ def test_marking_a_whole_paper_reviewed_can_be_undone():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 button = page.get_by_role("button", name="Mark 2 reviewed")
                 await button.click()
@@ -1765,7 +1766,7 @@ def test_a_deleted_claim_waits_for_its_notice_and_can_be_brought_back():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="delete").click()
@@ -1800,7 +1801,7 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 await page.locator(".paperhead h2", has_text="A study").wait_for()
                 assert "paper=doe2026study" in page.url
@@ -1839,7 +1840,7 @@ def test_slash_reaches_the_search_box_and_question_mark_shows_the_shortcuts():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
 
                 await page.keyboard.press("/")
@@ -1853,12 +1854,11 @@ def test_slash_reaches_the_search_box_and_question_mark_shows_the_shortcuts():
                 assert await page.input_value("#q") == ""
                 await page.locator('#papers [data-paper="doe2026study"]').wait_for()
 
-                # From another view it goes back to the claims, which is what
-                # the box filters.
+                # From another view it returns to library search.
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
                 await page.keyboard.press("/")
-                await page.locator("#content .claim").first.wait_for()
+                await page.locator("#content .library-paper").first.wait_for()
                 assert await page.evaluate("document.activeElement.id") == "q"
 
                 await page.keyboard.press("Escape")   # out of the box first
@@ -1885,7 +1885,7 @@ def test_a_claim_links_to_its_own_page_of_the_pdf_and_the_paper_menu_has_a_butto
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 link = page.locator('.claim[data-claim="doe2026study-c1"] .pdflink')
                 await link.wait_for()
                 assert await link.text_content() == "PDF p.3"
@@ -1919,7 +1919,7 @@ def test_superseded_refresh_cannot_replace_current_sync_status(engine, newer_fai
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
                 await page.evaluate("poller.stop()")
                 await page.evaluate("async () => { if (poller.running) await poller.once().catch(() => {}); }")
@@ -1968,7 +1968,7 @@ def test_refresh_failure_is_visible_and_returning_to_the_window_recovers(engine)
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('[data-act="edit"][data-claim="study-c1"]').click()
                 draft = page.locator('form[data-form="study-c1"] textarea[name="text"]')
                 await draft.fill("Keep my unsaved claim edit.")
@@ -2014,7 +2014,7 @@ def test_import_feedback_starts_before_the_request_finishes(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await expect(page.locator("#import-analysis-status")).to_be_visible()
                 accepted, release = asyncio.Event(), asyncio.Event()
                 requests = []
@@ -2065,7 +2065,7 @@ def test_references_that_could_not_be_read_are_named_where_they_were_pasted():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.fill("#refs", "wibble flimflam")
                 await page.locator("#btn-add").click()
                 warning = page.locator("#ref-warn")
@@ -2090,7 +2090,7 @@ def test_a_reference_already_in_the_corpus_is_named_straight_away():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').wait_for()
                 panel = page.locator("#paper-import")
                 if not await panel.evaluate("element => element.open"):
@@ -2114,7 +2114,7 @@ def test_the_export_notice_opens_the_file_it_just_wrote():
             context = await browser.new_context()
             page = await context.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.get_by_role("button", name="Export HTML").click()
                 notice = page.locator("#toasts .toast", has_text="Exported to")
                 await notice.wait_for()
@@ -2144,7 +2144,7 @@ def test_back_to_another_workspace_restores_that_entrys_paper_and_filters():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="mind"]').click()
                 await page.locator(".paperhead h2", has_text="A consciousness paper").wait_for()
 
@@ -2186,7 +2186,7 @@ def test_a_bulk_review_reaches_a_claim_whose_editor_is_open():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 form = page.locator(f'form[data-form="{one}"]')
@@ -2222,7 +2222,7 @@ def test_history_restores_a_paper_only_when_it_still_exists_and_parks_a_new_clai
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator(".paperhead h2", has_text="Paper A").wait_for()
 
@@ -2271,7 +2271,7 @@ def test_a_bulk_review_undo_writes_to_the_workspace_it_was_taken_in():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
@@ -2310,7 +2310,7 @@ def test_a_refused_workspace_switch_leaves_the_entry_alone():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator(".paperhead h2", has_text="Default paper").wait_for()
 
@@ -2318,10 +2318,11 @@ def test_a_refused_workspace_switch_leaves_the_entry_alone():
                 await page.locator(".plist", has_text="Other paper").wait_for()
 
                 # A draft in this workspace, then Back across the boundary.
+                await page.locator('#btn-claims-view').click()
                 await page.locator('[data-act="edit"][data-claim="shared-c1"]').click()
                 field = page.locator('form[data-form="shared-c1"] textarea[name="text"]')
                 await field.fill("A draft worth keeping.")
-                await page.go_back()
+                await page.evaluate('history.go(-2)')
                 await _answer(page, "Cancel")
 
                 # Nothing of the other corpus's entry was applied: the key
@@ -2383,7 +2384,7 @@ def test_a_held_delete_is_sent_once_and_settles_before_its_paper_is_removed():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.get_by_role("button", name="delete").click()
@@ -2425,7 +2426,7 @@ def test_a_bulk_review_leaves_a_claim_that_is_waiting_out_a_delete_alone():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 await page.locator(f'.claim[data-claim="{one}"] [data-act="del"]').click()
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
@@ -2464,7 +2465,7 @@ def test_r_does_not_move_on_when_the_review_did_not_happen():
 
             await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 await page.locator(f'form[data-form="{one}"] textarea[name="text"]').fill("One, edited.")
@@ -2500,7 +2501,7 @@ def test_a_deleted_synthesis_takes_its_parked_draft_with_it():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 synth = page.locator('.synth[data-topic="recovery"]')
                 await synth.get_by_role("button", name="edit").click()
                 await page.locator('textarea[data-synth="recovery"]').fill("A draft that is parked.")
@@ -2510,6 +2511,7 @@ def test_a_deleted_synthesis_takes_its_parked_draft_with_it():
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for(state="hidden")
                 await page.locator('#papers [data-paper=""]').click()
+                await page.locator('#btn-claims-view').click()
                 await synth.wait_for(state="visible")
                 await synth.get_by_role("button", name="delete").click()
                 notice = page.locator("#toasts .toast", has_text="Deleted the synthesis")
@@ -2547,7 +2549,7 @@ def test_undoing_a_bulk_review_freezes_the_editors_it_is_undoing():
 
             await page.route("**/api/papers/doe2026study/review", hold_undo)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 form = page.locator(f'form[data-form="{one}"]')
@@ -2582,7 +2584,7 @@ def test_removing_a_paper_settles_only_that_papers_deletions():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim[data-claim="{a_one}"] [data-act="del"]').click()
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
                 await notice.wait_for()
@@ -2617,7 +2619,7 @@ def test_moving_forward_withdraws_the_question_back_was_asking():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator(".paperhead h2", has_text="Default paper").wait_for()
                 await page.locator("#workspace").select_option(label="Other")
@@ -2661,7 +2663,7 @@ def test_the_status_filter_is_part_of_the_view_the_url_carries():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tensions-nav [data-view="tensions"]').click()
                 await page.locator("#tension-status").select_option("dismissed")
                 await page.locator(".tcard.dismissed").wait_for()
@@ -2701,7 +2703,7 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
 
             await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 form = page.locator(f'form[data-form="{one}"]')
@@ -2753,7 +2755,7 @@ def test_removing_a_paper_names_the_workspace_it_was_asked_in():
             await page.route("**/api/papers/shared/claims/*", move_after_claim_delete)
             await page.route("**/api/papers/shared", record_paper_delete)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
@@ -2805,7 +2807,7 @@ def test_a_claim_cannot_be_deleted_while_its_paper_is_being_removed():
             await page.route("**/api/papers/shared", hold_paper_delete)
             await page.route("**/api/papers/shared/claims/*", record_claim_delete)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.wait_for()
@@ -2868,7 +2870,7 @@ def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
             await page.route("**/api/papers/paper-a/claims/*", move_after_claim_delete)
             await page.route("**/api/tensions", record_pass)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('.claim[data-claim="paper-a-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
                 await page.locator("#btn-tensions").click()
@@ -2902,7 +2904,7 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
 
             await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_patch)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
@@ -2937,7 +2939,7 @@ def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
         async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 800})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
                 await page.wait_for_function("window.doxographGraph().alpha === 0")
@@ -2971,7 +2973,7 @@ def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine,
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={"width": 1200, "height": 900})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.wait_for_function("window.doxographGraph().alpha === 0")
                 await page.get_by_label("X axis", exact=True).select_option(x_axis)
@@ -3011,7 +3013,7 @@ def test_no_undo_is_offered_for_a_delete_that_has_already_been_sent():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim[data-claim="{one}"]').wait_for()
 
                 # Another action flushes while the delete's own redraw, which
@@ -3039,14 +3041,14 @@ def test_back_from_the_analysis_views_returns_to_the_claims():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 for button, view in [("#btn-tensions", "tensions"), ("#btn-agreements", "agreements")]:
                     await page.locator(button).click()
                     await page.locator(f'#{view}-nav [data-view="{view}"].active').wait_for()
                     assert f"view={view}" in page.url
                     await page.go_back()
                     await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
-                    assert "view=" not in page.url
+                    assert "view=claims" in page.url
 
     run_browser(scenario())
 
@@ -3061,7 +3063,7 @@ def test_a_flush_takes_deletes_made_while_it_is_running():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim[data-claim="{one}"]').wait_for()
                 await page.evaluate("""
                   ([a, b]) => (async () => {
@@ -3092,7 +3094,7 @@ def test_a_flush_leaves_alone_a_delete_made_in_another_workspace():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim[data-claim="{one}"]').wait_for()
                 settled, waiting = await page.evaluate("""
                   ([a, b]) => (async () => {
@@ -3123,7 +3125,7 @@ def test_back_returns_to_the_research_form_after_leaving_it():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 for leave in ["Cancel", "Save"]:
                     await page.locator('#research-nav [data-view="research"]').click()
                     await page.locator("#research-form").wait_for()
@@ -3191,7 +3193,7 @@ def test_a_page_closing_does_not_send_a_delete_that_is_already_on_its_way():
 
             await page.route(f"**/api/papers/doe2026study/claims/{one}", hold_delete)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim[data-claim="{one}"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
                 await page.evaluate("void flushTrash()")
@@ -3237,7 +3239,7 @@ def test_a_reworded_quote_is_shown_beside_the_paper_and_can_take_its_wording():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(".claim .qflag").wait_for()
                 await page.get_by_role("button", name="in the paper").click()
 
@@ -3282,7 +3284,7 @@ def test_the_query_takes_words_in_any_order_and_finds_them_in_the_pdfs():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
 
                 # Two words, in the other order, which no substring search finds.
@@ -3319,7 +3321,7 @@ def test_alike_shows_claims_from_other_papers_worded_the_same_way():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="alike", exact=True).click()
@@ -3352,7 +3354,7 @@ def test_the_map_draws_a_citation_from_one_paper_to_another():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
                 await page.wait_for_function(
@@ -3401,7 +3403,7 @@ def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engin
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.wait_for_function("""window.doxographGraph().edges.filter(e => e.type === 'cite').length === 2
                     && window.doxographGraph().alpha === 0""")
@@ -3501,7 +3503,7 @@ def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(".claim .qflag").wait_for()
                 await page.get_by_role("button", name="in the paper").click()
                 await page.locator(".qctx .qpassage").wait_for()
@@ -3540,7 +3542,7 @@ def test_rewrite_asks_again_even_when_nothing_has_changed():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(".synth").wait_for()
                 await page.route("**/api/syntheses", capture)
                 await page.get_by_role("button", name="Rewrite").click()
@@ -3586,7 +3588,7 @@ def test_citations_do_not_cross_between_workspaces():
             page = await browser.new_page()
             page.on("response", lambda r: answers.append(r.url) if "/api/citations" in r.url else None)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.route("**/api/citations", hold)
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
@@ -3624,7 +3626,7 @@ def test_a_passage_stands_aside_when_the_claim_changes_underneath_it():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(".claim .qflag").wait_for()
                 await page.get_by_role("button", name="in the paper").click()
                 await page.locator(".qctx .qpassage").wait_for()
@@ -3647,7 +3649,7 @@ def test_a_paper_arriving_after_the_search_still_turns_up_in_it():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 await page.locator("#q").fill("sandbagging")
                 await page.locator(".pdfhits", has_text="No paper's text holds").wait_for()
@@ -3672,7 +3674,7 @@ def test_a_query_with_no_words_in_it_matches_nothing():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 # No paper holds "---" as a phrase and it has no words to look
                 # for, so it narrows to nothing rather than to everything.
@@ -3700,7 +3702,7 @@ def test_opening_a_passage_keeps_what_is_typed_in_another_claims_editor():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim[data-claim="{first["id"]}"]').wait_for()
                 await page.locator(f'.claim[data-claim="{first["id"]}"]').get_by_role(
                     "button", name="edit").click()
@@ -3729,7 +3731,7 @@ def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="alike", exact=True).click()
@@ -3757,7 +3759,7 @@ def test_the_map_picks_up_a_paper_that_arrives_while_it_is_open():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
                 assert await page.evaluate(
@@ -3794,7 +3796,7 @@ def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{first["id"]}"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="in the paper").click()
@@ -3835,7 +3837,7 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 # Grouped by topic, the claim is drawn under both of its tags.
                 await page.locator(".claim").first.wait_for()
                 assert await page.locator(".claim").count() == 2
@@ -3866,7 +3868,7 @@ def test_a_dropped_pdf_brings_its_arrows_while_the_map_is_open():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
 
@@ -3895,7 +3897,7 @@ def test_the_page_finds_what_the_server_finds_whatever_the_case():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 for query in ("Straße", "STRASSE", "strasse"):
                     await page.locator("#q").fill(query)
@@ -3921,7 +3923,7 @@ def test_the_alike_panel_goes_even_while_an_editor_holds_the_content():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="alike", exact=True).click()
@@ -3954,7 +3956,7 @@ def test_following_an_alike_suggestion_keeps_what_was_typed():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator('.claim[data-claim="doe2026recovery-c1"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="alike", exact=True).click()
@@ -3985,7 +3987,7 @@ def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 cards = page.locator('.claim[data-claim="doe2026recovery-c1"]')
                 await cards.first.wait_for()
                 assert await cards.count() == 2        # one per topic it carries
@@ -4022,7 +4024,7 @@ def test_a_corpus_change_during_a_citation_scan_is_asked_again():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.route("**/api/citations", hold)
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await page.locator(".graph-wrap canvas").wait_for()
@@ -4061,7 +4063,7 @@ def test_a_pdf_result_can_be_reached_from_the_keyboard():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 await page.locator("#q").fill("sandbagging")
                 hit = page.locator('.pdfhits .pdfhit [data-paper="wu2026silent"]')
@@ -4088,7 +4090,7 @@ def test_the_page_folds_a_greek_iota_subscript_as_the_server_does():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 from playwright.async_api import expect
                 claims = page.locator("#content .claim")
                 await expect(claims).to_have_count(2)
@@ -4114,7 +4116,7 @@ def test_the_page_keeps_a_vowel_sign_the_server_keeps():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 await page.locator("#q").fill("काल")
                 await page.locator("#content .claim").first.wait_for()
@@ -4134,7 +4136,7 @@ def test_the_page_drops_an_arabic_vowel_mark_as_the_server_does():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 await page.locator("#q").fill("كتاب")
                 await page.locator("#content .claim").first.wait_for()
@@ -4154,7 +4156,7 @@ def test_a_word_whose_vowels_are_marks_is_one_term_on_the_page_too():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 await page.locator("#q").fill("किताब")
                 await page.locator("#content .claim").first.wait_for()
@@ -4174,7 +4176,7 @@ def test_the_page_folds_a_historic_cyrillic_letter_as_the_server_does():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 await page.locator("#q").fill("ставъ")
                 await page.locator("#content .claim").first.wait_for()
@@ -4194,7 +4196,7 @@ def test_the_page_folds_what_a_decomposition_produces():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#content .claim").first.wait_for()
                 await page.locator("#q").fill("σ")
                 await page.locator("#content .claim").first.wait_for()
@@ -4229,7 +4231,7 @@ def test_an_export_does_not_run_on_a_delete_that_failed():
             await page.route(f"**/api/papers/doe2026study/claims/{one}", refuse_delete)
             await page.route("**/api/export", record_export)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim[data-claim="{one}"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
 
@@ -4315,7 +4317,7 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 card = page.locator('.claim[data-claim="paper-a-c1"]')
                 await card.wait_for()
@@ -4360,7 +4362,7 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tags [data-tag="solo"]').wait_for()
                 assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
 
@@ -4401,7 +4403,7 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tags [data-tag="solo"]').click()
                 await page.locator('#tags [data-tag="solo"].active').wait_for()
                 assert "tag=solo" in page.url
@@ -4461,7 +4463,7 @@ def test_a_focused_tension_keeps_its_way_out_when_the_claim_it_names_goes():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator('.claim[data-claim="paper-a-c1"]')
                 await card.wait_for()
                 await card.locator(".tmark").click()
@@ -4502,7 +4504,7 @@ def test_a_delete_is_still_offered_and_sent_when_the_redraw_after_it_fails():
 
             await page.route("**/api/state", refuse_read)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.wait_for()
 
@@ -4547,7 +4549,7 @@ def test_a_deleted_row_leaves_the_screen_when_the_redraw_after_it_fails():
 
             await page.route("**/api/state", refuse_read)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.wait_for()
 
@@ -4593,7 +4595,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
 
                 # The topic whose only claim is held: the server would stop
                 # showing that synthesis, so the card goes rather than standing
@@ -4661,7 +4663,7 @@ def test_a_held_claim_moves_the_paper_status_dot_with_it():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
 
                 def dot(key, status):
                     return page.locator(f'#papers [data-paper="{key}"] .dot.{status}')
@@ -4725,7 +4727,7 @@ def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tags [data-tag="recovery"]').click()
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.locator(".stale").wait_for()
@@ -4777,7 +4779,7 @@ def test_a_held_claim_leaves_the_agreements_in_the_order_the_server_would_send()
             order = ("() => [...document.querySelectorAll('.tcard[data-agreement]')]"
                      ".map((node) => node.dataset.agreement).join(',') === '%s'")
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-c"]').click()
                 card = page.locator('.claim[data-claim="paper-c-c1"]')
                 await card.wait_for()
@@ -4825,7 +4827,7 @@ def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
             shows = ("() => [...document.querySelectorAll('.tcard[data-agreement]')]"
                      ".map((node) => node.dataset.agreement).join(',') === '%s'")
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-c"]').click()
                 card = page.locator('.claim[data-claim="paper-c-c1"]')
                 await card.wait_for()
@@ -4867,7 +4869,7 @@ def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tags [data-tag="recovery"]').click()
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.wait_for()
@@ -4917,7 +4919,7 @@ def test_deciding_an_agreement_settles_a_held_claim_delete_first():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-c"]').click()
                 claim = page.locator('.claim[data-claim="paper-c-c1"]')
                 await claim.wait_for()
@@ -4979,7 +4981,7 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
             await page.route("**/api/papers/shared/claims", record_write)
             await page.route("**/api/papers/shared/verify", record_write)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 add = page.get_by_role("button", name="Add claim by hand")
                 await add.click()
@@ -5050,7 +5052,7 @@ def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
             await page.route("**/api/papers/shared/claims/*", hold_claim_delete)
             await page.route("**/api/tags", record_tag_write)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
@@ -5125,7 +5127,7 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
             await page.route("**/api/papers/shared/verify", record_write)
             await page.route("**/api/papers/shared/extract", record_write)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
@@ -5189,7 +5191,7 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
             await page.route("**/api/papers/shared/claims/*", hold_claim_patch)
             await page.route("**/api/papers/shared", record_paper_delete)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 # A review toggle is a PATCH on the claim; hold it in flight.
                 await page.locator('.claim[data-claim="shared-c1"] [data-act="review"]').click()
@@ -5227,7 +5229,7 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 field = page.locator('textarea[data-note="paper-a"]')
                 await page.click('#papers [data-paper="paper-a"]')
                 assert await field.is_visible()
@@ -5270,7 +5272,7 @@ def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
                 await page.locator('form[data-form="paper-a-c1"] textarea[name="note"]').fill(
                     "Overstated: the appendix contradicts this.")
@@ -5325,7 +5327,7 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
 
             await page.route("**/api/papers/shared", hold_delete_record_patch)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('textarea[data-note="shared"]').fill("Typed while it was going.")
 
@@ -5366,7 +5368,7 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('textarea[data-note="shared"]').fill("Typed and then removed.")
 
@@ -5397,7 +5399,7 @@ def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 note_field = page.locator('textarea[data-note="paper-a"]')
                 claim_field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
@@ -5431,7 +5433,7 @@ def test_the_background_poll_leaves_a_note_being_written_alone():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 field = page.locator('textarea[data-note="paper-a"]')
                 await field.fill("Half a sentence")
@@ -5467,7 +5469,7 @@ def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
 
             await page.route("**/api/search*", hold_search)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 # Asked for first, and still in flight while the note opens.
                 await page.fill("#q", "recovery")
@@ -5510,7 +5512,7 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
 
             await page.route("**/api/papers/paper-a", hold_a)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('textarea[data-note="paper-a"]').fill("A's note.")
                 await page.locator(".note").get_by_role("button", name="Save").click()
@@ -5549,7 +5551,7 @@ def test_a_saved_claim_form_is_drawn_away_while_a_note_editor_is_open():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('textarea[data-note="paper-a"]').fill("Mine.")
 
@@ -5589,7 +5591,7 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
 
             await page.route("**/api/papers/paper-a/claims/*", hold_claim_patch)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 form = page.locator('form[data-form="paper-a-c1"]')
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
@@ -5623,7 +5625,7 @@ def test_side_pane_width_is_dragged_kept_and_put_back():
         async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1280, "height": 800})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 side = page.locator("#side")
                 handle = page.locator("#side-resize")
                 assert (await side.bounding_box())["width"] == 320
@@ -5699,7 +5701,7 @@ def test_side_pane_width_follows_the_root_font_size_and_a_narrow_window(engine):
 
             await page.route("**/app.css*", bigger_root)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 side = page.locator("#side")
                 handle = page.locator("#side-resize")
                 assert await page.evaluate("getComputedStyle(document.documentElement).fontSize") == "20px"
@@ -5776,7 +5778,7 @@ def test_side_pane_width_survives_a_browser_that_will_not_store_it(engine):
                 "Storage.prototype.setItem = function () { throw new Error('denied'); };"
             )
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 side = page.locator("#side")
                 box = await page.locator("#side-resize").bounding_box()
                 await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 200)
@@ -5831,7 +5833,7 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{key}-c1"]')
                 await card.first.wait_for()
 
@@ -5844,6 +5846,7 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
 
                 # Across the corpus with grouping off.
                 await page.locator('#papers [data-paper=""]').click()
+                await page.locator('#btn-claims-view').click()
                 await page.locator("#claim-filter-options > summary").click()
                 await page.locator("#group-by-tag").uncheck()
                 await card.get_by_role("button", name="hide the paper").click()
@@ -5864,7 +5867,7 @@ def test_a_shortcut_key_held_with_a_modifier_is_left_to_the_browser():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 # Dispatched rather than pressed, so the browser does not act
                 # on them either: what is under test is only what the page does.
@@ -5897,7 +5900,7 @@ def test_clicking_the_words_select_claim_ticks_the_box_on_a_card_not_yet_picked(
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 label = page.locator(f'.claim[data-claim="{two}"] .claim-selection label')
                 box = await label.bounding_box()
@@ -5926,7 +5929,7 @@ def test_a_review_that_fails_says_so_and_r_stays_on_the_claim():
 
             await page.route(f"**/api/papers/doe2026study/claims/{one}", refuse_patch)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 await page.keyboard.press("r")
                 await page.locator("#toasts .toast.warn",
@@ -5951,7 +5954,7 @@ def test_a_topic_that_could_not_be_added_says_so_and_keeps_its_name():
 
             await page.route("**/api/tags", refuse)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator("#new-tag").fill("interpretability")
                 await page.locator("#btn-tag").click()
                 await page.locator("#toasts .toast.warn",
@@ -5993,7 +5996,7 @@ def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back(
             page = await browser.new_page()
             with _server() as url:
                 await page.route("**/api/state", hold_one)
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#tags [data-tag="recovery"]').wait_for()
                 armed = True
                 httpx.post(f"{url}/api/tags", json={"name": "alignment", "description": ""})
@@ -6030,7 +6033,7 @@ def test_a_review_whose_read_back_fails_still_counts_and_r_moves_on():
 
             await page.route("**/api/state", refuse_read)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 refusing.set()
                 await page.keyboard.press("r")
@@ -6072,7 +6075,7 @@ def test_an_action_refused_while_the_reads_are_refused_too_still_says_so():
             await page.route("**/api/papers/doe2026study/proposed-tags", refuse_write)
             await page.route("**/api/state", refuse_read)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
                 await page.locator('[data-act="accept-tag"]').click()
                 await page.locator("#content .warn",
@@ -6139,7 +6142,7 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
             await page.route(written, refuse_write)
             await page.route("**/api/state", refuse_read)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 field = None
                 if action == "tension":
                     await page.locator('#tensions-nav [data-view="tensions"]').click()
@@ -6199,7 +6202,7 @@ def test_a_saved_claim_whose_read_back_fails_closes_its_editor():
 
             await page.route("**/api/state", refuse_read)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator(f'.claim.sel[data-claim="{one}"]').wait_for()
                 await page.locator(f'[data-act="edit"][data-claim="{one}"]').click()
                 form = page.locator(f'form[data-form="{one}"]')
@@ -6225,7 +6228,7 @@ def test_escape_outside_the_claim_form_leaves_its_draft_alone():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 claim_form = page.locator('form[data-form="paper-a-c1"]')
                 claim_field = claim_form.locator('textarea[name="text"]')
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
@@ -6278,7 +6281,7 @@ def test_text_dropped_into_a_field_is_the_fields_and_not_papers_to_add():
             page.on("request", lambda request: ingests.append(request.url)
                     if request.url.endswith("/api/ingest") else None)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
                 await page.locator('form[data-form="paper-a-c1"] textarea[name="quote"]').wait_for()
 

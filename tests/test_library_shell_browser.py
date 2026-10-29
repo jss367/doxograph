@@ -53,12 +53,12 @@ def test_library_menus_selection_and_keyboard(engine, width):
                 await page.get_by_role("button", name="Clear all", exact=True).click()
 
                 # Selecting through either list reveals the bulk workflow.
-                await page.locator('[data-select-paper="oversight"]').check()
+                await page.locator('#content [data-select-paper="oversight"]').check()
                 await expect(page.locator('[data-tool="compare"]')).to_be_visible()
                 await page.locator('[data-tool="clear-selection"]').click()
                 await expect(page.locator('[data-tool="compare"]')).to_be_hidden()
                 await page.locator('[data-tool="select-visible"]').click()
-                await expect(page.locator("#selection-count")).to_contain_text("1 claims")
+                await expect(page.locator("#selection-count")).to_have_text("0 claims · 1 papers selected")
                 await page.locator('[data-tool="compare"]').click()
                 await expect(page.locator("#research-tools")).to_be_visible()
                 await expect(page.locator(".comparison-card")).to_contain_text("Understanding model oversight")
@@ -81,7 +81,7 @@ def test_library_menus_selection_and_keyboard(engine, width):
 
 
 @pytest.mark.browser
-def test_empty_library_hides_claim_actions_until_claims_arrive():
+def test_empty_library_hides_selection_until_papers_arrive():
     async def scenario():
         async with browser_session() as browser:
             page = await browser.new_page()
@@ -92,7 +92,7 @@ def test_empty_library_hides_claim_actions_until_claims_arrive():
                 _paper("first", "The first paper")
                 await _poll(page)
                 await expect(page.locator("#selection-tools")).to_be_visible()
-                await expect(page.locator("#btn-focus-review")).to_be_visible()
+                await expect(page.locator("#btn-focus-review")).to_be_hidden()
 
     run_browser(scenario())
 
@@ -108,7 +108,7 @@ def test_filter_changes_update_claim_controls_without_polling(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await expect(page.locator("#selection-count")).to_have_text("2 claims")
                 await page.evaluate("poller.stop()")
                 count = page.locator("#selection-count")

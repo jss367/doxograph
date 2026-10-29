@@ -275,6 +275,34 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .clear-filters { border-color: transparent; background: transparent; color: var(--accent);
   font-size: .82rem; }
 
+.library-view-switch { display: flex; gap: .35rem; margin: .75rem 0 .25rem; }
+.library-view-switch[hidden] { display: none; }
+.library-view-switch button { font-size: .8rem; }
+.library-view-switch button[aria-pressed=true] { background: var(--sel); color: var(--accent); border-color: var(--accent); }
+.paper-library-view label:has(#group-by-tag) { display: none; }
+.paper-library-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .75rem; margin: 1rem 0; }
+.paper-library-heading h2 { margin: 0; font-size: 1.15rem; }
+.library-paper { position: relative; border: 1px solid var(--line); border-radius: 10px;
+  padding: 1.1rem 1.25rem; margin-bottom: .85rem; overflow-wrap: anywhere; }
+.library-paper:hover { border-color: var(--accent); background: var(--panel); }
+.library-paper:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.library-paper-heading { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; }
+.library-paper-heading h3 { flex: 1 1 15rem; margin: 0; font-size: 1rem; line-height: 1.4; }
+.library-paper-link { color: var(--ink); text-decoration: none; }
+.library-paper-link::after { content: ''; position: absolute; inset: 0; border-radius: 10px; }
+.library-paper-link:focus-visible { outline: none; }
+.library-paper .paper-selection, .library-paper-topics button { position: relative; z-index: 1; }
+.library-paper-meta { margin: .45rem 0 .65rem; font-size: .8rem; color: var(--muted); }
+.library-paper-summary { margin: 0 0 .8rem; font-size: .88rem; line-height: 1.6;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.library-paper-topics { display: flex; flex-wrap: wrap; gap: .4rem; font-size: .78rem; }
+.library-paper-topics .tag { margin: 0; cursor: pointer; font: inherit; }
+.reading-status { font-size: .72rem; padding: .2rem .6rem; border-radius: 999px;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+.reading-status.reading { color: var(--accent); background: var(--sel); }
+.reading-status.finished { color: var(--ok); }
+.library-paper-passage { margin: .8rem 0 0; font-size: .82rem; line-height: 1.5; color: var(--muted); }
+
 @media (max-width: 1100px) {
   header { gap: .7rem; }
   header .workspace-control label { display: none; }
