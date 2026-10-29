@@ -13,6 +13,7 @@ from doxograph import config, server
 class ByteRangeLocks:
     LK_NBLCK = 1
     LK_UNLCK = 2
+    LK_LOCK = 3
 
     def __init__(self):
         self.owners = {}
@@ -22,7 +23,7 @@ class ByteRangeLocks:
         stat = os.fstat(descriptor)
         key = (stat.st_dev, stat.st_ino)
         assert length == 1
-        if mode == self.LK_NBLCK:
+        if mode in (self.LK_NBLCK, self.LK_LOCK):
             if key in self.owners:
                 raise OSError("Byte range already locked, including through another local handle")
             self.owners[key] = descriptor
@@ -117,4 +118,25 @@ def test_windows_named_import_can_submit_and_run_while_request_holds_lease(windo
         assert response.json()["queued"] == 1
     assert len(jobs) == 1
     assert jobs[0]["state"] == "done"
+    assert not locks.owners
+
+
+def test_windows_registry_only_retirement_preserves_a_concurrently_restored_directory(windows_locks, monkeypatch):
+    workspace, locks = windows_locks
+    monkeypatch.setattr(server, "_jobs", {})
+    folder = config.base_data_dir() / "workspaces" / workspace
+    config.shutil.rmtree(folder)
+    original = config._write_workspace_records
+
+    def restore_after_commit(records):
+        original(records)
+        folder.mkdir()
+        (folder / "restored.txt").write_text("Restored data")
+
+    monkeypatch.setattr(config, "_write_workspace_records", restore_after_commit)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    response = client.delete(f"/api/workspaces/{workspace}")
+    assert response.status_code == 200
+    assert config.get_workspace(workspace) is None
+    assert (folder / "restored.txt").read_text() == "Restored data"
     assert not locks.owners

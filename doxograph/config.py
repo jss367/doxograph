@@ -422,7 +422,11 @@ def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool 
         path = base_data_dir() / "locks" / f"workspace-{value}.activity.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
         with _windows_workspace_activity(path, exclusive=exclusive):
-            yield True
+            corpus_locked = (base_data_dir() / "workspaces" / value).exists()
+            if not corpus_locked and not missing_ok:
+                _read_workspace_records()
+                raise KeyError(value)
+            yield corpus_locked
     else:  # pragma: no cover
         raise RuntimeError("no file-locking primitive available for workspace activity")
 
