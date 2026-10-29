@@ -551,7 +551,7 @@ function toast(message, { actions = [], timeout = 6000, tone = '', onExpire = nu
 
 let askResolve = null;
 
-function askDialog({ title, note = '', input = null, ok = 'OK', cancel = 'Cancel' }) {
+function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK', cancel = 'Cancel' }) {
   const dialog = $('ask');
   $('ask-title').textContent = title;
   $('ask-note').textContent = note;
@@ -560,6 +560,11 @@ function askDialog({ title, note = '', input = null, ok = 'OK', cancel = 'Cancel
   field.hidden = input === null;
   field.value = input ? (input.value || '') : '';
   field.placeholder = input ? (input.placeholder || '') : '';
+  const choices = $('ask-label-choices');
+  choices.hidden = labelChoices.length === 0;
+  choices.innerHTML = labelChoices.map((name) => `<button type="button" class="label label-choice"
+    data-label="${esc(name)}" style="${labelStyle(name)}" aria-label="${esc(name)}" aria-pressed="false">${esc(name)}</button>`).join('');
+  syncAskLabels();
   $('ask-ok').textContent = ok;
   $('ask-cancel').textContent = cancel;
   dialog.showModal();
@@ -590,8 +595,35 @@ $('ask').addEventListener('close', () => {
 
 const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
   askDialog({ title, note, ok }).then((answer) => answer === true);
-const askText = (title, { note = '', placeholder = '', value = '' } = {}) =>
-  askDialog({ title, note, input: { placeholder, value } });
+const askText = (title, { note = '', placeholder = '', value = '', labelChoices = [] } = {}) =>
+  askDialog({ title, note, input: { placeholder, value }, labelChoices });
+
+function normalizeLabel(name) {
+  // Match Python str.split(): U+FEFF is preserved; U+001C–001F and U+0085
+  // are separators. JavaScript's \s and trim() use a different set.
+  return name.toLowerCase().replace(/[\p{White_Space}\u001c-\u001f]+/gu, ' ').replace(/^ | $/g, '');
+}
+
+function parseLabels(value) {
+  return [...new Set(value.split(',').map(normalizeLabel).filter(Boolean))];
+}
+
+function syncAskLabels() {
+  const selected = new Set(parseLabels($('ask-input').value));
+  $('ask-label-choices').querySelectorAll('button').forEach((button) => {
+    button.setAttribute('aria-pressed', String(selected.has(button.dataset.label)));
+  });
+}
+
+$('ask-input').addEventListener('input', syncAskLabels);
+$('ask-label-choices').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-label]');
+  if (!button) return;
+  const labels = parseLabels($('ask-input').value);
+  const name = button.dataset.label;
+  $('ask-input').value = (labels.includes(name) ? labels.filter((label) => label !== name) : [...labels, name]).join(', ');
+  syncAskLabels();
+});
 
 // --- deletions, undone by not sending them --------------------------------
 //
@@ -1988,14 +2020,27 @@ function tensionsFor(claimId) {
     && t.claims.some((c) => c.id === claimId));
 }
 
-// The section hides itself when nothing is labelled. An empty list under a
-// heading reads as a feature that is broken rather than one nobody has used,
-// and the way in is the button on a paper, not this.
+// Derive colors from names so existing and new labels keep the same color
+// across papers, reloads, and changes to the corpus, without extra metadata.
+function labelStyle(name) {
+  let hash = 2166136261;
+  for (const char of normalizeLabel(name)) {
+    hash = Math.imul(hash ^ char.codePointAt(0), 16777619);
+  }
+  return `--label-hue:${(hash >>> 0) % 360}`;
+}
+
+function labelChip(name) {
+  return `<span class="label" data-label="${esc(name)}" style="${labelStyle(name)}">${esc(name)}</span>`;
+}
+
+// Hide the section until at least one paper has a label.
 function renderLabels() {
   const entries = Object.entries(S.label_counts || {});
   $('labels-sec').hidden = entries.length === 0;
   $('labels').innerHTML = entries.map(([name, count]) => `
-    <li class="${V.label === name ? 'active' : ''}" data-label="${esc(name)}">
+    <li class="${V.label === name ? 'active' : ''}" data-label="${esc(name)}" style="${labelStyle(name)}">
+      <span class="label-dot" aria-hidden="true"></span>
       <span>${esc(name)}</span>
       <span class="n">${count}</span>
     </li>`).join('');
@@ -2027,7 +2072,7 @@ function paperHeader(key, reading = false) {
       · <code>${esc(key)}</code>
       ${p.has_pdf ? `· <a href="/pdf/${esc(key)}?${workspaceQuery()}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
     ${(p.labels || []).length ? `<div class="labels">${(p.labels || [])
-      .map((l) => `<span class="label" data-label="${esc(l)}">${esc(l)}</span>`).join('')}</div>` : ''}
+      .map(labelChip).join('')}</div>` : ''}
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
     ${reading ? '' : paperNote(key)}
@@ -2090,7 +2135,7 @@ function readingHeader(p, title) {
       <summary>About this paper</summary>
       ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
       ${p.relevance ? `<p class="ps">${esc(p.relevance)}</p>` : ''}
-      ${(p.labels || []).map(l => `<span class="label" data-label="${esc(l)}">${esc(l)}</span>`).join(' ')}
+      ${(p.labels || []).map(labelChip).join(' ')}
     </details>` : ''}
     ${proposedPanel(p.key)}
   </div>`;
@@ -2205,23 +2250,20 @@ async function saveNote(key) {
   }
 }
 
-// Labels are typed into one field, as a claim's topics are, rather than
-// added and removed one at a time: there are rarely more than two or three on
-// a paper, and one field is one request and nothing to keep in sync. The
-// labels already in use are offered in the note, since the point of a label is
-// that other papers carry the same one and a typo makes a second list of one.
+// Clicking an existing label edits the same draft as typing; only OK saves it.
 async function editLabels(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper) return;
-  const inUse = Object.keys(S.label_counts || {});
+  const inUse = [...new Set([...Object.keys(S.label_counts || {}), ...(paper.labels || [])])].sort();
   const answer = await askText(`Labels for ${paper.title || key}`, {
-    note: 'Separate labels with commas. Spaces are allowed within a label.'
-      + (inUse.length ? ` In use: ${inUse.join(', ')}` : ''),
+    note: (inUse.length ? 'Click a label to add or remove it. ' : '')
+      + 'Type new labels separated by commas. Spaces are allowed within a label.',
     placeholder: 'open source, reading list',
     value: (paper.labels || []).join(', '),
+    labelChoices: inUse,
   });
   if (answer === null) return;   // cancelled: not the same as clearing them
-  const labels = answer.split(',').map((l) => l.trim()).filter(Boolean);
+  const labels = parseLabels(answer);
   try {
     await api(`/api/papers/${encodeURIComponent(key)}`, {
       method: 'PATCH',
