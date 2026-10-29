@@ -31,7 +31,7 @@ def test_startup_failure_and_reload_recovery(engine, failure):
             async def late_script(route):
                 if broken:
                     # A post-app script fails after boot has rendered the corpus.
-                    await page.locator('#content .claim').first.wait_for()
+                    await page.locator('#content .library-paper').first.wait_for()
                     await route.abort()
                 else:
                     await route.continue_()
@@ -60,8 +60,8 @@ def test_startup_failure_and_reload_recovery(engine, failure):
                 broken = False
                 await page.get_by_role("button", name="Reload library").click()
                 await expect(page.locator("#startup-error")).to_be_hidden()
-                await expect(page.locator("#content")).to_contain_text("A claim from")
-                await expect(page.locator("#selection-count")).to_have_text("1 claim")
+                await expect(page.locator("#content .library-paper")).to_contain_text("Understanding model oversight")
+                await expect(page.locator("#selection-count")).to_have_text("1 paper")
 
     run_browser(scenario())
 

@@ -13,7 +13,7 @@ const WorkspaceNotes = (() => {
   function update() {
     if (!draft) return;
     const panel = el('workspace-notes-panel');
-    panel.hidden = !(scope.view === 'claims' && (!scope.paper || keep))
+    panel.hidden = !(scope.view === 'library' || (scope.view === 'claims' && (!scope.paper || keep)))
       && !forced && !changed() && !draft.error && !saving && !upload;
     document.querySelector('.research-tools-nav [data-tool="notes"]').setAttribute('aria-expanded', String(!panel.hidden));
     const parent = el(scope.view === 'claims' && scope.paper ? 'workspace-notes-reading' : 'workspace-notes-home');

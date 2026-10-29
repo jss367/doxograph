@@ -23,7 +23,7 @@ def test_manual_evidence_assessment(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await expect(page.locator('#papers')).to_contain_text('1 to review')
                 await page.locator('[data-act="edit"]').first.click()
                 await page.locator('.evidence-assessment > summary').click()
@@ -51,7 +51,7 @@ def test_focused_assessment_fields_have_independent_accessible_labels(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#btn-focus-review').click()
                 dialog = page.locator('#focused-review')
                 await dialog.get_by_role('button', name='Edit claim', exact=True).click()

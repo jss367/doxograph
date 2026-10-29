@@ -161,7 +161,7 @@ def test_command_palette_preserves_drafts_and_updates_with_workspace(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('.claim[data-paper="one"]').click()
                 await page.keyboard.press("e")
                 field = page.locator('form[data-form] textarea[name="text"]')

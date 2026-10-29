@@ -85,7 +85,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
       // A newer success or failure owns the sync status. An older failure
       // must not replace it, including after leaving and returning to a workspace.
       if (requestedEpoch !== epoch || asked < pullSettled) {
-        return { applied: false, changed: false, registryChanged: false };
+        return { applied: false, changed: false, registryChanged: false, workspaceChanged: requestedEpoch !== epoch };
       }
       pullSettled = asked;
       throw error;
@@ -95,7 +95,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     }
     // The epoch also rejects a late answer after going A -> B -> A.
     if (requestedEpoch !== epoch || asked < pullSettled) {
-      return { applied: false, changed: false, registryChanged: false };
+      return { applied: false, changed: false, registryChanged: false, workspaceChanged: requestedEpoch !== epoch };
     }
     pullSettled = asked;
     let registryChanged = false;

@@ -105,7 +105,7 @@ def test_workspace_notes_inflight_edits_failures_and_conflicts(engine):
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 editor = await open_notes(page)
                 started, release = asyncio.Event(), asyncio.Event()
 
@@ -478,7 +478,7 @@ def test_workspace_notes_typed_during_delete_drain_are_saved_before_switch(engin
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 editor = await open_notes(page)
                 await page.locator('.claim [data-act="del"]').first.click()
                 await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
@@ -582,7 +582,7 @@ def test_workspace_notes_escape_preserves_an_unrelated_claim_draft(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('.claim [data-act="edit"]').first.click()
                 form = page.locator('form[data-form]')
                 claim = form.locator('textarea[name="text"]')

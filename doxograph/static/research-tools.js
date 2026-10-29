@@ -75,16 +75,19 @@ const ResearchTools = (() => {
     redrawHighlights();
   }
   function syncSelectionControls() {
+    const library = V.view === 'library';
     const selected = claims.size + papers.size > 0;
     el('selection-tools').classList.toggle('has-selection', selected);
-    el('selection-tools').hidden = !selected && !client.state.claims.length;
+    el('selection-tools').hidden = !selected && !(library ? client.state.papers.length : client.state.claims.length);
     el('selection-tools').querySelectorAll('[data-needs-selection]').forEach(button => { button.hidden = !selected; });
-    const visible = visibleClaims().length;
-    el('selection-tools').querySelector('[data-tool="select-visible"]').hidden = !visible;
-    el('btn-focus-review').hidden = !visible;
+    const visible = library ? visiblePapers().length : visibleClaims().length;
+    const select = el('selection-tools').querySelector('[data-tool="select-visible"]');
+    select.hidden = !visible;
+    select.textContent = library ? 'Select visible papers' : 'Select visible claims';
+    el('btn-focus-review').hidden = library || !visible;
     el('selection-count').textContent = selected
       ? `${claims.size} claims · ${papers.size} papers selected`
-      : `${visible} claim${visible === 1 ? '' : 's'}`;
+      : `${visible} ${library ? 'paper' : 'claim'}${visible === 1 ? '' : 's'}`;
   }
   function claimCheckbox(row) {
     const key = refKey(row);
@@ -271,10 +274,10 @@ const ResearchTools = (() => {
       ${marks.length ? '' : `<p class="empty">${marksFilter === 'all' ? 'Highlight a passage or mark a figure while reading a paper.' : 'No open questions. Tick “Open question” on a mark to list it here.'}</p>`}`;
   }
   function renderSearches() {
-    el('research-body').innerHTML = `<p class="hint">Saved searches remember filters, not a fixed list of results. New matching claims appear automatically.</p>
+    el('research-body').innerHTML = `<p class="hint">Saved searches remember your view and filters. New matching papers or claims appear automatically.</p>
       ${button('save-search','Save current library filters')}
       ${notebook.searches.map(s => `<article class="reading-entry" data-search="${html(s.id)}"><h3>${html(s.name)}</h3>
-        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${client.state.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || 'All claims')}</p>
+        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${client.state.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || (s.view === 'library' ? 'All papers' : 'All claims'))}</p>
         ${button('apply-search','Open search')}${button('rename-search','Rename')}${button('delete-search','Delete')}</article>`).join('')}`;
   }
   async function queue(keys) {
@@ -1327,7 +1330,7 @@ const ResearchTools = (() => {
     if (name === 'save-search') {
       const title = await promptDialog('Name this saved search', '', {ok:'Save search'});
       if (!title?.trim()) return;
-      const search = {id:uid(),name:title.trim()};
+      const search = {id:uid(),name:title.trim(),view:V.view === 'library' ? 'library' : 'claims'};
       for (const field of ['q','paper','tag','label','kind','unreviewed','unverified','group']) search[field] = V[field];
       notebook.searches.push(search); await save(); tab = 'searches'; render(); return;
     }
@@ -1337,6 +1340,7 @@ const ResearchTools = (() => {
         if (!await discardDrafts()) return;
         await close({duringOperation:true}); if (el('research-tools').open) return; captureOpenEditor();
         const params = new URLSearchParams();
+        params.set('view', search.view || 'claims');
         if (workspace !== 'default') params.set('ws',workspace);
         for (const field of ['q','paper','tag','label','kind']) if (search[field]) params.set(field, search[field]);
         if (search.unreviewed) params.set('unreviewed','1'); if (search.unverified) params.set('unverified','1');
@@ -1411,7 +1415,11 @@ const ResearchTools = (() => {
     event.preventDefault(); event.stopPropagation();
     const name = target.dataset.tool;
     if (name === 'clear-selection') { claims.clear(); papers.clear(); remember(); sync(); return; }
-    if (name === 'select-visible') { visibleClaims().forEach(c=>claims.add(refKey(c))); remember(); sync(); return; }
+    if (name === 'select-visible') {
+      if (V.view === 'library') visiblePapers().forEach(p => papers.add(p.key));
+      else visibleClaims().forEach(c => claims.add(refKey(c)));
+      remember(); sync(); return;
+    }
     if (name === 'notes') { WorkspaceNotes.open(); return; }
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {

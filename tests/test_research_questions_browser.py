@@ -22,7 +22,7 @@ def test_question_evidence_and_conclusion_survive_reload(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('[data-tool="select-visible"]').click()
                 await page.locator('[data-tool="questions"]').click()
                 await ready(page)

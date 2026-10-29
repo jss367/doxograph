@@ -35,7 +35,7 @@ def test_research_tools_workflow(engine, uuid_available):
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('[data-select-claim]').first.wait_for()
                 await page.locator('[data-select-claim]').nth(0).check()
                 await page.locator('[data-select-claim]').nth(1).check()
@@ -173,7 +173,7 @@ def test_paper_reads_beside_its_notes(engine):
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.on('request', lambda request: external.append(request.url) if not request.url.startswith(('http://127.0.0.1:', 'blob:')) else None)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 # The library view has no reader; a paper without a PDF has none either.
                 await page.locator('#content .claim').first.wait_for()
                 assert await page.locator('#reader').is_hidden()
@@ -529,7 +529,7 @@ def test_reader_keeps_pages_notes_and_progress_under_pressure(engine):
                     {'id':'first','paper':'long','page':1,'rects':[rect],'text':'Page 1 of the long paper.','color':'yellow','note':'Note A'},
                     {'id':'second','paper':'long','page':2,'rects':[rect],'text':'Page 2 of the long paper.','color':'green','note':''}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="long"]').click()
                 # Scrolled to the end as soon as the pages are laid out, while the
                 # first ones are still being drawn: once the end is drawn, the
@@ -634,7 +634,7 @@ def test_history_restore_and_notebook_conflict(engine):
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.on('request', lambda request: external.append(request.url) if not request.url.startswith(('http://127.0.0.1:', 'blob:')) else None)
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('.paperhead h2', has_text='A study of recovery').wait_for()
                 dialog = page.locator('#research-tools')
@@ -701,7 +701,7 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 await page.get_by_role('button', name='Next page', exact=True).click()
@@ -814,7 +814,7 @@ def test_short_last_page_canceled_figure_removal_draft_and_failed_final_save(eng
                 data = httpx.get(url+'/api/notebook').json()
                 data['reading'] = [{'paper':'paper','status':'reading','page':1,'bookmarks':[]}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 # The last page is too short for its top to reach the scroller's
@@ -948,7 +948,7 @@ def test_landscape_pages_fit_hidden_pdf_mark_focus_and_superseded_final_save(eng
                 data = httpx.get(url+'/api/notebook').json()
                 data['reading'] = [{'paper':'paper','status':'reading','page':1,'bookmarks':[]}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 await page.locator('#reader .pdf-page[data-page="2"] .textLayer span').first.wait_for()
@@ -1054,7 +1054,7 @@ def test_mark_while_loading_switch_during_request_and_draft_on_removed_paper(eng
                     {'id':'two','paper':'paper','page':2,'rects':[rect],'text':'Second page findings.','color':'green','note':''},
                     {'id':'three','paper':'second','page':1,'rects':[rect],'text':'The second paper.','color':'blue','note':''}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 rail = page.locator('#content')
                 # The PDF is held while a rail mark is clicked: once it arrives,
                 # the reader opens on that mark's page with the mark outlined.
@@ -1155,7 +1155,7 @@ def test_page_above_measured_later_keeps_the_view_in_place(engine):
                 data = httpx.get(url+'/api/notebook').json()
                 data['reading'] = [{'paper':'paper','status':'reading','page':3,'bookmarks':[]}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 # Opened on page 3 while page 2 was still the first page's size.
                 await page.locator('#reader .pdf-page[data-page="3"] .textLayer span').first.wait_for()
@@ -1198,7 +1198,7 @@ def test_removing_a_paper_after_switching_workspaces_leaves_the_other_workspaces
                 data = httpx.get(url+'/api/notebook', headers=elsewhere).json()
                 data['highlights'] = [{'id':'far','paper':'paper','page':1,'rects':[rect],'text':'Elsewhere.','color':'blue','note':''}]
                 assert httpx.put(url+'/api/notebook', json=data, headers=elsewhere).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator(f'.claim[data-claim="{claim["id"]}"]').wait_for()
                 # A claim deleted and still in its Undo window.
@@ -1272,7 +1272,7 @@ def test_zoom_keeps_the_page_under_the_eye_across_mixed_page_sizes(engine):
                 data = httpx.get(url+'/api/notebook').json()
                 data['reading'] = [{'paper':'paper','status':'reading','page':1,'bookmarks':[]}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 await page.locator('#reader .pdf-page[data-page="2"]:not(.pending)').wait_for()
@@ -1333,7 +1333,7 @@ def test_page_showing_its_end_at_the_top_keeps_the_page_under_the_reading_line(e
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 # Page 4 is far enough from page 1 not to have been drawn or
@@ -1380,7 +1380,7 @@ def test_a_mount_overtaken_while_the_last_reader_is_torn_down_does_not_open(engi
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="one"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
                 # Both clicks in one task: the second lands while the first
@@ -1429,7 +1429,7 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 data['reading'] = [{'paper':'paper','status':'reading','page':2,'bookmarks':[]}]
                 data['highlights'] = [{'id':'one','paper':'paper','page':1,'rects':[rect],'text':'Recovery depends on conditions.','color':'yellow','note':'Saved note'}]
                 assert httpx.put(url+'/api/notebook', json=data).status_code == 200
-                await page.goto(url)
+                await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 rail = page.locator('#content')
                 await rail.locator('.highlight-entry[data-highlight="one"]').wait_for()
