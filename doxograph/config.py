@@ -596,8 +596,8 @@ def create_workspace(name: str) -> dict:
     return record
 
 
-def delete_workspace(value: str) -> None:
-    """Retire a named workspace and remove its corpus, preserving shared data."""
+def delete_workspace(value: str) -> bool:
+    """Retire a workspace; return whether durable retirement allows cleanup."""
     if value == DEFAULT_WORKSPACE_ID:
         raise ValueError("The default workspace cannot be deleted")
     if not value or value != _workspace_slug(value):
@@ -631,7 +631,7 @@ def delete_workspace(value: str) -> None:
                 # might restore its old entry. Leave the original corpus intact
                 # so that even this failure cannot expose partially erased data.
                 logging.getLogger(__name__).exception("Could not sync workspace retirement; corpus kept at %s", folder)
-                return
+                return False
     if folder.exists():
         try:
             shutil.rmtree(folder)
@@ -640,6 +640,7 @@ def delete_workspace(value: str) -> None:
             # directory on cleanup failure rather than report a false failure
             # or put a partially removed corpus back in the picker.
             logging.getLogger(__name__).exception("Could not remove deleted workspace data at %s", folder)
+    return True
 
 
 def papers_dir() -> Path:

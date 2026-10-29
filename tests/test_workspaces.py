@@ -371,6 +371,12 @@ def test_failed_retirement_directory_sync_keeps_original_corpus(monkeypatch, cap
         store.save_paper(store.new_paper("keep", title="Original paper"))
         path = store.paper_path("keep")
         before = path.read_bytes()
+        retained = config.pdfs_dir() / ".incoming-retry.pdf"
+        retained.write_bytes(b"%PDF-1.4\nSaved retry input")
+        job = server._new_import_job("Retry upload", False, staged=retained, filename="input.pdf")
+        server._set(job, state="error")
+        folder = config.data_dir()
+        files_before = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
     fsync = os.fsync
 
     def refuse_directory(descriptor):
@@ -384,6 +390,9 @@ def test_failed_retirement_directory_sync_keeps_original_corpus(monkeypatch, cap
     assert response.status_code == 200
     assert config.get_workspace(target["id"]) is None
     assert path.read_bytes() == before
+    assert {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()} == files_before
+    assert job["id"] not in server._jobs
+    assert job["id"] not in server.job_journal._paths
     assert "corpus kept" in caplog.text
     assert "Directory sync unavailable" in caplog.text
 

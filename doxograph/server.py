@@ -1581,7 +1581,7 @@ def delete_workspace(workspace_id: str) -> dict:
         _deleting_workspaces.add(identity)
     try:
         try:
-            config.delete_workspace(workspace_id)
+            cleanup_allowed = config.delete_workspace(workspace_id)
         except KeyError:
             raise HTTPException(404, f"no workspace {workspace_id}")
         except ValueError as exc:
@@ -1594,7 +1594,7 @@ def delete_workspace(workspace_id: str) -> dict:
             for key in [key for key, job in _jobs.items() if job.get("workspace") == workspace_id]:
                 job = _jobs.pop(key)
                 try:
-                    job_journal.remove(job)
+                    job_journal.remove(job, keep_file=not cleanup_allowed)
                 except OSError:
                     # Retirement is already committed. Cleanup must not turn
                     # that success into a failure that strands the old UI.

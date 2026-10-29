@@ -72,9 +72,9 @@ def save(job: dict) -> None:
         'job': {k: v for k, v in job.items() if not k.startswith('_')}, 'source': source})
 
 
-def remove(job: dict) -> None:
+def remove(job: dict, *, keep_file: bool = False) -> None:
     path = _paths.pop(job['id'], None)
-    if path:
+    if path and not keep_file:
         path.unlink(missing_ok=True)
 
 
