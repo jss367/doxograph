@@ -50,6 +50,44 @@ def test_legacy_search_links_keep_claims_and_explicit_library_links_keep_papers(
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_library_includes_pdf_matches_beyond_both_search_page_limits(engine):
+    config.set_ai_enabled(False)
+    pdf = minimal_pdf(["Only this source passage mentions strawberry."])
+    for index in range(105):
+        key = f"study-{index:03d}"
+        store.save_paper(store.new_paper(key, title=f"Study {index}"))
+        store.pdf_path(key).write_bytes(pdf)
+    store.save_paper(store.new_paper("unmatched", title="Another paper"))
+    store.set_labels("study-104", ["favorites"])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#q").fill("strawberry")
+                cards = page.locator(".library-paper")
+                await expect(cards).to_have_count(105)
+                await expect(page.locator('#papers [data-paper=""] .pm')).to_have_text("105 of 106 match")
+                await page.locator('#labels [data-label="favorites"]').click()
+                await expect(cards).to_have_count(1)
+                await expect(cards.first).to_have_attribute("data-library-paper", "study-104")
+                await page.get_by_role("button", name="Clear all", exact=True).click()
+
+                # A bounded claims search must expand when switching to the library.
+                await page.get_by_role("button", name="Extracted claims", exact=True).click()
+                await page.locator("#q").fill("strawberry")
+                await expect(page.locator("#content .pdfhit")).to_have_count(20)
+                await page.get_by_role("button", name="Papers", exact=True).click()
+                await expect(cards).to_have_count(105)
+                await page.reload()
+                await expect(cards).to_have_count(105)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 @pytest.mark.parametrize("width", [1440, 390])
 def test_paper_library_metadata_navigation_and_selection(engine, width):
     config.set_ai_enabled(False)

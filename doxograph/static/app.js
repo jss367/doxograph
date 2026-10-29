@@ -1702,6 +1702,7 @@ function rerunTextSearch() {
 async function runTextSearch(query, quiet = false) {
   const seq = ++textSearchSeq;
   const workspace = workspaceClient.workspaceId;
+  const library = V.view === 'library';
   if (!quiet) {
     captureOpenEditor();   // the redraw rebuilds any open form from state
     V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
@@ -1709,8 +1710,18 @@ async function runTextSearch(query, quiet = false) {
   }
   let next;
   try {
-    const found = await api(`/api/search?q=${encodeURIComponent(query)}`);
-    next = { q: query, loading: false, papers: found.papers || [], terms: found.terms || [], error: null };
+    const papers = new Map();
+    let offset = 0, found;
+    do {
+      found = await api(`/api/search?q=${encodeURIComponent(query)}&limit=${library ? 100 : 20}&offset=${offset}`);
+      if (seq !== textSearchSeq || workspace !== workspaceClient.workspaceId) return;
+      for (const hit of found.papers || []) papers.set(hit.key, hit);
+      if (found.next_offset != null) {
+        if (!Number.isInteger(found.next_offset) || found.next_offset <= offset) throw new Error('Search returned an invalid next page.');
+        offset = found.next_offset;
+      }
+    } while (library && found.next_offset != null);
+    next = { q: query, loading: false, papers: [...papers.values()], terms: found.terms || [], complete: found.next_offset == null, error: null };
   } catch (error) {
     next = { q: query, loading: false, papers: [], terms: [], error: error.message };
   }
@@ -2940,6 +2951,8 @@ function showView(view) {
     V.selectedId = null;
   }
   V.view = view;
+  // A query started in claim review may only have fetched its first PDF page.
+  if (view === 'library' && V.textSearch && !V.textSearch.complete) rerunTextSearch();
   if (view !== 'tensions') V.tensionFocus = null;
   if (view !== 'agreements') V.agreementFocus = null;
 }
