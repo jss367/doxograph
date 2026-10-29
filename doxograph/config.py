@@ -605,15 +605,17 @@ def create_workspace(name: str) -> dict:
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         try:
+            # Initialize before publishing the id. Deletion takes the same
+            # registry locks and cannot remove a half-initialized corpus.
+            with use_workspace(key):
+                ensure_dirs()
             records.append(record)
             _write_workspace_records(records)
         except BaseException:
-            # The directory is new and still empty here; avoid leaving an
-            # unregistered workspace when writing the small registry fails.
-            workspace_dir.rmdir()
+            # No request can use this unpublished id; remove any partially
+            # initialized directories when setup or the registry write fails.
+            shutil.rmtree(workspace_dir)
             raise
-    with use_workspace(key):
-        ensure_dirs()
     return record
 
 

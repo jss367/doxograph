@@ -238,6 +238,59 @@ def test_existing_corpus_is_the_default_and_new_workspaces_are_isolated():
     assert [paper["title"] for paper in store.all_papers()] == ["A consciousness paper"]
 
 
+def test_deletion_waits_for_initialization_before_workspace_is_published(monkeypatch):
+    monkeypatch.setattr(server, "_jobs", {})
+    initializing, release, exclusive_taken = threading.Event(), threading.Event(), threading.Event()
+    ensure, activity = config.ensure_dirs, config.workspace_activity
+
+    def paused_initialization():
+        ensure()
+        initializing.set()
+        assert release.wait(5)
+
+    @contextlib.contextmanager
+    def tracked_activity(value, **options):
+        with activity(value, **options) as locked:
+            if options.get("exclusive"):
+                exclusive_taken.set()
+            yield locked
+
+    monkeypatch.setattr(config, "ensure_dirs", paused_initialization)
+    monkeypatch.setattr(config, "workspace_activity", tracked_activity)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    with ThreadPoolExecutor(2) as pool:
+        creation = pool.submit(config.create_workspace, "Research")
+        try:
+            assert initializing.wait(5)
+            deletion = pool.submit(client.delete, "/api/workspaces/research")
+            assert exclusive_taken.wait(5)
+            assert config.get_workspace("research") is None
+            assert not deletion.done()
+        finally:
+            release.set()
+        assert creation.result(timeout=5)["id"] == "research"
+        assert deletion.result(timeout=5).status_code == 200
+    assert config.get_workspace("research") is None
+    assert not (config.base_data_dir() / "workspaces" / "research").exists()
+
+
+def test_failed_initialization_does_not_publish_or_leave_partial_workspace(monkeypatch):
+    config.create_workspace("Keep")
+    before = config.workspaces_path().read_bytes()
+    ensure = config.ensure_dirs
+
+    def failed_initialization():
+        ensure()
+        raise OSError("Initialization failed")
+
+    monkeypatch.setattr(config, "ensure_dirs", failed_initialization)
+    with pytest.raises(OSError, match="Initialization failed"):
+        config.create_workspace("Research")
+    assert config.workspaces_path().read_bytes() == before
+    assert config.get_workspace("research") is None
+    assert not (config.base_data_dir() / "workspaces" / "research").exists()
+
+
 @pytest.mark.skipif(config.fcntl is None, reason="POSIX read-only directory leases")
 def test_named_workspace_browsing_does_not_require_writable_data_root(monkeypatch):
     target = config.create_workspace("Research")
