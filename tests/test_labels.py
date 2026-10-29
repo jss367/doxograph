@@ -216,6 +216,49 @@ def test_the_export_shows_a_papers_labels_and_searches_on_them():
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_label_choices_preserve_server_unicode_normalization(engine):
+    from playwright.async_api import expect
+    from test_browser import _answer, _paper as _browser_paper, _server
+
+    _browser_paper("target", "A Labeled Paper", "steering")
+    _browser_paper("other", "Another Paper", "steering")
+    original = ["a\ufeffb", "\ufeffedge\ufeff", "reading list"]
+    store.set_labels("target", original)
+    store.set_labels("other", ["not-apollo"])
+    whitespace = [chr(code) for code in range(0x3001) if chr(code).isspace()]
+    samples = [f"{space} A{space}{space}B {space}" for space in whitespace] + original
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}#paper=target")
+                await page.locator('.paperhead .label').first.wait_for()
+                assert await page.evaluate("values => values.map(parseLabels)", samples) == [
+                    store.normalize_labels([value]) for value in samples
+                ]
+                await page.get_by_role("button", name="Labels", exact=True).click()
+                choices = page.get_by_role("group", name="Existing labels")
+                await expect(choices.locator('[aria-pressed="true"]')).to_have_count(3)
+                await choices.get_by_role("button", name="not-apollo", exact=True).click()
+                await expect(page.locator('#ask-input')).to_have_value(
+                    ', '.join(store.normalize_labels(original) + ['not-apollo'])
+                )
+                # Saving must also preserve U+FEFF at label boundaries.
+                await page.locator('#ask-input').fill(
+                    ', '.join(original + ['not-apollo', '\x1cNEW\x85LABEL\x1f'])
+                )
+                await _answer(page, "OK")
+                await expect(page.locator('.paperhead .label')).to_have_count(5)
+                assert store.load_paper("target")["labels"] == store.normalize_labels(
+                    original + ['not-apollo', 'new label']
+                )
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_label_colors_render_without_color_mix(engine):
     import re
 

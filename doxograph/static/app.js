@@ -598,8 +598,14 @@ const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
 const askText = (title, { note = '', placeholder = '', value = '', labelChoices = [] } = {}) =>
   askDialog({ title, note, input: { placeholder, value }, labelChoices });
 
+function normalizeLabel(name) {
+  // Match Python str.split(): U+FEFF is preserved; U+001C–001F and U+0085
+  // are separators. JavaScript's \s and trim() use a different set.
+  return name.toLowerCase().replace(/[\p{White_Space}\u001c-\u001f]+/gu, ' ').replace(/^ | $/g, '');
+}
+
 function parseLabels(value) {
-  return [...new Set(value.split(',').map((name) => name.toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean))];
+  return [...new Set(value.split(',').map(normalizeLabel).filter(Boolean))];
 }
 
 function syncAskLabels() {
@@ -2018,7 +2024,7 @@ function tensionsFor(claimId) {
 // across papers, reloads, and changes to the corpus, without extra metadata.
 function labelStyle(name) {
   let hash = 2166136261;
-  for (const char of name.toLowerCase().replace(/\s+/g, ' ').trim()) {
+  for (const char of normalizeLabel(name)) {
     hash = Math.imul(hash ^ char.codePointAt(0), 16777619);
   }
   return `--label-hue:${(hash >>> 0) % 360}`;
@@ -2257,7 +2263,7 @@ async function editLabels(key) {
     labelChoices: inUse,
   });
   if (answer === null) return;   // cancelled: not the same as clearing them
-  const labels = answer.split(',').map((l) => l.trim()).filter(Boolean);
+  const labels = parseLabels(answer);
   try {
     await api(`/api/papers/${encodeURIComponent(key)}`, {
       method: 'PATCH',
