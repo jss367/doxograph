@@ -155,6 +155,7 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
                 await expect(page.locator('#btn-reader-claims')).to_have_attribute('aria-expanded', 'true')
 
                 await page.locator('#btn-reader-claims').click()
+                await page.locator(".paper-actions > summary").click()
                 await page.locator('[data-act="add-claim"]').click()
                 await expect(page.locator('form[data-form="__new__"]')).to_be_visible()
 
@@ -300,13 +301,14 @@ def test_reading_layout_and_library_return(engine, width):
                 await page.get_by_role('button', name='Hide PDF', exact=True).click()
                 await expect(page.locator('#reader')).to_be_hidden()
                 await expect(page.locator('textarea[data-note="paper"]')).to_have_value('My unfinished thought.')
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role('button', name='Show PDF', exact=True).click()
                 await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
                 await page.locator('textarea[data-note="paper"]').fill('Saved from the reader.')
                 await page.locator('.note [data-act="save-note"]').click()
                 await ready(page)
                 await expect(page.locator('textarea[data-note="paper"]')).to_have_count(0)
-                await expect(page.locator('#content > .note')).to_contain_text('Saved from the reader.')
+                await expect(page.locator('#content .paper-overview .note')).to_contain_text('Saved from the reader.')
                 assert store.load_paper('paper')['notes'] == 'Saved from the reader.'
                 assert not errors
     run_browser(scenario())

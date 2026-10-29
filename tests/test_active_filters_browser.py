@@ -115,6 +115,7 @@ def test_poll_prunes_only_parked_drafts_for_deleted_papers(engine, action, faile
                                          ("two", "Retained paper", "Draft for a retained paper.")]:
                     if key == "two":
                         await page.locator("#papers [data-paper='two']").click()
+                    await page.locator(".paper-actions > summary").click()
                     await page.get_by_role("button", name="Add claim by hand").click()
                     form = page.locator("form[data-form='__new__']")
                     await form.locator("[name='text']").fill(text)
@@ -158,6 +159,7 @@ def test_new_claim_without_text_can_be_resumed_after_clearing_scope(engine, acti
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#paper=one&group=0")
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Add claim by hand").click()
                 form = page.locator("form[data-form='__new__']")
                 edited = form.locator(f"[name='{field}']")
@@ -169,7 +171,7 @@ def test_new_claim_without_text_can_be_resumed_after_clearing_scope(engine, acti
                     value = "Evidence collected before drafting the claim text."
                     await edited.fill(value)
 
-                # Both Resume and the header's Add claim action must restore details.
+                # Both Resume and the menu's Add claim action restore details.
                 for resume in ("Resume", "Add claim by hand"):
                     chips = page.get_by_role("group", name="Active filters", exact=True)
                     name = "Clear all" if action == "all" else "Remove filter: Paper: Original paper"
@@ -177,6 +179,8 @@ def test_new_claim_without_text_can_be_resumed_after_clearing_scope(engine, acti
                     await expect(form).to_have_count(0)
                     await page.locator("#papers [data-paper='one']").click()
                     await expect(page.locator("#content .proposed")).to_contain_text("claim text is still empty")
+                    if resume == "Add claim by hand":
+                        await page.locator(".paper-actions > summary").click()
                     await page.get_by_role("button", name=resume, exact=True).click()
                     await expect(form.locator("[name='text']")).to_have_value("")
                     await expect(edited).to_have_value(value)
@@ -315,6 +319,7 @@ def test_clearing_paper_scope_parks_new_claim(engine, action, draft_state):
 
             with _server() as url:
                 await page.goto(f"{url}/#paper=one&tag=alignment&group=0")
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Add claim by hand").click()
                 await new_form.locator("textarea[name='text']").fill(draft_text)
 

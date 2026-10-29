@@ -1947,6 +1947,7 @@ function renderAll() {
 function renderStats() {
   renderStorageWarnings();
   renderContinuation();
+  renderPaperReadingProgress();
   const unreviewed = S.claims.filter((c) => !c.reviewed).length;
   const proposed = S.papers.reduce((n, p) => n + (p.n_proposed_tags || 0), 0);
   const bits = [
@@ -2154,66 +2155,39 @@ function paperHeader(key, reading = false) {
   const url = (p.source || {}).url;
   const title = url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(p.title || key)}</a>`
                     : esc(p.title || key);
-  if (reading) return readingHeader(p, title);
-  return `<div class="paperhead">
-    <h2>${title}</h2>
-    <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')}
-      ${p.year ? '· ' + esc(p.year) : ''} ${p.venue ? '· ' + esc(p.venue) : ''}
-      · <code>${esc(key)}</code>
-      ${p.has_pdf ? `· <a href="/pdf/${esc(key)}?${workspaceQuery()}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
-    ${(p.labels || []).length ? `<div class="labels">${(p.labels || [])
-      .map(labelChip).join('')}</div>` : ''}
-    ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
-    ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
-    ${reading ? '' : paperNote(key)}
-    <div class="row">
-      <button type="button" data-act="reextract" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Re-read paper</button>
-      <button type="button" data-act="retag-one" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'} data-paper="${esc(key)}">Retag claims</button>
-      ${p.has_pdf ? `<button type="button" data-act="verify" data-paper="${esc(key)}" title="Check every quote against the PDF text">Check quotes</button>` : ''}
-      ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${esc(key)}"
-        title="Mark every claim on this paper reviewed">Mark ${p.n_unreviewed} reviewed</button>` : ''}
-      ${p.has_pdf ? `<button type="button" data-act="toggle-pdf" data-paper="${esc(key)}"
-        title="${V.pdfHidden ? 'Read the paper beside its claims' : 'Put the PDF away and list the claims full width'}">${V.pdfHidden ? 'Show PDF' : 'Hide PDF'}</button>` : ''}
-      ${p.has_pdf ? `<button type="button" data-paper-chat="${esc(key)}" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'}>Chat about paper</button>` : ''}
-      <button type="button" data-tool="queue-paper" data-paper="${esc(key)}">Add to reading queue</button>
-      <button type="button" data-tool="history" data-paper="${esc(key)}">Edit history</button>
-      <button type="button" data-act="add-claim" data-paper="${esc(key)}">Add claim by hand</button>
-      <button type="button" data-act="labels" data-paper="${esc(key)}"
-        title="Mark this paper — open source, has a model on HuggingFace, anything you sort papers by">Labels</button>
-      <button type="button" data-act="del-paper" data-paper="${esc(key)}" style="margin-left:auto">Remove</button>
-    </div>
-    ${proposedPanel(key)}
-  </div>`;
+  return readingHeader(p, title, reading);
 }
 
-// The reader shows identity and the actions used while reading. Maintenance
+// Both paper layouts share the same reading actions. Analysis and maintenance
 // commands stay reachable in a disclosure, with native keyboard navigation.
-function readingHeader(p, title) {
+function readingHeader(p, title, reading) {
   const key = esc(p.key);
   const existing = $('paperhead').querySelector('.paper-actions');
   const open = existing?.dataset.paper === p.key && existing.open;
-  const about = $('paperhead').querySelector('.paper-about');
-  const aboutOpen = about?.dataset.paper === p.key && about.open;
   const ai = S.ai_enabled === true ? '' : 'disabled';
+  const progress = (S.notebook?.reading || []).find(r => r.paper === p.key);
   return `<div class="paperhead reading-head">
     <div class="reading-title"><h2>${title}</h2>
       <p class="pm">${esc((p.authors || []).join(', ') || 'Authors unknown')}${p.year ? ` · ${esc(p.year)}` : ''}${p.venue ? ` · ${esc(p.venue)}` : ''}</p></div>
-    <div class="reading-actions">
-      <button type="button" data-act="add-claim" data-paper="${key}">Add claim by hand</button>
+    <div class="reading-actions" data-paper="${key}">
+      <button type="button" class="primary" data-tool="reader" data-paper="${key}" ${p.has_pdf ? '' : 'disabled'}
+        ${p.has_pdf ? '' : 'title="Add a PDF to read this paper"'}>Read</button>
+      <button type="button" data-paper-chat="${key}" data-ai-action ${p.has_pdf ? ai : 'disabled'}
+        ${p.has_pdf ? '' : 'title="Add a PDF to ask about this paper"'}>Ask about this paper</button>
+      <button type="button" data-tool="${progress ? 'reading' : 'queue-paper'}" data-paper="${key}">${progress ? 'View reading queue' : 'Add to reading queue'}</button>
       <details class="paper-actions" data-paper="${key}" ${open ? 'open' : ''}>
         <summary>Paper actions</summary>
         <div class="paper-actions-menu">
-          <button type="button" data-paper-chat="${key}" data-ai-action ${ai}>Chat about paper</button>
-          <button type="button" data-tool="queue-paper" data-paper="${key}">Add to reading queue</button>
-          <button type="button" data-act="toggle-pdf" data-paper="${key}">Hide PDF</button>
-          <button type="button" data-act="verify" data-paper="${key}">Check quotes</button>
+          <button type="button" data-act="add-claim" data-paper="${key}">Add claim by hand</button>
+          ${p.has_pdf ? `<button type="button" data-act="toggle-pdf" data-paper="${key}">${reading ? 'Hide PDF' : 'Show PDF'}</button>
+          <button type="button" data-act="verify" data-paper="${key}">Check quotes</button>` : ''}
           ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${key}">Mark ${p.n_unreviewed} reviewed</button>` : ''}
           <button type="button" data-act="labels" data-paper="${key}">Labels</button>
           <button type="button" data-tool="history" data-paper="${key}">Edit history</button>
           <hr>
           <button type="button" data-act="reextract" data-paper="${key}" data-ai-action ${ai}>Re-read paper</button>
           <button type="button" data-act="retag-one" data-paper="${key}" data-ai-action ${ai}>Retag claims</button>
-          <a href="/pdf/${encodeURIComponent(p.key)}?${workspaceQuery()}" target="_blank" rel="noopener">Open original PDF ↗</a>
+          ${p.has_pdf ? `<a href="/pdf/${encodeURIComponent(p.key)}?${workspaceQuery()}" target="_blank" rel="noopener">Open original PDF ↗</a>` : ''}
           <button type="button" data-reader-command="btn-export">Export HTML</button>
           <button type="button" data-reader-command="btn-bib">BibTeX</button>
           <button type="button" data-reader-command="btn-help">Keyboard shortcuts</button>
@@ -2221,14 +2195,36 @@ function readingHeader(p, title) {
         </div>
       </details>
     </div>
-    ${p.summary || p.relevance || (p.labels || []).length ? `<details class="paper-about" data-paper="${key}" ${aboutOpen ? 'open' : ''}>
-      <summary>About this paper</summary>
-      ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
-      ${p.relevance ? `<p class="ps">${esc(p.relevance)}</p>` : ''}
-      ${(p.labels || []).map(labelChip).join(' ')}
-    </details>` : ''}
-    ${proposedPanel(p.key)}
   </div>`;
+}
+
+function paperReadingProgress(key) {
+  const progress = (S.notebook?.reading || []).find(r => r.paper === key);
+  if (!progress) return 'Not started';
+  const status = {queued: 'In reading queue', reading: 'Reading', finished: 'Finished'}[progress.status];
+  return `${status}${progress.status !== 'queued' ? ` · Page ${progress.page}` : ''}`;
+}
+
+// Page saves can finish while a note editor holds off redraws. Update only the
+// progress text, leaving the editor and mounted PDF in place.
+function renderPaperReadingProgress() {
+  document.querySelectorAll('[data-paper-progress]').forEach(node => {
+    node.textContent = paperReadingProgress(node.dataset.paperProgress);
+  });
+}
+
+function paperOverview(paper) {
+  return `<section class="paper-overview" aria-labelledby="paper-overview-title">
+    <h3 id="paper-overview-title">Paper overview</h3>
+    <div class="paper-reading-progress"><span class="who">Reading progress</span>
+      <p data-paper-progress="${esc(paper.key)}">${esc(paperReadingProgress(paper.key))}</p></div>
+    ${(paper.labels || []).length ? `<div class="labels">${paper.labels.map(labelChip).join('')}</div>` : ''}
+    <div class="paper-summary"><h4>Summary</h4>
+      ${paper.summary ? `<p>${esc(paper.summary)}</p>` : '<p class="hint">No summary yet. You can read the paper and add your own notes.</p>'}</div>
+    ${paper.relevance ? `<div class="paper-relevance"><h4>Why it matters</h4><p>${esc(paper.relevance)}</p></div>` : ''}
+    ${paperNote(paper.key)}
+    ${proposedPanel(paper.key)}
+  </section>`;
 }
 
 // A note is shown as the reader typed it: blank lines make paragraphs and
@@ -3164,21 +3160,21 @@ function renderContent() {
   syncHash();
 }
 
-// Polling can refresh the header while its disclosure is open. Keep keyboard
-// focus on the same command, rather than dropping it back onto the document.
+// Polling can refresh the header. Keep keyboard focus on the same reading
+// action or menu command, rather than dropping it back onto the document.
 function paperActionCursor() {
   const field = document.activeElement;
-  const menu = field?.closest('.paper-actions[open]');
-  if (!menu) return null;
+  const actions = field?.closest('.reading-actions');
+  if (!actions) return null;
   const attribute = ['data-act', 'data-tool', 'data-paper-chat', 'data-reader-command', 'href']
     .find(name => field.hasAttribute(name));
-  return {paper: menu.dataset.paper,
+  return {paper: actions.dataset.paper,
     selector: attribute ? `[${attribute}="${CSS.escape(field.getAttribute(attribute))}"]` : 'summary'};
 }
 function restorePaperActionCursor(cursor) {
   if (!cursor) return;
-  const menu = document.querySelector(`.paper-actions[open][data-paper="${CSS.escape(cursor.paper)}"]`);
-  (menu?.querySelector(cursor.selector) || menu?.querySelector('summary'))?.focus({preventScroll: true});
+  const actions = document.querySelector(`.reading-actions[data-paper="${CSS.escape(cursor.paper)}"]`);
+  (actions?.querySelector(cursor.selector) || actions?.querySelector('summary'))?.focus({preventScroll: true});
 }
 
 function noteCursor() {
@@ -3253,12 +3249,11 @@ function drawContent() {
       <button type="button" data-act="discard-new">Discard</button>
     </div>`;
   }
-  // Beside the paper, the rail opens with what is yours: the note on the
-  // paper, then its highlights, then the claims. The highlights stay listed
-  // with the PDF put away; clicking one brings it back at that page.
-  if (reading) html += paperNote(V.paper);
+  // Keep the overview and personal notes together in either paper layout.
+  // Highlights stay listed with the PDF put away; clicking one reopens it.
   if (V.paper) {
     const paper = S.papers.find((p) => p.key === V.paper);
+    if (paper) html += paperOverview(paper);
     const marked = (S.notebook?.highlights || []).some((h) => h.paper === V.paper);
     if (paper && (paper.has_pdf || marked)) html += ResearchTools.highlightsHtml(V.paper);
   }
@@ -4741,7 +4736,8 @@ function syncAnalysisControls() {
   $('auto-extract').checked = enabled && readOnArrival;
   $('import-analysis-status').hidden = S.ai_enabled !== false;
   document.querySelectorAll('[data-ai-action]').forEach((button) => {
-    button.disabled = !enabled;
+    button.disabled = !enabled || (button.hasAttribute('data-paper-chat')
+      && !S.papers.some(p => p.key === button.dataset.paperChat && p.has_pdf));
   });
   if (typeof syncAgentChatControls === 'function') syncAgentChatControls();
 }

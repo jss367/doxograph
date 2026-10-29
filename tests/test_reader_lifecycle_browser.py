@@ -35,6 +35,7 @@ def test_removed_mark_keeps_the_entire_changed_note_recoverable(engine, removed)
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 await page.locator('[data-highlight-note]').fill(note)
                 if removed == 'mark':
+                    await page.locator(".paper-actions > summary").click()
                     await page.get_by_role('button', name='Add claim by hand', exact=True).click()
                     await page.locator('form[data-form] [name="text"]').fill('A separate unsaved claim')
                     notebook = httpx.get(url + '/api/notebook').json()
@@ -488,6 +489,7 @@ def test_bookmark_reconciles_a_reopened_paper_without_overriding_new_navigation(
                 await asyncio.wait_for(held.wait(), timeout=10)
                 await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Hide PDF', exact=True).click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role('button', name='Show PDF', exact=True).click()
                 await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
                 if move_after_reopen:

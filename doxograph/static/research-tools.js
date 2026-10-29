@@ -889,6 +889,7 @@ const ResearchTools = (() => {
         const local = (client.state.notebook?.reading || []).find(r => r.paper === paper);
         if (local) local.page = number;
         renderContinuation();
+        renderPaperReadingProgress();
       }
       // A reader opened on this paper while the save ran started from the
       // page the queue had then; it now knows what the queue says.
