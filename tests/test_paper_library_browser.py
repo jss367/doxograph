@@ -14,6 +14,42 @@ from test_browser import _answer, _paper, _poll, _server
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("filters", ["q=recovery", "label=favorites"])
+def test_legacy_search_links_keep_claims_and_explicit_library_links_keep_papers(engine, filters):
+    config.set_ai_enabled(False)
+    _paper("one", "A study of recovery")
+    _paper("two", "Another study")
+    store.set_labels("one", ["favorites"])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#{filters}")
+                claim = page.locator('#content .claim[data-claim="one-c1"]')
+                await expect(claim).to_have_count(1)
+                await expect(page.locator("#content .claim")).to_have_count(1)
+                await expect(page.locator(".library-paper")).to_have_count(0)
+                await page.reload()
+                await expect(claim).to_have_count(1)
+
+                # Choosing the new library keeps the same filters across reloads.
+                await page.get_by_role("button", name="Papers", exact=True).click()
+                await expect(page.locator('.library-paper[data-library-paper="one"]')).to_have_count(1)
+                await expect(page.locator(".library-paper")).to_have_count(1)
+                await page.reload()
+                await expect(page.locator(".library-paper")).to_have_count(1)
+                await expect(page.locator("#content .claim")).to_have_count(0)
+
+                # A fresh home URL still defaults to the complete paper library.
+                await page.goto(url)
+                await expect(page.locator(".library-paper")).to_have_count(2)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 @pytest.mark.parametrize("width", [1440, 390])
 def test_paper_library_metadata_navigation_and_selection(engine, width):
     config.set_ai_enabled(False)

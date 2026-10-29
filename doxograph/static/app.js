@@ -1178,7 +1178,7 @@ function dropMissingFilters() {
 function applyHash() {
   const params = hashParams();
   // Preserve older links into claim review while making the library home.
-  const legacyClaims = ['paper', 'sel', 'tag', 'kind', 'unreviewed', 'unverified', 'group'].some(key => params.has(key));
+  const legacyClaims = ['paper', 'sel', 'tag', 'q', 'label', 'kind', 'unreviewed', 'unverified', 'group'].some(key => params.has(key));
   const view = params.get('view') || (legacyClaims ? 'claims' : 'library');
   V.view = HASH_VIEWS.includes(view) ? view : 'library';
   V.paper = V.view === 'library' ? null : params.get('paper') || null;
