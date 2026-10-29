@@ -490,12 +490,13 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .paperhead .pm { color: var(--muted); font-size: .85rem; }
 .paperhead .ps { font-size: .9rem; margin: .4rem 0 0; }
 .labels { display: flex; flex-wrap: wrap; gap: .3rem; margin: .35rem 0 0; }
+/* Alpha HSL keeps labels colored on the oldest supported macOS WebViews. */
 .label { --label-color: hsl(var(--label-hue, 210) 65% 50%);
   font-size: .75rem; padding: .05rem .45rem;
-  border: 1px solid color-mix(in srgb, var(--label-color) 45%, var(--line));
-  background: color-mix(in srgb, var(--label-color) 14%, var(--bg));
+  border: 1px solid hsl(var(--label-hue, 210) 65% 50% / .45);
+  background: hsl(var(--label-hue, 210) 65% 50% / .14);
   border-radius: 999px; color: var(--ink); cursor: pointer; overflow-wrap: anywhere; }
-.label:hover { background: color-mix(in srgb, var(--label-color) 24%, var(--bg));
+.label:hover { background: hsl(var(--label-hue, 210) 65% 50% / .24);
   border-color: var(--label-color); }
 .label-dot { width: .55rem; height: .55rem; flex: 0 0 .55rem; border-radius: 50%;
   background: hsl(var(--label-hue, 210) 65% 50%); }
@@ -506,7 +507,7 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
   text-align: left; max-width: 100%; padding: .3rem .6rem; font-size: .85rem; }
 .label-choice::after { content: '+'; }
 .label-choice[aria-pressed="true"] { border-color: var(--label-color);
-  background: color-mix(in srgb, var(--label-color) 28%, var(--bg)); }
+  background: hsl(var(--label-hue, 210) 65% 50% / .28); }
 .label-choice[aria-pressed="true"]::after { content: '✓'; }
 
 /* A form whose save is in flight: read-only until the request settles. */

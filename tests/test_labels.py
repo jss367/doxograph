@@ -216,6 +216,49 @@ def test_the_export_shows_a_papers_labels_and_searches_on_them():
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_label_colors_render_without_color_mix(engine):
+    import re
+
+    from playwright.async_api import expect
+    from test_browser import _paper as _browser_paper, _server
+
+    _browser_paper("target", "A Labeled Paper", "steering")
+    _browser_paper("other", "Another Paper", "steering")
+    store.set_labels("target", ["apollo"])
+    store.set_labels("other", ["not-apollo"])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+
+            async def old_webview_styles(route):
+                response = await route.fetch()
+                # Model the unsupported CSS function by dropping its declarations.
+                css = re.sub(r'[^{};]+:[^{};]*color-mix\([^{};]*;', '', await response.text())
+                await route.fulfill(response=response, body=css)
+
+            await page.route('**/app.css?*', old_webview_styles)
+            with _server() as url:
+                await page.goto(f"{url}#paper=target")
+                chip = page.locator('.paperhead .label')
+                await chip.wait_for()
+                for mode in ("light", "dark"):
+                    await page.evaluate("appearance => applyThemeSettings({appearance, colors: 'slate'})", mode)
+                    await expect(chip).to_have_css("border-top-width", "1px")
+                    await expect(chip).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+                    await page.get_by_role("button", name="Labels", exact=True).click()
+                    choice = page.get_by_role("group", name="Existing labels").get_by_role("button", name="apollo", exact=True)
+                    selected = await choice.evaluate("el => getComputedStyle(el).backgroundColor")
+                    await choice.click()
+                    await expect(choice).not_to_have_css("background-color", selected)
+                    await expect(choice).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+                    await page.keyboard.press("Escape")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_label_choices_toggle_the_draft_and_keep_their_colors(engine):
     from playwright.async_api import expect
     from test_browser import _answer, _paper as _browser_paper, _server
