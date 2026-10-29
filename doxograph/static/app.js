@@ -1316,9 +1316,9 @@ async function pull() {
     }
     throw error;
   }
-  // A discarded read must not drive any rendering of the current workspace,
-  // whose selected snapshot may still be empty while its first read is held.
-  if (!result.applied) return null;
+  // Obsolete workspace reads must not render a destination still loading.
+  // A newer ready snapshot in the same workspace can satisfy a forced redraw.
+  if (!result.applied) return result.workspaceChanged || workspaceClient.state.workspace?.id !== workspace ? null : false;
   $('sync-status').hidden = true;
   S = workspaceClient.state;
   if (result.registryChanged) renderWorkspacePicker();

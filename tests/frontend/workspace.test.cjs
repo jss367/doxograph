@@ -131,7 +131,9 @@ test('an older answer cannot overwrite a newer refresh or its ETag', async () =>
   const first = client.pull();
   await client.pull();
   old.resolve(json({ papers: ['old'] }, 'old-tag'));
-  assert.equal((await first).applied, false);
+  const discarded = await first;
+  assert.equal(discarded.applied, false);
+  assert.equal(discarded.workspaceChanged, false);
   assert.deepEqual(client.state.papers, ['new']);
   await client.pull();
   assert.equal(sentTags.at(-1), 'new-tag');
@@ -147,7 +149,9 @@ test('an older failure cannot replace a newer successful refresh', async () => {
   const first = client.pull();
   await client.pull();
   old.reject(new Error('Old request failed'));
-  assert.equal((await first).applied, false);
+  const discarded = await first;
+  assert.equal(discarded.applied, false);
+  assert.equal(discarded.workspaceChanged, false);
   assert.deepEqual(client.state.papers, ['new']);
 });
 
@@ -179,7 +183,9 @@ test('a failure from before leaving and returning to the same workspace is disca
   client.select('second');
   client.select('first');
   old.reject(new Error('Old workspace request failed'));
-  assert.equal((await first).applied, false);
+  const discarded = await first;
+  assert.equal(discarded.applied, false);
+  assert.equal(discarded.workspaceChanged, true);
   assert.deepEqual(client.state.papers, []);
 });
 
@@ -191,7 +197,9 @@ test('a response from before leaving and returning to the same workspace is disc
   client.select('second');
   client.select('first');
   old.resolve(json({ papers: ['outdated'] }));
-  assert.equal((await first).applied, false);
+  const discarded = await first;
+  assert.equal(discarded.applied, false);
+  assert.equal(discarded.workspaceChanged, true);
   assert.deepEqual(client.state.papers, []);
 });
 
