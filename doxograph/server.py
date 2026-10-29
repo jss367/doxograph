@@ -1592,7 +1592,13 @@ def delete_workspace(workspace_id: str) -> dict:
             raise HTTPException(503, "The workspace could not be deleted. Check that its data directory is writable.") from exc
         with _jobs_lock:
             for key in [key for key, job in _jobs.items() if job.get("workspace") == workspace_id]:
-                job_journal.remove(_jobs.pop(key))
+                job = _jobs.pop(key)
+                try:
+                    job_journal.remove(job)
+                except OSError:
+                    # Retirement is already committed. Cleanup must not turn
+                    # that success into a failure that strands the old UI.
+                    logger.exception("Could not remove journal for deleted workspace job %s", key)
         with _state_cache_lock:
             _state_cache.pop(workspace_id, None)
         _job_recovery_issues.pop(str(config.base_data_dir() / "workspaces" / workspace_id), None)

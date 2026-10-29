@@ -299,6 +299,44 @@ def test_delete_rejects_default_and_missing_workspace():
     assert store.load_paper("keep")["title"] == "Default paper"
 
 
+def test_committed_deletion_succeeds_when_corpus_and_journal_cleanup_fail(monkeypatch, caplog):
+    target = config.create_workspace("Research")
+    with config.use_workspace(target["id"]):
+        first = server._new_job("First finished import")
+        second = server._new_job("Second finished import")
+        server._set(first, state="done")
+        server._set(second, state="done")
+        first_path = server.job_journal._paths[first["id"]]
+        second_path = server.job_journal._paths[second["id"]]
+    original_unlink = type(first_path).unlink
+
+    def fail_removal(folder):
+        raise PermissionError("Corpus cleanup blocked")
+
+    def fail_first_journal(path, *args, **kwargs):
+        if path == first_path:
+            raise PermissionError("Journal cleanup blocked")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(config.shutil, "rmtree", fail_removal)
+    monkeypatch.setattr(type(first_path), "unlink", fail_first_journal)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    response = client.delete(f"/api/workspaces/{target['id']}")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["workspaces"]] == ["default"]
+    assert config.get_workspace(target["id"]) is None
+    assert first["id"] not in server._jobs
+    assert second["id"] not in server._jobs
+    assert first["id"] not in server.job_journal._paths
+    assert second["id"] not in server.job_journal._paths
+    assert first_path.exists()
+    assert not second_path.exists()
+    assert client.get("/api/state", headers={"X-Doxograph-Workspace": target["id"]}).status_code == 404
+    assert "Corpus cleanup blocked" in caplog.text
+    assert "Journal cleanup blocked" in caplog.text
+
+
 def test_delete_rolls_back_corpus_if_registry_write_fails(monkeypatch):
     target = config.create_workspace("Research")
     with config.use_workspace(target["id"]):
