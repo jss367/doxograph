@@ -47,6 +47,41 @@ def image_bytes():
     return output.getvalue()
 
 
+def test_create_retry_returns_existing_note_without_overwriting_edits(client):
+    headers = {'Idempotency-Key': 'a' * 32}
+    payload = {'title': 'Library answer', 'body': 'Original answer'}
+    note = client.post('/api/research-notes', headers=headers, json=payload).json()
+    edited = client.put('/api/research-notes/' + note['id'], json={
+        'title': 'My edited answer', 'body': 'My writing', 'revision': note['revision']}).json()
+    retry = client.post('/api/research-notes', headers=headers, json=payload)
+    assert retry.status_code == 201
+    assert retry.json() == edited
+    assert client.get('/api/research-notes').json()['notes'] == [edited]
+    workspace = config.create_workspace('Other research')
+    other_headers = {**headers, 'X-Doxograph-Workspace': workspace['id']}
+    other = client.post('/api/research-notes', headers=other_headers, json=payload).json()
+    assert other['body'] == payload['body'] and other['revision'] == 1
+    assert client.get('/api/research-notes', headers=other_headers).json()['notes'] == [other]
+    assert client.get('/api/research-notes').json()['notes'] == [edited]
+
+
+def test_parallel_create_retries_write_one_note(client):
+    def create(_):
+        return research_notes.create_note(research_notes.NoteBody(title='Library answer'), 'b' * 32)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        notes = list(pool.map(create, range(8)))
+    assert all(note == notes[0] for note in notes)
+    assert research_notes.load() == [notes[0]]
+
+
+@pytest.mark.parametrize('operation_id', ['not-an-id', '../notes', 'a' * 31, 'a' * 33])
+def test_invalid_create_operation_ids_are_rejected(client, operation_id):
+    response = client.post('/api/research-notes', headers={'Idempotency-Key': operation_id},
+                           json={'title': 'Library answer'})
+    assert response.status_code == 422
+    assert client.get('/api/research-notes').json()['notes'] == []
+
+
 def test_local_images_are_validated_and_workspace_scoped(client):
     content = image_bytes()
     response = client.post('/api/research-notes/images',files={'file':('figure.png',content,'image/png')})

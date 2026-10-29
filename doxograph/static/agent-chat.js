@@ -56,13 +56,29 @@ $('agent-messages').addEventListener('click', async (event) => {
   const message = chat.messages[index];
   if (message?.role !== 'assistant' || message.saving) return;
   if (button.dataset.agentAction === 'open') {
-    // A saved answer always belongs to the workspace it was generated in.
-    if (workspaceClient.workspaceId !== chat.workspace) {
-      await switchWorkspace(chat.workspace);
-      if (workspaceClient.workspaceId !== chat.workspace) return;
+    message.saving = true;
+    message.saveError = '';
+    renderAgentChat();
+    try {
+      const {notes} = await api('/api/research-notes', {headers: {'X-Doxograph-Workspace': chat.workspace}});
+      if (!notes.some(note => note.id === message.savedNote)) {
+        message.savedNote = null;
+        message.saveOperation = null;
+        message.saveError = 'The saved note was deleted. You can save this answer again.';
+        return;
+      }
+      // A saved answer always belongs to the workspace it was generated in.
+      if (workspaceClient.workspaceId !== chat.workspace) {
+        await switchWorkspace(chat.workspace);
+        if (workspaceClient.workspaceId !== chat.workspace) return;
+      }
+      $('library-agent').close();
+      await ResearchNotes.open(message.savedNote);
+    } catch (error) { message.saveError = `Could not open this note: ${error.message}`; }
+    finally {
+      message.saving = false;
+      if (activeAgentChat === chat) renderAgentChat();
     }
-    $('library-agent').close();
-    await ResearchNotes.open(message.savedNote);
     return;
   }
   if (message.savedNote) return;
@@ -70,8 +86,12 @@ $('agent-messages').addEventListener('click', async (event) => {
   message.saveError = '';
   renderAgentChat();
   try {
+    // Reuse the operation even when the server committed but its response was lost.
+    message.saveOperation ||= Array.from(crypto.getRandomValues(new Uint8Array(16)),
+      byte => byte.toString(16).padStart(2, '0')).join('');
     const note = await api('/api/research-notes', {
-      method: 'POST', headers: {'Content-Type': 'application/json', 'X-Doxograph-Workspace': chat.workspace},
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-Doxograph-Workspace': chat.workspace,
+        'Idempotency-Key': message.saveOperation},
       body: JSON.stringify(libraryAnswerNote(chat, index)),
     });
     message.savedNote = note.id;

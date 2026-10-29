@@ -7,7 +7,7 @@ import pytest
 
 from browser_support import browser_session, run_browser
 from doxograph import config
-from test_browser import _server
+from test_browser import _answer, _server
 from test_research_notes_browser import ready
 
 
@@ -102,6 +102,7 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                     await page.screenshot(path='.context/library-answer-small.png')
                 await page.set_viewport_size({'width': 1440, 'height': 1100})
                 await page.get_by_role('button', name='Open saved note', exact=True).click()
+                await page.locator('#research-notes').wait_for(state='visible')
                 await ready(page)
                 assert await page.locator('#library-agent').is_hidden()
                 assert await page.locator('#note-body').input_value() == note['body']
@@ -122,6 +123,85 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 await page.locator('#btn-agent').click()
                 assert await page.locator('#agent-messages').inner_text() == ''
                 assert not errors and not external
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_committed_save_with_lost_response_retries_once_and_deleted_note_can_be_saved_again(engine):
+    config.set_ai_provider('claude_code')
+    workspace = config.create_workspace('Synthesis retry studies')
+    headers = {'X-Doxograph-Workspace': workspace['id']}
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors, operations, questions = [], [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            # Saving also works on HTTP LAN deployments without randomUUID.
+            await page.add_init_script("Object.defineProperty(crypto, 'randomUUID', {value: undefined})")
+
+            async def answer(route):
+                questions.append(route.request.post_data_json['messages'])
+                await route.fulfill(json={'answer': ANSWER, 'assistant': 'Claude'})
+
+            async def save(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                operations.append((route.request.headers['idempotency-key'],
+                                   route.request.headers['x-doxograph-workspace']))
+                if len(operations) == 1:
+                    # Commit on the real test server, then lose only the response.
+                    response = await route.fetch()
+                    assert response.status == 201
+                    await route.abort('failed')
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/agent/chat', answer)
+            await page.route('**/api/research-notes', save)
+            with _server() as url:
+                await page.goto(url + '/#ws=' + workspace['id'])
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill(QUESTION)
+                await page.locator('#agent-send').click()
+                await page.locator('#agent-messages .note-prose h2').wait_for()
+                config.set_ai_enabled(False)
+                await page.evaluate('pollOnce()')
+                await page.locator('#agent-question').fill('Keep this follow-up')
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('alert').filter(has_text='Could not save this answer').wait_for()
+                [first] = httpx.get(url + '/api/research-notes', headers=headers).json()['notes']
+                assert first['id'] == operations[0][0]
+                assert ANSWER in first['body']
+                assert await page.locator('#agent-question').input_value() == 'Keep this follow-up'
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
+                assert operations == [(first['id'], workspace['id'])] * 2
+                assert httpx.get(url + '/api/research-notes', headers=headers).json()['notes'] == [first]
+                await page.get_by_role('button', name='Open saved note', exact=True).click()
+                await page.locator('#research-notes').wait_for(state='visible')
+                await ready(page)
+                await page.get_by_role('button', name='Delete note', exact=True).click()
+                await _answer(page, 'Delete note')
+                await ready(page)
+                await page.get_by_role('button', name='Close research notes', exact=True).click()
+                await page.locator('#btn-agent').click()
+                await page.get_by_role('button', name='Open saved note', exact=True).click()
+                await page.get_by_role('alert').filter(has_text='The saved note was deleted').wait_for()
+                assert await page.locator('#library-agent').is_visible()
+                assert 'What the papers show' in await page.locator('#agent-messages').inner_text()
+                assert await page.locator('#agent-question').input_value() == 'Keep this follow-up'
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
+                [replacement] = httpx.get(url + '/api/research-notes', headers=headers).json()['notes']
+                assert replacement['id'] != first['id']
+                assert replacement['body'] == first['body']
+                assert operations[-1] == (replacement['id'], workspace['id'])
+                assert httpx.get(url + '/api/research-notes').json()['notes'] == []
+                assert len(questions) == 1 and not errors
 
     run_browser(scenario())
 
