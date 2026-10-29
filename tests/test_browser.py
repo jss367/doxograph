@@ -729,19 +729,23 @@ def test_right_click_menu_removes_a_paper_without_leaving_the_open_one():
 
 
 @pytest.mark.browser
-def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor(engine):
+    from playwright.async_api import expect
+
     _paper("paper-a", "Paper A")
     _paper("paper-b", "Paper B")
 
     async def scenario():
         draft_text = "An edit that Escape on the menu must not throw away."
 
-        async with browser_session("chromium") as browser:
+        async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
                 menu = page.locator("#ctxmenu")
                 textarea = page.locator('form[data-form="paper-b-c1"] textarea[name="text"]')
+                origin = page.locator('#papers [data-menu="paper-a"]')
                 await page.locator('[data-act="edit"][data-claim="paper-b-c1"]').click()
                 await textarea.fill(draft_text)
 
@@ -752,11 +756,12 @@ def test_escape_closes_the_paper_menu_without_cancelling_an_open_editor():
                 await menu.wait_for(state="hidden")
                 assert await textarea.input_value() == draft_text
 
-                # Right-clicking a paper moves focus to its sidebar control.
-                # Refocus the editor: Escape on an unrelated control keeps drafts.
-                assert await page.locator("#papers").evaluate("element => element === document.activeElement")
+                # Dismissal restores Paper A's actions. Another Escape there
+                # must leave the unrelated draft on Paper B intact as well.
+                await expect(origin).to_be_focused()
                 await page.keyboard.press("Escape")
                 assert await textarea.input_value() == draft_text
+                await expect(origin).to_be_focused()
                 await textarea.press("Escape")
                 await textarea.wait_for(state="detached")
 

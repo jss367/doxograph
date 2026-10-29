@@ -551,7 +551,7 @@ function toast(message, { actions = [], timeout = 6000, tone = '', onExpire = nu
 
 let askResolve = null;
 
-function askDialog({ title, note = '', input = null, ok = 'OK', cancel = 'Cancel' }) {
+function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK', cancel = 'Cancel' }) {
   const dialog = $('ask');
   $('ask-title').textContent = title;
   $('ask-note').textContent = note;
@@ -560,6 +560,11 @@ function askDialog({ title, note = '', input = null, ok = 'OK', cancel = 'Cancel
   field.hidden = input === null;
   field.value = input ? (input.value || '') : '';
   field.placeholder = input ? (input.placeholder || '') : '';
+  const choices = $('ask-label-choices');
+  choices.hidden = labelChoices.length === 0;
+  choices.innerHTML = labelChoices.map((name) => `<button type="button" class="label label-choice"
+    data-label="${esc(name)}" style="${labelStyle(name)}" aria-label="${esc(name)}" aria-pressed="false">${esc(name)}</button>`).join('');
+  syncAskLabels();
   $('ask-ok').textContent = ok;
   $('ask-cancel').textContent = cancel;
   dialog.showModal();
@@ -590,8 +595,35 @@ $('ask').addEventListener('close', () => {
 
 const confirmDialog = (title, { note = '', ok = 'OK' } = {}) =>
   askDialog({ title, note, ok }).then((answer) => answer === true);
-const askText = (title, { note = '', placeholder = '', value = '' } = {}) =>
-  askDialog({ title, note, input: { placeholder, value } });
+const askText = (title, { note = '', placeholder = '', value = '', labelChoices = [] } = {}) =>
+  askDialog({ title, note, input: { placeholder, value }, labelChoices });
+
+function normalizeLabel(name) {
+  // Match Python str.split(): U+FEFF is preserved; U+001C–001F and U+0085
+  // are separators. JavaScript's \s and trim() use a different set.
+  return name.toLowerCase().replace(/[\p{White_Space}\u001c-\u001f]+/gu, ' ').replace(/^ | $/g, '');
+}
+
+function parseLabels(value) {
+  return [...new Set(value.split(',').map(normalizeLabel).filter(Boolean))];
+}
+
+function syncAskLabels() {
+  const selected = new Set(parseLabels($('ask-input').value));
+  $('ask-label-choices').querySelectorAll('button').forEach((button) => {
+    button.setAttribute('aria-pressed', String(selected.has(button.dataset.label)));
+  });
+}
+
+$('ask-input').addEventListener('input', syncAskLabels);
+$('ask-label-choices').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-label]');
+  if (!button) return;
+  const labels = parseLabels($('ask-input').value);
+  const name = button.dataset.label;
+  $('ask-input').value = (labels.includes(name) ? labels.filter((label) => label !== name) : [...labels, name]).join(', ');
+  syncAskLabels();
+});
 
 // --- deletions, undone by not sending them --------------------------------
 //
@@ -1938,6 +1970,9 @@ function renderPapers() {
       ${ResearchTools.paperCheckbox(p)}<span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
         ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims · ${esc(paperReadiness(p))}${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
+      ${(p.labels || []).length ? `<span class="labels" aria-label="Paper labels">${p.labels.map((label) => `
+        <button type="button" class="label" data-label="${esc(label)}" style="${labelStyle(label)}"
+          aria-pressed="${V.label === label}" title="Filter by label: ${esc(label)}">${esc(label)}</button>`).join('')}</span>` : ''}
       <button type="button" class="pmenu" data-menu="${esc(p.key)}"
         aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
@@ -1991,14 +2026,27 @@ function tensionsFor(claimId) {
     && t.claims.some((c) => c.id === claimId));
 }
 
-// The section hides itself when nothing is labelled. An empty list under a
-// heading reads as a feature that is broken rather than one nobody has used,
-// and the way in is the button on a paper, not this.
+// Derive colors from names so existing and new labels keep the same color
+// across papers, reloads, and changes to the corpus, without extra metadata.
+function labelStyle(name) {
+  let hash = 2166136261;
+  for (const char of normalizeLabel(name)) {
+    hash = Math.imul(hash ^ char.codePointAt(0), 16777619);
+  }
+  return `--label-hue:${(hash >>> 0) % 360}`;
+}
+
+function labelChip(name) {
+  return `<span class="label" data-label="${esc(name)}" style="${labelStyle(name)}">${esc(name)}</span>`;
+}
+
+// Hide the section until at least one paper has a label.
 function renderLabels() {
   const entries = Object.entries(S.label_counts || {});
   $('labels-sec').hidden = entries.length === 0;
   $('labels').innerHTML = entries.map(([name, count]) => `
-    <li class="${V.label === name ? 'active' : ''}" data-label="${esc(name)}">
+    <li class="${V.label === name ? 'active' : ''}" data-label="${esc(name)}" style="${labelStyle(name)}">
+      <span class="label-dot" aria-hidden="true"></span>
       <span>${esc(name)}</span>
       <span class="n">${count}</span>
     </li>`).join('');
@@ -2030,7 +2078,7 @@ function paperHeader(key, reading = false) {
       · <code>${esc(key)}</code>
       ${p.has_pdf ? `· <a href="/pdf/${esc(key)}?${workspaceQuery()}" target="_blank" rel="noopener">PDF</a>` : '· no PDF'}</div>
     ${(p.labels || []).length ? `<div class="labels">${(p.labels || [])
-      .map((l) => `<span class="label" data-label="${esc(l)}">${esc(l)}</span>`).join('')}</div>` : ''}
+      .map(labelChip).join('')}</div>` : ''}
     ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
     ${p.relevance ? `<p class="ps"><em>Why it is here:</em> ${esc(p.relevance)}</p>` : ''}
     ${reading ? '' : paperNote(key)}
@@ -2093,7 +2141,7 @@ function readingHeader(p, title) {
       <summary>About this paper</summary>
       ${p.summary ? `<p class="ps">${esc(p.summary)}</p>` : ''}
       ${p.relevance ? `<p class="ps">${esc(p.relevance)}</p>` : ''}
-      ${(p.labels || []).map(l => `<span class="label" data-label="${esc(l)}">${esc(l)}</span>`).join(' ')}
+      ${(p.labels || []).map(labelChip).join(' ')}
     </details>` : ''}
     ${proposedPanel(p.key)}
   </div>`;
@@ -2208,23 +2256,20 @@ async function saveNote(key) {
   }
 }
 
-// Labels are typed into one field, as a claim's topics are, rather than
-// added and removed one at a time: there are rarely more than two or three on
-// a paper, and one field is one request and nothing to keep in sync. The
-// labels already in use are offered in the note, since the point of a label is
-// that other papers carry the same one and a typo makes a second list of one.
+// Clicking an existing label edits the same draft as typing; only OK saves it.
 async function editLabels(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper) return;
-  const inUse = Object.keys(S.label_counts || {});
+  const inUse = [...new Set([...Object.keys(S.label_counts || {}), ...(paper.labels || [])])].sort();
   const answer = await askText(`Labels for ${paper.title || key}`, {
-    note: 'Separate labels with commas. Spaces are allowed within a label.'
-      + (inUse.length ? ` In use: ${inUse.join(', ')}` : ''),
+    note: (inUse.length ? 'Click a label to add or remove it. ' : '')
+      + 'Type new labels separated by commas. Spaces are allowed within a label.',
     placeholder: 'open source, reading list',
     value: (paper.labels || []).join(', '),
+    labelChoices: inUse,
   });
   if (answer === null) return;   // cancelled: not the same as clearing them
-  const labels = answer.split(',').map((l) => l.trim()).filter(Boolean);
+  const labels = parseLabels(answer);
   try {
     await api(`/api/papers/${encodeURIComponent(key)}`, {
       method: 'PATCH',
@@ -4438,11 +4483,16 @@ $('panes').addEventListener('click', async (event) => {
 });
 
 $('papers').addEventListener('click', (event) => {
+  const label = event.target.closest('[data-label]');
+  if (label) {
+    chooseLabel(label.dataset.label);
+    return;
+  }
   // The same menu the right-click opens, for the people who never try one.
   const menuButton = event.target.closest('[data-menu]');
   if (menuButton) {
     const box = menuButton.getBoundingClientRect();
-    openPaperMenu(menuButton.dataset.menu, box.left, box.bottom + 4);
+    openPaperMenu(menuButton.dataset.menu, box.left, box.bottom + 4, menuButton);
     return;
   }
   const li = event.target.closest('[data-paper]');
@@ -4886,36 +4936,65 @@ document.querySelectorAll('.action-disclosure').forEach(menu => {
 
 // --- paper context menu --------------------------------------------------
 
-function openPaperMenu(paper, x, y) {
+let paperMenuTrigger = null;
+let paperMenuScroll = null;
+
+function restorePaperMenuFocus(trigger) {
+  if (!trigger || trigger.workspace !== workspaceClient.workspaceId) return;
+  $('papers').querySelector(`[data-menu="${CSS.escape(trigger.paper)}"]`)?.focus({ preventScroll: true });
+}
+
+function openPaperMenu(paper, x, y, trigger = null) {
+  // Keep the identity rather than the node: polling and label saves rebuild
+  // the list while the menu or its editor is open.
+  paperMenuTrigger = trigger ? { paper, workspace: workspaceClient.workspaceId } : null;
+  paperMenuScroll = new Map([$('side'), $('papers')].map(node =>
+    [node, { top: node.scrollTop, left: node.scrollLeft }]));
   const p = S.papers.find((row) => row.key === paper);
   const menu = $('ctxmenu');
   menu.innerHTML = `
     <li class="mh">${esc(p ? p.title || paper : paper)}</li>
     ${p && p.has_pdf ? `<li><button type="button" data-act="open-pdf" data-paper="${esc(paper)}">Open the PDF</button></li>` : ''}
+    <li><button type="button" data-act="labels" data-paper="${esc(paper)}">${p?.labels?.length ? 'Edit labels…' : 'Add labels…'}</button></li>
     <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
   menu.hidden = false;
   // Measure after showing, then keep the whole menu inside the window.
   const { width, height } = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 4))}px`;
   menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 4))}px`;
+  if (trigger) menu.querySelector('button')?.focus({ preventScroll: true });
 }
 
-function closePaperMenu() {
+function closePaperMenu({ restoreFocus = false } = {}) {
   $('ctxmenu').hidden = true;
+  const trigger = paperMenuTrigger;
+  paperMenuTrigger = null;
+  paperMenuScroll = null;
+  if (restoreFocus) restorePaperMenuFocus(trigger);
+  return trigger;
 }
 
 $('papers').addEventListener('contextmenu', (event) => {
   const li = event.target.closest('[data-paper]');
-  if (!li || !li.dataset.paper) return;   // "All papers" has nothing to remove
+  if (!li || !li.dataset.paper) return;   // "All papers" has no paper actions
   event.preventDefault();
-  openPaperMenu(li.dataset.paper, event.clientX, event.clientY);
+  openPaperMenu(li.dataset.paper, event.clientX, event.clientY, li.querySelector('[data-menu]'));
 });
 
 $('ctxmenu').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
   if (!button) return;
-  closePaperMenu();
+  const trigger = closePaperMenu({ restoreFocus: true });
   const paper = button.dataset.paper;
+  if (button.dataset.act === 'labels') {
+    try {
+      await editLabels(paper);
+    } finally {
+      // A save replaces the restored button. Recover focus only if it fell
+      // back to the document, preserving any new focus chosen during the save.
+      if (document.activeElement === document.body) restorePaperMenuFocus(trigger);
+    }
+  }
   // The paper stays in the list until its DELETE comes back, so the menu can
   // be opened on it again and asked to remove it a second time.
   if (button.dataset.act === 'del-paper') {
@@ -4927,6 +5006,18 @@ $('ctxmenu').addEventListener('click', async (event) => {
   }
 });
 
+$('ctxmenu').addEventListener('keydown', (event) => {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  const buttons = [...$('ctxmenu').querySelectorAll('button')];
+  if (!buttons.length) return;
+  const current = buttons.indexOf(document.activeElement);
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+    : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+  event.preventDefault();
+  event.stopPropagation();
+  buttons[index].focus({ preventScroll: true });
+});
+
 // A press anywhere outside the menu dismisses it. Right-clicking another paper
 // also lands here first, then the contextmenu handler above reopens it there.
 document.addEventListener('mousedown', (event) => {
@@ -4934,8 +5025,16 @@ document.addEventListener('mousedown', (event) => {
 });
 // Escape is handled in the keyboard section below, ahead of the editor keys,
 // so closing the menu does not also cancel an open editor.
-$('side').addEventListener('scroll', closePaperMenu);
-window.addEventListener('resize', closePaperMenu);
+// Paper lists scroll independently; scroll does not bubble from descendants.
+$('side').addEventListener('scroll', event => {
+  if ($('ctxmenu').hidden) return;
+  // Opening by pointer can follow a scroll in the same frame. Ignore that
+  // queued event when its position was already accounted for on opening.
+  const start = paperMenuScroll?.get(event.target);
+  if (start && start.top === event.target.scrollTop && start.left === event.target.scrollLeft) return;
+  closePaperMenu({ restoreFocus: true });
+}, { capture: true });
+window.addEventListener('resize', () => closePaperMenu({ restoreFocus: true }));
 
 // Choosing a label from the sidebar or from a paper's own header. A label is
 // a property of the paper, so it is read as "show me the papers like this
@@ -5505,7 +5604,11 @@ document.addEventListener('keydown', async (event) => {
   // While the paper menu is open Escape belongs to it. Falling through to the
   // editor branches would also run `cancelEdit` and drop a draft the user
   // only meant to keep by dismissing the menu.
-  if (event.key === 'Escape' && !$('ctxmenu').hidden) { closePaperMenu(); return; }
+  if (event.key === 'Escape' && !$('ctxmenu').hidden) {
+    closePaperMenu({ restoreFocus: true });
+    event.preventDefault();
+    return;
+  }
   // This independent editor owns its keyboard. Escape here must not reach
   // the claim-editor fallback and discard a draft elsewhere in the view.
   if (event.target.closest?.('#workspace-notes-panel')) return;
