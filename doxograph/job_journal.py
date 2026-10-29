@@ -62,6 +62,22 @@ def check_workspace_owners(folder: Path) -> None:
     The caller holds exclusive workspace activity until deletion has finished.
     """
     with _lease_guard:
+        for path in (folder / '.jobs').glob('*.json'):
+            if path.is_symlink():
+                continue
+            try:
+                data = json.loads(path.read_text())
+            except (ValueError, UnicodeError):
+                continue  # Malformed notifications do not identify a live owner.
+            if (not isinstance(data, dict) or data.get('version') != 1
+                    or type(data.get('pid')) is not int or data['pid'] <= 0):
+                continue
+            try:
+                alive = _owner_alive(data, path.parent)
+            except PermissionError:
+                alive = True  # An inaccessible live process is not a dead owner.
+            if alive:
+                raise BlockingIOError('A legacy server still owns this workspace')
         for path in (folder / '.jobs').glob('.owner-*.lock'):
             if path in _leases:
                 continue

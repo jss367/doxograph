@@ -89,6 +89,50 @@ def _hold_foreign_job_owner(data_dir, workspace, ready, release):
         assert release.wait(10)
 
 
+def _hold_legacy_job_owner(data_dir, workspace, ready, release):
+    os.environ["DOXOGRAPH_DATA"] = data_dir
+    with config.use_workspace(workspace):
+        store.write_json(config.data_dir() / '.jobs' / '21.json', {
+            'version': 1, 'pid': os.getpid(),
+            'job': {'id': 21, 'workspace': workspace, 'state': 'fetching',
+                    'label': 'Legacy worker', 'started': store.now()},
+            'source': {},
+        })
+        ready.set()
+        assert release.wait(10)
+        store.save_context("Legacy worker completed")
+
+
+def test_delete_waits_for_live_version_one_journal_owner_without_instance_marker(monkeypatch):
+    monkeypatch.setattr(server, "_jobs", {})
+    target = config.create_workspace("Research")
+    context = multiprocessing.get_context("spawn")
+    ready, release = context.Event(), context.Event()
+    child = context.Process(target=_hold_legacy_job_owner,
+                            args=(str(config.base_data_dir()), target["id"], ready, release))
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    child.start()
+    folder = config.base_data_dir() / "workspaces" / target["id"]
+    try:
+        assert ready.wait(10)
+        assert not list((folder / '.jobs').glob('.owner-*'))
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 409
+        assert config.get_workspace(target["id"]) == target
+        assert (folder / '.jobs' / '21.json').exists()
+        release.set()
+        child.join(timeout=10)
+        assert child.exitcode == 0
+        with config.use_workspace(target["id"]):
+            assert store.load_context() == "Legacy worker completed"
+        assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
+        assert not folder.exists()
+    finally:
+        release.set()
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=5)
+
+
 def test_delete_refuses_live_foreign_journal_owner_then_removes_corpus():
     target = config.create_workspace("Research")
     context = multiprocessing.get_context("spawn")
