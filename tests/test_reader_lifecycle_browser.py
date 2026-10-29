@@ -186,7 +186,8 @@ def test_mark_editor_reconciles_clean_removal_and_conflicting_notes(engine, remo
                 assert await page.locator('[data-highlight-note]').input_value() == 'My changed note'
                 assert httpx.get(url + '/api/notebook').json()['highlights'][0]['note'] == 'Written in another window'
                 await page.locator('#toasts .toast', has_text='note changed in another window').wait_for()
-                await page.locator('#content').get_by_role('button', name='Cancel', exact=True).click()
+                await page.locator('.highlight-entry[data-highlight="mark"]').get_by_role(
+                    'button', name='Cancel', exact=True).click()
                 await ready(page)
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 # A clean editor closes without a recovery warning or phantom
