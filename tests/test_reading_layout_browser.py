@@ -12,6 +12,163 @@ from test_research_tools_browser import ready
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('storage_available', [True, False])
+def test_reading_pane_widths_resize_and_survive_narrow_windows(engine, storage_available):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Adjustable reading panes'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            if not storage_available:
+                await page.add_init_script('''
+                    Storage.prototype.getItem = () => { throw new Error('Unavailable'); };
+                    Storage.prototype.setItem = () => { throw new Error('Unavailable'); };
+                    Storage.prototype.removeItem = () => { throw new Error('Unavailable'); };
+                ''')
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                side, claims = page.locator('#side'), page.locator('#claim-column')
+                handle = page.locator('#claims-resize')
+
+                async def width(node):
+                    return round((await node.bounding_box())['width'])
+
+                async def drag(selector, dx):
+                    box = await page.locator(selector).bounding_box()
+                    x, y = box['x'] + box['width'] / 2, box['y'] + 100
+                    await page.mouse.move(x, y)
+                    await page.mouse.down()
+                    await page.mouse.move(x + dx, y, steps=5)
+                    await page.mouse.up()
+
+                await drag('#side-resize', -60)
+                assert await width(side) == 260
+                before = await width(claims)
+                await drag('#claims-resize', -80)
+                assert await width(claims) == before + 80
+                await expect(handle).to_be_focused()
+                await page.keyboard.press('ArrowRight')
+                assert await width(claims) == before + 68
+                await page.keyboard.press('Shift+ArrowLeft')
+                wanted = before + 116
+                assert await width(claims) == wanted
+                await expect(handle).to_have_attribute('aria-valuenow', str(wanted))
+
+                # A constrained window must not replace the requested widths.
+                await page.set_viewport_size({'width': 850, 'height': 1000})
+                await expect(handle).to_have_attribute('aria-valuemax', '310')
+                assert await width(page.locator('#reader')) >= 280
+                assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                await page.set_viewport_size({'width': 390, 'height': 1000})
+                await expect(handle).to_be_hidden()
+                await expect(page.locator('#side-resize')).to_be_hidden()
+                await page.set_viewport_size({'width': 1440, 'height': 1000})
+                await expect(claims).to_have_css('width', f'{wanted}px')
+                assert await width(side) == 260
+
+                if storage_available:
+                    await page.reload()
+                    await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                    assert await width(side) == 260
+                    assert await width(claims) == wanted
+
+                # Home and a stationary double-click restore the responsive default.
+                await handle.focus()
+                await page.keyboard.press('Home')
+                assert await width(claims) == before
+                await page.keyboard.press('ArrowLeft')
+                assert await width(claims) == before + 12
+                await handle.dblclick()
+                assert await width(claims) == before
+                await drag('#claims-resize', -30)
+                await handle.dispatch_event('dblclick')
+                assert await width(claims) == before + 30
+                assert not await page.locator('body').evaluate("node => node.classList.contains('resizing-claims')")
+
+                await drag('#claims-resize', 2000)
+                assert await width(claims) == 240
+                await drag('#claims-resize', -2000)
+                assert await width(page.locator('#reader')) == 280
+                await handle.focus()
+                await page.keyboard.press('Home')
+                assert await width(claims) == before
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('width', [1440, 390])
+def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, width):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Reading with fewer distractions'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    claim = store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': width, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await page.locator(f'#content [data-claim="{claim["id"]}"] [data-act="edit"]').click()
+                draft = page.locator(f'form[data-form="{claim["id"]}"] textarea[name="note"]')
+                await draft.fill('An unfinished thought beside the source.')
+                await page.evaluate('''() => {
+                    window.originalPdfPage = document.querySelector('#reader .pdf-page');
+                    window.originalDraft = document.querySelector('form[data-form] textarea[name="note"]');
+                }''')
+                if width > 800:
+                    await page.locator('#btn-reader-library').click()
+                await page.locator('#btn-reader-claims').click()
+                await expect(page.locator('#side')).to_be_hidden()
+                await expect(page.locator('#claim-column')).to_be_hidden()
+                await expect(page.locator('#claims-resize')).to_be_hidden()
+                await expect(page.locator('#btn-reader-claims')).to_have_text('Show claims')
+                await expect(page.locator('#btn-reader-claims')).to_have_attribute('aria-expanded', 'false')
+                if width > 800:
+                    reader = await page.locator('#reader').bounding_box()
+                    main = await page.locator('#main').bounding_box()
+                    assert abs(reader['width'] - main['width']) <= 1
+
+                await page.locator('#btn-reader-claims').click()
+                await expect(draft).to_have_value('An unfinished thought beside the source.')
+                assert await page.evaluate("originalDraft === document.querySelector('form[data-form] textarea[name=\"note\"]')")
+                assert await page.evaluate("originalPdfPage === document.querySelector('#reader .pdf-page')")
+                await page.locator('#btn-reader-library').click()
+                await expect(page.locator('#side')).to_be_visible()
+
+                # Asking for workspace notes brings the hidden column back.
+                await page.locator('#btn-reader-claims').click()
+                await page.locator('[data-sidebar-focus="write"]').click()
+                await page.locator('.research-tools-nav [data-tool="notes"]').click()
+                await expect(page.locator('#claim-column')).to_be_visible()
+                await expect(page.locator('#workspace-notes')).to_be_focused()
+                await expect(page.locator('#btn-reader-claims')).to_have_attribute('aria-expanded', 'true')
+
+                await page.locator('#btn-reader-claims').click()
+                await page.locator('[data-act="add-claim"]').click()
+                await expect(page.locator('form[data-form="__new__"]')).to_be_visible()
+
+                # Collapsing the reading column must not hide the library's claims.
+                await page.locator('#btn-reader-claims').click()
+                await page.locator('#btn-back-library').click()
+                await expect(page.locator('#claim-column')).to_be_visible()
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('width', [1440, 1024, 390])
 def test_claim_editor_fits_reading_sidebar(engine, width):
     config.set_ai_enabled(False)

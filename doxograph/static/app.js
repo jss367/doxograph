@@ -86,6 +86,7 @@ function readingPaper() {
 
 // Reading has its own layout. Library filters remain available on demand and
 // keep their state when the user returns to the library.
+let readingClaimsCollapsed = false;
 function layoutPanes(reading) {
   const wasReading = document.body.classList.contains('reading-paper');
   document.body.classList.toggle('reading-paper', Boolean(reading));
@@ -97,6 +98,8 @@ function layoutPanes(reading) {
     const narrow = reading && window.matchMedia('(max-width: 800px)').matches;
     setReadingLibrary(Boolean(narrow));
   }
+  document.body.classList.toggle('claims-collapsed', Boolean(reading) && readingClaimsCollapsed);
+  fitClaimsWidth();
   const filtersOpen = document.body.classList.contains('reading-filters-open');
   const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.unreviewed || V.unverified);
   $('btn-reader-filters').textContent = filtered ? 'Claim filters · active' : 'Claim filters';
@@ -105,9 +108,20 @@ function layoutPanes(reading) {
 }
 
 function setReadingLibrary(collapsed) {
+  if (collapsed && $('side').contains(document.activeElement)) $('btn-reader-library').focus();
   document.body.classList.toggle('library-collapsed', collapsed);
   $('btn-reader-library').textContent = collapsed ? 'Show library' : 'Hide library';
   $('btn-reader-library').setAttribute('aria-expanded', String(!collapsed));
+  fitClaimsWidth();
+}
+
+function setReadingClaims(collapsed) {
+  if (collapsed && $('claim-column').contains(document.activeElement)) $('btn-reader-claims').focus();
+  readingClaimsCollapsed = collapsed;
+  document.body.classList.toggle('claims-collapsed', document.body.classList.contains('reading-paper') && collapsed);
+  $('btn-reader-claims').textContent = collapsed ? 'Show claims' : 'Hide claims';
+  $('btn-reader-claims').setAttribute('aria-expanded', String(!collapsed));
+  fitClaimsWidth();
 }
 
 function setReadingFilters(open) {
@@ -135,6 +149,7 @@ function focusPaperImport() {
 // and takes the passage.
 function startClaimFromPassage(paper, passage) {
   if (refuseWhileRemoving(paper, 'a new claim')) return;
+  setReadingClaims(false);
   captureOpenEditor();
   const held = V.newClaim && V.newClaim.paper === paper ? V.newClaim : blankClaim(paper);
   V.newClaim = { ...held, quote: passage.quote, locator: passage.locator, note: passage.note || held.note || '' };
@@ -384,6 +399,7 @@ window.addEventListener('resize', fitSideWidth);
   };
   handle.addEventListener('pointerup', release);
   handle.addEventListener('pointercancel', release);
+  handle.addEventListener('lostpointercapture', release);
   handle.addEventListener('dblclick', () => {
     if (!movedThisPress && !movedLastPress) wantSideWidth(sideWidthDefault(), true);
   });
@@ -401,6 +417,88 @@ window.addEventListener('resize', fitSideWidth);
     else if (event.key === 'ArrowRight') nudge(at + step);
     else if (event.key === 'Home') wantSideWidth(sideWidthDefault(), true);
     else return;
+    event.preventDefault();
+  });
+}
+
+// The claims column keeps its own width. ResizeObserver also refits it when
+// the library opens or changes width, without replacing the mounted reader.
+const CLAIMS_WIDTH_KEY = 'doxograph-claims-width';
+let claimsWidthWanted = null;
+try {
+  const saved = Number(localStorage.getItem(CLAIMS_WIDTH_KEY));
+  if (Number.isFinite(saved) && saved > 0) claimsWidthWanted = saved;
+} catch (_) { /* use the responsive default */ }
+const claimsWidthDefault = () => Math.max(
+  (window.innerWidth <= 1100 ? 17 : 19) * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16),
+  $('main').clientWidth * (window.innerWidth <= 1100 ? .34 : .3));
+const claimsWidthMax = () => Math.max(0, $('main').clientWidth - 280);
+const claimsWidthMin = () => Math.min(240, claimsWidthMax());
+const clampClaimsWidth = px => Math.min(claimsWidthMax(), Math.max(claimsWidthMin(), Math.round(px)));
+
+function fitClaimsWidth() {
+  if (!document.body.classList.contains('reading-paper') || window.innerWidth <= 800) return;
+  const width = clampClaimsWidth(claimsWidthWanted ?? claimsWidthDefault());
+  $('panes').style.setProperty('--claims-width', `${width}px`);
+  const handle = $('claims-resize');
+  handle.setAttribute('aria-valuenow', String(width));
+  handle.setAttribute('aria-valuemin', String(claimsWidthMin()));
+  handle.setAttribute('aria-valuemax', String(claimsWidthMax()));
+}
+function storeClaimsWidth() {
+  try {
+    if (claimsWidthWanted === null) localStorage.removeItem(CLAIMS_WIDTH_KEY);
+    else localStorage.setItem(CLAIMS_WIDTH_KEY, String(claimsWidthWanted));
+  } catch (_) { /* retain the width for this session */ }
+}
+new ResizeObserver(fitClaimsWidth).observe($('main'));
+window.addEventListener('resize', fitClaimsWidth);
+
+{
+  const handle = $('claims-resize');
+  let drag = null, movedThisPress = false, movedLastPress = false;
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.focus();
+    movedLastPress = movedThisPress;
+    movedThisPress = false;
+    drag = { pointer: event.pointerId, from: event.clientX,
+      width: $('claim-column').getBoundingClientRect().width, wanted: claimsWidthWanted };
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-claims');
+  });
+  handle.addEventListener('pointermove', event => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    if (Math.abs(event.clientX - drag.from) > 2) movedThisPress = true;
+    // Moving the right divider left makes the claims column wider.
+    claimsWidthWanted = clampClaimsWidth(drag.width + drag.from - event.clientX);
+    fitClaimsWidth();
+  });
+  const release = event => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    if (clampClaimsWidth(claimsWidthWanted ?? claimsWidthDefault()) === Math.round(drag.width)) {
+      claimsWidthWanted = drag.wanted;
+    }
+    drag = null;
+    document.body.classList.remove('resizing-claims');
+    storeClaimsWidth();
+  };
+  handle.addEventListener('pointerup', release);
+  handle.addEventListener('pointercancel', release);
+  handle.addEventListener('lostpointercapture', release);
+  const reset = () => { claimsWidthWanted = null; storeClaimsWidth(); fitClaimsWidth(); };
+  handle.addEventListener('dblclick', () => {
+    if (!movedThisPress && !movedLastPress) reset();
+  });
+  handle.addEventListener('keydown', event => {
+    const at = clampClaimsWidth(claimsWidthWanted ?? claimsWidthDefault());
+    const step = event.shiftKey ? 48 : 12;
+    if (event.key === 'Home') reset();
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const width = clampClaimsWidth(at + (event.key === 'ArrowLeft' ? step : -step));
+      if (width !== at) { claimsWidthWanted = width; storeClaimsWidth(); fitClaimsWidth(); }
+    } else return;
     event.preventDefault();
   });
 }
@@ -3864,6 +3962,9 @@ async function removePaper(paper) {
 $('btn-reader-library').addEventListener('click', () => {
   setReadingLibrary(!document.body.classList.contains('library-collapsed'));
 });
+$('btn-reader-claims').addEventListener('click', () => {
+  setReadingClaims(!readingClaimsCollapsed);
+});
 window.matchMedia('(max-width: 800px)').addEventListener('change', event => {
   if (readingPaper()) setReadingLibrary(event.matches);
 });
@@ -4254,6 +4355,7 @@ $('panes').addEventListener('click', async (event) => {
       // still clickable. Opening the form would invite a claim the DELETE
       // behind it is about to discard.
       if (refuseWhileRemoving(paper, 'a new claim')) return;
+      setReadingClaims(false);
       captureOpenEditor();
       // Resume a held draft rather than overwriting what was typed into it.
       if (!V.newClaim || V.newClaim.paper !== paper || !newClaimHasEdits(V.newClaim)) {
@@ -5429,7 +5531,7 @@ document.addEventListener('keydown', async (event) => {
     selectNextUnreviewed(rows);
   } else if (event.key === 'e') {
     const row = selectedRow(rows);
-    if (row) { captureOpenEditor(); V.editing = row.id; renderContent(); }
+    if (row) { setReadingClaims(false); captureOpenEditor(); V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
     const row = selectedRow(rows);
     if (!row) return;
@@ -5460,7 +5562,7 @@ document.addEventListener('keydown', async (event) => {
 
 function scrollToSelected() {
   const el = document.querySelector('.claim.sel');
-  if (el) el.scrollIntoView({ block: 'nearest' });
+  if (el) { setReadingClaims(false); el.scrollIntoView({ block: 'nearest' }); }
 }
 
 // --- drag and drop --------------------------------------------------------

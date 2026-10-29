@@ -362,6 +362,14 @@ size gets a wider pane, and the width is remembered in this browser.
 In narrow windows, the library stacks above the content at full width and the
 divider is hidden. Widening the window restores the saved sidebar width.
 
+While reading a PDF, drag the divider on either side of the document to resize
+the library or claims pane. Each width is remembered in this browser. The
+dividers support the same arrow keys, Shift, Home, and double-click controls.
+Use **Hide library** and **Hide claims** in the top bar to give the document
+more room; each button switches to **Show** so you can bring its pane back.
+Hiding a pane keeps the PDF and unsaved edits in place. In narrow windows, the
+claims stack below the PDF and the resize handles are hidden.
+
 Deleting a claim, an agreement, or a synthesis is not confirmed first. It is
 undone instead: the row leaves the page at once and the request is held until
 its notice fades, so Undo is the delete never being sent and the claim comes
