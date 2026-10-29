@@ -2,6 +2,7 @@
 
 import multiprocessing
 import os
+import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -335,6 +336,56 @@ def test_committed_deletion_succeeds_when_corpus_and_journal_cleanup_fail(monkey
     assert client.get("/api/state", headers={"X-Doxograph-Workspace": target["id"]}).status_code == 404
     assert "Corpus cleanup blocked" in caplog.text
     assert "Journal cleanup blocked" in caplog.text
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory durability barrier")
+def test_retirement_syncs_registry_directory_before_removing_corpus(monkeypatch):
+    target = config.create_workspace("Research")
+    events = []
+    fsync, replace, rmtree = os.fsync, os.replace, config.shutil.rmtree
+
+    def synced(descriptor):
+        events.append("directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file")
+        fsync(descriptor)
+
+    def replaced(source, destination):
+        replace(source, destination)
+        events.append("replace")
+
+    def removed(folder):
+        assert config.get_workspace(target["id"]) is None
+        events.append("remove")
+        rmtree(folder)
+
+    monkeypatch.setattr(os, "fsync", synced)
+    monkeypatch.setattr(os, "replace", replaced)
+    monkeypatch.setattr(config.shutil, "rmtree", removed)
+    config.delete_workspace(target["id"])
+    assert events == ["file", "replace", "directory", "remove"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory durability barrier")
+def test_failed_retirement_directory_sync_keeps_original_corpus(monkeypatch, caplog):
+    target = config.create_workspace("Research")
+    with config.use_workspace(target["id"]):
+        store.save_paper(store.new_paper("keep", title="Original paper"))
+        path = store.paper_path("keep")
+        before = path.read_bytes()
+    fsync = os.fsync
+
+    def refuse_directory(descriptor):
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("Directory sync unavailable")
+        fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", refuse_directory)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    response = client.delete(f"/api/workspaces/{target['id']}")
+    assert response.status_code == 200
+    assert config.get_workspace(target["id"]) is None
+    assert path.read_bytes() == before
+    assert "corpus kept" in caplog.text
+    assert "Directory sync unavailable" in caplog.text
 
 
 def test_delete_rolls_back_corpus_if_registry_write_fails(monkeypatch):

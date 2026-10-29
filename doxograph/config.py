@@ -616,6 +616,22 @@ def delete_workspace(value: str) -> None:
         retired = [{"id": value, "deleted": True} if isinstance(item, dict) and item.get("id") == value
                    else item for item in records]
         _write_workspace_records(retired)
+        # File fsync precedes os.replace in _write_json; persist that directory
+        # entry too before destroying any corpus data (as store.write_atomic
+        # does for other durable writes on POSIX).
+        if os.name == "posix":
+            try:
+                descriptor = os.open(workspaces_path().parent, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            except OSError:
+                # The registry is retired in the running system, but a crash
+                # might restore its old entry. Leave the original corpus intact
+                # so that even this failure cannot expose partially erased data.
+                logging.getLogger(__name__).exception("Could not sync workspace retirement; corpus kept at %s", folder)
+                return
     if folder.exists():
         try:
             shutil.rmtree(folder)
