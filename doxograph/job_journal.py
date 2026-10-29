@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 _paths: dict[int, Path] = {}
 _leases: dict[Path, contextlib.AbstractContextManager[None]] = {}
 _lease_guard = threading.Lock()
+_WINDOWS = os.name == 'nt'
 
 
 def _hold_owner_lease(folder: Path) -> None:
@@ -30,15 +31,36 @@ def _hold_owner_lease(folder: Path) -> None:
             _leases[path] = lease
 
 
+def _pid_alive(pid: int) -> bool:
+    if _WINDOWS:
+        import _winapi
+
+        try:
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+        except OSError as exc:
+            if exc.winerror == 87:  # ERROR_INVALID_PARAMETER: no such process.
+                return False
+            if exc.winerror == 5:  # ERROR_ACCESS_DENIED: conservatively live.
+                return True
+            raise
+        try:
+            return _winapi.WaitForSingleObject(handle, 0) != _winapi.WAIT_OBJECT_0
+        finally:
+            _winapi.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _owner_alive(data: dict, folder: Path) -> bool:
     if data['version'] == 1:
         # Journals written before instance leases cannot distinguish PID reuse.
-        # Keep conservative compatibility with a possibly live older server.
-        try:
-            os.kill(data['pid'], 0)
-        except ProcessLookupError:
-            return False
-        return True
+        # Query Windows handles instead of sending a console control signal.
+        return _pid_alive(data['pid'])
     owner = data.get('owner')
     if not isinstance(owner, str) or not re.fullmatch(r'[a-f0-9]{32}', owner):
         raise ValueError('invalid job owner instance')
