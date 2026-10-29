@@ -381,7 +381,7 @@ def _windows_workspace_activity(path: Path, *, exclusive: bool):
 
 
 @contextlib.contextmanager
-def workspace_activity(value: str, *, exclusive: bool = False):
+def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool = False):
     """Nonblocking corpus lease shared by every server using this data root.
 
     POSIX leases lock the existing corpus directory through a read-only handle,
@@ -389,24 +389,30 @@ def workspace_activity(value: str, *, exclusive: bool = False):
     on a separate lock file. Every request validates retirement after locking.
     """
     if value == DEFAULT_WORKSPACE_ID:
-        yield
+        yield True
         return
     if not value or value != _workspace_slug(value):
         raise KeyError(value)
     if fcntl is not None:
         folder = base_data_dir() / "workspaces" / value
+        corpus_locked = True
         try:
             descriptor = os.open(folder, os.O_RDONLY)
         except FileNotFoundError:
             # Preserve the registry error instead of disguising damaged
             # registry contents as a missing workspace when no directory exists.
             _read_workspace_records()
-            raise KeyError(value)
+            if not missing_ok:
+                raise KeyError(value)
+            # Only registry retirement is permitted without a corpus lease.
+            # A restored directory must not be removed through this fallback.
+            descriptor = os.open(base_data_dir(), os.O_RDONLY)
+            corpus_locked = False
         try:
             mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
             fcntl.flock(descriptor, mode | fcntl.LOCK_NB)
             try:
-                yield
+                yield corpus_locked
             finally:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
@@ -416,7 +422,7 @@ def workspace_activity(value: str, *, exclusive: bool = False):
         path = base_data_dir() / "locks" / f"workspace-{value}.activity.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
         with _windows_workspace_activity(path, exclusive=exclusive):
-            yield
+            yield True
     else:  # pragma: no cover
         raise RuntimeError("no file-locking primitive available for workspace activity")
 
@@ -613,13 +619,16 @@ def delete_workspace(value: str) -> bool:
         raise ValueError("The default workspace cannot be deleted")
     if not value or value != _workspace_slug(value):
         raise KeyError(value)
-    with workspace_activity(value, exclusive=True), _workspaces_lock, _workspace_file_lock():
+    with (workspace_activity(value, exclusive=True, missing_ok=True) as corpus_locked,
+          _workspaces_lock, _workspace_file_lock()):
         from . import job_journal
 
         records = _read_workspace_records()
         if get_workspace(value) is None:
             raise KeyError(value)
         folder = base_data_dir() / "workspaces" / value
+        if not corpus_locked and folder.exists():
+            raise BlockingIOError("The workspace directory was restored; retry deletion")
         # Refuse links rather than following a hand-edited filesystem outside
         # the corpus. Commit retirement before touching corpus files: a crash
         # before this commit leaves the live corpus at its original path; a
@@ -647,6 +656,8 @@ def delete_workspace(value: str) -> bool:
                 logging.getLogger(__name__).exception("Could not sync workspace retirement; corpus kept at %s", folder)
                 return False
         job_journal.release_workspace_owner(folder)
+        if not corpus_locked:
+            return False  # Retire the registry only; never erase a restored directory.
         if folder.exists():
             try:
                 shutil.rmtree(folder)

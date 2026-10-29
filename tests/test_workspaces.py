@@ -401,6 +401,41 @@ def test_delete_rejects_default_and_missing_workspace():
     assert store.load_paper("keep")["title"] == "Default paper"
 
 
+def test_delete_retires_registered_workspace_with_a_missing_directory():
+    target = config.create_workspace("Research")
+    folder = config.base_data_dir() / "workspaces" / target["id"]
+    config.shutil.rmtree(folder)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    headers = {"X-Doxograph-Workspace": target["id"]}
+    assert client.get("/api/state", headers=headers).status_code == 404
+    response = client.delete(f"/api/workspaces/{target['id']}", headers=headers)
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["workspaces"]] == ["default"]
+    assert config.get_workspace(target["id"]) is None
+    assert not folder.exists()
+    assert config.create_workspace("Research")["id"] == "research-2"
+
+
+@pytest.mark.skipif(config.fcntl is None, reason="POSIX missing-directory fallback")
+def test_registry_only_retirement_does_not_remove_a_concurrently_restored_directory(monkeypatch):
+    target = config.create_workspace("Research")
+    folder = config.base_data_dir() / "workspaces" / target["id"]
+    config.shutil.rmtree(folder)
+    original = config._write_workspace_records
+
+    def restore_after_commit(records):
+        original(records)
+        folder.mkdir()
+        (folder / "restored.txt").write_text("Restored data")
+
+    monkeypatch.setattr(config, "_write_workspace_records", restore_after_commit)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    response = client.delete(f"/api/workspaces/{target['id']}")
+    assert response.status_code == 200
+    assert config.get_workspace(target["id"]) is None
+    assert (folder / "restored.txt").read_text() == "Restored data"
+
+
 def test_committed_deletion_succeeds_when_corpus_and_journal_cleanup_fail(monkeypatch, caplog):
     target = config.create_workspace("Research")
     with config.use_workspace(target["id"]):
