@@ -1837,6 +1837,9 @@ function renderPapers() {
       ${ResearchTools.paperCheckbox(p)}<span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
         ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims · ${esc(paperReadiness(p))}${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
+      ${(p.labels || []).length ? `<span class="labels" aria-label="Paper labels">${p.labels.map((label) => `
+        <button type="button" class="label" data-label="${esc(label)}"
+          aria-pressed="${V.label === label}" title="Filter by label: ${esc(label)}">${esc(label)}</button>`).join('')}</span>` : ''}
       <button type="button" class="pmenu" data-menu="${esc(p.key)}"
         aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
@@ -4333,6 +4336,11 @@ $('panes').addEventListener('click', async (event) => {
 });
 
 $('papers').addEventListener('click', (event) => {
+  const label = event.target.closest('[data-label]');
+  if (label) {
+    chooseLabel(label.dataset.label);
+    return;
+  }
   // The same menu the right-click opens, for the people who never try one.
   const menuButton = event.target.closest('[data-menu]');
   if (menuButton) {
@@ -4787,6 +4795,7 @@ function openPaperMenu(paper, x, y) {
   menu.innerHTML = `
     <li class="mh">${esc(p ? p.title || paper : paper)}</li>
     ${p && p.has_pdf ? `<li><button type="button" data-act="open-pdf" data-paper="${esc(paper)}">Open the PDF</button></li>` : ''}
+    <li><button type="button" data-act="labels" data-paper="${esc(paper)}">${p?.labels?.length ? 'Edit labels…' : 'Add labels…'}</button></li>
     <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
   menu.hidden = false;
   // Measure after showing, then keep the whole menu inside the window.
@@ -4801,7 +4810,7 @@ function closePaperMenu() {
 
 $('papers').addEventListener('contextmenu', (event) => {
   const li = event.target.closest('[data-paper]');
-  if (!li || !li.dataset.paper) return;   // "All papers" has nothing to remove
+  if (!li || !li.dataset.paper) return;   // "All papers" has no paper actions
   event.preventDefault();
   openPaperMenu(li.dataset.paper, event.clientX, event.clientY);
 });
@@ -4811,6 +4820,9 @@ $('ctxmenu').addEventListener('click', async (event) => {
   if (!button) return;
   closePaperMenu();
   const paper = button.dataset.paper;
+  if (button.dataset.act === 'labels') {
+    await editLabels(paper);
+  }
   // The paper stays in the list until its DELETE comes back, so the menu can
   // be opened on it again and asked to remove it a second time.
   if (button.dataset.act === 'del-paper') {

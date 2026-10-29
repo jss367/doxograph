@@ -493,6 +493,8 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .label { font-size: .75rem; padding: .05rem .45rem; border: 1px solid var(--line);
   border-radius: 999px; color: var(--muted); cursor: pointer; }
 .label:hover { color: var(--ink); border-color: var(--accent); }
+.plist .label { background: transparent; overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
+.plist .label[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 
 /* A form whose save is in flight: read-only until the request settles. */
 form[data-form].saving, #research-form.saving { opacity: .6; }

@@ -172,6 +172,68 @@ def test_the_export_shows_a_papers_labels_and_searches_on_them():
 # --- the browser ----------------------------------------------------------
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_sidebar_labels_can_be_edited_without_opening_the_paper(engine):
+    from playwright.async_api import expect
+
+    from test_browser import _answer, _paper as _browser_paper, _server
+
+    _browser_paper("open2026model", "An Open Model", "steering")
+    _browser_paper("closed2026model", "A Closed Model", "steering")
+    store.set_labels("closed2026model", ["keep"])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(f"{url}#paper=closed2026model")
+                target = page.locator('#papers li[data-paper="open2026model"]')
+                menu = page.locator("#ctxmenu")
+                chip = target.get_by_role("button", name="read-next", exact=True)
+
+                await target.click(button="right")
+                await menu.get_by_role("button", name="Add labels…").click()
+                await expect(page.locator("#ask-title")).to_have_text("Labels for An Open Model")
+                await _answer(page, "OK", "Read-Next, open-source")
+                await expect(chip).to_be_visible()
+                await expect(page.locator(".paperhead h2")).to_have_text("A Closed Model")
+                assert store.load_paper("closed2026model")["labels"] == ["keep"]
+
+                # The ellipsis opens the same editor and preserves existing labels.
+                await target.locator(".pmenu").click()
+                await menu.get_by_role("button", name="Edit labels…").click()
+                await expect(page.locator("#ask-input")).to_have_value("open-source read-next")
+                await _answer(page, "Cancel", "discard-me")
+                await expect(chip).to_be_visible()
+                assert store.load_paper("open2026model")["labels"] == ["open-source", "read-next"]
+
+                # Filtering by a chip leaves an excluded paper and does not open
+                # the chip's paper. Keyboard activation toggles the filter off.
+                await chip.click()
+                await expect(chip).to_have_attribute("aria-pressed", "true")
+                await expect(page.locator('#papers li[data-paper="closed2026model"]')).to_have_count(0)
+                assert "label=read-next" in page.url and "paper=" not in page.url
+                await chip.focus()
+                await page.keyboard.press("Enter")
+                await expect(chip).to_have_attribute("aria-pressed", "false")
+                await expect(page.locator('#papers li[data-paper="closed2026model"]')).to_be_visible()
+
+                await page.reload()
+                await expect(chip).to_be_visible()
+                await target.click(button="right")
+                await menu.get_by_role("button", name="Edit labels…").click()
+                await _answer(page, "OK", "")
+                await expect(target.locator(".labels")).to_have_count(0)
+                await expect(page.locator('#labels [data-label="read-next"]')).to_have_count(0)
+                assert store.load_paper("open2026model")["labels"] == []
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
     from test_browser import _answer, _paper as _browser_paper, _server
 
