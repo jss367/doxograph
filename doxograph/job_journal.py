@@ -34,6 +34,7 @@ def _hold_owner_lease(folder: Path) -> None:
 def _pid_alive(pid: int) -> bool:
     if _WINDOWS:
         import _winapi
+        fingerprint.snapshot()
 
         try:
             handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
