@@ -126,8 +126,9 @@ def test_long_chat_keeps_draft_and_explains_how_to_start_over(answer, turns):
 
 
 @pytest.mark.browser
-def test_library_agent_dialog_sends_the_conversation_and_shows_lookups():
-    config.set_ai_provider('claude_code')
+@pytest.mark.parametrize('provider,assistant', [('claude_code', 'Claude'), ('codex', 'ChatGPT')])
+def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider, assistant):
+    config.set_ai_provider(provider)
 
     async def check(url):
         async with async_playwright() as playwright:
@@ -140,7 +141,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups():
             async def respond(route):
                 requests.append(route.request.post_data_json['messages'])
                 await route.fulfill(content_type='application/json', body=json.dumps({
-                    'answer': 'Two papers agree.', 'activity': ['Searched claims steering'], 'assistant': 'Claude'}))
+                    'answer': 'Two papers agree.', 'activity': ['Searched claims steering'], 'assistant': assistant}))
 
             await page.route('**/api/agent/chat', respond)
             await page.goto(url)
@@ -149,6 +150,8 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups():
             await page.locator('#agent-send').click()
             await page.get_by_text('Two papers agree.', exact=True).wait_for()
             assert await page.locator('#agent-messages .activity').text_content() == 'Searched claims steering'
+            assert await page.locator('#agent-messages .who').all_text_contents() == ['You', assistant]
+            assert await page.locator('#agent-codex-guidance').is_visible() == (provider == 'codex')
             await page.locator('#agent-question').fill('And disagrees?')
             await page.locator('#agent-send').click()
             await page.locator('#agent-question:enabled').wait_for()
@@ -163,9 +166,8 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups():
 
 
 @pytest.mark.browser
-@pytest.mark.parametrize('provider', ['api', 'codex'])
-def test_library_agent_cannot_send_outside_claude_subscription_mode(provider):
-    config.set_ai_provider(provider)
+def test_library_agent_cannot_send_outside_subscription_mode():
+    config.set_ai_provider('api')
 
     async def check(url):
         async with async_playwright() as playwright:
@@ -183,6 +185,42 @@ def test_library_agent_cannot_send_outside_claude_subscription_mode(provider):
 
     with _server() as url:
         asyncio.run(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_library_agent_updates_provider_without_losing_drafts_or_answer_labels(engine):
+    config.set_ai_provider('claude_code')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+
+            async def respond(route):
+                assistant = 'ChatGPT' if config.ai_provider() == 'codex' else 'Claude'
+                await route.fulfill(json={'answer': f'{assistant} answer.', 'assistant': assistant})
+
+            await page.route('**/api/agent/chat', respond)
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            await page.locator('#agent-question').fill('First question')
+            await page.locator('#agent-send').click()
+            await page.get_by_text('Claude answer.', exact=True).wait_for()
+            await page.locator('#agent-question').fill('Follow up')
+            config.set_ai_provider('api')
+            await page.evaluate('pollOnce()')
+            assert await page.locator('#agent-send').is_disabled()
+            config.set_ai_provider('codex')
+            await page.evaluate('pollOnce()')
+            assert await page.locator('#agent-send').is_enabled()
+            assert await page.locator('#agent-question').input_value() == 'Follow up'
+            assert await page.locator('#agent-codex-guidance').is_visible()
+            await page.locator('#agent-send').click()
+            await page.get_by_text('ChatGPT answer.', exact=True).wait_for()
+            assert await page.locator('#agent-messages .who').all_text_contents() == ['You', 'Claude', 'You', 'ChatGPT']
+
+    with _server() as url:
+        run_browser(check(url))
 
 
 @pytest.mark.browser
@@ -211,7 +249,7 @@ def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider)
             await page.locator('#btn-agent').click()
             assert await page.locator('#library-agent').is_visible()
             assert 'Enable AI analysis in Settings.' in await page.locator('#agent-status').inner_text()
-            if provider != 'claude_code':
+            if provider == 'api':
                 assert 'Choose Claude subscription' in await page.locator('#agent-status').inner_text()
             await page.locator('#agent-question').fill('Keep my question')
             assert await page.locator('#agent-send').is_disabled()
@@ -222,7 +260,7 @@ def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider)
             assert await page.locator('#settings-menu').is_visible()
             await page.locator('#ai-enabled').check()
             await page.get_by_text('AI analysis enabled.', exact=True).wait_for()
-            if provider != 'claude_code':
+            if provider == 'api':
                 await page.locator('#ai-access').select_option('claude_code')
                 await page.get_by_text('Model access saved.', exact=True).wait_for()
             await page.locator('#btn-close-settings').click()
