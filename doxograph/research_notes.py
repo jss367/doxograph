@@ -10,7 +10,7 @@ from typing import Annotated
 from collections.abc import Callable
 from urllib.parse import urljoin
 
-from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, RootModel
@@ -95,12 +95,18 @@ def list_notes() -> dict:
 
 
 @router.post("", status_code=201)
-def create_note(body: NoteBody) -> dict:
+def create_note(body: NoteBody,
+                operation_id: Annotated[NoteId | None, Header(alias="Idempotency-Key")] = None) -> dict:
     if not body.title.strip():
         raise HTTPException(422, "Give your note a title.")
     with store.document_lock("research-notes"):
         notes = load()
-        identifier = uuid.uuid4().hex
+        # A library answer keeps this ID across retries. A response lost after
+        # the write must return the existing note, including any later edits.
+        identifier = operation_id or uuid.uuid4().hex
+        existing = next((note for note in notes if note["id"] == identifier), None)
+        if existing is not None:
+            return existing
         note = dict(body.model_dump(), id=identifier, revision=next_revision(identifier),
                     created=store.now(), updated=store.now())
         notes.append(note)

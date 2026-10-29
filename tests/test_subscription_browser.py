@@ -149,7 +149,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider,
             await page.locator('#agent-question').fill('What agrees on steering?')
             await page.locator('#agent-send').click()
             await page.get_by_text('Two papers agree.', exact=True).wait_for()
-            assert await page.locator('#agent-messages .activity').text_content() == 'Searched claims steering'
+            assert await page.locator('#agent-messages .activity li').text_content() == 'Searched claims steering'
             assert await page.locator('#agent-messages .who').all_text_contents() == ['You', assistant]
             assert await page.locator('#agent-codex-guidance').is_visible() == (provider == 'codex')
             await page.locator('#agent-question').fill('And disagrees?')
