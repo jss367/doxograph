@@ -355,7 +355,7 @@ def cmd_mcp(args) -> int:
     from .mcp_server import run
 
     try:
-        run(args.url, without_notes=args.without_notes)
+        run(args.url, without_notes=args.without_notes, workspace=args.workspace)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -403,6 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--url", default="http://127.0.0.1:8765", help="local Doxograph server URL")
     p.add_argument("--without-notes", action="store_true",
                    help="leave out personal notes, claim notes, and links to your own claims")
+    p.add_argument("--workspace", help="restrict all tools to this workspace ID")
     p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("serve", help="run the web app")

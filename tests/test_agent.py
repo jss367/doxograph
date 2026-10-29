@@ -72,7 +72,7 @@ def test_command_allows_only_library_tools_and_runs_this_codes_server():
     assert "doe2026" in system and "workspace='default'" in system
     entry = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["doxograph"]
     assert entry["command"] == sys.executable
-    assert entry["args"][-3:] == ["--url", "http://127.0.0.1:9", "--without-notes"]
+    assert entry["args"][-5:] == ["--url", "http://127.0.0.1:9", "--without-notes", "--workspace", "default"]
     assert Path(entry["env"]["PYTHONPATH"], "doxograph", "agent.py").is_file()
 
 
@@ -152,7 +152,8 @@ def test_codex_library_uses_selected_model_and_only_the_notes_free_library_tools
     overrides = tomllib.loads("\n".join(args[i + 1] for i, arg in enumerate(args) if arg == "-c"))
     entry = overrides["mcp_servers"]["doxograph"]
     assert entry["command"] == sys.executable
-    assert entry["args"] == ["-m", "doxograph", "mcp", "--url", "http://127.0.0.1:9000", "--without-notes"]
+    assert entry["args"] == ["-m", "doxograph", "mcp", "--url", "http://127.0.0.1:9000",
+                             "--without-notes", "--workspace", other["id"]]
     assert entry["enabled_tools"] == list(agent.TOOLS) and entry["required"]
     assert Path(entry["env"]["PYTHONPATH"], "doxograph", "agent.py").is_file()
     assert "--ignore-user-config" in args and "--ephemeral" in args

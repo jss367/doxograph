@@ -43,16 +43,16 @@ def instructions(workspace: str, focus: str | None) -> str:
     return system
 
 
-def library_server(url: str) -> codex_cli.MCPServer:
+def library_server(url: str, workspace: str) -> codex_cli.MCPServer:
     # Run the same code as this server, not whichever `doxograph` the environment finds first.
     return codex_cli.MCPServer(
         name=SERVER, command=sys.executable,
-        args=["-m", "doxograph", "mcp", "--url", url, "--without-notes"],
+        args=["-m", "doxograph", "mcp", "--url", url, "--without-notes", "--workspace", workspace],
         env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}, enabled_tools=TOOLS)
 
 
 def command(binary: str, url: str, workspace: str, focus: str | None) -> list[str]:
-    entry = library_server(url)
+    entry = library_server(url, workspace)
     server = {"command": entry.command, "args": entry.args, "env": entry.env}
     allowed = ",".join(f"mcp__{SERVER}__{name}" for name in TOOLS)
     return [binary, "--setting-sources", "", "-p", "--output-format", "stream-json", "--verbose",
@@ -94,9 +94,10 @@ def answer(messages: list[dict], callback_url: Callable[[], str], focus: str | N
     config.require_ai_enabled()
     if config.ai_provider() not in ("claude_code", "codex"):
         raise ModelSetupError("Choose Claude subscription or ChatGPT subscription (Codex) in Settings → Model access.")
+    workspace = config.workspace_id()
     if config.ai_provider() == "codex":
-        client = codex_cli.Client(mcp_server=lambda: library_server(callback_url()))
-        response = client.create(model=config.model(), system=instructions(config.workspace_id(), focus),
+        client = codex_cli.Client(mcp_server=lambda: library_server(callback_url(), workspace))
+        response = client.create(model=config.model(), system=instructions(workspace, focus),
                                  messages=[{"role": "user", "content": f"Conversation:\n{json.dumps(messages, ensure_ascii=False)}"}])
         return {"answer": response.text, "activity": activity(client.events),
                 "model": config.model(), "assistant": "ChatGPT"}
@@ -105,7 +106,7 @@ def answer(messages: list[dict], callback_url: Callable[[], str], focus: str | N
     with tempfile.TemporaryDirectory(prefix="doxograph-agent-") as cwd:
         claude_code.require_subscription([binary, "--setting-sources", ""], env, cwd)
         config.require_ai_enabled()
-        result = claude_code._run(command(binary, callback_url(), config.workspace_id(), focus), env=env, cwd=cwd,
+        result = claude_code._run(command(binary, callback_url(), workspace, focus), env=env, cwd=cwd,
                                   input=prompt, timeout=TIMEOUT)
     try:
         events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]

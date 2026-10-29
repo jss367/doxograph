@@ -167,9 +167,10 @@ It has no file, shell, web, or write access, and it does not receive the PDFs.
 The Codex option includes your global Codex instructions, as disclosed in the dialog.
 `--without-notes` leaves out your paper and workspace notes, your claim notes, and
 the links from claims to your own claims, and a search cannot match text inside
-them. Your research context is not exposed by any tool. It can read every
-workspace by ID, but it is asked to stay in the one you are viewing. Answers can
-be wrong; check them against the papers.
+them. Your research context is not exposed by any tool. Ask the library is
+restricted to the workspace captured when you send a question, even
+if the model requests another workspace. Answers can be wrong; check them
+against the papers.
 
 ## Use
 
