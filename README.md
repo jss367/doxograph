@@ -79,22 +79,22 @@ Choose model access in **Settings → Model access**:
   resolves on its own (including an `ant auth login` profile).
 - **Claude subscription (Claude Code)**: install the [Claude Code CLI](https://code.claude.com/docs/en/setup),
   run `claude auth login` in Terminal, and sign in with your Claude account.
-  Extraction, retagging, synthesis, agreements, tensions, and paper chat then
-  run through the installed CLI using that account. Usage follows your plan's
+  Extraction, retagging, synthesis, agreements, tensions, paper chat, and Ask the
+  library run through the installed CLI using that account. Usage follows your plan's
   limits and credits; this does not include a subscription with Doxograph.
   Doxograph ignores inherited API credentials for these requests and refuses
   to fall back to API billing. If Claude Code isn't on the app's PATH, set
   `DOXOGRAPH_CLAUDE_PATH` to its executable's absolute path.
 - **ChatGPT subscription (Codex)**: install the [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode)
   and run `codex login` in Terminal to sign in with ChatGPT. The same analysis
-  features and paper chat use your saved ChatGPT login and its plan limits or
-  credits. Doxograph ignores inherited API credentials and refuses to fall back
+  features, paper chat, and Ask the library use your saved ChatGPT login and its
+  plan limits or credits. Doxograph ignores inherited API credentials and refuses to fall back
   to API billing. Set `DOXOGRAPH_CODEX_PATH` if the executable is installed in an
   unusual location. Choose **Settings → AI analysis → ChatGPT model**, select a
   model, and click **Save model**. The list comes from the installed Codex CLI;
   you can refresh it or enter a custom model ID. The selection is saved across
-  restarts and workspaces and applies to new analysis and paper chat. **Codex
-  default (automatic)** lets Codex choose its recommended model. Until you save
+  restarts and workspaces and applies to new analysis, paper chat, and Ask the
+  library. **Codex default (automatic)** lets Codex choose its recommended model. Until you save
   a choice, `DOXOGRAPH_CODEX_MODEL` can supply a model available to your account;
   a saved choice takes precedence over that environment variable.
 
@@ -111,8 +111,9 @@ a temporary directory with shell commands, browsing, hooks, plugins, apps, and
 delegation disabled. User `config.toml` settings and project instructions are
 excluded, and the run is ephemeral. **Codex still loads global instructions**
 from `AGENTS.override.md` or `AGENTS.md` in its home directory and sends that
-guidance along with the paper request. This is disclosed in Settings and paper
-chat. Choose a Claude option if you want requests without global Codex guidance.
+guidance along with the request. This is disclosed in Settings, paper chat,
+and Ask the library. Choose a Claude option if you want requests without global
+Codex guidance.
 Neither subscription option includes a paid plan with Doxograph.
 
 Choose a provider and model in **Settings → AI analysis**. Anthropic is the
@@ -123,8 +124,8 @@ See [Model](#model) for setup and the differences in PDF handling.
 To turn off model use, open **Settings** and uncheck **Enable AI analysis**.
 The preference survives restarts and applies to every workspace and the CLI
 using the same data directory. While off, imports skip extraction, and
-extraction, retagging, agreements, tensions, synthesis, and paper chat cannot start new
-model calls or upload PDFs for analysis. Requests already sent may finish.
+extraction, retagging, agreements, tensions, synthesis, paper chat, and Ask the
+library cannot start new model calls or upload PDFs for analysis. Requests already sent may finish.
 Browsing, manual editing, quote checks, and exports remain available. With
 Anthropic or a subscription selected, removing a paper still deletes its
 previously uploaded Anthropic copies. With another API or local provider
@@ -150,18 +151,20 @@ selected in Settings and is disabled when AI analysis is off.
 
 **Ask the library** in the header opens a chat that answers across every paper in
 the workspace, where paper chat reads one PDF. It needs AI analysis enabled and
-**Claude subscription (Claude Code)** selected in Settings → Model access. If
+**Claude subscription (Claude Code)** or **ChatGPT subscription (Codex)** selected
+in Settings → Model access. It uses the model selected for that provider. If
 either is missing, the dialog explains what to change and offers **Open Settings**.
-Claude looks things up
+The selected assistant looks things up
 through the [MCP server](#query-doxograph-from-agents) below, started with
 `--without-notes`: it can search papers, claims, and PDF text, read a paper,
 list topics, and read agreements, tensions, and syntheses. The line under each
-answer lists the lookups it made. Claude Code reaches the library through the
+answer lists the lookups it made. Both assistants reach the library through the
 app that is serving the page, over a loopback address (the default; `--host 0.0.0.0`
 also works). If the app is bound only to another address, the chat says so
 instead of failing partway through an answer.
 
 It has no file, shell, web, or write access, and it does not receive the PDFs.
+The Codex option includes your global Codex instructions, as disclosed in the dialog.
 `--without-notes` leaves out your paper and workspace notes, your claim notes, and
 the links from claims to your own claims, and a search cannot match text inside
 them. Your research context is not exposed by any tool. It can read every

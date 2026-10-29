@@ -1,6 +1,6 @@
 'use strict';
 
-// "Ask the library": a conversation with the Claude subscription agent, which reads this
+// "Ask the library": a conversation with the selected subscription agent, which reads this
 // workspace through read-only tools. Conversations are scoped by workspace and live only in
 // this tab. Loaded after app.js, which owns `$`, `api`, `esc`, `paragraphs`, and `S`.
 const agentChats = new Map();
@@ -28,13 +28,14 @@ function syncAgentChatControls() {
   const chat = activeAgentChat;
   if (!chat) return;
   const enabled = S.ai_enabled === true;
-  const ready = S.ai_provider === 'claude_code';
+  const ready = ['claude_code', 'codex'].includes(S.ai_provider);
   const setup = [
     ...(!enabled ? ['Enable AI analysis in Settings.'] : []),
-    ...(!ready ? ['Choose Claude subscription in Settings → Model access.'] : []),
+    ...(!ready ? ['Choose Claude subscription or ChatGPT subscription (Codex) in Settings → Model access.'] : []),
   ].join(' ');
   $('agent-send').disabled = chat.busy || !enabled || !ready;
   $('agent-settings').hidden = !setup;
+  $('agent-codex-guidance').hidden = S.ai_provider !== 'codex';
   $('agent-status').textContent = chat.busy ? 'Looking through the library…' : setup || chat.error;
 }
 
@@ -60,7 +61,7 @@ $('agent-clear').addEventListener('click', () => {
 $('agent-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const chat = activeAgentChat;
-  if (!chat || chat.busy || S.ai_enabled !== true || S.ai_provider !== 'claude_code' || !chat.draft.trim()) return;
+  if (!chat || chat.busy || S.ai_enabled !== true || !['claude_code', 'codex'].includes(S.ai_provider) || !chat.draft.trim()) return;
   const messages = [...chat.messages, { role: 'user', content: chat.draft.trim() }];
   const lengths = messages.map((message) => Array.from(message.content).length);
   if (messages.length > 40 || lengths.some((length) => length > 32000)
@@ -76,7 +77,7 @@ $('agent-form').addEventListener('submit', async (event) => {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': chat.workspace },
       body: JSON.stringify({ messages: messages.map(({ role, content }) => ({ role, content })) }),
     });
-    chat.messages = [...messages, { role: 'assistant', content: result.answer, assistant: result.assistant || 'Claude',
+    chat.messages = [...messages, { role: 'assistant', content: result.answer, assistant: result.assistant || 'Assistant',
       activity: result.activity || [] }];
     chat.draft = '';
   } catch (error) { chat.error = error.message; }

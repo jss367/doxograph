@@ -1,4 +1,4 @@
-"""A library-wide agent: the user's signed-in Claude Code, reading the corpus.
+"""A library-wide agent using the user's signed-in Claude Code or Codex.
 
 Unlike paper chat, which sends one PDF, the agent answers across every paper by
 calling Doxograph's read-only MCP server (`doxograph mcp`) against the running
@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from . import claude_code, config
+from . import claude_code, codex_cli, config
 from .model_errors import ModelSetupError
 
 SERVER = "doxograph"
@@ -36,16 +36,27 @@ _VERBS = {"search_papers": "Searched papers", "search_claims": "Searched claims"
           "list_topics": "Listed topics", "read_evidence": "Read"}
 
 
-def command(binary: str, url: str, workspace: str, focus: str | None) -> list[str]:
+def instructions(workspace: str, focus: str | None) -> str:
     system = SYSTEM.format(workspace=workspace)
     if focus:
         system += f"\nThe user is looking at the paper with key {focus!r}; assume questions are about it unless they say otherwise."
+    return system
+
+
+def library_server(url: str) -> codex_cli.MCPServer:
     # Run the same code as this server, not whichever `doxograph` the environment finds first.
-    server = {"command": sys.executable, "args": ["-m", "doxograph", "mcp", "--url", url, "--without-notes"],
-              "env": {"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}}
+    return codex_cli.MCPServer(
+        name=SERVER, command=sys.executable,
+        args=["-m", "doxograph", "mcp", "--url", url, "--without-notes"],
+        env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}, enabled_tools=TOOLS)
+
+
+def command(binary: str, url: str, workspace: str, focus: str | None) -> list[str]:
+    entry = library_server(url)
+    server = {"command": entry.command, "args": entry.args, "env": entry.env}
     allowed = ",".join(f"mcp__{SERVER}__{name}" for name in TOOLS)
     return [binary, "--setting-sources", "", "-p", "--output-format", "stream-json", "--verbose",
-            "--model", config.model(), "--system-prompt", system,
+            "--model", config.model(), "--system-prompt", instructions(workspace, focus),
             "--tools", "", "--allowedTools", allowed, "--permission-mode", "dontAsk",
             "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": {SERVER: server}}),
             "--settings", '{"disableAllHooks":true}', "--disable-slash-commands", "--no-chrome",
@@ -57,6 +68,14 @@ def activity(events: list[dict]) -> list[str]:
     prefix = f"mcp__{SERVER}__"
     lines = []
     for event in events:
+        if event.get("type") == "item.completed":
+            item = event.get("item") or {}
+            if item.get("type") == "mcp_tool_call" and item.get("server") == SERVER:
+                tool, args = item.get("tool"), item.get("arguments") or {}
+                if tool in TOOLS and isinstance(args, dict):
+                    detail = next((str(args[k]) for k in ("q", "key", "kind", "topic") if args.get(k)), "")
+                    lines.append(f"{_VERBS[tool]} {detail}".strip())
+            continue
         if event.get("type") != "assistant":
             continue
         for block in (event.get("message") or {}).get("content") or []:
@@ -73,8 +92,14 @@ def activity(events: list[dict]) -> list[str]:
 def answer(messages: list[dict], callback_url: Callable[[], str], focus: str | None = None) -> dict:
     """`callback_url` is called once the cheap checks pass, since it probes the running app."""
     config.require_ai_enabled()
-    if config.ai_provider() != "claude_code":
-        raise ModelSetupError("The library agent needs a Claude subscription. Choose it in Settings → Model access.")
+    if config.ai_provider() not in ("claude_code", "codex"):
+        raise ModelSetupError("Choose Claude subscription or ChatGPT subscription (Codex) in Settings → Model access.")
+    if config.ai_provider() == "codex":
+        client = codex_cli.Client(mcp_server=lambda: library_server(callback_url()))
+        response = client.create(model=config.model(), system=instructions(config.workspace_id(), focus),
+                                 messages=[{"role": "user", "content": f"Conversation:\n{json.dumps(messages, ensure_ascii=False)}"}])
+        return {"answer": response.text, "activity": activity(client.events),
+                "model": config.model(), "assistant": "ChatGPT"}
     binary, env = claude_code.executable(), claude_code.environment()
     prompt = f"Conversation:\n{json.dumps(messages, ensure_ascii=False)}"
     with tempfile.TemporaryDirectory(prefix="doxograph-agent-") as cwd:

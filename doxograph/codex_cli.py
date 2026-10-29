@@ -7,8 +7,10 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Unpack
+from typing import Any, Unpack
 
 from . import config
 from .analysis_types import ModelResponse, ProviderRequest
@@ -82,9 +84,31 @@ def models() -> list[dict[str, str]]:
         raise ModelSetupError(message) from exc
 
 
+@dataclass(frozen=True)
+class MCPServer:
+    name: str
+    command: str
+    args: list[str]
+    env: dict[str, str]
+    enabled_tools: tuple[str, ...]
+
+    def config_args(self) -> list[str]:
+        """CLI overrides use TOML values; encode each leaf separately."""
+        prefix = f"mcp_servers.{self.name}"
+        values = {f"{prefix}.command": json.dumps(self.command),
+                  f"{prefix}.args": json.dumps(self.args),
+                  f"{prefix}.enabled_tools": json.dumps(self.enabled_tools),
+                  f"{prefix}.required": "true"}
+        values.update({f"{prefix}.env.{key}": json.dumps(value) for key, value in self.env.items()})
+        return [arg for key, value in values.items() for arg in ("-c", f"{key}={value}")]
+
+
 class Client:
-    def __init__(self) -> None:
+    def __init__(self, *, mcp_server: Callable[[], MCPServer] | None = None) -> None:
         self.messages = self
+        # Resolve the callback only after checking login, before starting a turn.
+        self.mcp_server = mcp_server
+        self.events: list[dict[str, Any]] = []
 
     def create(self, **kwargs: Unpack[ProviderRequest]) -> ModelResponse:
         config.require_ai_enabled()
@@ -119,11 +143,13 @@ class Client:
                     "--skip-git-repo-check", "--sandbox", "read-only", "--json", "--color", "never",
                     "-c", 'approval_policy="never"', "-c", 'forced_login_method="chatgpt"',
                     "-c", 'model_provider="openai"', "-c", 'web_search="disabled"',
+                    "-c", "tools.view_image=false",
                     "-c", "project_doc_max_bytes=0", "-c", "skills.include_instructions=false",
                     "-c", f"model_instructions_file={json.dumps(str(instructions))}",
                     "--output-last-message", str(output)]
             for feature in ("shell_tool", "shell_snapshot", "apps", "hooks", "plugins", "remote_plugin",
-                            "multi_agent", "in_app_browser", "in_app_local_automation"):
+                            "multi_agent", "in_app_browser", "in_app_local_automation", "browser_use",
+                            "computer_use", "image_generation", "skill_search", "tool_suggest"):
                 args.extend(["--disable", feature])
             if kwargs["model"] != "Codex default":
                 args.extend(["--model", kwargs["model"]])
@@ -135,6 +161,8 @@ class Client:
                 schema_path = Path(cwd) / "schema.json"
                 schema_path.write_text(json.dumps(schema), encoding="utf-8")
                 args.extend(["--output-schema", str(schema_path)])
+            if self.mcp_server is not None:
+                args.extend(self.mcp_server().config_args())
             args.append("-")
             config.require_ai_enabled()
             result = _run(args, env=env, cwd=cwd, input=stdin)
@@ -144,6 +172,7 @@ class Client:
                     raise ValueError("Expected JSON objects")
             except ValueError as exc:
                 raise RuntimeError("Codex returned an unreadable response. Update Codex and retry.") from exc
+            self.events = events
             failed = next((event for event in reversed(events)
                            if event.get("type") in ("turn.failed", "error")), None)
             complete = next((event for event in reversed(events) if event.get("type") == "turn.completed"), None)
