@@ -1620,28 +1620,28 @@ function queryPatterns(query) {
 function haystack(row) {
   return [row.text, row.evidence, row.quote, row.note, row.paper, row.paper_title,
           row.paper_year, (row.paper_authors || []).join(' '),
-          paperNoteFor(row.paper), (row.tags || []).join(' '),
+          paperSearchTextFor(row.paper), (row.tags || []).join(' '),
           (row.paper_labels || []).join(' ')]
     .join(' ').toLowerCase();
 }
 
-// The paper's note, for its claims' haystacks: a query matching only the note
-// would otherwise list the paper and then show it as empty, which is the one
+// Paper summaries and notes, for their claims' haystacks: a query matching only
+// those fields must not list the paper and then show it as empty, which is the one
 // thing `haystack` carries the paper's fields to prevent.
 //
 // Cached against the array `S.papers` currently is. That array is replaced
 // wholesale whenever the corpus is read and never edited in place, so the
 // identity check rebuilds the map exactly when it has to.
-let paperNotes = { from: null, byKey: new Map() };
+let paperSearchText = { from: null, byKey: new Map() };
 
-function paperNoteFor(key) {
-  if (paperNotes.from !== S.papers) {
-    paperNotes = {
+function paperSearchTextFor(key) {
+  if (paperSearchText.from !== S.papers) {
+    paperSearchText = {
       from: S.papers,
-      byKey: new Map((S.papers || []).map((p) => [p.key, p.notes || ''])),
+      byKey: new Map((S.papers || []).map((p) => [p.key, [p.summary, p.notes].join(' ')])),
     };
   }
-  return paperNotes.byKey.get(key) || '';
+  return paperSearchText.byKey.get(key) || '';
 }
 
 // A paper's own text, for the query. `haystack` covers a paper through its

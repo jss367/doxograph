@@ -267,7 +267,7 @@ def test_library_search_topics_labels_sort_and_live_status(engine):
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=library&group=0")
                 cards = page.locator(".library-paper")
                 await expect(cards).to_have_count(2)
                 await page.locator("#paper-sort").select_option("year-desc")
@@ -281,6 +281,14 @@ def test_library_search_topics_labels_sort_and_live_status(engine):
                     await page.locator("#q").fill(query)
                     await expect(cards).to_have_count(1)
                     await expect(cards.first).to_have_attribute("data-library-paper", key)
+                    if query == "confidence":
+                        await page.get_by_role("button", name="Extracted claims", exact=True).click()
+                        await expect(page.locator('#content .claim[data-claim="one-c1"]')).to_be_visible()
+                        await expect(page.locator("#content .claim")).to_have_count(1)
+                        await page.reload()
+                        await expect(page.locator('#content .claim[data-claim="one-c1"]')).to_be_visible()
+                        await page.get_by_role("button", name="Papers", exact=True).click()
+                        await expect(cards).to_have_count(1)
                 await expect(cards.locator(".library-paper-passage")).to_contain_text("strawberry")
                 await expect(page.locator('#papers [data-paper=""] .pm')).to_have_text("1 of 2 match")
                 await expect(page.locator('#papers [data-paper="two"]')).to_have_count(1)
