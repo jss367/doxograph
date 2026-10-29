@@ -234,6 +234,99 @@ def test_sidebar_labels_can_be_edited_without_opening_the_paper(engine):
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_paper_menu_keyboard_focus_survives_dismissal_and_label_saves(engine):
+    from playwright.async_api import expect
+
+    from doxograph import config
+    from pdfs import minimal_pdf
+    from test_browser import _answer, _paper as _browser_paper, _poll, _server
+
+    _browser_paper("study", "A study", "steering")
+    other = config.create_workspace("Other")
+    with config.use_workspace(other["id"]):
+        _browser_paper("study", "Another workspace's study", "steering")
+        store.set_labels("study", ["keep"])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                paper = page.locator('#papers li[data-paper="study"]')
+                trigger = paper.locator(".pmenu")
+                menu = page.locator("#ctxmenu")
+                action = menu.get_by_role("button", name="Add labels…")
+
+                await trigger.focus()
+                await page.keyboard.press("Enter")
+                await expect(action).to_be_focused()
+                await page.keyboard.press("ArrowDown")
+                await expect(menu.get_by_role("button", name="Remove paper")).to_be_focused()
+                await page.keyboard.press("Home")
+                await expect(action).to_be_focused()
+                await page.keyboard.press("End")
+                await expect(menu.get_by_role("button", name="Remove paper")).to_be_focused()
+                await page.keyboard.press("Escape")
+                await expect(menu).to_be_hidden()
+                await expect(trigger).to_be_focused()
+
+                # A poll replaces the trigger while the menu owns focus.
+                await page.keyboard.press("Enter")
+                await expect(action).to_be_focused()
+                await _poll(page)
+                await page.keyboard.press("Escape")
+                await expect(trigger).to_be_focused()
+
+                await page.keyboard.press("Enter")
+                await expect(action).to_be_focused()
+                await page.keyboard.press("Enter")
+                await expect(page.locator("#ask-input")).to_be_focused()
+                await page.keyboard.press("Escape")
+                await expect(page.locator("#ask")).to_be_hidden()
+                await expect(trigger).to_be_focused()
+
+                await page.keyboard.press("Enter")
+                await expect(action).to_be_focused()
+                await page.keyboard.press("Enter")
+                await _answer(page, "OK", "read-next")
+                await expect(paper.locator(".label")).to_have_text("read-next")
+                await expect(trigger).to_be_focused()
+
+                # Pointer dismissal leaves focus on the chosen field.
+                await page.keyboard.press("Enter")
+                await expect(menu.get_by_role("button", name="Edit labels…")).to_be_focused()
+                await page.locator("#q").click()
+                await expect(menu).to_be_hidden()
+                await expect(page.locator("#q")).to_be_focused()
+
+                # When a PDF is available it is first, and arrows still reach labels.
+                store.pdf_path("study").write_bytes(minimal_pdf("A synthetic paper."))
+                await _poll(page)
+                await trigger.focus()
+                await page.keyboard.press("Enter")
+                await expect(menu.get_by_role("button", name="Open the PDF")).to_be_focused()
+                await page.keyboard.press("ArrowDown")
+                await expect(menu.get_by_role("button", name="Edit labels…")).to_be_focused()
+                await page.keyboard.press("ArrowUp")
+                await expect(menu.get_by_role("button", name="Open the PDF")).to_be_focused()
+                await page.keyboard.press("Escape")
+                await expect(trigger).to_be_focused()
+
+                # Leaving with a menu open must not focus a same-key paper in
+                # the destination workspace or carry any label edits into it.
+                await page.keyboard.press("Enter")
+                await expect(menu.get_by_role("button", name="Open the PDF")).to_be_focused()
+                await page.evaluate("id => switchWorkspace(id)", other["id"])
+                await expect(menu).to_be_hidden()
+                await expect(paper.locator(".pt")).to_have_text("Another workspace's study")
+                await expect(trigger).not_to_be_focused()
+                await expect(paper.locator(".label")).to_have_text("keep")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
     from test_browser import _answer, _paper as _browser_paper, _server
 
