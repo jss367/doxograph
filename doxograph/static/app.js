@@ -4873,8 +4873,8 @@ document.addEventListener('mousedown', (event) => {
 });
 // Escape is handled in the keyboard section below, ahead of the editor keys,
 // so closing the menu does not also cancel an open editor.
-$('side').addEventListener('scroll', closePaperMenu);
-window.addEventListener('resize', closePaperMenu);
+$('side').addEventListener('scroll', () => closePaperMenu({ restoreFocus: true }));
+window.addEventListener('resize', () => closePaperMenu({ restoreFocus: true }));
 
 // Choosing a label from the sidebar or from a paper's own header. A label is
 // a property of the paper, so it is read as "show me the papers like this

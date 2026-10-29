@@ -313,6 +313,20 @@ def test_paper_menu_keyboard_focus_survives_dismissal_and_label_saves(engine):
                 await page.keyboard.press("Escape")
                 await expect(trigger).to_be_focused()
 
+                # Layout changes dismiss the menu and return its keyboard focus.
+                await page.keyboard.press("Enter")
+                await expect(menu.get_by_role("button", name="Open the PDF")).to_be_focused()
+                await page.set_viewport_size({"width": 1120, "height": 600})
+                await expect(menu).to_be_hidden()
+                await expect(trigger).to_be_focused()
+
+                await page.keyboard.press("Enter")
+                await expect(menu.get_by_role("button", name="Open the PDF")).to_be_focused()
+                await page.locator("#side").evaluate("side => { side.scrollTop += 64; }")
+                await expect(menu).to_be_hidden()
+                await expect(trigger).to_be_focused()
+                assert await page.locator("#side").evaluate("side => side.scrollTop") > 0
+
                 # Leaving with a menu open must not focus a same-key paper in
                 # the destination workspace or carry any label edits into it.
                 await page.keyboard.press("Enter")
