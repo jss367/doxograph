@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from playwright.async_api import expect
@@ -82,6 +83,67 @@ def test_library_includes_pdf_matches_beyond_both_search_page_limits(engine):
                 await expect(cards).to_have_count(105)
                 await page.reload()
                 await expect(cards).to_have_count(105)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("navigation", ["query", "workspace"])
+def test_stale_search_page_cannot_change_results_or_continue_after_navigation(engine, navigation):
+    config.set_ai_enabled(False)
+    for key in ["one", "two", "fresh"]:
+        store.save_paper(store.new_paper(key, title=f"Local paper {key}"))
+    other = config.create_workspace("Other research")
+    with config.use_workspace(other["id"]):
+        store.save_paper(store.new_paper("remote", title="Another workspace paper"))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            held, release = asyncio.Event(), asyncio.Event()
+            old_requests = []
+
+            async def search_page(route):
+                params = parse_qs(urlsplit(route.request.url).query)
+                query = params["q"][0]
+                offset = int(params.get("offset", ["0"])[0])
+                if query == "strawberry":
+                    old_requests.append((route.request.headers["x-doxograph-workspace"], offset))
+                    if offset == 100:
+                        held.set()
+                        await release.wait()
+                    await route.fulfill(json={"terms": [query], "papers": [{"key": "one" if offset == 0 else "two"}],
+                                              "next_offset": offset + 100 if offset < 200 else None})
+                else:
+                    await route.fulfill(json={"terms": [query], "papers": [{"key": "fresh"}], "next_offset": None})
+
+            with _server() as url:
+                await page.goto(url)
+                cards = page.locator(".library-paper")
+                await expect(cards).to_have_count(3)
+                await page.route("**/api/search*", search_page)
+                try:
+                    # Start the real pagination path with a promise we can await after release.
+                    await page.evaluate("""() => {
+                        V.q = 'strawberry'; document.getElementById('q').value = V.q;
+                        window.oldSearch = runTextSearch(V.q);
+                    }""")
+                    await asyncio.wait_for(held.wait(), timeout=10)
+                    if navigation == "query":
+                        await page.locator("#q").fill("banana")
+                        expected = "fresh"
+                    else:
+                        await page.locator("#workspace").select_option(other["id"])
+                        expected = "remote"
+                    await expect(cards).to_have_count(1)
+                    await expect(cards.first).to_have_attribute("data-library-paper", expected)
+                finally:
+                    release.set()
+                await page.evaluate("window.oldSearch")
+                await expect(cards).to_have_count(1)
+                await expect(cards.first).to_have_attribute("data-library-paper", expected)
+                assert old_requests == [(config.DEFAULT_WORKSPACE_ID, 0), (config.DEFAULT_WORKSPACE_ID, 100)]
 
     run_browser(scenario())
 
