@@ -384,26 +384,37 @@ def _windows_workspace_activity(path: Path, *, exclusive: bool):
 def workspace_activity(value: str, *, exclusive: bool = False):
     """Nonblocking corpus lease shared by every server using this data root.
 
-    Lock files live outside the corpus and remain after deletion, so a late
-    request cannot lock a new inode and bypass an in-progress deletion.
+    POSIX leases lock the existing corpus directory through a read-only handle,
+    keeping healthy read-only libraries browsable. Windows uses counted handles
+    on a separate lock file. Every request validates retirement after locking.
     """
     if value == DEFAULT_WORKSPACE_ID:
         yield
         return
     if not value or value != _workspace_slug(value):
         raise KeyError(value)
-    path = base_data_dir() / "locks" / f"workspace-{value}.activity.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
     if fcntl is not None:
-        with path.open("a+") as handle:
+        folder = base_data_dir() / "workspaces" / value
+        try:
+            descriptor = os.open(folder, os.O_RDONLY)
+        except FileNotFoundError:
+            # Preserve the registry error instead of disguising damaged
+            # registry contents as a missing workspace when no directory exists.
+            _read_workspace_records()
+            raise KeyError(value)
+        try:
             mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-            fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
+            fcntl.flock(descriptor, mode | fcntl.LOCK_NB)
             try:
                 yield
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
     elif msvcrt is not None:
         # Other Windows servers are conservatively excluded during activity.
+        path = base_data_dir() / "locks" / f"workspace-{value}.activity.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
         with _windows_workspace_activity(path, exclusive=exclusive):
             yield
     else:  # pragma: no cover

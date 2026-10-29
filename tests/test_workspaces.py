@@ -179,6 +179,47 @@ def test_existing_corpus_is_the_default_and_new_workspaces_are_isolated():
     assert [paper["title"] for paper in store.all_papers()] == ["A consciousness paper"]
 
 
+@pytest.mark.skipif(config.fcntl is None, reason="POSIX read-only directory leases")
+def test_named_workspace_browsing_does_not_require_writable_data_root(monkeypatch):
+    target = config.create_workspace("Research")
+    with config.use_workspace(target["id"]):
+        store.save_paper(store.new_paper("paper", title="Read-only research"))
+    root = config.base_data_dir().resolve()
+    original_open, original_mkdir, descriptor_open = type(root).open, type(root).mkdir, os.open
+    writes = []
+
+    def readonly_open(path, mode="r", *args, **kwargs):
+        if path.is_relative_to(root) and any(flag in mode for flag in "wax+"):
+            writes.append(path)
+            raise PermissionError("Synthetic read-only library")
+        return original_open(path, mode, *args, **kwargs)
+
+    def readonly_mkdir(path, *args, **kwargs):
+        if path.is_relative_to(root):
+            writes.append(path)
+            raise PermissionError("Synthetic read-only library")
+        return original_mkdir(path, *args, **kwargs)
+
+    def readonly_descriptor(path, flags, *args, **kwargs):
+        if flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT):
+            writes.append(path)
+            raise PermissionError("Synthetic read-only library")
+        return descriptor_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(type(root), "open", readonly_open)
+    monkeypatch.setattr(type(root), "mkdir", readonly_mkdir)
+    monkeypatch.setattr(os, "open", readonly_descriptor)
+    client = TestClient(server.app, base_url="http://127.0.0.1:8765")
+    response = client.get("/api/state", headers={"X-Doxograph-Workspace": target["id"]})
+    assert response.status_code == 200
+    assert response.json()["papers"][0]["title"] == "Read-only research"
+    assert writes == []
+    # A read-only handle still participates in deletion exclusion.
+    with config.workspace_activity(target["id"]):
+        with pytest.raises(BlockingIOError):
+            with config.workspace_activity(target["id"], exclusive=True):
+                pytest.fail("Deletion bypassed a read-only request lease")
+
 def test_workspace_api_scopes_state_and_downloads():
     store.save_paper(store.new_paper("mind", title="Consciousness"))
     animal = config.create_workspace("Animal locomotion")
