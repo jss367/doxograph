@@ -132,9 +132,21 @@ previously uploaded Anthropic copies. With another API or local provider
 selected, deletion stays local; any earlier
 Anthropic uploads must be removed from your Anthropic account separately.
 
+## Paper overview
+
+Open a paper to see its summary, why it matters to your research, your own
+notes, and its saved reading progress together in **Paper overview**. The
+overview stays available when the PDF is hidden. Papers without a summary
+or PDF can still be annotated and added to the reading queue.
+
+Use **Read** to open the PDF at your saved page, **Ask about this paper** to
+start a conversation, or **Add to reading queue** to save it for later.
+Once queued, **View reading queue** opens its reading status and bookmarks.
+Extraction, quote checks, and **Add claim by hand** are under **Paper actions**.
+
 ## Chat about a paper
 
-Open a paper with a stored PDF and select **Chat about paper**. Ask a question
+Open a paper with a stored PDF and select **Ask about this paper**. Ask a question
 and continue with follow-ups. The model receives that paper's PDF (or its
 page-labeled text for ChatGPT) and the
 conversation, and is asked to cite PDF page numbers. Personal Doxograph notes
@@ -454,8 +466,10 @@ writing space are stored locally in `note-images/`.
   highlights, and claims. The PDF and the rail scroll independently. **Hide
   library** makes more room for the paper; **All papers** returns to the library.
   **Claim filters** reveals filters and selection tools, with an indicator when
-  a filter is active. Less frequent commands live under **Paper actions**, and
-  summaries and labels appear under **About this paper**. In narrow windows,
+  a filter is active. **Paper overview** brings the summary, relevance, notes,
+  labels, and reading progress together in the rail. **Read**, **Ask about this
+  paper**, and the reading queue are available in the header; less frequent
+  commands live under **Paper actions**. In narrow windows, the overview and
   notes appear below the PDF. The reader is offline; the PDF is drawn in the
   browser and never sent anywhere. Zoom defaults to the width of the column.
   **Paper actions → Hide PDF** lists the claims full width instead, and the

@@ -233,10 +233,11 @@ def test_label_choices_preserve_server_unicode_normalization(engine):
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}#paper=target")
-                await page.locator('.paperhead .label').first.wait_for()
+                await page.locator('.paper-overview .label').first.wait_for()
                 assert await page.evaluate("values => values.map(parseLabels)", samples) == [
                     store.normalize_labels([value]) for value in samples
                 ]
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels", exact=True).click()
                 choices = page.get_by_role("group", name="Existing labels")
                 await expect(choices.locator('[aria-pressed="true"]')).to_have_count(3)
@@ -249,7 +250,7 @@ def test_label_choices_preserve_server_unicode_normalization(engine):
                     ', '.join(original + ['not-apollo', '\x1cNEW\x85LABEL\x1f'])
                 )
                 await _answer(page, "OK")
-                await expect(page.locator('.paperhead .label')).to_have_count(5)
+                await expect(page.locator('.paper-overview .label')).to_have_count(5)
                 assert store.load_paper("target")["labels"] == store.normalize_labels(
                     original + ['not-apollo', 'new label']
                 )
@@ -282,12 +283,13 @@ def test_label_colors_render_without_color_mix(engine):
             await page.route('**/app.css?*', old_webview_styles)
             with _server() as url:
                 await page.goto(f"{url}#paper=target")
-                chip = page.locator('.paperhead .label')
+                chip = page.locator('.paper-overview .label')
                 await chip.wait_for()
                 for mode in ("light", "dark"):
                     await page.evaluate("appearance => applyThemeSettings({appearance, colors: 'slate'})", mode)
                     await expect(chip).to_have_css("border-top-width", "1px")
                     await expect(chip).not_to_have_css("background-color", "rgba(0, 0, 0, 0)")
+                    await page.locator(".paper-actions > summary").click()
                     await page.get_by_role("button", name="Labels", exact=True).click()
                     choice = page.get_by_role("group", name="Existing labels").get_by_role("button", name="apollo", exact=True)
                     selected = await choice.evaluate("el => getComputedStyle(el).backgroundColor")
@@ -314,8 +316,8 @@ def test_label_choices_toggle_the_draft_and_keep_their_colors(engine):
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}#paper=target")
-                await page.locator('.paperhead .label').wait_for()
-                hue = await page.locator('.paperhead .label').evaluate(
+                await page.locator('.paper-overview .label').wait_for()
+                hue = await page.locator('.paper-overview .label').evaluate(
                     "el => el.style.getPropertyValue('--label-hue')"
                 )
                 assert hue
@@ -323,6 +325,7 @@ def test_label_choices_toggle_the_draft_and_keep_their_colors(engine):
                     "el => el.style.getPropertyValue('--label-hue')"
                 ) == hue
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels", exact=True).click()
                 choices = page.get_by_role("group", name="Existing labels")
                 apollo = choices.get_by_role("button", name="apollo", exact=True)
@@ -354,22 +357,24 @@ def test_label_choices_toggle_the_draft_and_keep_their_colors(engine):
                 await other.click()
                 await expect(page.locator('#ask-input')).to_have_value('apollo, new label, not-apollo')
                 await _answer(page, "OK")
-                await expect(page.locator('.paperhead .label')).to_have_text(['apollo', 'new label', 'not-apollo'])
+                await expect(page.locator('.paper-overview .label')).to_have_text(['apollo', 'new label', 'not-apollo'])
                 assert store.load_paper("target")["labels"] == ['apollo', 'new label', 'not-apollo']
 
                 await page.reload()
-                chip = page.locator('.paperhead .label[data-label="apollo"]')
+                chip = page.locator('.paper-overview .label[data-label="apollo"]')
                 await chip.wait_for()
                 assert await chip.evaluate("el => el.style.getPropertyValue('--label-hue')") == hue
                 await page.evaluate("applyThemeSettings({appearance: 'dark', colors: 'slate'})")
                 assert await chip.evaluate("el => el.style.getPropertyValue('--label-hue')") == hue
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels", exact=True).click()
                 await apollo.click()
                 await page.keyboard.press("Escape")
                 await expect(page.locator('#ask')).to_be_hidden()
                 await expect(chip).to_be_visible()
                 assert store.load_paper("target")["labels"] == ['apollo', 'new label', 'not-apollo']
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels", exact=True).click()
                 await expect(apollo).to_have_attribute("aria-pressed", "true")
                 await _answer(page, "Cancel")
@@ -620,18 +625,20 @@ def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
                 assert await page.locator("#labels-sec:visible").count() == 0
 
                 await page.locator('#papers [data-paper="open2026model"]').click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels").click()
                 await _answer(page, "OK", "Open Source, huggingface, reading-list")
-                await page.locator('.paperhead .label', has_text="open source").wait_for()
+                await page.locator('.paper-overview .label', has_text="open source").wait_for()
 
                 # Reopening and saving must retain three distinct labels,
                 # including both the multiword and existing hyphenated names.
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels").click()
                 await page.locator('#ask').wait_for(state="visible")
                 assert await page.locator('#ask-input').input_value() == 'huggingface, open source, reading-list'
                 await _answer(page, "OK")
-                await page.locator('.paperhead .label', has_text="open source").wait_for()
-                assert await page.locator('.paperhead .label').all_text_contents() == [
+                await page.locator('.paper-overview .label', has_text="open source").wait_for()
+                assert await page.locator('.paper-overview .label').all_text_contents() == [
                     'huggingface', 'open source', 'reading-list',
                 ]
 
@@ -673,9 +680,10 @@ def test_taking_the_filtered_label_off_the_open_paper_clears_the_filter():
                 await page.goto(f"{url}#label=open-source&paper=open2026model")
                 await page.locator('.claim', has_text="An Open Model").wait_for()
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels").click()
                 await _answer(page, "OK", "")
-                await page.locator('.paperhead .label').wait_for(state="detached")
+                await page.locator('.paper-overview .label').wait_for(state="detached")
 
                 # The paper is still open, and still shows its claims.
                 assert await page.locator('.claim').count() == 1

@@ -35,6 +35,7 @@ def test_removed_mark_keeps_the_entire_changed_note_recoverable(engine, removed)
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 await page.locator('[data-highlight-note]').fill(note)
                 if removed == 'mark':
+                    await page.locator(".paper-actions > summary").click()
                     await page.get_by_role('button', name='Add claim by hand', exact=True).click()
                     await page.locator('form[data-form] [name="text"]').fill('A separate unsaved claim')
                     notebook = httpx.get(url + '/api/notebook').json()
@@ -185,7 +186,8 @@ def test_mark_editor_reconciles_clean_removal_and_conflicting_notes(engine, remo
                 assert await page.locator('[data-highlight-note]').input_value() == 'My changed note'
                 assert httpx.get(url + '/api/notebook').json()['highlights'][0]['note'] == 'Written in another window'
                 await page.locator('#toasts .toast', has_text='note changed in another window').wait_for()
-                await page.locator('#content').get_by_role('button', name='Cancel', exact=True).click()
+                await page.locator('.highlight-entry[data-highlight="mark"]').get_by_role(
+                    'button', name='Cancel', exact=True).click()
                 await ready(page)
                 await page.get_by_role('button', name='Edit note', exact=True).click()
                 # A clean editor closes without a recovery warning or phantom
@@ -488,6 +490,7 @@ def test_bookmark_reconciles_a_reopened_paper_without_overriding_new_navigation(
                 await asyncio.wait_for(held.wait(), timeout=10)
                 await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Hide PDF', exact=True).click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role('button', name='Show PDF', exact=True).click()
                 await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
                 if move_after_reopen:

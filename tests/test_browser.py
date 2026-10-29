@@ -487,7 +487,8 @@ def test_workspace_switch_waits_for_a_pending_paper_removal():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await asyncio.wait_for(delete_started.wait(), timeout=5)
 
@@ -627,6 +628,7 @@ def test_failed_new_claim_survives_navigation_back_to_its_paper():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Add claim by hand").click()
                 await page.locator('form[data-form="__new__"] textarea[name="text"]').fill(draft_text)
                 await page.locator('form[data-form="__new__"]').get_by_role("button", name="Save", exact=True).click()
@@ -1828,6 +1830,7 @@ def test_marking_a_whole_paper_reviewed_can_be_undone():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator(".paper-actions > summary").click()
                 button = page.get_by_role("button", name="Mark 2 reviewed")
                 await button.click()
                 notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
@@ -1838,6 +1841,7 @@ def test_marking_a_whole_paper_reviewed_can_be_undone():
                 # Undo takes back this decision only: the claim reviewed before
                 # it was not part of what was just done.
                 await notice.get_by_role("button", name="Undo").click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").wait_for()
 
     run_browser(scenario())
@@ -2283,6 +2287,7 @@ def test_a_bulk_review_reaches_a_claim_whose_editor_is_open():
                 assert not await reviewed.is_checked()
                 await form.locator('textarea[name="text"]').fill("One, reworded.")
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 await page.locator("#toasts .toast", has_text="2 claims marked reviewed").wait_for()
 
@@ -2316,6 +2321,7 @@ def test_history_restores_a_paper_only_when_it_still_exists_and_parks_a_new_clai
 
                 # A new claim belongs to the paper it was started on, so Back
                 # to another paper parks it instead of offering it there.
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Add claim by hand").click()
                 await page.locator('form[data-form="__new__"] textarea[name="text"]').fill(
                     "A draft that belongs to Paper A.")
@@ -2361,6 +2367,7 @@ def test_a_bulk_review_undo_writes_to_the_workspace_it_was_taken_in():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
                 await notice.wait_for()
@@ -2369,6 +2376,7 @@ def test_a_bulk_review_undo_writes_to_the_workspace_it_was_taken_in():
                 # resets the view, so the paper is opened again over there.
                 await page.locator("#workspace").select_option(label="Other")
                 await page.locator('#papers [data-paper="shared"]').click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").wait_for()
 
                 await notice.get_by_role("button", name="Undo").click()
@@ -2489,7 +2497,8 @@ def test_a_held_delete_is_sent_once_and_settles_before_its_paper_is_removed():
                 await card.wait_for(state="detached")
                 await page.locator(f'.claim[data-claim="{two}"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await page.locator('#papers [data-paper="doe2026study"]').wait_for(state="detached")
                 # Nothing is left waiting: had the claim's delete survived its
@@ -2520,6 +2529,7 @@ def test_a_bulk_review_leaves_a_claim_that_is_waiting_out_a_delete_alone():
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
                 await notice.wait_for()
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 1 reviewed").click()
                 await page.locator("#toasts .toast", has_text="1 claim marked reviewed").wait_for()
 
@@ -2643,6 +2653,7 @@ def test_undoing_a_bulk_review_freezes_the_editors_it_is_undoing():
                 form = page.locator(f'form[data-form="{one}"]')
                 await form.wait_for()
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
                 await notice.wait_for()
@@ -2799,12 +2810,14 @@ def test_a_bulk_review_waits_for_a_save_already_on_its_way():
                 await form.get_by_role("button", name="Save").click()
                 await asyncio.wait_for(started.wait(), timeout=5)
 
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 await page.locator("#toasts .toast", has_text="Wait for the change in flight").wait_for()
                 release.set()
                 await page.locator("#content").get_by_text("One, edited.").wait_for()
 
                 # Once it has landed, the bulk review goes through as usual.
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 await page.locator("#toasts .toast", has_text="2 claims marked reviewed").wait_for()
 
@@ -2848,7 +2861,8 @@ def test_removing_a_paper_names_the_workspace_it_was_asked_in():
                 await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
 
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 for _ in range(100):
                     if sent_to:
@@ -2900,7 +2914,8 @@ def test_a_claim_cannot_be_deleted_while_its_paper_is_being_removed():
                 card = page.locator(f'.claim[data-claim="{one}"]')
                 await card.wait_for()
 
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await asyncio.wait_for(in_flight.wait(), 10)
 
@@ -2994,6 +3009,7 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="doe2026study"]').click()
+                await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Mark 2 reviewed").click()
                 notice = page.locator("#toasts .toast", has_text="2 claims marked reviewed")
                 await notice.wait_for()
@@ -5072,6 +5088,7 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
                 add = page.get_by_role("button", name="Add claim by hand")
+                await page.locator(".paper-actions > summary").click()
                 await add.click()
                 form = page.locator('form[data-form="__new__"]')
                 await form.wait_for()
@@ -5088,6 +5105,7 @@ def test_nothing_new_is_written_to_a_paper_while_it_is_being_removed():
 
                 # The header's own buttons are outside the form and stay
                 # clickable, so they refuse and say why.
+                await page.locator(".paper-actions > summary").click()
                 await add.click()
                 await page.locator("#toasts .toast",
                                    has_text="That paper is being removed").wait_for()
@@ -5228,6 +5246,7 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
                 # request still to come.
                 await asyncio.wait_for(in_flight.wait(), 10)
 
+                await page.locator(".paper-actions > summary").click()
                 await add.click()
                 await page.locator("#toasts .toast",
                                    has_text="That paper is being removed").wait_for()
@@ -5285,7 +5304,8 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
                 await page.locator('.claim[data-claim="shared-c1"] [data-act="review"]').click()
                 await asyncio.wait_for(in_flight.wait(), 10)
 
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await page.locator(
                     "#toasts .toast",
@@ -5297,7 +5317,8 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
                 assert paper_deletes == []
 
                 # Asked again once the page is quiet, it goes through.
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
 
@@ -5338,7 +5359,7 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
 
                 await page.get_by_role("button", name="Save", exact=True).click()
                 await field.wait_for(state="hidden")
-                await page.locator(".paperhead .note").get_by_text(
+                await page.locator(".paper-overview .note").get_by_text(
                     "Read this one for the method.").wait_for()
                 # Saved notes offer editing beside the text.
                 assert await page.get_by_role("button", name="Write a note").count() == 0
@@ -5419,7 +5440,8 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('textarea[data-note="shared"]').fill("Typed while it was going.")
 
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await asyncio.wait_for(in_flight.wait(), 10)
 
@@ -5460,7 +5482,8 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
                 await page.locator('#papers [data-paper="shared"]').click()
                 await page.locator('textarea[data-note="shared"]').fill("Typed and then removed.")
 
-                await page.get_by_role("button", name="Remove", exact=True).click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
 
@@ -5502,7 +5525,7 @@ def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_
                 await claim_field.fill("Claim text typed before the note was saved.")
                 await page.locator(".note").get_by_role("button", name="Save").click()
                 await note_field.wait_for(state="hidden")
-                await page.locator(".paperhead .note").get_by_text("A note of my own.").wait_for()
+                await page.locator(".paper-overview .note").get_by_text("A note of my own.").wait_for()
                 assert await claim_field.input_value() == "Claim text typed before the note was saved."
 
     run_browser(scenario())
