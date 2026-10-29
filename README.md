@@ -157,8 +157,13 @@ either is missing, the dialog explains what to change and offers **Open Settings
 The selected assistant looks things up
 through the [MCP server](#query-doxograph-from-agents) below, started with
 `--without-notes`: it can search papers, claims, and PDF text, read a paper,
-list topics, and read agreements, tensions, and syntheses. The line under each
-answer lists the lookups it made. Both assistants reach the library through the
+list topics, and read agreements, tensions, and syntheses. Expand **Library lookups**
+below an answer to see what it looked up. Answers render Markdown headings, lists, tables,
+links, code, and equations. **Save as research note** keeps an answer in this
+workspace's **Research notes**, along with its question, assistant, timestamp,
+and source lookups. **Open saved note** lets you rename, edit, or export it as
+Markdown. Saved notes survive reloads and new conversations; unsaved chat stays
+only for this page session. Both assistants reach the library through the
 app that is serving the page, over a loopback address (the default; `--host 0.0.0.0`
 also works). If the app is bound only to another address, the chat says so
 instead of failing partway through an answer.
