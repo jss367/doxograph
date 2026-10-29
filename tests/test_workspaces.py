@@ -1,5 +1,6 @@
 """Workspace isolation across storage, requests, and queued work."""
 
+import contextlib
 import multiprocessing
 import os
 import stat
@@ -542,6 +543,42 @@ def test_delete_waits_until_worker_returns_even_after_terminal_state():
         assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
     finally:
         server._jobs.pop(job["id"], None)
+
+
+def test_refused_pruning_lease_preserves_notifications_journals_and_retry_inputs(monkeypatch):
+    monkeypatch.setattr(server, "_jobs", {})
+    target = config.create_workspace("Research")
+    jobs, inputs, journals = [], [], []
+    with config.use_workspace(target["id"]):
+        for index in range(42):
+            staged = config.pdfs_dir() / f".incoming-retry-{index}.pdf"
+            staged.write_bytes(b"%PDF-1.4\nRetry input")
+            job = server._new_import_job(f"Import {index}", False, staged=staged, filename="input.pdf")
+            server._set(job, state="error")
+            jobs.append(job)
+            inputs.append(staged)
+            journals.append(server.job_journal._paths[job["id"]])
+    activity = config.workspace_activity
+    busy = True
+
+    @contextlib.contextmanager
+    def lease(value, *, exclusive=False):
+        if busy and value == target["id"]:
+            raise BlockingIOError("Another server is active")
+        with activity(value, exclusive=exclusive):
+            yield
+
+    monkeypatch.setattr(config, "workspace_activity", lease)
+    server._prune_jobs()
+    assert set(server._jobs) == {job["id"] for job in jobs}
+    assert all(path.exists() for path in inputs + journals)
+    assert all(job["_import"]["staged"] == path for job, path in zip(jobs, inputs))
+
+    busy = False
+    server._prune_jobs()
+    assert set(server._jobs) == {job["id"] for job in jobs[2:]}
+    assert all(not path.exists() for path in inputs[:2] + journals[:2])
+    assert all(path.exists() for path in inputs[2:] + journals[2:])
 
 
 @pytest.mark.parametrize("named", [False, True], ids=["default", "named"])

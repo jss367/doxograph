@@ -632,7 +632,6 @@ def _prune_jobs() -> None:
 
 
 def _prune_workspace_jobs() -> None:
-    removed = []
     with _jobs_lock:
         by_workspace: dict[str, list[dict]] = {}
         for job in _jobs.values():
@@ -642,16 +641,24 @@ def _prune_workspace_jobs() -> None:
             if _workspace_identity(workspace) in _deleting_workspaces:
                 continue
             by_workspace.setdefault(workspace, []).append(job)
-        for done in by_workspace.values():
-            for job in sorted(done, key=lambda item: item["id"])[:-40]:
-                _jobs.pop(job["id"], None)
-                removed.append(job)
-    for job in removed:
+    for workspace, done in by_workspace.items():
+        candidates = sorted(done, key=lambda item: item["id"])[:-40]
+        if not candidates:
+            continue
         try:
-            workspace = job.get("workspace", config.DEFAULT_WORKSPACE_ID)
             with config.use_workspace(workspace), _using_workspace(workspace):
-                _forget_import(job)
-                job_journal.remove(job)
+                # A refused lease must leave notifications and retry inputs
+                # together, so a later pruning pass can actually clean them up.
+                removed = []
+                with _jobs_lock:
+                    for job in candidates:
+                        if (_jobs.get(job["id"]) is job
+                                and job["state"] in ("done", "error")
+                                and not (job.get("interrupted") and job.get("retryable"))):
+                            removed.append(_jobs.pop(job["id"]))
+                for job in removed:
+                    _forget_import(job)
+                    job_journal.remove(job)
         except HTTPException as exc:
             if exc.status_code not in (404, 409):
                 raise
