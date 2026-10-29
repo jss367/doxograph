@@ -151,8 +151,8 @@ def test_import_timeout_cannot_dismiss_old_cards_while_workspace_loads(engine):
                 await page.goto(url)
                 notices = page.locator('#jobs [data-auto-dismiss]')
                 await expect(notices).to_have_count(1)
-                await page.clock.run_for(7000)
                 held, release = asyncio.Event(), asyncio.Event()
+                old_poll, release_old_poll = asyncio.Event(), asyncio.Event()
                 deletes = []
                 page.on("request", lambda request: deletes.append(request.headers)
                         if request.method == "DELETE" and "/api/jobs/" in request.url else None)
@@ -161,12 +161,20 @@ def test_import_timeout_cannot_dismiss_old_cards_while_workspace_loads(engine):
                     if route.request.headers.get("x-doxograph-workspace") == other["id"]:
                         held.set()
                         await release.wait()
+                    else:
+                        old_poll.set()
+                        await release_old_poll.wait()
                     await route.continue_()
 
                 await page.route("**/api/state", hold_destination)
                 try:
+                    await page.clock.run_for(7000)
+                    await asyncio.wait_for(old_poll.wait(), timeout=10)
                     await page.select_option('#workspace', other["id"])
                     await asyncio.wait_for(held.wait(), timeout=10)
+                    completed = await page.evaluate('poller.completed')
+                    release_old_poll.set()
+                    await page.wait_for_function('before => poller.completed > before', arg=completed)
                     await expect(notices).to_have_count(1)
                     # The old DOM is connected after selection until the new
                     # workspace's state arrives. Its timer must not act there.
@@ -179,6 +187,7 @@ def test_import_timeout_cannot_dismiss_old_cards_while_workspace_loads(engine):
                     await expect(page.locator('#toasts')).not_to_contain_text("Job not found")
                     assert len(httpx.get(url + "/api/jobs").json()["jobs"]) == 1
                 finally:
+                    release_old_poll.set()
                     release.set()
                 await expect(notices).to_have_count(0)
                 await page.select_option('#workspace', config.DEFAULT_WORKSPACE_ID)

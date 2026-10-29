@@ -1316,7 +1316,9 @@ async function pull() {
     }
     throw error;
   }
-  if (!result.applied) return false;
+  // A discarded read must not drive any rendering of the current workspace,
+  // whose selected snapshot may still be empty while its first read is held.
+  if (!result.applied) return null;
   $('sync-status').hidden = true;
   S = workspaceClient.state;
   if (result.registryChanged) renderWorkspacePicker();
@@ -1355,7 +1357,7 @@ function corpusChanged() {
 async function refresh() {
   const requestedWorkspace = workspaceClient.workspaceId;
   const changed = await pull();
-  if (requestedWorkspace !== workspaceClient.workspaceId) return;
+  if (changed === null || requestedWorkspace !== workspaceClient.workspaceId) return;
   if (changed) corpusChanged();
   render();
 }
@@ -1368,7 +1370,7 @@ async function refreshAll() {
   captureOpenEditor();
   const requestedWorkspace = workspaceClient.workspaceId;
   const changed = await pull();
-  if (requestedWorkspace !== workspaceClient.workspaceId) return;
+  if (changed === null || requestedWorkspace !== workspaceClient.workspaceId) return;
   if (changed) corpusChanged();
   renderAll();
 }
@@ -5771,6 +5773,7 @@ $('btn-refresh-library').addEventListener('click', () => {
 // content guard preserves the editor DOM, draft text, focus, and selection.
 async function updateFromPoll() {
   const changed = await pull();
+  if (changed === null) return;
   renderJobs();
   if (!changed) {
     if (citationsFailed && V.view === 'graph') loadCitations();
