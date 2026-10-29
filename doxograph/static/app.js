@@ -4790,6 +4790,7 @@ document.querySelectorAll('.action-disclosure').forEach(menu => {
 // --- paper context menu --------------------------------------------------
 
 let paperMenuTrigger = null;
+let paperMenuScroll = null;
 
 function restorePaperMenuFocus(trigger) {
   if (!trigger || trigger.workspace !== workspaceClient.workspaceId) return;
@@ -4800,6 +4801,8 @@ function openPaperMenu(paper, x, y, trigger = null) {
   // Keep the identity rather than the node: polling and label saves rebuild
   // the list while the menu or its editor is open.
   paperMenuTrigger = trigger ? { paper, workspace: workspaceClient.workspaceId } : null;
+  paperMenuScroll = new Map([$('side'), $('papers')].map(node =>
+    [node, { top: node.scrollTop, left: node.scrollLeft }]));
   const p = S.papers.find((row) => row.key === paper);
   const menu = $('ctxmenu');
   menu.innerHTML = `
@@ -4819,6 +4822,7 @@ function closePaperMenu({ restoreFocus = false } = {}) {
   $('ctxmenu').hidden = true;
   const trigger = paperMenuTrigger;
   paperMenuTrigger = null;
+  paperMenuScroll = null;
   if (restoreFocus) restorePaperMenuFocus(trigger);
   return trigger;
 }
@@ -4863,6 +4867,7 @@ $('ctxmenu').addEventListener('keydown', (event) => {
   const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
     : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
   event.preventDefault();
+  event.stopPropagation();
   buttons[index].focus({ preventScroll: true });
 });
 
@@ -4873,7 +4878,15 @@ document.addEventListener('mousedown', (event) => {
 });
 // Escape is handled in the keyboard section below, ahead of the editor keys,
 // so closing the menu does not also cancel an open editor.
-$('side').addEventListener('scroll', () => closePaperMenu({ restoreFocus: true }));
+// Paper lists scroll independently; scroll does not bubble from descendants.
+$('side').addEventListener('scroll', event => {
+  if ($('ctxmenu').hidden) return;
+  // Opening by pointer can follow a scroll in the same frame. Ignore that
+  // queued event when its position was already accounted for on opening.
+  const start = paperMenuScroll?.get(event.target);
+  if (start && start.top === event.target.scrollTop && start.left === event.target.scrollLeft) return;
+  closePaperMenu({ restoreFocus: true });
+}, { capture: true });
 window.addEventListener('resize', () => closePaperMenu({ restoreFocus: true }));
 
 // Choosing a label from the sidebar or from a paper's own header. A label is

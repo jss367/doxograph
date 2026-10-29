@@ -261,12 +261,14 @@ def test_paper_menu_keyboard_focus_survives_dismissal_and_label_saves(engine):
                 await trigger.focus()
                 await page.keyboard.press("Enter")
                 await expect(action).to_be_focused()
+                selected_claim = await page.evaluate("V.selectedId")
                 await page.keyboard.press("ArrowDown")
                 await expect(menu.get_by_role("button", name="Remove paper")).to_be_focused()
                 await page.keyboard.press("Home")
                 await expect(action).to_be_focused()
                 await page.keyboard.press("End")
                 await expect(menu.get_by_role("button", name="Remove paper")).to_be_focused()
+                assert await page.evaluate("V.selectedId") == selected_claim
                 await page.keyboard.press("Escape")
                 await expect(menu).to_be_hidden()
                 await expect(trigger).to_be_focused()
@@ -336,6 +338,46 @@ def test_paper_menu_keyboard_focus_survives_dismissal_and_label_saves(engine):
                 await expect(paper.locator(".pt")).to_have_text("Another workspace's study")
                 await expect(trigger).not_to_be_focused()
                 await expect(paper.locator(".label")).to_have_text("keep")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_scrolling_the_paper_list_dismisses_its_menu_and_restores_focus(engine):
+    from playwright.async_api import expect
+
+    from test_browser import _paper as _browser_paper, _server
+
+    for index in range(12):
+        _browser_paper(f"study-{index:02}", f"A study {index:02}", "steering")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                papers = page.locator("#papers")
+                trigger = papers.locator(".pmenu").first
+                menu = page.locator("#ctxmenu")
+                await trigger.focus()
+                await page.keyboard.press("Enter")
+                await expect(menu.get_by_role("button", name="Add labels…")).to_be_focused()
+
+                side_scroll = await page.locator("#side").evaluate("side => side.scrollTop")
+                await papers.evaluate("list => { list.scrollTop += 64; }")
+                await expect(menu).to_be_hidden()
+                await expect(trigger).to_be_focused()
+                assert await papers.evaluate("list => list.scrollTop") > 0
+                assert await page.locator("#side").evaluate("side => side.scrollTop") == side_scroll
+
+                # The scroll that revealed a trigger may still have an event
+                # queued when a pointer opens the menu in that same frame.
+                await papers.evaluate("list => { list.scrollTop = 0; list.querySelector('.pmenu').click(); }")
+                await page.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+                await expect(menu.get_by_role("button", name="Add labels…")).to_be_focused()
+                await page.keyboard.press("Escape")
+                await expect(trigger).to_be_focused()
 
     run_browser(scenario())
 
