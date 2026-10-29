@@ -215,6 +215,91 @@ def test_the_export_shows_a_papers_labels_and_searches_on_them():
 # --- the browser ----------------------------------------------------------
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_label_choices_toggle_the_draft_and_keep_their_colors(engine):
+    from playwright.async_api import expect
+    from test_browser import _answer, _paper as _browser_paper, _server
+
+    _browser_paper("target", "Training Monitors for Black Box Scheming Detection", "steering")
+    _browser_paper("other", "Another Paper", "steering")
+    store.set_labels("target", ["apollo"])
+    store.set_labels("other", ["apollo", "not-apollo", "reading list", '<b>research</b>'])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}#paper=target")
+                await page.locator('.paperhead .label').wait_for()
+                hue = await page.locator('.paperhead .label').evaluate(
+                    "el => el.style.getPropertyValue('--label-hue')"
+                )
+                assert hue
+                assert await page.locator('#labels [data-label="apollo"]').evaluate(
+                    "el => el.style.getPropertyValue('--label-hue')"
+                ) == hue
+
+                await page.get_by_role("button", name="Labels", exact=True).click()
+                choices = page.get_by_role("group", name="Existing labels")
+                apollo = choices.get_by_role("button", name="apollo", exact=True)
+                other = choices.get_by_role("button", name="not-apollo", exact=True)
+                reading = choices.get_by_role("button", name="reading list", exact=True)
+                await expect(apollo).to_have_attribute("aria-pressed", "true")
+                assert await apollo.evaluate("el => el.style.getPropertyValue('--label-hue')") == hue
+                assert await other.evaluate("el => el.style.getPropertyValue('--label-hue')") != hue
+                assert await choices.locator('b').count() == 0
+                await expect(choices.get_by_role("button", name='<b>research</b>', exact=True)).to_be_visible()
+
+                await other.click()
+                await expect(other).to_have_attribute("aria-pressed", "true")
+                await expect(page.locator('#ask-input')).to_have_value('apollo, not-apollo')
+                # Keyboard activation keeps focus and toggles without submitting.
+                await reading.focus()
+                await page.keyboard.press("Space")
+                await expect(reading).to_be_focused()
+                await expect(reading).to_have_attribute("aria-pressed", "true")
+                await apollo.click()
+                await expect(apollo).to_have_attribute("aria-pressed", "false")
+                await expect(page.locator('#ask-input')).to_have_value('not-apollo, reading list')
+                assert store.load_paper("target")["labels"] == ["apollo"]
+
+                # Typing and clicking share one normalized, deduplicated draft.
+                await page.locator('#ask-input').fill(' Apollo , APOLLO, New  Label')
+                await expect(apollo).to_have_attribute("aria-pressed", "true")
+                await expect(other).to_have_attribute("aria-pressed", "false")
+                await other.click()
+                await expect(page.locator('#ask-input')).to_have_value('apollo, new label, not-apollo')
+                await _answer(page, "OK")
+                await expect(page.locator('.paperhead .label')).to_have_text(['apollo', 'new label', 'not-apollo'])
+                assert store.load_paper("target")["labels"] == ['apollo', 'new label', 'not-apollo']
+
+                await page.reload()
+                chip = page.locator('.paperhead .label[data-label="apollo"]')
+                await chip.wait_for()
+                assert await chip.evaluate("el => el.style.getPropertyValue('--label-hue')") == hue
+                await page.evaluate("applyThemeSettings({appearance: 'dark', colors: 'slate'})")
+                assert await chip.evaluate("el => el.style.getPropertyValue('--label-hue')") == hue
+
+                await page.get_by_role("button", name="Labels", exact=True).click()
+                await apollo.click()
+                await page.keyboard.press("Escape")
+                await expect(page.locator('#ask')).to_be_hidden()
+                await expect(chip).to_be_visible()
+                assert store.load_paper("target")["labels"] == ['apollo', 'new label', 'not-apollo']
+                await page.get_by_role("button", name="Labels", exact=True).click()
+                await expect(apollo).to_have_attribute("aria-pressed", "true")
+                await _answer(page, "Cancel")
+
+                # The shared dialog must clear label choices for other prompts.
+                await page.evaluate("void askText('Another question', {value: 'unchanged'})")
+                await expect(choices).to_be_hidden()
+                await expect(page.locator('#ask-input')).to_have_value('unchanged')
+                await _answer(page, "Cancel")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
     from test_browser import _answer, _paper as _browser_paper, _server
 
