@@ -3,7 +3,7 @@
 import threading
 import time
 
-from doxograph import config, extract, server, store
+from doxograph import config, extract, job_queue, store
 from doxograph.analysis_types import ModelResponse
 
 
@@ -99,7 +99,7 @@ def test_a_retag_job_reads_the_corpus_it_was_queued_in(monkeypatch):
 
     monkeypatch.setattr(extract, "retag_paper", retag)
     with config.use_workspace(workspace["id"]):
-        job = server._new_job("retag")
-    server._run_retag(job, ["roe2024gait"])
+        job = job_queue._new_job("retag")
+    job_queue._run_retag(job, ["roe2024gait"])
     assert seen == [(workspace["id"], "Gait")]
     assert (job["state"], job["detail"]) == ("done", "1 papers")

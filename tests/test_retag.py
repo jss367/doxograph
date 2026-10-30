@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from doxograph import extract, server, store
+from doxograph import extract, job_queue, store
 
 
 # --- retag must not overwrite edits made while the model was working -----
@@ -300,11 +300,11 @@ def test_a_retag_failure_does_not_cost_the_papers_after_it(monkeypatch):
         retagged.append(key)   # papers run a few at a time, so the order is not fixed
 
     monkeypatch.setattr(extract, "retag_paper", retag)
-    job = server._new_job("retag 3 papers")
+    job = job_queue._new_job("retag 3 papers")
     try:
-        server._run_retag(job, ["a2020first", "b2021second", "c2022third"])
+        job_queue._run_retag(job, ["a2020first", "b2021second", "c2022third"])
     finally:
-        server._jobs.pop(job["id"], None)
+        job_queue._jobs.pop(job["id"], None)
 
     assert sorted(retagged) == ["b2021second", "c2022third"], "a failure stopped the whole batch"
     assert job["state"] == "error"
@@ -313,10 +313,10 @@ def test_a_retag_failure_does_not_cost_the_papers_after_it(monkeypatch):
 
 def test_a_retag_batch_that_all_works_is_done(monkeypatch):
     monkeypatch.setattr(extract, "retag_paper", lambda key: None)
-    job = server._new_job("retag 2 papers")
+    job = job_queue._new_job("retag 2 papers")
     try:
-        server._run_retag(job, ["a2020first", "b2021second"])
+        job_queue._run_retag(job, ["a2020first", "b2021second"])
     finally:
-        server._jobs.pop(job["id"], None)
+        job_queue._jobs.pop(job["id"], None)
 
     assert (job["state"], job["detail"]) == ("done", "2 papers")

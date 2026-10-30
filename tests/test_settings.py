@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, config, extract, ingest, server, store
+from doxograph import __main__, config, extract, ingest, job_queue, server, store
 
 
 def client():
@@ -44,7 +44,7 @@ def test_invalid_settings_do_not_reenable_analysis(contents):
 def test_analysis_routes_reject_requests_before_queueing(monkeypatch, path):
     config.set_ai_enabled(False)
     submit = Mock()
-    monkeypatch.setattr(server._pool, "submit", submit)
+    monkeypatch.setattr(job_queue._pool, "submit", submit)
     with client() as c:
         response = c.post(path, json={})
     assert response.status_code == 403
@@ -90,7 +90,7 @@ def test_waiting_model_call_rechecks_setting_after_acquiring_slot(monkeypatch):
 def test_import_endpoints_override_automatic_analysis_including_native_defaults(monkeypatch):
     config.set_ai_enabled(False)
     submit = Mock()
-    monkeypatch.setattr(server._pool, "submit", submit)
+    monkeypatch.setattr(job_queue._pool, "submit", submit)
     with client() as c:
         assert c.post("/api/ingest", json={"text": "2602.06941", "extract": True}).status_code == 200
         assert submit.call_args.args[-1] is False
@@ -108,11 +108,11 @@ def test_import_workers_skip_analysis_disabled_after_queueing(monkeypatch, uploa
     monkeypatch.setattr(ingest, "ingest_staged_pdf", lambda *a: (key, True))
     analyze = Mock(side_effect=AssertionError("must not analyze"))
     monkeypatch.setattr(extract, "extract_paper", analyze)
-    job = server._new_job("import")
+    job = job_queue._new_job("import")
     if upload:
-        server._run_upload(job, store.pdf_path(key), "paper.pdf", True)
+        job_queue._run_upload(job, store.pdf_path(key), "paper.pdf", True)
     else:
-        server._run_ingest(job, None, True)
+        job_queue._run_ingest(job, None, True)
     assert job["state"] == "done"
     analyze.assert_not_called()
 

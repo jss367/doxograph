@@ -173,7 +173,7 @@ def resolve(ref: dict) -> dict:
         paper = store.load_paper(ref["paper"])
         claim = next(c for c in paper.get("claims", []) if c["id"] == ref["claim"])
     except (KeyError, StopIteration):
-        raise HTTPException(404, "A selected claim no longer exists. Refresh your selection.")
+        raise HTTPException(404, "A selected claim no longer exists. Refresh your selection.") from None
     return dict(claim, paper=paper["key"], paper_title=paper.get("title", ""),
                 paper_authors=paper.get("authors") or [], paper_year=paper.get("year"),
                 paper_notes=paper.get("notes", ""), source=paper.get("source", {}))
@@ -218,7 +218,7 @@ def save_notebook(body: Notebook) -> dict:
                 try:
                     store.load_paper(reading["paper"])
                 except KeyError:
-                    raise HTTPException(404, "Paper no longer exists")
+                    raise HTTPException(404, "Paper no longer exists") from None
         # Like reading entries, highlights outlive their paper rather than vanish,
         # but a new highlight needs a paper that still exists.
         if any(h["kind"] == "figure" and len(h["rects"]) != 1 for h in data["highlights"]):
@@ -228,7 +228,7 @@ def save_notebook(body: Notebook) -> dict:
             try:
                 store.load_paper(paper)
             except KeyError:
-                raise HTTPException(404, "Paper no longer exists")
+                raise HTTPException(404, "Paper no longer exists") from None
         data["revision"] += 1
         store.write_json(config.data_dir() / "notebook.json", data)
         return data
@@ -270,7 +270,7 @@ def bulk(body: Bulk) -> dict:
         try:
             papers = {key: store.load_paper(key) for key in keys}
         except KeyError:
-            raise HTTPException(404, "A selected paper no longer exists")
+            raise HTTPException(404, "A selected paper no longer exists") from None
         for ref in refs:
             resolve(ref)  # validate the entire selection before the first write
         if body.field == "tags" and body.mode != "remove":
@@ -342,7 +342,7 @@ def history(key: str) -> dict:
     try:
         paper = store.load_paper(key)
     except KeyError:
-        raise HTTPException(404, "Paper no longer exists")
+        raise HTTPException(404, "Paper no longer exists") from None
     return {"entries": list(reversed(paper.get("history", []))), "expected": fingerprint(paper),
             "claims": paper.get("claims", []), "notes": paper.get("notes", "")}
 
@@ -360,7 +360,7 @@ def restore(key: str, body: Restore) -> dict:
             paper = store.load_paper(key)
             entry = next(e for e in paper.get("history", []) if e["id"] == body.revision)
         except (KeyError, StopIteration):
-            raise HTTPException(404, "History entry no longer exists")
+            raise HTTPException(404, "History entry no longer exists") from None
         if fingerprint(paper) != body.expected:
             raise HTTPException(409, "This paper changed. Reopen history before restoring.")
         omitted_topics = []
@@ -437,7 +437,7 @@ def export_selection(body: Selection) -> Response:
             try:
                 paper = store.load_paper(key)
             except KeyError:
-                raise HTTPException(404, "Paper no longer exists")
+                raise HTTPException(404, "Paper no longer exists") from None
             for c in paper.get("claims", []):
                 if (key, c["id"]) not in seen:
                     refs.append({"paper": key, "claim": c["id"]})
@@ -543,7 +543,7 @@ def annotated_pdf(key: Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$", max_leng
     try:
         writer = PdfWriter(clone_from=PdfReader(path))
     except (PdfReadError, ValueError, OSError):
-        raise HTTPException(422, "This PDF could not be read to add annotations")
+        raise HTTPException(422, "This PDF could not be read to add annotations") from None
     skipped = 0
     for mark in sorted(marks, key=lambda h: (h["page"], h["rects"][0]["y"], h["rects"][0]["x"])):
         if mark["page"] > len(writer.pages):

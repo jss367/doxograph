@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, chat, codex_cli, config, extract, ingest, quotes, server, store
+from doxograph import __main__, chat, codex_cli, config, extract, ingest, job_queue, quotes, server, store
 
 
 @pytest.fixture
@@ -170,8 +170,8 @@ def test_queued_analysis_keeps_model_selected_at_submission(codex, monkeypatch):
             seen.append(config.model())
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        monkeypatch.setattr(server, '_pool', pool)
-        future = server._submit_job(work, server._new_job('analysis'))
+        monkeypatch.setattr(job_queue, '_pool', pool)
+        future = job_queue._submit_job(work, job_queue._new_job('analysis'))
         try:
             assert started.wait(timeout=5)
             config.save_codex_model('next-model')
@@ -254,7 +254,7 @@ def test_cli_batch_keeps_subscription_for_items_waiting_for_a_worker(provider):
 @pytest.mark.parametrize('provider', ['codex', 'claude_code'])
 def test_server_batch_keeps_subscription_selected_before_queue_delay(provider, monkeypatch):
     config.set_ai_provider(provider)
-    job = server._new_job('retag')
+    job = job_queue._new_job('retag')
     # Model access changes while the whole job is waiting for the server pool.
     config.set_ai_provider('api')
     monkeypatch.setattr(config, 'PASS_WORKERS', 1)
@@ -265,7 +265,7 @@ def test_server_batch_keeps_subscription_selected_before_queue_delay(provider, m
         config.set_ai_provider('api')
 
     monkeypatch.setattr(extract, 'retag_paper', retag)
-    server._run_retag(job, ['first', 'second', 'third'])
+    job_queue._run_retag(job, ['first', 'second', 'third'])
     assert job['state'] == 'done'
     assert seen == [(key, provider) for key in ['first', 'second', 'third']]
     assert config.ai_provider() == 'api'
@@ -334,6 +334,6 @@ def test_queued_work_captures_both_selections_from_one_snapshot(monkeypatch, acc
         seen.append((config.ai_provider(), config.analysis_config().provider, job['ai_provider']))
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        monkeypatch.setattr(server, '_pool', pool)
-        server._submit_job(work, job).result(timeout=5)
+        monkeypatch.setattr(job_queue, '_pool', pool)
+        job_queue._submit_job(work, job).result(timeout=5)
     assert seen == [(access, api_provider, access)]

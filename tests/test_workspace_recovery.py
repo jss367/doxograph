@@ -12,7 +12,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from doxograph import backups, config, ingest, job_journal, notebook, server, store, workspace_archive
+from doxograph import backups, config, ingest, job_journal, job_queue, notebook, server, store, workspace_archive
 from pdfs import minimal_pdf
 
 
@@ -86,17 +86,17 @@ def test_archive_links_do_not_redirect_another_workspaces_paper():
 
 
 def test_interrupted_import_survives_a_real_process_exit_and_requires_resume(monkeypatch):
-    script = '''from doxograph import config, server, ingest
+    script = '''from doxograph import config, ingest, job_queue, server
 config.ensure_dirs()
-job = server._new_import_job('A study', False, ref=ingest.Ref('arxiv','2602.06941','2602.06941'))
-server._set(job, state='fetching')
+job = job_queue._new_import_job('A study', False, ref=ingest.Ref('arxiv','2602.06941','2602.06941'))
+job_queue._set(job, state='fetching')
 print(job['id'])
 '''
     result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, env=os.environ.copy(), check=True)
     identifier = int(result.stdout.strip())
-    monkeypatch.setattr(server, '_jobs', {})
+    monkeypatch.setattr(job_queue, '_jobs', {})
     submitted = []
-    monkeypatch.setattr(server._pool, 'submit', lambda *args: submitted.append(args))
+    monkeypatch.setattr(job_queue._pool, 'submit', lambda *args: submitted.append(args))
     with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
         [job] = client.get('/api/jobs').json()['jobs']
         assert job['id'] == identifier and job['interrupted'] and job['retryable']
@@ -130,8 +130,8 @@ def test_failed_backup_does_not_overwrite_the_original(monkeypatch):
 
 
 def test_live_jobs_cannot_be_recovered_by_a_second_server():
-    job = server._new_import_job('A study', False, ref=ingest.Ref('arxiv', '2602.06941', '2602.06941'))
-    server._set(job, state='fetching')
+    job = job_queue._new_import_job('A study', False, ref=ingest.Ref('arxiv', '2602.06941', '2602.06941'))
+    job_queue._set(job, state='fetching')
     assert job_journal.recover() == []
     assert job['state'] == 'fetching'
 

@@ -3,36 +3,27 @@
 from __future__ import annotations
 
 import contextlib
-import contextvars
-import ipaddress
 import hashlib
 import json
 import logging
-import functools
 import os
 import re
 import threading
-import time
-import traceback
-import uuid
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Literal
-from urllib.parse import parse_qs, urlsplit
+from typing import Any, Literal
+from urllib.parse import parse_qs
 
-import anthropic
-import httpx
-from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
-from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from starlette.types import ASGIApp, Receive, Scope, Send
+from pydantic import BaseModel, Field
 
-from . import (__version__, agent, bib, chat, chats, cites, codex_cli, config, export, extract, fingerprint, ingest, pairs,
-               search, store, notebook, records, research_notes, storage, providers, query, job_journal,
-               backups, workspace_archive)
-from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
+from . import (__version__, activity, analysis_api, backups, bib, chat_api, chats, codex_cli, config, export,
+               fingerprint, job_journal, job_queue, notebook, origins, papers_api, query, records,
+               research_notes, storage, store, workspace_archive)
+from .model_errors import ModelSetupError
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +39,7 @@ STATIC = Path(__file__).parent / "static"
 fingerprint.snapshot()
 
 @contextlib.asynccontextmanager
-async def _lifespan(_: FastAPI):
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Read the dependencies once more, now that the server is fully loaded.
 
     `import uvicorn` is not the end of Uvicorn's importing: `uvicorn.run` builds
@@ -61,11 +52,11 @@ async def _lifespan(_: FastAPI):
     never calls `serve()` at all.
     """
     fingerprint.snapshot()
-    _recover_jobs()
+    job_queue._recover_jobs()
     try:
         yield
     finally:
-        _close_import_session()
+        job_queue._close_import_session()
 
 
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
@@ -75,342 +66,31 @@ app.include_router(chats.router)
 app.include_router(query.router)
 app.include_router(backups.router)
 app.include_router(workspace_archive.router)
+app.include_router(job_queue.router)
+app.include_router(papers_api.router)
+app.include_router(chat_api.router)
+app.include_router(analysis_api.router)
 app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-assets")
 
 
 @app.exception_handler(store.StorageRecoveryError)
-async def storage_recovery_error(request: Request, exc: store.StorageRecoveryError):
+async def storage_recovery_error(request: Request, exc: store.StorageRecoveryError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=503)
 
 
 @app.exception_handler(store.PaperReadError)
-async def paper_read_error(request: Request, exc: store.PaperReadError):
+async def paper_read_error(request: Request, exc: store.PaperReadError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 
 @app.exception_handler(store.TopicConflictError)
-async def topic_conflict_error(request: Request, exc: store.TopicConflictError):
+async def topic_conflict_error(request: Request, exc: store.TopicConflictError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
 @app.exception_handler(storage.StorageReadError)
-async def storage_read_error(request: Request, exc: storage.StorageReadError):
+async def storage_read_error(request: Request, exc: storage.StorageReadError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=503)
-
-
-_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
-_jobs: dict[int, dict] = {}
-_jobs_lock = threading.Lock()
-_job_counter = time.time_ns() // 1000  # Below JavaScript's integer limit; survives process restarts.
-_job_recovery_issues: dict[str, list[str]] = {}
-_workspace_activity_lock = threading.RLock()
-_workspace_activity: dict[tuple[str, str], int] = {}
-_deleting_workspaces: set[tuple[str, str]] = set()
-
-
-def _workspace_identity(value: str) -> tuple[str, str]:
-    return (str(config.base_data_dir().resolve()), value)
-
-
-@contextlib.contextmanager
-def _using_workspace(value: str):
-    """Keep deletion out of requests and the entire lifetime of worker calls."""
-    identity = _workspace_identity(value)
-    with contextlib.ExitStack() as leases:
-        with _workspace_activity_lock:
-            if identity in _deleting_workspaces:
-                raise HTTPException(409, "This workspace is being deleted")
-            try:
-                leases.enter_context(config.workspace_activity(value))
-            except BlockingIOError:
-                raise HTTPException(409, "This workspace is busy or being deleted")
-            except KeyError:
-                raise HTTPException(404, f"no workspace {value}")
-            if config.get_workspace(value) is None:
-                raise HTTPException(404, f"no workspace {value}")
-            _workspace_activity[identity] = _workspace_activity.get(identity, 0) + 1
-        try:
-            yield
-        finally:
-            with _workspace_activity_lock:
-                remaining = _workspace_activity[identity] - 1
-                if remaining:
-                    _workspace_activity[identity] = remaining
-                else:
-                    del _workspace_activity[identity]
-
-#: Methods that cannot make work, and so are not counted. Everything else is.
-SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-_arrivals_lock = threading.Lock()
-_requests_arriving = 0
-
-#: Everything this server has ever accepted, counted once each and never
-#: decremented. Only goes up, so a reading of it is an identity for "the work
-#: this server had taken on by then" in a way the gauges can never be: two
-#: readings of `1 in flight` can be two different papers.
-#:
-#: Once each is the whole difficulty. A paper arrives as a request and becomes
-#: a job, which are two moments in the life of one acceptance, and counting both
-#: would move this number without anything new having been accepted — so the
-#: launcher would ask again about a paper the user had already agreed to lose.
-#: A request counts itself and says so; a job counts itself only when nothing
-#: has counted it already, which is how the handful of jobs made by GETs are
-#: not missed.
-_work_taken = 0
-_work_lock = threading.Lock()
-#: Whether the request this job is being made inside has already been counted.
-#: A `ContextVar` because the counting happens in ASGI middleware and the
-#: counted-or-not has to reach a handler several frames down without being
-#: passed through every one of them, and without leaking into the next request.
-_request_counted: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "doxograph_request_counted", default=False)
-
-
-def _take_work() -> None:
-    global _work_taken
-    with _work_lock:
-        _work_taken += 1
-
-
-class CountArrivingRequests:
-    """Count a request that might become work from the moment it lands.
-
-    A handler cannot count this for itself: Starlette has received the whole
-    body before the handler runs, and during that receive the job does not
-    exist yet. `/api/health` would say idle while a paper was still arriving,
-    and the macOS launcher would stop the server on top of it.
-
-    Counted by method rather than by a list of routes, so a new route that
-    creates work is counted without anyone remembering to add it. Reads are
-    left out: `/api/health` is itself a GET and would report itself busy.
-    Written as raw ASGI so it does not pump `/pdf/{key}` through an extra
-    stream to do the counting.
-    """
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("method", "GET") in SAFE_METHODS:
-            return await self.app(scope, receive, send)
-        global _requests_arriving
-        _request_counted.set(True)
-        _take_work()
-        with _arrivals_lock:
-            _requests_arriving += 1
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            with _arrivals_lock:
-                _requests_arriving -= 1
-
-
-#: Carries the address `serve()` bound to into a `--reload` subprocess, which
-#: re-imports this module instead of calling `serve()` again and would otherwise
-#: fall back to loopback-only and refuse the page's own writes.
-BIND_ENV = "DOXOGRAPH_BIND"
-
-#: Where an operator who published this server has said its page lives: a
-#: comma-separated list of origins, or bare `host:port` authorities. Needed
-#: where the name the browser typed cannot be read off the socket and must not
-#: be taken from the request: a wildcard bind, or a Unix socket. Behind a TLS
-#: terminator publish both `https://name` (the browser's Origin) and
-#: `http://name` (the forwarded Host). See `trust_bind`.
-PUBLISHED_ORIGINS_ENV = "DOXOGRAPH_PUBLISHED_ORIGINS"
-
-#: The port a scheme means when an authority does not spell one out. A `Host`
-#: header carries no scheme of its own, so the request's scheme does that work.
-DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
-
-#: `(hostname, port)` pairs this server answers for besides the loopback ones,
-#: filled in from where `serve()` bound and from `PUBLISHED_ORIGINS_ENV`. Empty
-#: under `uvicorn doxograph.server:app`, which binds the loopback interface.
-_published_authorities: frozenset[tuple[str, int | None]] = frozenset()
-
-#: True when the bind was a wildcard address. Nothing is trusted on account of
-#: it; it only decides whether `serve()` warns that the server has been
-#: published without anyone saying under what name.
-_bound_to_every_address = False
-
-
-def _is_loopback(hostname: str) -> bool:
-    """Whether a URL's host part names this machine's loopback interface."""
-    if hostname == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
-#: The loopback names a browser actually produces. `127.0.0.2:8765` is
-#: loopback too, but it is a different browser origin from the page this app
-#: is served on, so for an Origin check it is another site.
-_CANONICAL_LOOPBACK = frozenset({ipaddress.ip_address("127.0.0.1"),
-                                 ipaddress.ip_address("::1")})
-
-
-def _is_canonical_loopback(hostname: str) -> bool:
-    """Whether a host part is one of the names a browser gives this machine."""
-    if hostname == "localhost":
-        return True
-    try:
-        # Via `ip_address` so the long spellings of `::1` are recognised too.
-        return ipaddress.ip_address(hostname) in _CANONICAL_LOOPBACK
-    except ValueError:
-        return False
-
-
-def _origin_authority(origin: str) -> tuple[str, int | None]:
-    """An origin as the `(hostname, port)` pair it names, the port made explicit.
-
-    A port the origin leaves out is the one its scheme implies. Anything
-    `urlsplit` cannot parse, including a half-written IPv6 literal, comes back
-    as the empty authority, which nobody trusts.
-    """
-    try:
-        split = urlsplit(origin)
-        hostname, port = split.hostname or "", split.port
-    except ValueError:
-        return "", None
-    return hostname, port if port is not None else DEFAULT_PORTS.get(split.scheme)
-
-
-def _host_authority(host: str, scheme: str) -> tuple[str, int | None]:
-    """A `Host` header as the same pair. It has no scheme, so it is lent one."""
-    return _origin_authority(f"{scheme}://{host}")
-
-
-def _is_our_own(
-    authority: tuple[str, int | None],
-    bound_port: int | None,
-    *,
-    as_a_browser_origin: bool = False,
-) -> bool:
-    """Whether an authority is one this server could itself be answering for.
-
-    Trust comes from where this server listens, never from what a request
-    says about itself. Loopback is trusted against `bound_port`, read off the
-    listening socket, so `http://localhost:3000` stays another origin. The
-    scheme is not compared: a Host carries none, and the same server behind a
-    TLS terminator is the same server.
-
-    Published authorities are consulted first, so `https://localhost` in front
-    of a backend on another port is answered for. `as_a_browser_origin` narrows
-    loopback to the names a browser gives this machine, since another loopback
-    address is another browser origin. With no port on the socket (a Unix
-    socket) a Host can still be judged by name, but an Origin has to be one
-    the operator published, or the loopback rule would admit every program on
-    the machine.
-    """
-    hostname, port = authority
-    if not hostname:
-        return False
-    if authority in _published_authorities:
-        return True
-    if (_is_canonical_loopback if as_a_browser_origin else _is_loopback)(hostname):
-        if bound_port is None:
-            return not as_a_browser_origin
-        return port == bound_port
-    return False
-
-
-def _authorities_from_environment() -> set[tuple[str, int | None]]:
-    """The authorities `PUBLISHED_ORIGINS_ENV` names, ignoring the unparseable."""
-    published = set()
-    for item in os.environ.get(PUBLISHED_ORIGINS_ENV, "").split(","):
-        item = item.strip()
-        if not item:
-            continue
-        authority = _origin_authority(item) if "//" in item else _host_authority(item, "http")
-        if authority[0]:
-            published.add(authority)
-    return published
-
-
-def trust_bind(host: str, port: int) -> None:
-    """Record where the server is listening, so its own page is recognised.
-
-    The canonical loopback names need no recording. Another loopback address
-    does, or `serve --host 127.0.0.2` would lock out its own page. A wildcard
-    bind records nothing: which of this machine's names the browser typed is
-    not knowable from the socket and must not be read from the request, so the
-    operator says it via `PUBLISHED_ORIGINS_ENV`.
-    """
-    global _published_authorities, _bound_to_every_address
-    host = host.strip("[]").lower()
-    _bound_to_every_address = host in {"0.0.0.0", "::", ""}
-    published = _authorities_from_environment()
-    if not _bound_to_every_address and not _is_canonical_loopback(host):
-        published.add((host, port))
-    _published_authorities = frozenset(published)
-
-
-def _trust_bind_from_environment() -> None:
-    global _published_authorities
-    bind = os.environ.get(BIND_ENV, "")
-    host, _, port = bind.rpartition(":")
-    if host and port.isdigit():
-        trust_bind(host, int(port))
-    else:
-        _published_authorities = frozenset(_authorities_from_environment())
-
-
-_trust_bind_from_environment()
-
-
-class RejectCrossSiteRequests:
-    """Refuse a request another site sent, or one addressed to another name.
-
-    The Host check carries the weight. A page on `evil.example.com` whose name
-    has been rebound to `127.0.0.1` reaches this server over a connection the
-    browser considers same-origin, and it can read every reply. Comparing
-    Origin against Host would not catch it, since the page sets both. What it
-    cannot change is the name it asked for, which the browser puts in Host, so
-    every request has to be addressed to an authority this server answers for,
-    as `_is_our_own` works out from the socket.
-
-    The Origin check is the ordinary cross-site one. `/api/upload` is a
-    multipart POST, which a browser sends across origins without a preflight;
-    every other mutating route takes JSON and is held back by one. A request
-    with no Origin (curl, the CLI, the macOS uploader) is left alone.
-
-    Outermost of the middlewares, so a refused request is never counted as
-    work in flight and never selects a workspace.
-    """
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            return await self.app(scope, receive, send)
-        headers = dict(scope.get("headers") or [])
-        scheme = scope.get("scheme") or "http"
-        bound_port = (scope.get("server") or (None, None))[1]
-        host = headers.get(b"host", b"").decode("utf-8", "replace")
-        if not _is_our_own(_host_authority(host, scheme), bound_port):
-            return await self._refuse(
-                f"request addressed to {host!r} refused: not a name this server answers for",
-                scope, receive, send,
-            )
-        if scope.get("method", "GET") in SAFE_METHODS:
-            return await self.app(scope, receive, send)
-        origin = headers.get(b"origin", b"").decode("utf-8", "replace")
-        if origin and not _is_our_own(_origin_authority(origin), bound_port,
-                                      as_a_browser_origin=True):
-            return await self._refuse(
-                f"cross-site request from {origin} refused", scope, receive, send
-            )
-        return await self.app(scope, receive, send)
-
-    @staticmethod
-    async def _refuse(detail: str, scope, receive, send):
-        # 403 rather than 421: a 421 invites an HTTP/2 client to retry on a
-        # fresh connection, and the objection is to the request itself.
-        response = JSONResponse({"detail": detail}, status_code=403)
-        return await response(scope, receive, send)
 
 
 def _broken_registry(exc: ValueError) -> str:
@@ -428,10 +108,10 @@ class SelectWorkspace:
     as a query parameter instead.
     """
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         # These routes either do not read a corpus or are themselves how the
@@ -458,7 +138,7 @@ class SelectWorkspace:
         try:
             # Acquire before validation so deletion cannot slip between the
             # registry lookup and the first read or write of corpus files.
-            usage = _using_workspace(selected)
+            usage = activity._using_workspace(selected)
             usage.__enter__()
         except HTTPException as exc:
             response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
@@ -475,423 +155,12 @@ class SelectWorkspace:
             usage.__exit__(None, None, None)
 
 
-app.add_middleware(CountArrivingRequests)
+app.add_middleware(activity.CountArrivingRequests)
 app.add_middleware(SelectWorkspace)
 # Added last, so it wraps the other two and turns a cross-site request away
 # before either of them sees it.
-app.add_middleware(RejectCrossSiteRequests)
+app.add_middleware(origins.RejectCrossSiteRequests)
 
-
-def _finish(job: dict, key: str) -> None:
-    """Close a job, saying so when the paper arrived without its PDF.
-
-    A paper with no PDF cannot be read, and marking the job plainly done hides
-    that: for a new paper the job leaves the strip entirely because its detail is
-    empty. The CLI already counts this as a failure; the web UI now says it too.
-    """
-    if key and not store.pdf_path(key).exists():
-        try:
-            note = store.load_paper(key).get("error") or "no PDF available"
-        except (KeyError, json.JSONDecodeError):
-            note = "the paper was removed"
-        _set(job, state="error", detail=f"no PDF stored ({note})",
-             explanation="The paper's details were saved, but its PDF is unavailable. "
-                         "Retry to check again, or upload the PDF yourself.")
-        return
-    explanation = ""
-    source = job.get("_import", {})
-    if source and store.needs_extraction(key):
-        if not config.ai_enabled():
-            explanation = "PDF saved. AI analysis is off, so no claims were extracted."
-        elif not source.get("extract"):
-            explanation = "PDF saved without analysis because Read on arrival was off."
-    _set(job, state="done", explanation=explanation)
-    _forget_import(job)
-
-
-def _new_job(label: str, **fields) -> dict:
-    global _job_counter
-    # A job made inside a request the middleware already counted is that
-    # request's work arriving in its second form, not a second acceptance.
-    # A job made by a GET has nothing to have counted it, so it counts itself.
-    if not _request_counted.get():
-        _take_work()
-    with _jobs_lock:
-        _job_counter += 1
-        job = {"id": _job_counter, "label": label, "state": "queued",
-               "detail": "", "key": None, "started": store.now()}
-        job["workspace"] = config.workspace_id()
-        job["ai_provider"] = config.ai_provider()
-        job.update(fields)
-        job_journal.save(job)
-        _jobs[job["id"]] = job
-        return job
-
-
-def _set(job: dict, **fields) -> None:
-    with _jobs_lock:
-        job.update(fields)
-        job_journal.save(job)
-
-
-def _new_import_job(label: str, do_extract: bool, **source) -> dict:
-    return _new_job(label, kind="import", retryable=True,
-                    _import={**source, "extract": do_extract})
-
-
-def _forget_import(job: dict) -> None:
-    """Release retained upload bytes when a notification no longer needs them."""
-    with _jobs_lock:
-        source = job.pop("_import", {})
-        if job.get("kind") == "import":
-            job["retryable"] = False
-        job_journal.save(job)
-    if staged := source.get("staged"):
-        staged.unlink(missing_ok=True)
-
-
-def _close_import_session() -> None:
-    """Leave retry inputs and the latest notification available after relaunch."""
-    with _workspace_activity_lock, _jobs_lock:
-        for job in _jobs.values():
-            if (job.get("_import")
-                    and _workspace_identity(job["workspace"]) not in _deleting_workspaces):
-                try:
-                    with config.use_workspace(job["workspace"]), _using_workspace(job["workspace"]):
-                        job_journal.save(job)
-                except HTTPException as exc:
-                    if exc.status_code not in (404, 409):
-                        raise
-
-
-def _recover_jobs() -> None:
-    global _job_counter
-    try:
-        workspaces = config.list_workspaces()
-    except ValueError:
-        workspaces = [{"id": config.DEFAULT_WORKSPACE_ID}]
-    with _workspace_activity_lock, _jobs_lock:
-        for workspace in workspaces:
-            with config.use_workspace(workspace["id"]):
-                issues = []
-                try:
-                    # Browsing a healthy, read-only library needs no lock file.
-                    if any((config.data_dir() / '.jobs').glob('*.json')):
-                        with _using_workspace(workspace["id"]), store.document_lock("job-recovery"):
-                            for job in job_journal.recover(issues):
-                                if job["id"] not in _jobs:
-                                    _jobs[job["id"]] = job
-                                    _job_counter = max(_job_counter, job["id"])
-                except OSError as exc:
-                    issues.append(f'Previous imports could not be recovered: {exc}. Their saved inputs were left in place.')
-                except HTTPException as exc:
-                    if exc.status_code not in (404, 409):
-                        raise
-                _job_recovery_issues[str(config.data_dir())] = issues
-
-
-def _import_failed(job: dict, exc: Exception) -> None:
-    if isinstance(exc, (httpx.TimeoutException, anthropic.APITimeoutError)):
-        explanation = "The service took too long to respond. Retry to try again."
-    elif isinstance(exc, (httpx.RequestError, anthropic.APIConnectionError)):
-        explanation = "The service could not be reached. Check your connection, then retry."
-    elif isinstance(exc, anthropic.AuthenticationError):
-        explanation = "AI analysis could not sign in. Check the selected provider's credentials, then retry."
-    elif isinstance(exc, (httpx.HTTPStatusError, anthropic.APIStatusError)):
-        status = exc.response.status_code
-        if status == 429:
-            explanation = "The service is receiving too many requests. Wait a moment, then retry."
-        elif status in (401, 403):
-            if job["state"] == "reading":
-                explanation = "AI analysis could not sign in. Check the selected provider's credentials, then retry."
-            else:
-                explanation = "The service refused access. You may need to download and upload the PDF yourself."
-        elif status == 404:
-            explanation = "The paper could not be found at this address. Check the reference, then retry."
-        else:
-            explanation = "The service could not complete the request. Wait a moment, then retry."
-    elif isinstance(exc, ingest.InvalidPDFUpload):
-        explanation = "This file is not a PDF. Upload a valid PDF to import this paper."
-    elif isinstance(exc, ValueError):
-        explanation = "The paper or PDF could not be read. Check the reference or file, then retry."
-    elif isinstance(exc, ingest.PaperRemoved):
-        explanation = "The paper was removed during import. Retry to add it again."
-    elif job["state"] == "reading":
-        explanation = "The PDF was saved, but AI analysis failed. Retry to try the analysis again."
-    else:
-        explanation = "The import could not be completed. Retry to try again."
-    if isinstance(exc, ingest.InvalidPDFUpload):
-        _forget_import(job)
-    _set(job, state="error", detail=f"{type(exc).__name__}: {exc}", explanation=explanation)
-
-
-def _prune_jobs() -> None:
-    # Pruning visits notifications outside the calling worker's workspace.
-    # Finish those writes before deletion, and skip a corpus being removed.
-    with _workspace_activity_lock:
-        _prune_workspace_jobs()
-
-
-def _prune_workspace_jobs() -> None:
-    with _jobs_lock:
-        by_workspace: dict[str, list[dict]] = {}
-        for job in _jobs.values():
-            if job["state"] not in ("done", "error") or (job.get("interrupted") and job.get("retryable")):
-                continue
-            workspace = job.get("workspace", config.DEFAULT_WORKSPACE_ID)
-            if _workspace_identity(workspace) in _deleting_workspaces:
-                continue
-            by_workspace.setdefault(workspace, []).append(job)
-    for workspace, done in by_workspace.items():
-        candidates = sorted(done, key=lambda item: item["id"])[:-40]
-        if not candidates:
-            continue
-        try:
-            with config.use_workspace(workspace), _using_workspace(workspace):
-                # A refused lease must leave notifications and retry inputs
-                # together, so a later pruning pass can actually clean them up.
-                removed = []
-                with _jobs_lock:
-                    for job in candidates:
-                        if (_jobs.get(job["id"]) is job
-                                and job["state"] in ("done", "error")
-                                and not (job.get("interrupted") and job.get("retryable"))):
-                            removed.append(_jobs.pop(job["id"]))
-                for job in removed:
-                    _forget_import(job)
-                    job_journal.remove(job)
-        except HTTPException as exc:
-            if exc.status_code not in (404, 409):
-                raise
-
-
-def _submit_job(function, job: dict, *args):
-    """Capture accepted settings before a job waits in the outer worker pool."""
-    with config.use_model_access():
-        # Queue submission is the acceptance point for both selections.
-        _set(job, ai_provider=config.ai_provider())
-        context = contextvars.copy_context()
-    workspace = job.get("workspace", config.workspace_id())
-    usage = _using_workspace(workspace) if workspace != config.DEFAULT_WORKSPACE_ID else None
-    if usage is not None:
-        usage.__enter__()
-    try:
-        future = _pool.submit(functools.partial(context.run, function), job, *args)
-    except Exception as exc:
-        try:
-            _set(job, state="error", detail=str(exc), explanation="The operation could not start. Retry to try again.")
-        finally:
-            if usage is not None:
-                usage.__exit__(None, None, None)
-        raise
-    # Hold the lease while queued and until the entire callable returns, even
-    # after its notification becomes terminal; cancellation releases it too.
-    if usage is not None:
-        future.add_done_callback(lambda _: usage.__exit__(None, None, None))
-    return future
-
-
-def _workspace_job(function):
-    """Keep the workspace and model access selected when the job was queued."""
-    @functools.wraps(function)
-    @config.analysis_session
-    def wrapped(job: dict, *args, **kwargs):
-        with (
-            config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)),
-            config.use_ai_provider(job.get("ai_provider", config.ai_provider())),
-            _using_workspace(config.workspace_id()),
-        ):
-            return function(job, *args, **kwargs)
-    return wrapped
-
-
-# --- background work ------------------------------------------------------
-
-@_workspace_job
-def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
-    try:
-        _set(job, state="fetching")
-        key, created = ingest.ingest_ref(ref)
-        recovered = not created and store.needs_extraction(key)
-        _set(job, key=key, label=key,
-             detail="" if created else ("PDF recovered" if recovered else "already in the corpus"))
-        # Read whenever the paper has a PDF and no claims, rather than only when
-        # it was just created: a recovered download needs reading too.
-        if do_extract and config.ai_enabled() and store.needs_extraction(key):
-            _set(job, state="reading")
-            extract.extract_paper(key)
-        _finish(job, key)
-    except Exception as exc:
-        _import_failed(job, exc)
-        traceback.print_exc()
-    finally:
-        _prune_jobs()
-
-
-@_workspace_job
-def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> None:
-    attempt = staged
-    try:
-        _set(job, state="fetching")
-        # The ingester consumes its input, including on failure. Keep the
-        # original for Retry, and give each attempt a disposable hard link.
-        if job.get("_import"):
-            attempt = staged.with_name(f".incoming-attempt-{uuid.uuid4().hex}.pdf")
-            os.link(staged, attempt)
-        key, created = ingest.ingest_staged_pdf(attempt, filename)
-        _set(job, key=key, label=key, detail="" if created else "already in the corpus")
-        if do_extract and config.ai_enabled() and store.needs_extraction(key):
-            _set(job, state="reading")
-            extract.extract_paper(key)
-        _finish(job, key)
-    except Exception as exc:
-        _import_failed(job, exc)
-        traceback.print_exc()
-    finally:
-        if attempt != staged:
-            attempt.unlink(missing_ok=True)
-        _prune_jobs()
-
-
-@_workspace_job
-def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
-    try:
-        _set(job, state="reading", key=key)
-        extract.extract_paper(key, keep_reviewed=keep_reviewed)
-        _set(job, state="done")
-    except Exception as exc:
-        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
-        traceback.print_exc()
-    finally:
-        _prune_jobs()
-
-
-def _finish_pass(job: dict, total: int, unit: str, failed: int, last_failure: str, summary: str) -> None:
-    if failed:
-        _set(job, state="error", detail=f"{failed} of {total} {unit} failed, {summary}; {last_failure}")
-    else:
-        _set(job, state="done", detail=f"{total} {unit}, {summary}")
-
-
-@_workspace_job
-def _run_tensions(job: dict, topics: list[str], force: bool = False) -> None:
-    try:
-        rows, tags = store.claim_rows(), store.load_tags()
-        added = reopened = skipped = failed = done = 0
-        last_failure = ""
-        _set(job, state="reading", detail=f"0 of {len(topics)} topics")
-        for topic, result, exc in extract.run_concurrently(
-                topics, lambda t: extract.find_tensions(t, rows, tags, force=force)):
-            done += 1
-            if exc is not None:
-                failed += 1
-                last_failure = f"{topic}: {type(exc).__name__}: {exc}"
-                traceback.print_exception(exc)
-            else:
-                added += result["added"]
-                reopened += result["reopened"]
-                skipped += 1 if result.get("skipped") else 0
-            _set(job, detail=f"{done} of {len(topics)} topics")
-        summary = (f"{added} new" + (f", {reopened} reopened" if reopened else "")
-                   + (f", {skipped} unchanged" if skipped else ""))
-        _finish_pass(job, len(topics), "topics", failed, last_failure, summary)
-    except Exception as exc:
-        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
-        traceback.print_exc()
-    finally:
-        _prune_jobs()
-
-
-@_workspace_job
-def _run_agreements(job: dict, topics: list[str], force: bool = False) -> None:
-    try:
-        rows, tags = store.claim_rows(), store.load_tags()
-        added = grown = skipped = failed = done = 0
-        last_failure = ""
-        _set(job, state="reading", detail=f"0 of {len(topics)} topics")
-        for topic, result, exc in extract.run_concurrently(
-                topics, lambda t: extract.find_agreements(t, rows, tags, force=force)):
-            done += 1
-            if exc is not None:
-                failed += 1
-                last_failure = f"{topic}: {type(exc).__name__}: {exc}"
-                traceback.print_exception(exc)
-            else:
-                added += result["added"]
-                grown += result["grown"]
-                skipped += 1 if result.get("skipped") else 0
-            _set(job, detail=f"{done} of {len(topics)} topics")
-        summary = (f"{added} new" + (f", {grown} grown" if grown else "")
-                   + (f", {skipped} unchanged" if skipped else ""))
-        _finish_pass(job, len(topics), "topics", failed, last_failure, summary)
-    except Exception as exc:
-        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
-        traceback.print_exc()
-    finally:
-        _prune_jobs()
-
-
-@_workspace_job
-def _run_syntheses(job: dict, topics: list[str], force: bool = False) -> None:
-    try:
-        rows, tags = store.claim_rows(), store.load_tags()
-        written = skipped = failed = done = 0
-        last_failure = ""
-        _set(job, state="reading", detail=f"0 of {len(topics)} topics")
-        for topic, result, exc in extract.run_concurrently(
-                topics, lambda t: extract.synthesize_topic(t, rows, tags, force=force)):
-            done += 1
-            if exc is not None:
-                failed += 1
-                last_failure = f"{topic}: {type(exc).__name__}: {exc}"
-                traceback.print_exception(exc)
-            else:
-                written += 1 if result["written"] else 0
-                skipped += 1 if result.get("skipped") else 0
-            _set(job, detail=f"{done} of {len(topics)} topics")
-        # The topics nothing had changed in are said either way: a pass that
-        # failed somewhere still did not ask about those, and a summary that
-        # left them out would read as though it had.
-        unchanged = f", {skipped} unchanged" if skipped else ""
-        if failed:
-            _set(job, state="error",
-                 detail=(f"{failed} of {len(topics)} topics failed, "
-                         f"{written} written{unchanged}; {last_failure}"))
-        else:
-            _set(job, state="done", detail=f"{written} of {len(topics)} topics written{unchanged}")
-    except Exception as exc:
-        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
-        traceback.print_exc()
-    finally:
-        _prune_jobs()
-
-
-@_workspace_job
-def _run_retag(job: dict, keys: list[str]) -> None:
-    try:
-        failed = done = 0
-        last_failure = ""
-        _set(job, state="reading", detail=f"0 of {len(keys)}")
-        for key, _result, exc in extract.run_concurrently(keys, extract.retag_paper):
-            done += 1
-            if exc is not None:
-                failed += 1
-                last_failure = f"{key}: {type(exc).__name__}: {exc}"
-                traceback.print_exception(exc)
-            _set(job, key=key, detail=f"{done} of {len(keys)}")
-        if failed:
-            _set(job, state="error",
-                 detail=f"{failed} of {len(keys)} papers failed; {last_failure}")
-        else:
-            _set(job, state="done", detail=f"{len(keys)} papers")
-    except Exception as exc:
-        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
-        traceback.print_exc()
-    finally:
-        _prune_jobs()
-
-
-# --- request bodies -------------------------------------------------------
 
 class SettingsBody(BaseModel):
     model_config = {"extra": "forbid"}
@@ -904,204 +173,6 @@ class SettingsBody(BaseModel):
 
 class ProviderBody(BaseModel):
     ai_provider: Literal["api", "claude_code", "codex"]
-
-
-class ChatMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=32000)
-
-
-class ChatBody(BaseModel):
-    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
-    # A saved conversation keeps its own agent; without one, Settings decides.
-    agent: Literal["api", "claude_code", "codex"] | None = None
-
-    @field_validator("messages")
-    @classmethod
-    def conversation(cls, messages):
-        if any(m.role != ("user" if i % 2 == 0 else "assistant") or not m.content.strip()
-               for i, m in enumerate(messages)) or messages[-1].role != "user":
-            raise ValueError("Send alternating user and assistant messages, ending with a question.")
-        if sum(len(m.content) for m in messages) > 80000:
-            raise ValueError("Start a new conversation; this one is too long.")
-        return messages
-
-
-class IngestBody(BaseModel):
-    text: str = ""
-    extract: bool = True
-
-
-class TagBody(BaseModel):
-    name: str
-    description: str = ""
-
-
-class RenameBody(BaseModel):
-    name: str
-
-
-class ProposedTagsBody(BaseModel):
-    accept: list[str] = []
-    discard: list[str] = []
-
-
-class RetagBody(BaseModel):
-    keys: list[str] | None = None
-
-
-class ReviewBody(BaseModel):
-    """A bulk review decision. `claims` restricts it to those claims; without
-    it every claim on the paper is set."""
-
-    reviewed: bool = True
-    claims: list[str] | None = None
-
-
-class TensionsBody(BaseModel):
-    topics: list[str] | None = None
-    # A topic nothing has changed in is not asked about again. This asks anyway.
-    force: bool = False
-
-
-class TensionStatusBody(BaseModel):
-    status: str
-
-
-class AgreementsBody(BaseModel):
-    topics: list[str] | None = None
-    # A topic nothing has changed in is not asked about again. This asks anyway.
-    force: bool = False
-
-
-class AgreementStatusBody(BaseModel):
-    status: str
-
-
-class SynthesesBody(BaseModel):
-    topics: list[str] | None = None
-    # A topic nothing has changed in is not asked about again. This asks anyway.
-    force: bool = False
-
-
-class SynthesisTextBody(BaseModel):
-    text: str
-
-
-class LedgerLink(BaseModel):
-    claim: str
-    relation: str = config.LEDGER_RELATIONS[-1]
-    note: str = ""
-
-    @field_validator("relation")
-    @classmethod
-    def _known_relation(cls, value: str) -> str:
-        if value not in config.LEDGER_RELATIONS:
-            raise ValueError(f"relation must be one of {config.LEDGER_RELATIONS}")
-        return value
-
-
-class ClaimPatch(BaseModel):
-    """The claim fields a person may set, with the types they must hold.
-
-    Only the fields the caller sent are applied, so a patch stays a patch. A
-    `kind` or `strength` outside the known set is refused here rather than
-    stored and shown as a blank badge.
-    """
-
-    text: str | None = None
-    kind: str | None = None
-    strength: str | None = None
-    tags: list[str] | None = None
-    evidence: str | None = None
-    quote: str | None = None
-    locator: str | None = None
-    ledger_links: list[LedgerLink] | None = None
-    # The reader's own note on the claim. Free text: it is the one field here
-    # nothing but a person writes, so there is nothing to validate it against.
-    note: str | None = None
-    reviewed: bool | None = None
-    conditions: str | None = Field(default=None, max_length=20000)
-    limitations: str | None = Field(default=None, max_length=20000)
-    evidence_origin: str | None = Field(default=None, max_length=300)
-    evidence_relationship: Literal["unassessed", "original", "independent_replication", "shared_data"] | None = None
-
-    @field_validator("kind")
-    @classmethod
-    def _known_kind(cls, value: str | None) -> str | None:
-        if value is not None and value not in config.CLAIM_KINDS:
-            raise ValueError(f"kind must be one of {config.CLAIM_KINDS}")
-        return value
-
-    @field_validator("strength")
-    @classmethod
-    def _known_strength(cls, value: str | None) -> str | None:
-        if value is not None and value not in config.CLAIM_STRENGTHS:
-            raise ValueError(f"strength must be one of {config.CLAIM_STRENGTHS}")
-        return value
-
-    @field_validator("tags")
-    @classmethod
-    def _slug_tags(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        return sorted({store.slugify(t) for t in value if store.slugify(t)})
-
-    def fields(self) -> dict:
-        """The fields the caller sent, as plain values the store writes.
-
-        A null is treated as not sent. No claim field is cleared by null (an
-        empty string or list does that), and writing None would leave a claim
-        that `tag_counts` and the export cannot read.
-        """
-        return {k: v for k, v in self.model_dump(exclude_unset=True).items() if v is not None}
-
-
-class PaperPatch(BaseModel):
-    """The paper fields a person may correct, and the types they must hold.
-
-    A year of `"2020"` was once accepted as a string and broke the export,
-    which sorts papers by year. Only the fields the caller sent are applied:
-    `None` is a value to write (clearing a year), an absent field is left alone.
-
-    Title, authors and notes take no null. Every reader of them expects text
-    or a list — the export, BibTeX, the notebook, `doxograph list` — and a
-    null written to disk broke each of those. An empty string or list clears
-    them instead. The defaults are never written, since only sent fields are.
-    """
-
-    title: str = ""
-    authors: list[str] = []
-    year: int | None = None
-    venue: str | None = None
-    doi: str | None = None
-    summary: str | None = None
-    relevance: str | None = None
-    # The reader's own note on the paper. Why the ingest has no PDF is
-    # `error`, which is the machine's to write and not offered here.
-    notes: str = ""
-    labels: list[str] | None = None
-
-    @field_validator("labels")
-    @classmethod
-    def _normalize_labels(cls, value: list[str] | None) -> list[str] | None:
-        # A null clears them. Every reader of the field treats it as a list —
-        # `label_counts` walks it, the page joins it — and writing None would
-        # leave a paper none of them can read.
-        return store.normalize_labels(value or [])
-
-
-class LedgerClaim(BaseModel):
-    id: str
-    text: str = ""
-
-
-class LedgerBody(BaseModel):
-    claims: list[LedgerClaim]
-
-
-class ContextBody(BaseModel):
-    text: str
 
 
 class ExportBody(BaseModel):
@@ -1140,94 +211,18 @@ def index() -> HTMLResponse:
     return HTMLResponse(source, headers={"Cache-Control": "no-store"})
 
 
-@app.get("/app.css", response_class=PlainTextResponse)
-def app_css() -> FileResponse:
-    return _frontend_response("app.css", "text/css")
+def _serve_frontend_asset(asset: Path) -> None:
+    media_type = "text/css" if asset.suffix == ".css" else "text/javascript"
+
+    def serve() -> FileResponse:
+        return _frontend_response(asset.name, media_type)
+
+    app.add_api_route(f"/{asset.name}", serve, methods=["GET"], include_in_schema=False)
 
 
-@app.get("/app.js", response_class=PlainTextResponse)
-def app_js() -> FileResponse:
-    return _frontend_response("app.js", "application/javascript")
-
-
-@app.get("/startup.js")
-def startup_js() -> FileResponse:
-    return _frontend_response("startup.js", "text/javascript")
-
-
-@app.get("/workspace-recovery.js")
-def workspace_recovery_js() -> FileResponse:
-    return _frontend_response("workspace-recovery.js", "text/javascript")
-
-
-@app.get("/research-tools.js")
-def research_tools_js() -> FileResponse:
-    return _frontend_response("research-tools.js", "text/javascript")
-
-
-@app.get("/workspace-notes.js")
-def workspace_notes_js() -> FileResponse:
-    return _frontend_response("workspace-notes.js", "text/javascript")
-
-
-@app.get("/research-tools.css")
-def research_tools_css() -> FileResponse:
-    return _frontend_response("research-tools.css", "text/css")
-
-
-@app.get("/note-writing.js")
-def note_writing_js() -> FileResponse:
-    return _frontend_response("note-writing.js", "text/javascript")
-
-
-@app.get("/research-notes.js")
-def research_notes_js() -> FileResponse:
-    return _frontend_response("research-notes.js", "text/javascript")
-
-
-@app.get("/research-notes.css")
-def research_notes_css() -> FileResponse:
-    return _frontend_response("research-notes.css", "text/css")
-
-
-@app.get("/agent-chat.js")
-def agent_chat_js():
-    return _frontend_response("agent-chat.js", "text/javascript")
-
-
-@app.get("/chat-threads.js")
-def chat_threads_js():
-    return _frontend_response("chat-threads.js", "text/javascript")
-
-
-@app.get("/focused-review.js")
-def focused_review_js() -> FileResponse:
-    return _frontend_response("focused-review.js", "text/javascript")
-
-
-@app.get("/appearance.js")
-def appearance_js() -> FileResponse:
-    return _frontend_response("appearance.js", "text/javascript")
-
-
-@app.get("/paper-map.js")
-def paper_map_js() -> FileResponse:
-    return _frontend_response("paper-map.js", "text/javascript")
-
-
-@app.get("/workspace-client.js")
-def workspace_client_js() -> FileResponse:
-    return _frontend_response("workspace-client.js", "text/javascript")
-
-
-@app.get("/workspace-controller.js")
-def workspace_controller_js() -> FileResponse:
-    return _frontend_response("workspace-controller.js", "text/javascript")
-
-
-@app.get("/poller.js")
-def poller_js() -> FileResponse:
-    return _frontend_response("poller.js", "text/javascript")
+# Every script and stylesheet the shell loads, so a new one needs no route.
+for _asset in sorted([*STATIC.glob("*.js"), *STATIC.glob("*.css")]):
+    _serve_frontend_asset(_asset)
 
 
 @app.get("/favicon.png")
@@ -1235,11 +230,8 @@ def favicon() -> FileResponse:
     return FileResponse(STATIC / "favicon.png", media_type="image/png")
 
 
-ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
-
-
 @app.get("/api/health")
-def health() -> dict:
+def health() -> dict[str, Any]:
     """Say the server is up, and whether it is in the middle of something.
 
     The macOS launcher polls this while it waits for uvicorn to bind and asks
@@ -1269,12 +261,12 @@ def health() -> dict:
     `taken` that agree are the same work; two that differ are not — which is why
     a paper must not be counted once as a request and again as a job.
     """
-    with _arrivals_lock:
-        arriving = _requests_arriving
-    with _jobs_lock:
-        jobs = sum(1 for job in _jobs.values() if job["state"] in ACTIVE_JOB_STATES)
-    with _work_lock:
-        taken = _work_taken
+    with activity._arrivals_lock:
+        arriving = activity._requests_arriving
+    with job_queue._jobs_lock:
+        jobs = sum(1 for job in job_queue._jobs.values() if job["state"] in job_queue.ACTIVE_JOB_STATES)
+    with activity._work_lock:
+        taken = activity._work_taken
     return {
         "app": "doxograph",
         "version": __version__,
@@ -1287,7 +279,7 @@ def health() -> dict:
 
 
 @app.get("/api/code")
-def code() -> dict:
+def code() -> dict[str, Any]:
     """Whether this server is still running the code that is on disk.
 
     `/api/health` reports a release number, and a release number is coarser than
@@ -1334,7 +326,7 @@ def code() -> dict:
 #: was built from. The page polls twice a second and the corpus changes far
 #: less often than that; the signature is a directory listing, the answer is
 #: every paper file read and joined.
-_state_cache: dict[str, tuple[str, dict]] = {}
+_state_cache: dict[str, tuple[str, dict[str, Any]]] = {}
 _state_cache_lock = threading.Lock()
 
 
@@ -1348,18 +340,18 @@ def _state_section[T](read: Callable[[], T], fallback: T,
         return fallback
 
 
-def _build_state() -> dict:
+def _build_state() -> dict[str, Any]:
     issues: list[records.StorageIssue] = []
     papers = store.all_papers(issues=issues)
     rows = store.claim_rows(papers)
     saved_notebook = _state_section(notebook.load, notebook.Notebook().model_dump(), issues)
-    tensions = _state_section(lambda: store.tension_rows(rows), [], issues)
-    agreements = _state_section(lambda: store.agreement_rows(rows), [], issues)
-    syntheses = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
-    tags = _state_section(store.load_tags, [], issues)
-    ledger = _state_section(store.load_ledger, [], issues)
+    tensions: list[dict[str, Any]] = _state_section(lambda: store.tension_rows(rows), [], issues)
+    agreements: list[dict[str, Any]] = _state_section(lambda: store.agreement_rows(rows), [], issues)
+    syntheses: list[dict[str, Any]] = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
+    tags: list[dict[str, Any]] = _state_section(store.load_tags, [], issues)
+    ledger: list[dict[str, Any]] = _state_section(store.load_ledger, [], issues)
     context = _state_section(store.load_context, "", issues)
-    _state_section(store.retired_keys, set(), issues)
+    _state_section(store.retired_keys, set[str](), issues)
     if any(issue["path"] == str(store.tensions_path()) for issue in issues):
         # Their text is still useful, but freshness cannot be established while
         # the judgments that contributed to it are unavailable.
@@ -1416,6 +408,8 @@ def state(request: Request) -> Response:
     settings_signature = hashlib.sha256(json.dumps(
         {**config.analysis_settings(), "codex_model": config.codex_model()}, sort_keys=True).encode()).hexdigest()
     workspace_record = config.get_workspace()
+    # SelectWorkspace has already refused a request for an unknown workspace.
+    assert workspace_record is not None
     name_signature = hashlib.sha1(workspace_record["name"].encode()).hexdigest()
     signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}-{config.ai_provider()}-{name_signature}"
     with _state_cache_lock:
@@ -1443,7 +437,7 @@ def state(request: Request) -> Response:
 
 
 @app.put("/api/settings")
-def update_settings(body: SettingsBody) -> dict:
+def update_settings(body: SettingsBody) -> dict[str, Any]:
     if body.codex_model is not None:
         try:
             config.save_codex_model(body.codex_model)
@@ -1472,7 +466,7 @@ def update_settings(body: SettingsBody) -> dict:
 
 
 @app.get("/api/settings/codex/models")
-def codex_models() -> dict:
+def codex_models() -> dict[str, Any]:
     try:
         return {"models": codex_cli.models()}
     except (ModelSetupError, RuntimeError) as exc:
@@ -1480,135 +474,67 @@ def codex_models() -> dict:
 
 
 @app.put("/api/settings/provider")
-def update_provider(body: ProviderBody) -> dict:
+def update_provider(body: ProviderBody) -> dict[str, Any]:
     config.set_ai_provider(body.ai_provider)
     return {"ai_provider": config.ai_provider()}
 
 
-def _require_analysis() -> None:
-    if not config.ai_enabled():
-        raise HTTPException(403, "AI analysis is disabled. Enable it in Settings to run analysis.")
-
-
-@app.get("/api/jobs")
-def jobs() -> dict:
-    """The recent background jobs in this workspace, newest first."""
-    with _jobs_lock:
-        recent = sorted(
-            (job for job in _jobs.values() if job.get("workspace") == config.workspace_id()),
-            key=lambda j: j["id"], reverse=True,
-        )[:20]
-        # Retry sources include local paths and Ref objects; only notification
-        # fields belong on the wire.
-        recent = [{k: v for k, v in job.items() if not k.startswith("_")} for job in recent]
-    return {"jobs": recent, "recovery_issues": _job_recovery_issues.get(str(config.data_dir()), [])}
-
-
-@app.post("/api/jobs/{job_id}/retry")
-def retry_import(job_id: int) -> dict:
-    """Retry a failed import in place, once, in its original workspace."""
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        if job is None or job.get("workspace") != config.workspace_id():
-            raise HTTPException(404, "Job not found")
-        if job["state"] != "error":
-            raise HTTPException(409, "Only failed imports can be retried")
-        source = job.get("_import")
-        if not source:
-            raise HTTPException(409, "This job cannot be retried. Add the paper again.")
-        previous = dict(job)
-        try:
-            job.update(state="queued", detail="", explanation="", started=store.now(), ai_provider=config.ai_provider(), interrupted=False)
-            job_journal.save(job)
-        except OSError:
-            job.clear()
-            job.update(previous)
-            raise HTTPException(503, "The retry could not be saved. Check that the data directory is writable.")
-    try:
-        if "ref" in source:
-            _submit_job(_run_ingest, job, source["ref"], source["extract"])
-        else:
-            _submit_job(_run_upload, job, source["staged"], source["filename"], source["extract"])
-    except Exception:
-        with _jobs_lock:
-            job.clear()
-            job.update(previous)
-            job_journal.save(job)
-        raise HTTPException(503, "The retry could not start. Please try again.")
-    return {"id": job_id}
-
-
-@app.delete("/api/jobs/{job_id}", status_code=204)
-def dismiss_job(job_id: int) -> Response:
-    """Dismiss a finished notification without cancelling background work."""
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        if job is None or job.get("workspace") != config.workspace_id():
-            raise HTTPException(404, "Job not found")
-        if job["state"] not in ("done", "error"):
-            raise HTTPException(409, "This job is still running")
-        del _jobs[job_id]
-    _forget_import(job)
-    job_journal.remove(job)
-    return Response(status_code=204)
-
-
 @app.get("/api/workspaces")
-def workspaces() -> dict:
+def workspaces() -> dict[str, Any]:
     try:
         return {"workspaces": config.list_workspaces()}
     except ValueError as exc:
-        raise HTTPException(500, _broken_registry(exc))
+        raise HTTPException(500, _broken_registry(exc)) from exc
 
 
 @app.post("/api/workspaces", status_code=201)
-def create_workspace(body: WorkspaceBody) -> dict:
+def create_workspace(body: WorkspaceBody) -> dict[str, Any]:
     try:
         workspace = config.create_workspace(body.name)
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     return {"workspace": workspace, "workspaces": config.list_workspaces()}
 
 
 @app.patch("/api/workspaces/{workspace_id}")
-def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict:
+def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict[str, Any]:
     try:
         workspace = config.rename_workspace(workspace_id, body.name)
     except KeyError:
-        raise HTTPException(404, f"no workspace {workspace_id}")
+        raise HTTPException(404, f"no workspace {workspace_id}") from None
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     return {"workspace": workspace, "workspaces": config.list_workspaces()}
 
 
 @app.delete("/api/workspaces/{workspace_id}")
-def delete_workspace(workspace_id: str) -> dict:
+def delete_workspace(workspace_id: str) -> dict[str, Any]:
     if workspace_id == config.DEFAULT_WORKSPACE_ID:
         raise HTTPException(422, "The default workspace cannot be deleted")
-    identity = _workspace_identity(workspace_id)
-    with _workspace_activity_lock, _jobs_lock:
+    identity = activity._workspace_identity(workspace_id)
+    with activity._workspace_activity_lock, job_queue._jobs_lock:
         # Deletion requests do not take shared leases themselves. Every other
         # request and any queued job must settle before taking the exclusive one.
-        if (identity in _deleting_workspaces
-                or _workspace_activity.get(identity, 0) > 0
+        if (identity in activity._deleting_workspaces
+                or activity._workspace_activity.get(identity, 0) > 0
                 or any(job.get("workspace") == workspace_id and job["state"] not in ("done", "error")
-                       for job in _jobs.values())):
+                       for job in job_queue._jobs.values())):
             raise HTTPException(409, "This workspace is busy. Wait for its imports and other activity to finish, then try again.")
-        _deleting_workspaces.add(identity)
+        activity._deleting_workspaces.add(identity)
     try:
         try:
             cleanup_allowed = config.delete_workspace(workspace_id)
         except KeyError:
-            raise HTTPException(404, f"no workspace {workspace_id}")
+            raise HTTPException(404, f"no workspace {workspace_id}") from None
         except ValueError as exc:
-            raise HTTPException(422, str(exc))
+            raise HTTPException(422, str(exc)) from None
         except BlockingIOError:
-            raise HTTPException(409, "This workspace is busy in another server. Close that server or wait for its activity to finish, then try again.")
+            raise HTTPException(409, "This workspace is busy in another server. Close that server or wait for its activity to finish, then try again.") from None
         except OSError as exc:
             raise HTTPException(503, "The workspace could not be deleted. Check that its data directory is writable.") from exc
-        with _jobs_lock:
-            for key in [key for key, job in _jobs.items() if job.get("workspace") == workspace_id]:
-                job = _jobs.pop(key)
+        with job_queue._jobs_lock:
+            for key in [key for key, job in job_queue._jobs.items() if job.get("workspace") == workspace_id]:
+                job = job_queue._jobs.pop(key)
                 try:
                     job_journal.remove(job, keep_file=not cleanup_allowed)
                 except OSError:
@@ -1617,571 +543,15 @@ def delete_workspace(workspace_id: str) -> dict:
                     logger.exception("Could not remove journal for deleted workspace job %s", key)
         with _state_cache_lock:
             _state_cache.pop(workspace_id, None)
-        _job_recovery_issues.pop(str(config.base_data_dir() / "workspaces" / workspace_id), None)
+        job_queue._job_recovery_issues.pop(str(config.base_data_dir() / "workspaces" / workspace_id), None)
         return {"workspaces": config.list_workspaces()}
     finally:
-        with _workspace_activity_lock:
-            _deleting_workspaces.discard(identity)
-
-
-def _settled(key: str | None, do_extract: bool) -> str | None:
-    """A paper already here that a job would have nothing to do for.
-
-    Queuing one puts a job on the strip that fetches nothing and reports what
-    was already true, a poll later, after the reader has moved on. A paper
-    waiting to be read is not settled: the job is what reads it.
-    """
-    if not key or (do_extract and store.needs_extraction(key)):
-        return None
-    return key
-
-
-@app.post("/api/ingest")
-def api_ingest(body: IngestBody) -> dict:
-    """Queue what has to be fetched, and say outright what is already here."""
-    refs, unknown = ingest.parse_refs(body.text)
-    do_extract = body.extract and config.ai_enabled()
-    queued, known = 0, []
-    for ref in refs:
-        settled = _settled(ingest.already_stored(ref), do_extract)
-        if settled:
-            known.append({"ref": ref.raw, "key": settled})
-            continue
-        job = _new_import_job(ref.value, do_extract, ref=ref)
-        _submit_job(_run_ingest, job, ref, do_extract)
-        queued += 1
-    return {"queued": queued, "known": known, "unknown": unknown}
-
-
-@app.post("/api/upload")
-async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
-    """Stage every upload on disk, then hand the worker its path.
-
-    Reading each file into memory kept the whole batch resident: three workers
-    run at a time and every queued job held its own `bytes` until its turn came,
-    so a drop of ten large PDFs cost ten PDFs of memory rather than three.
-    """
-    do_extract = extract_now and config.ai_enabled()
-    queued = 0
-    for upload in files:
-        name = upload.filename or "upload.pdf"
-        # On a worker thread: copying a large drop on the event loop would stop
-        # the page polling, saving or doing anything else until it finished.
-        staged = await run_in_threadpool(ingest.stage_upload, upload.file, name)
-        # The bytes name the paper, so a file already here needs no worker: it
-        # has nothing to parse, look up or download. It is still reported as a
-        # finished job rather than in this response, because the Mac app posts
-        # here too — a PDF dropped on the Dock or opened from Finder — and the
-        # job strip in the window is the only report it has.
-        settled = _settled(await run_in_threadpool(ingest.already_uploaded, staged), do_extract)
-        if settled:
-            staged.unlink(missing_ok=True)
-            _set(_new_job(name), kind="import", key=settled, label=settled,
-                 state="done", detail="already in the corpus")
-            # Nothing else will: the workers prune on their way out, and this
-            # notice never reaches one. Without it a session that keeps
-            # re-dropping papers it already has grows `_jobs` for ever.
-            _prune_jobs()
-            continue
-        job = _new_import_job(name, do_extract, staged=staged, filename=name)
-        try:
-            _submit_job(_run_upload, job, staged, name, do_extract)
-        except BaseException:
-            with _jobs_lock:
-                _jobs.pop(job["id"], None)
-            _forget_import(job)
-            job_journal.remove(job)
-            raise
-        queued += 1
-    return {"queued": queued}
-
-
-@app.get("/api/papers/{key}")
-def get_paper(key: str) -> dict:
-    try:
-        return store.load_paper(key)
-    except KeyError:
-        raise HTTPException(404, f"no paper {key}")
-
-
-@app.patch("/api/papers/{key}")
-def patch_paper(key: str, patch: PaperPatch) -> dict:
-    # Only the fields the caller sent: an unset field is not a field set to
-    # None, and writing the whole model would blank everything left out.
-    fields = patch.model_dump(exclude_unset=True)
-    with store.paper_lock(key):
-        try:
-            paper = store.load_paper(key)
-        except KeyError:
-            raise HTTPException(404, f"no paper {key}")
-        paper.update(fields)
-        store.save_paper(paper)
-    return paper
-
-
-@app.delete("/api/papers/{key}")
-def remove_paper(key: str) -> dict:
-    # A key with nothing on disk has nothing to remove, and retiring it would
-    # still spend the citekey for good: a stale or mistyped request must not.
-    if not key.strip() or not any(path.exists() for path in
-                                  (store.paper_path(key), store.pdf_path(key), store.text_path(key))):
-        raise HTTPException(404, "No such paper.")
-    try:
-        extract.delete_paper(key)
-        chats.delete_paper_chats(key)
-    except ModelSetupError as exc:
-        raise HTTPException(502, str(exc)[:500])
-    except (anthropic.APIError, httpx.HTTPError):
-        logger.exception("Removing a paper's uploads failed")
-        raise HTTPException(502, "Anthropic could not be reached to delete this paper's uploaded PDF. "
-                                 "Check your connection, then remove the paper again.")
-    return {"deleted": key}
-
-
-@app.post("/api/papers/{key}/extract")
-def reextract(key: str, keep_reviewed: bool = True) -> dict:
-    _require_analysis()
-    if not store.paper_path(key).exists():
-        raise HTTPException(404, f"no paper {key}")
-    job = _new_job(key)
-    _submit_job(_run_extract, job, key, keep_reviewed)
-    return {"queued": job["id"]}
-
-
-@contextlib.contextmanager
-def _chat_errors(label: str):
-    """Map the failures of a model-backed chat to the response the page shows."""
-    try:
-        yield
-    except providers.ProviderResponseError as exc:
-        logger.exception(f"{label} received an invalid provider response")
-        raise HTTPException(502, str(exc)[:500])
-    except InputTooLargeError as exc:
-        raise HTTPException(413, str(exc)[:500])
-    except FileNotFoundError:
-        raise HTTPException(400, "This paper's PDF is unavailable. Import it again before chatting.")
-    except ModelInputError as exc:
-        raise HTTPException(400, str(exc)[:500])
-    except ValueError:
-        logger.exception(f"{label} encountered invalid saved data or configuration")
-        raise HTTPException(500, f"{label} could not read the saved paper or model configuration. Check your library and provider settings.")
-    except ModelSetupError as exc:
-        logger.exception(f"{label} model setup failed")
-        raise HTTPException(502, str(exc)[:500])
-    except (anthropic.APIError, httpx.HTTPError) as exc:
-        logger.exception(f"{label} provider request failed")
-        status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
-        if status in (401, 403):
-            detail = "The model service refused access. Check the selected provider's credentials, then retry."
-        elif status == 429:
-            detail = "The model service's usage limit was reached. Wait a moment, then retry."
-        elif isinstance(exc, (httpx.TimeoutException, anthropic.APITimeoutError)):
-            detail = "The model service timed out. Try again."
-        else:
-            detail = "The model service could not be reached or is unavailable. Check your connection and provider settings, then retry."
-        raise HTTPException(502, detail)
-    except RuntimeError:
-        logger.exception(f"{label} model request failed")
-        raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.")
-
-
-def _chat_agent(agent: str | None):
-    return config.use_ai_provider(agent) if agent else contextlib.nullcontext()
-
-
-@app.post("/api/papers/{key}/chat")
-def paper_chat(key: str, body: ChatBody) -> dict:
-    _require_analysis()
-    with _chat_errors("Paper chat"), _chat_agent(body.agent):
-        try:
-            return chat.answer(key, [message.model_dump() for message in body.messages])
-        except KeyError:
-            raise HTTPException(404, f"no paper {key}")
-
-
-def _reachable(url: str) -> bool:
-    """Whether this very process answers at `url`, not another service or another Doxograph on that port."""
-    try:
-        response = httpx.get(f"{url}/api/health", timeout=3, trust_env=False, follow_redirects=False)
-        health = response.json() if response.is_success else {}
-    except (httpx.HTTPError, ValueError):
-        return False
-    return isinstance(health, dict) and health.get("app") == "doxograph" and health.get("instance") == fingerprint.INSTANCE
-
-
-def _callback_url(request: Request) -> str:
-    """Where the agent's tools reach this server: a loopback address that answers.
-
-    The MCP adapter talks only to loopback, so it never gets a LAN address. Prefer the loopback
-    address this request arrived on (127.0.0.2, ::1); otherwise try 127.0.0.1, which a wildcard
-    bind answers. A server bound to one non-loopback address answers on neither, so the check
-    fails with setup guidance rather than handing the agent a URL it cannot reach.
-    """
-    host, port = (request.scope.get("server") or (None, 8765))[:2]
-    try:
-        loopback = ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        loopback = host == "localhost"
-    host = host if loopback else "127.0.0.1"
-    url = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
-    if not _reachable(url):
-        raise ModelSetupError(
-            f"Ask the library needs Doxograph to answer on a loopback address, and {url} did not respond. "
-            "Start the app with `doxograph serve --host 127.0.0.1` (the default) or `--host 0.0.0.0`.")
-    return url
-
-
-class AgentBody(ChatBody):
-    paper: str | None = Field(default=None, max_length=200)
-
-
-@app.post("/api/agent/chat")
-def agent_chat(body: AgentBody, request: Request) -> dict:
-    _require_analysis()
-    with _chat_errors("Library agent"), _chat_agent(body.agent):
-        return agent.answer([message.model_dump() for message in body.messages],
-                            lambda: _callback_url(request), body.paper)
-
-
-@app.post("/api/papers/{key}/review")
-def review_paper_claims(key: str, body: ReviewBody) -> dict:
-    """Mark a paper's claims reviewed in one write.
-
-    Reviewing is the app's main work, and a paper arrives with a dozen claims
-    at once. The ids that changed come back so the page can offer an undo that
-    unreviews exactly those, leaving claims reviewed earlier alone.
-    """
-    try:
-        changed = store.review_claims(key, body.reviewed, body.claims)
-    except KeyError:
-        raise HTTPException(404, f"no paper {key}")
-    return {"key": key, "reviewed": body.reviewed, "changed": changed}
-
-
-@app.post("/api/papers/{key}/verify")
-def verify_quotes(key: str) -> dict:
-    """Re-check every quote on a paper against its PDF. Fast enough to run
-    inline: the PDF text is read once and cached."""
-    try:
-        paper = store.verify_quotes(key)
-    except KeyError:
-        raise HTTPException(404, f"no paper {key}")
-    return {"key": key, "n_unverified": store.summarize(paper)["n_unverified"]}
-
-
-@app.get("/api/citations")
-def citations() -> dict:
-    """Which papers in the corpus cite which, from their reference lists.
-
-    Read off the PDFs already on disk. The map asks for this when it opens
-    rather than with the rest of the state, since it is the only thing that
-    wants it and the whole corpus has to be read to answer.
-    """
-    return {"edges": cites.edges()}
-
-
-@app.get("/api/search")
-def search_text(q: str = "", limit: int = 20, offset: int = 0) -> dict:
-    """The papers whose own text holds every word of the query.
-
-    The claims are searched in the page, which needs no server at all. This is
-    the other half: a word in a paper that no claim mentions, and a paper
-    nothing has been extracted from yet.
-    """
-    page_size = max(1, min(limit, 100))
-    start = max(0, offset)
-    hits = search.search_papers(q, limit=page_size + 1, offset=start)
-    known = {paper["key"]: paper for paper in store.all_papers()}
-    return {
-        "q": q,
-        "terms": search.terms(q),
-        "next_offset": start + page_size if len(hits) > page_size else None,
-        "papers": [
-            {
-                **hit,
-                "title": known[hit["key"]].get("title", ""),
-                "authors": known[hit["key"]].get("authors") or [],
-                "year": known[hit["key"]].get("year"),
-            }
-            for hit in hits[:page_size] if hit["key"] in known
-        ],
-    }
-
-
-@app.get("/api/papers/{key}/claims/{claim_id}/similar")
-def similar_claims(key: str, claim_id: str, limit: int = 5) -> dict:
-    """Claims from other papers that resemble this one, by their words.
-
-    No model: it compares the claims already on disk. A suggestion for reading,
-    not a judgment — whether two claims actually bear on each other is what the
-    tensions and agreements passes are for.
-    """
-    rows = store.claim_rows()
-    by_id = {row["id"]: row for row in rows}
-    if by_id.get(claim_id, {}).get("paper") != key:
-        raise HTTPException(404, f"no claim {claim_id} on {key}")
-    found = pairs.similar_to(claim_id, rows, limit=max(1, min(limit, 20)))
-    return {
-        "claim": claim_id,
-        "similar": [
-            {
-                **hit,
-                "text": by_id[hit["claim"]].get("text", ""),
-                "paper": by_id[hit["claim"]]["paper"],
-                "paper_authors": by_id[hit["claim"]].get("paper_authors", []),
-                "paper_year": by_id[hit["claim"]].get("paper_year"),
-            }
-            for hit in found
-        ],
-    }
-
-
-@app.get("/api/papers/{key}/claims/{claim_id}/quote-context")
-def quote_context(key: str, claim_id: str) -> dict:
-    """The passage of the PDF a claim's quote was matched against."""
-    if not store.paper_path(key).exists():
-        raise HTTPException(404, f"no paper {key}")
-    try:
-        return store.quote_context(key, claim_id)
-    except KeyError:
-        raise HTTPException(404, f"no claim {claim_id} on {key}")
-
-
-@app.post("/api/retag")
-def retag(body: RetagBody) -> dict:
-    _require_analysis()
-    keys = body.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
-    if not keys:
-        return {"queued": 0}
-    job = _new_job(f"retag {len(keys)} papers")
-    _submit_job(_run_retag, job, keys)
-    return {"queued": len(keys)}
-
-
-@app.post("/api/papers/{key}/claims")
-def create_claim(key: str, patch: ClaimPatch = Body(default=ClaimPatch())) -> dict:
-    try:
-        return store.add_claim(key, patch.fields())
-    except KeyError:
-        raise HTTPException(404, f"no paper {key}")
-
-
-@app.patch("/api/papers/{key}/claims/{claim_id}")
-def patch_claim(key: str, claim_id: str, patch: ClaimPatch) -> dict:
-    try:
-        return store.update_claim(key, claim_id, patch.fields())
-    except KeyError:
-        raise HTTPException(404, f"no claim {claim_id} on {key}")
-
-
-@app.delete("/api/papers/{key}/claims/{claim_id}")
-def remove_claim(key: str, claim_id: str) -> dict:
-    try:
-        store.delete_claim(key, claim_id)
-    except KeyError:
-        raise HTTPException(404, f"no claim {claim_id} on {key}")
-    return {"deleted": claim_id}
-
-
-@app.post("/api/papers/{key}/proposed-tags")
-def resolve_proposed_tags(key: str, body: ProposedTagsBody) -> dict:
-    """Accept proposed topics into the vocabulary, or discard them.
-
-    Discarding only clears the proposal — a discarded name must not end up in
-    the vocabulary, which is the whole point of proposals being separate.
-    """
-    # Vocabulary lock before paper lock: `rename_tag` takes them in that order,
-    # and accepting a tag takes both, so the reverse order here would deadlock.
-    with store.vocab_lock(), store.paper_lock(key):
-        try:
-            paper = store.load_paper(key)
-        except KeyError:
-            raise HTTPException(404, f"no paper {key}")
-        proposed = {t["name"]: t.get("description", "") for t in paper.get("proposed_tags", [])}
-        accepted = [name for name in body.accept if name in proposed]
-        for name in accepted:
-            store.add_tag(name, proposed[name])
-        resolved = set(accepted) | {name for name in body.discard if name in proposed}
-        paper["proposed_tags"] = [t for t in paper.get("proposed_tags", []) if t["name"] not in resolved]
-        store.save_paper(paper)
-    return {
-        "accepted": accepted,
-        "discarded": sorted(resolved - set(accepted)),
-        "tags": store.load_tags(),
-    }
-
-
-@app.post("/api/tags")
-def create_tag(body: TagBody) -> dict:
-    return {"tags": store.add_tag(body.name, body.description)}
-
-
-@app.patch("/api/tags/{name}")
-def patch_tag(name: str, body: RenameBody) -> dict:
-    try:
-        store.rename_tag(name, body.name)
-    except storage.StorageReadError:
-        raise
-    except store.PaperReadError:
-        raise
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    return {"tags": store.load_tags()}
-
-
-@app.delete("/api/tags/{name}")
-def remove_tag(name: str) -> dict:
-    store.delete_tag(name)
-    return {"tags": store.load_tags()}
-
-
-@app.post("/api/tensions")
-def find_tensions(body: TensionsBody) -> dict:
-    """Queue a pass over every topic where two papers could disagree.
-
-    Topics named in the body are deduplicated and kept only where a tension is
-    possible; a topic with claims from one paper has nothing to find, so it
-    would cost a model call to learn nothing.
-    """
-    _require_analysis()
-    possible = store.tension_topics()
-    topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
-    if not topics:
-        return {"queued": 0}
-    job = _new_job(f"tensions in {len(topics)} topics")
-    _submit_job(_run_tensions, job, topics, body.force)
-    return {"queued": len(topics)}
-
-
-@app.patch("/api/tensions/{tension_id}")
-def patch_tension(tension_id: str, body: TensionStatusBody) -> dict:
-    try:
-        return store.set_tension_status(tension_id, body.status)
-    except storage.StorageReadError:
-        raise
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    except KeyError:
-        raise HTTPException(404, f"no tension {tension_id}")
-
-
-@app.delete("/api/tensions/{tension_id}")
-def remove_tension(tension_id: str) -> dict:
-    try:
-        store.delete_tension(tension_id)
-    except KeyError:
-        raise HTTPException(404, f"no tension {tension_id}")
-    return {"deleted": tension_id}
-
-
-@app.post("/api/agreements")
-def find_agreements(body: AgreementsBody) -> dict:
-    """Queue a pass over every topic where two papers could agree: the same
-    topics a tension is possible in."""
-    _require_analysis()
-    possible = store.tension_topics()
-    topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
-    if not topics:
-        return {"queued": 0}
-    job = _new_job(f"agreements in {len(topics)} topics")
-    _submit_job(_run_agreements, job, topics, body.force)
-    return {"queued": len(topics)}
-
-
-@app.patch("/api/agreements/{agreement_id}")
-def patch_agreement(agreement_id: str, body: AgreementStatusBody) -> dict:
-    try:
-        return store.set_agreement_status(agreement_id, body.status)
-    except storage.StorageReadError:
-        raise
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    except KeyError:
-        raise HTTPException(404, f"no agreement {agreement_id}")
-
-
-@app.delete("/api/agreements/{agreement_id}")
-def remove_agreement(agreement_id: str) -> dict:
-    try:
-        store.delete_agreement(agreement_id)
-    except KeyError:
-        raise HTTPException(404, f"no agreement {agreement_id}")
-    return {"deleted": agreement_id}
-
-
-@app.post("/api/syntheses")
-def synthesize(body: SynthesesBody) -> dict:
-    """Queue a synthesis for each topic.
-
-    Named topics are deduplicated and kept only where they have a claim; with
-    none named, every topic with claims from two papers is written, since one
-    paper's claims add up to little on their own.
-    """
-    _require_analysis()
-    if body.topics:
-        rows = store.claim_rows()
-        topics = sorted({t for t in body.topics if store.topic_claims(t, rows)})
-    else:
-        topics = store.synthesis_topics()
-    if not topics:
-        return {"queued": 0}
-    job = _new_job(f"synthesis of {len(topics)} topics")
-    _submit_job(_run_syntheses, job, topics, body.force)
-    return {"queued": len(topics)}
-
-
-@app.patch("/api/syntheses/{topic}")
-def patch_synthesis(topic: str, body: SynthesisTextBody) -> dict:
-    try:
-        return store.set_synthesis_text(topic, body.text)
-    except storage.StorageReadError:
-        raise
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    except KeyError:
-        raise HTTPException(404, f"no synthesis for {topic}")
-
-
-@app.delete("/api/syntheses/{topic}")
-def remove_synthesis(topic: str) -> dict:
-    try:
-        store.delete_synthesis(topic)
-    except KeyError:
-        raise HTTPException(404, f"no synthesis for {topic}")
-    return {"deleted": topic}
-
-
-@app.put("/api/ledger")
-def put_ledger(body: LedgerBody) -> dict:
-    """Replace the ledger: the user's own claims, which extraction links to.
-
-    Ids must be present and unique, since a link names a claim by id alone.
-    Links on paper claims that name a removed id are left in place; the card
-    shows the bare id, and the user can take the link off or restore the claim.
-    """
-    claims = []
-    seen = set()
-    for item in body.claims:
-        claim_id = item.id.strip()
-        if not claim_id:
-            raise HTTPException(422, "every ledger claim needs an id")
-        if claim_id in seen:
-            raise HTTPException(422, f"ledger id {claim_id!r} is used twice")
-        seen.add(claim_id)
-        claims.append({"id": claim_id, "text": item.text.strip()})
-    store.save_ledger(claims)
-    return {"ledger": store.load_ledger()}
-
-
-@app.put("/api/context")
-def put_context(body: ContextBody) -> dict:
-    """Replace the research context given to every model pass."""
-    store.save_context(body.text)
-    return {"context": store.load_context()}
+        with activity._workspace_activity_lock:
+            activity._deleting_workspaces.discard(identity)
 
 
 @app.post("/api/export")
-def api_export(body: ExportBody) -> dict:
+def api_export(body: ExportBody) -> dict[str, Any]:
     path = export.write(title=body.title)
     return {"path": str(path)}
 
@@ -2200,26 +570,6 @@ def serve_export() -> FileResponse:
 @app.get("/api/bibtex", response_class=PlainTextResponse)
 def api_bibtex() -> PlainTextResponse:
     return PlainTextResponse(bib.render(), media_type="text/plain")
-
-
-@app.get("/pdf/{key}")
-def serve_pdf(key: str, inline: bool = False) -> FileResponse:
-    """Hand back a paper's PDF, as an attachment unless asked otherwise.
-
-    A browser keeps the attachment it has always been given. The Mac app asks
-    for `?inline=1`, because a WKWebView reads `Content-Disposition: attachment`
-    as an instruction to download the file rather than draw it, and a window
-    opened to read the paper that instead saves it somewhere is no use.
-    """
-    path = store.pdf_path(key)
-    if not path.exists():
-        raise HTTPException(404, f"no PDF for {key}")
-    return FileResponse(
-        path,
-        media_type="application/pdf",
-        filename=f"{key}.pdf",
-        content_disposition_type="inline" if inline else "attachment",
-    )
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> None:
@@ -2242,15 +592,15 @@ def serve(host: str = "127.0.0.1", port: int = 8765, reload: bool = False) -> No
             "kernel for whichever is free, so nobody can say where the page is"
         )
     config.ensure_dirs()
-    trust_bind(host, port)
-    os.environ[BIND_ENV] = f"{host}:{port}"
-    if _bound_to_every_address and not _published_authorities:
+    origins.trust_bind(host, port)
+    os.environ[origins.BIND_ENV] = f"{host}:{port}"
+    if origins._bound_to_every_address and not origins._published_authorities:
         # Writes from anywhere but this machine will be refused until the
         # operator says what name the page is served under.
         print(
             f"warning: --host {host} publishes on every address, but the name a browser\n"
             f"         will use cannot be read off the socket and is not taken from the\n"
             f"         request. Only loopback is trusted until you set, for example,\n"
-            f"         {PUBLISHED_ORIGINS_ENV}=http://this-machine.local:{port}"
+            f"         {origins.PUBLISHED_ORIGINS_ENV}=http://this-machine.local:{port}"
         )
     uvicorn.run("doxograph.server:app" if reload else app, host=host, port=port, reload=reload)

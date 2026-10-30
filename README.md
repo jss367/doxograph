@@ -1085,9 +1085,10 @@ node --test tests/frontend/*.test.cjs
 
 CI runs these checks, JavaScript syntax checks, and macOS Swift type checking
 and quit/relaunch tests. Strict type checking covers the shared storage reader,
-saved research models, model request/response contracts, and all API, local,
-and subscription provider adapters. The remaining application modules can be
-added as their dictionary-based interfaces are narrowed.
+the corpus store, saved research models, model request/response contracts, all
+API, local, and subscription provider adapters, and the web server with its
+routers and job queue. The remaining application modules can be added as their
+dictionary-based interfaces are narrowed.
 
 `analysis_types.py` defines the common request and response contracts. Provider
 responses are normalized into immutable text and usage records, then validated
@@ -1130,9 +1131,14 @@ older corpus refreshes even when navigating away and back to the same workspace.
 `workspace-controller.js` serializes workspace changes through explicit hooks
 for draft checks, pending deletes, and rendering. `poller.js` owns the timer and
 prevents overlapping rounds; manual refreshes can wait for an older round to
-finish before reading again. `app.js` supplies those hooks and keeps rendering,
-editor drafts, and optimistic deletions. These are classic scripts loaded in
-the order in `index.html`, so they need no JavaScript build step.
+finish before reading again. `app.js` supplies those hooks and keeps the
+library's shared state, navigation, rendering, and boot. The library's own
+views sit beside it and share its globals: `layout.js`, `dialogs.js`,
+`filters.js`, `papers.js`, `claims.js`, `analysis.js`, `research-context.js`,
+`jobs.js`, `settings.js`, `workspace-actions.js`, and `keyboard.js`, with
+optimistic deletions in `deletions.js`. `boot.js` starts the library once they
+have all loaded. These are classic scripts loaded in the order in `index.html`,
+so they need no JavaScript build step.
 
 For the fast Python/API checks, browser executables do not need to be installed:
 
