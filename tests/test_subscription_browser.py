@@ -426,6 +426,10 @@ def test_an_older_conversation_list_arriving_last_is_ignored(engine):
             await page.wait_for_timeout(200)
             assert await page.locator('#chat-thread option').all_text_contents() == ['Theirs']
             assert await page.locator('#chat-messages p').all_text_contents() == ['Theirs', 'Their answer.']
+            # A follow-up continues that conversation rather than forking it.
+            await ask('Mine')
+            assert await _saved_contents(1) == [['Theirs', 'Their answer.', 'Mine', 'Answer 1.']]
+            assert await page.locator('#chat-thread option').all_text_contents() == ['Theirs']
             assert not errors
 
     with _server() as url:
