@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import anthropic
 import httpx
-from fastapi import APIRouter, HTTPException, Query, UploadFile
+from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
@@ -306,8 +306,9 @@ def citations() -> dict[str, Any]:
 
 
 @router.get("/api/search")
+@router.post("/api/search")
 def search_text(q: str = "", limit: int = 20, offset: int = 0,
-                paper_keys: Annotated[list[str] | None, Query(max_length=10000)] = None) -> dict[str, Any]:
+                paper_keys: query.PaperScope = None) -> dict[str, Any]:
     """The papers whose own text holds every word of the query.
 
     The claims are searched in the page, which needs no server at all. This is

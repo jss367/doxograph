@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from . import config, notebook, quotes, research_notes, search, store
 
@@ -16,7 +17,18 @@ QueryText = Annotated[str, Query(max_length=1000)]
 # A client that must not read the user's own writing (the in-app agent) asks for
 # the personal fields to be left out; nothing that serves it should match on them either.
 OmitNotes = Annotated[bool, Query()]
-PaperScope = Annotated[list[str] | None, Query(max_length=10000)]
+class ScopeBody(BaseModel):
+    paper_keys: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,200}$")]] = Field(min_length=1, max_length=10000)
+
+
+def request_scope(paper_keys: Annotated[list[str] | None, Query(max_length=10000)] = None,
+                  body: Annotated[ScopeBody | None, Body()] = None) -> list[str] | None:
+    if body is not None and paper_keys is not None:
+        raise HTTPException(422, "Specify source scope once, in the body or query.")
+    return body.paper_keys if body is not None else paper_keys
+
+
+PaperScope = Annotated[list[str] | None, Depends(request_scope)]
 PERSONAL_CLAIM_FIELDS = ("note", "ledger_links", "conditions", "limitations", "evidence_origin", "evidence_relationship")
 
 
@@ -55,6 +67,7 @@ def papers_and_issues(paper_keys: list[str] | None = None) -> tuple[list[dict], 
 
 
 @router.get("/papers")
+@router.post("/papers")
 def papers(q: QueryText = "", topic: str = "", label: str = "",
            limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None) -> dict:
     saved, issues = papers_and_issues(paper_keys)
@@ -81,6 +94,7 @@ def paper(key: str, omit_notes: OmitNotes = False) -> dict:
 
 
 @router.get("/claims")
+@router.post("/claims")
 def claims(q: QueryText = "", topic: str = "", paper: str = "",
            reviewed: bool | None = None, limit: Limit = 20, offset: Offset = 0,
            omit_notes: OmitNotes = False, paper_keys: PaperScope = None) -> dict:
@@ -99,6 +113,7 @@ def claims(q: QueryText = "", topic: str = "", paper: str = "",
 
 
 @router.get("/topics")
+@router.post("/topics")
 def topics(q: QueryText = "", limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None) -> dict:
     saved, issues = papers_and_issues(paper_keys)
     counts = store.tag_counts(store.claim_rows(saved))
@@ -109,6 +124,7 @@ def topics(q: QueryText = "", limit: Limit = 20, offset: Offset = 0, paper_keys:
 
 
 @router.get("/evidence")
+@router.post("/evidence")
 def evidence(kind: Literal["agreements", "tensions", "syntheses"], topic: str = "",
              limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None, library_snapshot: bool = False) -> dict:
     saved, issues = papers_and_issues()

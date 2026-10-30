@@ -76,6 +76,7 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
     async def get(path: str, workspace: str | None = None, **params) -> dict[str, Any]:
         if bound_workspace is not None and workspace != bound_workspace:
             raise ToolError(f"This connection is restricted to workspace {bound_workspace!r}.")
+        body = None
         if bound_papers is not None:
             if path.startswith(("/api/query/papers/", "/api/query/passage/")):
                 if path.rsplit("/", 1)[-1] not in bound_papers:
@@ -83,7 +84,7 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
             elif path in ("/api/query/papers", "/api/query/claims", "/api/query/evidence", "/api/search") or (library_snapshot and path == "/api/query/topics"):
                 if params.get("paper") and params["paper"] not in bound_papers:
                     raise ToolError("This paper is outside the selected sources.")
-                params["paper_keys"] = bound_papers
+                body = {"paper_keys": bound_papers}
                 if path == "/api/query/evidence" and library_snapshot:
                     params["library_snapshot"] = True
             else:
@@ -95,7 +96,7 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
         async with httpx.AsyncClient(base_url=base_url, transport=transport, timeout=30,
                                      trust_env=False, follow_redirects=False) as client:
             try:
-                response = await client.get(path, headers=headers,
+                response = await client.request("POST" if body else "GET", path, headers=headers, json=body,
                                             params={k: v for k, v in params.items() if v is not None})
             except httpx.RequestError:
                 raise ToolError(f"Cannot reach Doxograph at {base_url}. Open the app or run "

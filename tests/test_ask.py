@@ -309,3 +309,25 @@ def test_library_ask_snapshots_readable_sources_while_explicit_scope_stays_stric
         store.paper_path('readable').unlink()
         body['scope'] = {'mode': 'library'}
         assert client.post('/api/ask', json=body).status_code == 422
+
+
+def test_large_scope_uses_http_bodies_on_the_real_server(monkeypatch):
+    from test_ask_browser import _server
+    keys = [f'{i:04d}-' + 'p' * 195 for i in range(600)]
+    for key in keys:
+        seed(key)
+    seed('outside')
+    store.save_tags([{'name':'recovery', 'description':'Recovery'}])
+    monkeypatch.setattr(search, 'folded_text', lambda key: 'recovery')
+    monkeypatch.setattr(search, 'paper_text', lambda key: 'recovery')
+    with _server() as url:
+        mcp = mcp_server.create_server(url, workspace='default', papers=keys, library_snapshot=True)
+        papers = call(mcp, 'search_papers', limit=1)
+        assert papers['total'] == 600 and papers['items'][0]['key'] == keys[0]
+        claims = call(mcp, 'search_claims', limit=1, offset=599)
+        assert claims['total'] == 600 and claims['items'][0]['paper'] == keys[-1]
+        assert call(mcp, 'list_topics')['items'][0]['n_claims'] == 600
+        assert call(mcp, 'search_paper_text', q='recovery', limit=1)['papers'][0]['key'] in keys
+        assert call(mcp, 'read_evidence', kind='syntheses')['items'] == []
+        with pytest.raises(ToolError, match='outside'):
+            call(mcp, 'get_paper', key='outside')
