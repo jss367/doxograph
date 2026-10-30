@@ -1226,6 +1226,18 @@ $('panes').addEventListener('click', async (event) => {
       renderContent();
       return;
     }
+    if (act === 'edit-title') {
+      const workspace = workspaceClient.workspaceId;
+      try {
+        await editPaperTitle(paper);
+      } finally {
+        if (workspace === workspaceClient.workspaceId && (document.activeElement === document.body
+            || (!$('ask').open && $('ask').contains(document.activeElement)))) {
+          restorePaperActionCursor({paper, selector: 'summary'});
+        }
+      }
+      return;
+    }
     if (act === 'labels') {
       // Nothing to guard against a removal in flight: the dialog is modal, and
       // a PATCH landing on a paper that has gone comes back 404 and says so.
