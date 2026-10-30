@@ -347,3 +347,30 @@ def test_note_keeps_originating_workspace_while_conversation_save_waits(engine, 
                 assert 'Sources: Memory and recovery' in body
                 assert httpx.get(url + '/api/research-notes', headers={'X-Doxograph-Workspace':other}).json()['notes'] == []
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_attachment_only_draft_survives_contextual_open_and_refresh(engine):
+    seed()
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
+            with _server() as url:
+                await page.goto(url + "/#paper=a")
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-files').set_input_files(
+                    {'name': 'draft.txt', 'mimeType': 'text/plain', 'buffer': b'Unsent context'})
+                await expect(page.locator('#agent-attachments')).to_contain_text('draft.txt')
+                await expect(page.locator('#agent-question')).to_be_empty()
+                await page.locator('#agent-close').click()
+                await page.locator('[data-paper-chat="a"]').first.click()
+                await expect(page.locator('#agent-thread option')).to_have_count(2)
+                await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(0)
+                await page.locator('#agent-thread').select_option(index=1)
+                await expect(page.locator('#agent-attachments')).to_contain_text('draft.txt')
+                await page.locator('#agent-close').click()
+                await page.locator('#btn-agent:enabled').click()
+                await expect(page.locator('#agent-attachments')).to_contain_text('draft.txt')
+                assert httpx.get(url + '/api/chats').json()['chats'] == []
+    run_browser(scenario())

@@ -108,7 +108,7 @@ const ChatThreads = (() => {
         else if ((thread.dirty || thread.draft.trim() || thread.draftAttachments?.length) && thread.revision && !writing(thread)) {
           fork(thread);
           kept.push(thread);
-        } else if (writing(thread) || thread.dirty || thread.draft.trim()) threads.push(thread);
+        } else if (writing(thread) || thread.dirty || thread.draft.trim() || thread.draftAttachments?.length) threads.push(thread);
       }
       target.threads = [...kept, ...threads];
       kept.forEach(thread => save(target, thread));
@@ -125,7 +125,7 @@ const ChatThreads = (() => {
       box = boxes.get(id);
       box.active ||= blank();
       if (options.fresh) {
-        if (box.active.draft && !box.threads.includes(box.active)) box.threads.unshift(box.active);
+        if ((box.active.draft || box.active.draftAttachments?.length || box.active.reading) && !box.threads.includes(box.active)) box.threads.unshift(box.active);
         box.active = blank();
         box.active.scope = structuredClone(options.scope);
         box.loaded = true;
@@ -366,11 +366,12 @@ const ChatThreads = (() => {
       open, ask, sync,
       newScope(scope) {
         if (!box) return;
-        const draft = box.active.draft, agent = box.active.agent;
+        const draft = box.active.draft, draftAttachments = box.active.draftAttachments, agent = box.active.agent;
         box.active = blank();
         box.active.agent = agent;
         box.active.scope = structuredClone(scope);
         box.active.draft = draft;
+        box.active.draftAttachments = draftAttachments || [];
         sync();
       },
       // Save into the chat the conversation belongs to, even after the dialog moved on.
