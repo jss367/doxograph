@@ -130,6 +130,46 @@ def test_codex_passes_temporary_image_files_and_cleans_them_up(monkeypatch):
     assert len(paths) == 1 and not paths[0].exists()
 
 
+@pytest.mark.parametrize('mode', ['RGBA', 'P'])
+def test_codex_composites_transparent_charts_onto_white(monkeypatch, mode):
+    from doxograph import codex_cli
+    config.set_ai_provider('codex')
+    fake_codex(monkeypatch, stream({'type': 'turn.completed'}))
+    run = codex_cli._run
+    if mode == 'RGBA':
+        chart = Image.new('RGBA', (3, 1), (0, 0, 0, 0))
+        chart.putpixel((1, 0), (0, 0, 0, 255))
+        chart.putpixel((2, 0), (255, 0, 0, 128))
+        expected_color = (255, 127, 127)
+    else:
+        chart = Image.new('P', (3, 1), 0)
+        chart.putpalette([0, 0, 0, 0, 0, 0, 255, 0, 0])
+        chart.info['transparency'] = 0
+        chart.putpixel((1, 0), 1)
+        chart.putpixel((2, 0), 2)
+        expected_color = (255, 0, 0)
+    raw = io.BytesIO()
+    chart.save(raw, format='PNG')
+    file = attachment('transparent-chart.png', raw.getvalue(), 'image/png')
+    captured = []
+
+    def inspect(args, **kwargs):
+        if '--image' in args:
+            path = Path(args[args.index('--image') + 1])
+            with Image.open(path) as sent:
+                assert sent.mode == 'RGB' and sent.size == (3, 1)
+                assert sent.getpixel((0, 0)) == (255, 255, 255)
+                assert sent.getpixel((1, 0)) == (0, 0, 0)
+                assert sent.getpixel((2, 0)) == expected_color
+            captured.append(path)
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(codex_cli, '_run', inspect)
+    codex_cli.Client().create(model='Codex default', system='Read the chart.', messages=[{
+        'role': 'user', 'content': conversation_blocks([{'role': 'user', 'content': 'Explain', 'attachments': [file]}])}])
+    assert len(captured) == 1 and not captured[0].exists()
+
+
 @pytest.mark.parametrize('provider', ['ollama', 'openai', 'openai-compatible'])
 def test_paper_chat_delivers_images_and_pdf_text_to_api_providers(monkeypatch, provider):
     select(provider)

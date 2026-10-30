@@ -136,7 +136,10 @@ class Client:
                         # Normalize GIF/WebP too, using generated paths rather than user filenames.
                         path = Path(cwd) / f"image-{len(images) + 1}.png"
                         with Image.open(io.BytesIO(base64.b64decode(block["source"]["data"]))) as image:
-                            image.convert("RGB").save(path)
+                            rgba = image.convert("RGBA")
+                            flattened = Image.new("RGB", rgba.size, "white")
+                            flattened.paste(rgba, mask=rgba.getchannel("A"))
+                            flattened.save(path)
                         images.append(path)
                         prompt.append(f"[Attached image {len(images)}]")
                         continue
