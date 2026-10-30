@@ -16,7 +16,7 @@ from . import config, notebook, records, research_notes, store
 
 router = APIRouter(prefix='/api/workspace/backups')
 KEEP_VERSIONS = 20
-DOCUMENTS = {'notebook.json', 'research-notes.json', 'tags.yaml', 'ledger.yaml',
+DOCUMENTS = {'notebook.json', 'research-notes.json', 'tags.yaml', 'facets.yaml', 'ledger.yaml',
              'context.md', 'agreements.json', 'tensions.json', 'syntheses.json', 'retired-keys.json'}
 
 

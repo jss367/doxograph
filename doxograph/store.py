@@ -727,7 +727,7 @@ def clean_ledger_links(links: Any) -> list[dict]:
 
 
 CLAIM_FIELDS = {
-    "text", "kind", "strength", "tags", "evidence", "quote", "locator",
+    "text", "kind", "strength", "tags", "facets", "evidence", "quote", "locator",
     "ledger_links", "note", "reviewed", "conditions", "limitations", "evidence_origin", "evidence_relationship",
 }
 
@@ -740,7 +740,9 @@ class TopicConflictError(ValueError):
 def _claim_edit_lock(key: str, patch: dict):
     # Topic edits share the vocabulary lock with renames, before taking the
     # paper lock. Notes and review decisions can still land during recovery.
-    with vocab_lock() if "tags" in patch else contextlib.nullcontext():
+    # Facet edits take the facets lock first, as a facet's deletion does.
+    with (facets_lock() if "facets" in patch else contextlib.nullcontext(),
+          vocab_lock() if "tags" in patch else contextlib.nullcontext()):
         if "tags" in patch:
             try:
                 retired = _retired_topics()
@@ -762,7 +764,9 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
         for claim in paper.get("claims", []):
             if claim.get("id") == claim_id:
                 for field, value in patch.items():
-                    if field in CLAIM_FIELDS:
+                    if field == "facets":
+                        set_claim_facets_by_hand(claim, value)
+                    elif field in CLAIM_FIELDS:
                         claim[field] = clean_ledger_links(value) if field == "ledger_links" else value
                 if "quote" in patch:
                     check_quote(key, claim)
@@ -776,10 +780,12 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
 def add_claim(key: str, patch: dict) -> dict:
     with _claim_edit_lock(key, patch):
         paper = load_paper(key)
-        fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS}
+        fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS and k != "facets"}
         if "ledger_links" in fields:
             fields["ledger_links"] = clean_ledger_links(fields["ledger_links"])
         claim = new_claim(paper, **fields)
+        if "facets" in patch:
+            set_claim_facets_by_hand(claim, patch["facets"])
         # A hand-written claim needs no review, but a blank one is not a claim yet.
         # An explicit `reviewed` in the patch still wins.
         if "reviewed" not in patch:
@@ -1151,7 +1157,7 @@ def corpus_signature() -> str:
                         parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_ctime_ns))
         except FileNotFoundError:
             pass
-    for path in (config.tags_path(), config.ledger_path(), tensions_path(), syntheses_path(),
+    for path in (config.tags_path(), config.facets_path(), config.ledger_path(), tensions_path(), syntheses_path(),
                  agreements_path(), context_path(), config.data_dir() / "notebook.json",
                  tag_change_path(), retired_keys_path()):
         try:
@@ -1269,6 +1275,262 @@ def tag_counts(rows: list[dict]) -> dict[str, int]:
         for tag in row.get("tags", []):
             counts[tag] = counts.get(tag, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+# --- facets ----------------------------------------------------------------
+#
+# A facet is a question asked of every claim whose answer is a short list of
+# names: which models a result was measured on, which datasets, which
+# intervention. The reader defines the facets a workspace has, each with a
+# description that goes into the extraction prompt, and the values are filled
+# in by the model and corrected by hand.
+#
+# Values are open: a facet has no fixed list, since a corpus about language
+# models names a new one with every other paper. What it has instead is
+# aliases, written when a reader merges two spellings, so "gpt-4-0613" read
+# from the next paper lands on "GPT-4" without anyone asking twice.
+#
+# Lock order is facets before vocabulary before paper.
+
+def facets_lock() -> contextlib.AbstractContextManager[None]:
+    return document_lock("facets")
+
+
+def _facets_file() -> dict:
+    return storage.read_yaml_model(
+        config.facets_path(), workspace_metadata.Facets,
+    ).model_dump(exclude_unset=True)
+
+
+def load_facets() -> list[dict]:
+    return _facets_file().get("facets") or []
+
+
+def _save_facets(facets: list[dict]) -> None:
+    """Caller must hold `facets_lock`."""
+    payload = _facets_file()
+    payload["facets"] = facets
+    workspace_metadata.Facets.model_validate(payload, strict=True)
+    write_atomic(
+        config.facets_path(),
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True, width=100),
+    )
+
+
+def facet_basis(facet: dict) -> str:
+    """What a facet's values were filled in against. Changing the description
+    changes the question, so the values on every paper go stale; aliases do
+    not, since they rewrite values already on file as they are added."""
+    return hashlib.sha1(json.dumps([facet["name"], facet.get("description", "")]).encode()).hexdigest()[:16]
+
+
+def facet_value_key(value: str) -> str:
+    """What makes two values one: case and spacing, as for labels."""
+    return label_key(" ".join(value.split()))
+
+
+def facet_spellings(rows: list[dict], facets: list[dict]) -> dict[str, dict[str, str]]:
+    """For each facet, every value on file by its key, in the spelling the
+    corpus uses most. A value read from a new paper takes that spelling, so
+    "gpt-4" and "GPT-4" are one value without anyone merging them."""
+    counts = facet_counts(rows, facets)
+    return {name: {facet_value_key(value): value for value in values} for name, values in counts.items()}
+
+
+def clean_facet_values(values: Any, facet: dict, known: dict[str, str] | None = None) -> list[str]:
+    """A facet's values as they are stored: whitespace collapsed, aliases
+    applied, one spelling per value, sorted."""
+    aliases = facet.get("aliases") or {}
+    cleaned: dict[str, str] = {}
+    for value in values if isinstance(values, list) else []:
+        if not isinstance(value, str) or not (value := " ".join(value.split())):
+            continue
+        key = facet_value_key(value)
+        if key in aliases:
+            value = aliases[key]
+            if not value:
+                continue
+            key = facet_value_key(value)
+        cleaned.setdefault(key, (known or {}).get(key, value))
+    return sorted(cleaned.values(), key=lambda value: (facet_value_key(value), value))
+
+
+def clean_claim_facets(raw: Any, facets: list[dict],
+                       known: dict[str, dict[str, str]] | None = None) -> dict[str, list[str]]:
+    """The values for each defined facet; a name no facet has is dropped, and
+    so is an empty list, which says no more than a missing one."""
+    raw = raw if isinstance(raw, dict) else {}
+    cleaned = {}
+    for facet in facets:
+        values = clean_facet_values(raw.get(facet["name"]), facet, (known or {}).get(facet["name"]))
+        if values:
+            cleaned[facet["name"]] = values
+    return cleaned
+
+
+def set_claim_facets_by_hand(claim: dict, raw: Any) -> None:
+    """Apply a person's facet values to a claim. A facet whose values they
+    changed is recorded as theirs, and no later pass overwrites it."""
+    facets = load_facets()
+    before = claim.get("facets") or {}
+    after = clean_claim_facets(raw, facets)
+    hand = set(claim.get("facets_hand") or [])
+    for facet in facets:
+        name = facet["name"]
+        if before.get(name, []) != after.get(name, []):
+            hand.add(name)
+    claim["facets"] = after
+    defined = {facet["name"] for facet in facets}
+    claim["facets_hand"] = sorted(hand & defined)
+    if not claim["facets_hand"]:
+        claim.pop("facets_hand")
+
+
+def stale_facets(paper: dict, facets: list[dict]) -> list[str]:
+    """The facets this paper's claims have not been given values for under
+    the facet's current description. A paper with no claims has nothing to
+    fill, so nothing is stale on it."""
+    if not paper.get("claims"):
+        return []
+    basis = paper.get("facet_basis") or {}
+    return [facet["name"] for facet in facets if basis.get(facet["name"]) != facet_basis(facet)]
+
+
+def facet_counts(rows: list[dict], facets: list[dict]) -> dict[str, dict[str, int]]:
+    """How many claims carry each value of each facet, commonest first.
+    Spellings that differ only in case count as one value, shown as the
+    spelling most claims use."""
+    result = {}
+    for facet in facets:
+        name = facet["name"]
+        spellings: dict[str, dict[str, int]] = {}
+        for row in rows:
+            for value in (row.get("facets") or {}).get(name, []):
+                seen = spellings.setdefault(facet_value_key(value), {})
+                seen[value] = seen.get(value, 0) + 1
+        counts = {min(seen, key=lambda value: (-seen[value], value)): sum(seen.values())
+                  for seen in spellings.values()}
+        result[name] = dict(sorted(counts.items(), key=lambda kv: (-kv[1], facet_value_key(kv[0]), kv[0])))
+    return result
+
+
+def stale_facet_papers(papers: list[dict], facets: list[dict]) -> dict[str, int]:
+    """For each facet, how many papers have claims it has not been filled on."""
+    counts = {facet["name"]: 0 for facet in facets}
+    for paper in papers:
+        for name in stale_facets(paper, facets):
+            counts[name] += 1
+    return counts
+
+
+def add_facet(name: str, description: str = "") -> list[dict]:
+    name = slugify(name)
+    if not name:
+        raise ValueError("Name the facet with at least one letter or digit.")
+    with facets_lock():
+        facets = load_facets()
+        if any(facet["name"] == name for facet in facets):
+            raise ValueError(f"There is already a facet named {name}.")
+        facets.append({"name": name, "description": " ".join(description.split())})
+        _save_facets(facets)
+        return facets
+
+
+def describe_facet(name: str, description: str) -> list[dict]:
+    """Change what a facet asks for. Every paper's values for it go stale."""
+    with facets_lock():
+        facets = load_facets()
+        facet = next((facet for facet in facets if facet["name"] == name), None)
+        if facet is None:
+            raise KeyError(name)
+        facet["description"] = " ".join(description.split())
+        _save_facets(facets)
+        return facets
+
+
+def _rewrite_papers(rewrite: Callable[[dict], bool]) -> None:
+    """Apply `rewrite` to every paper under its lock, saving the ones it
+    changed. Caller holds `facets_lock`."""
+    for key in paper_keys():
+        with paper_lock(key):
+            try:
+                paper = load_paper(key)
+            except KeyError:
+                continue
+            if rewrite(paper):
+                save_paper(paper)
+
+
+def delete_facet(name: str) -> list[dict]:
+    """Remove a facet and its values from every claim.
+
+    The values go first and the definition last, so a delete cut short
+    leaves the facet defined with fewer values, which a fill puts right,
+    rather than values for a facet nobody can see."""
+    with facets_lock():
+        if not any(facet["name"] == name for facet in load_facets()):
+            raise KeyError(name)
+
+        def strip(paper: dict) -> bool:
+            changed = (paper.get("facet_basis") or {}).pop(name, None) is not None
+            for claim in paper.get("claims", []):
+                changed |= (claim.get("facets") or {}).pop(name, None) is not None
+                hand = claim.get("facets_hand") or []
+                if name in hand:
+                    claim["facets_hand"] = [n for n in hand if n != name]
+                    changed = True
+            return changed
+
+        _rewrite_papers(strip)
+        facets = [facet for facet in load_facets() if facet["name"] != name]
+        _save_facets(facets)
+        return facets
+
+
+def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict]:
+    """Rename one value, merge several into one, or with an empty `new`
+    remove them, on every claim. The old spellings become aliases, so a later
+    read writes the new value in their place, or drops them."""
+    new = " ".join(new.split())
+    with facets_lock():
+        facets = load_facets()
+        facet = next((facet for facet in facets if facet["name"] == name), None)
+        if facet is None:
+            raise KeyError(name)
+        old_keys = {facet_value_key(value) for value in old if value.strip()}
+        new_key = facet_value_key(new) if new else None
+        old_keys.discard(new_key)
+        if not old_keys:
+            return facets
+        aliases = dict(facet.get("aliases") or {})
+        # An alias that pointed at a value being renamed follows it.
+        for key, target in aliases.items():
+            if target and facet_value_key(target) in old_keys:
+                aliases[key] = new
+        for key in old_keys:
+            aliases[key] = new
+        if new_key is not None:
+            aliases.pop(new_key, None)
+        facet["aliases"] = dict(sorted(aliases.items()))
+
+        def rewrite(paper: dict) -> bool:
+            changed = False
+            for claim in paper.get("claims", []):
+                values = (claim.get("facets") or {}).get(name)
+                if not values or not any(facet_value_key(v) in old_keys for v in values):
+                    continue
+                kept = [v for v in values if facet_value_key(v) not in old_keys] + ([new] if new else [])
+                cleaned = clean_facet_values(kept, {"name": name})
+                if cleaned:
+                    claim["facets"][name] = cleaned
+                else:
+                    claim["facets"].pop(name)
+                changed = True
+            return changed
+
+        _rewrite_papers(rewrite)
+        _save_facets(facets)
+        return facets
 
 
 def needs_extraction(key: str) -> bool:

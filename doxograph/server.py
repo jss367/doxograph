@@ -890,6 +890,31 @@ def _run_retag(job: dict, keys: list[str]) -> None:
         _prune_jobs()
 
 
+@_workspace_job
+def _run_fill_facets(job: dict, keys: list[str], force: bool = False) -> None:
+    try:
+        failed = done = 0
+        last_failure = ""
+        _set(job, state="reading", detail=f"0 of {len(keys)}")
+        for key, _result, exc in extract.run_concurrently(keys, lambda key: extract.fill_facets(key, force=force)):
+            done += 1
+            if exc is not None:
+                failed += 1
+                last_failure = f"{key}: {type(exc).__name__}: {exc}"
+                traceback.print_exception(exc)
+            _set(job, key=key, detail=f"{done} of {len(keys)}")
+        if failed:
+            _set(job, state="error",
+                 detail=f"{failed} of {len(keys)} papers failed; {last_failure}")
+        else:
+            _set(job, state="done", detail=f"{len(keys)} papers")
+    except Exception as exc:
+        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+    finally:
+        _prune_jobs()
+
+
 # --- request bodies -------------------------------------------------------
 
 class SettingsBody(BaseModel):
@@ -945,6 +970,28 @@ class ProposedTagsBody(BaseModel):
 
 class RetagBody(BaseModel):
     keys: list[str] | None = None
+
+
+class FacetBody(BaseModel):
+    name: str = Field(max_length=60)
+    description: str = Field(default="", max_length=2000)
+
+
+class FacetDescriptionBody(BaseModel):
+    description: str = Field(max_length=2000)
+
+
+class FacetValuesBody(BaseModel):
+    """Rename or merge values into `into`, or remove them with an empty one."""
+
+    values: list[str] = Field(min_length=1, max_length=200)
+    into: str = Field(default="", max_length=200)
+
+
+class FillFacetsBody(BaseModel):
+    keys: list[str] | None = None
+    # Ask about every facet on every paper, stale or not.
+    force: bool = False
 
 
 class ReviewBody(BaseModel):
@@ -1010,6 +1057,9 @@ class ClaimPatch(BaseModel):
     kind: str | None = None
     strength: str | None = None
     tags: list[str] | None = None
+    # Values for each facet, by facet name. Values for a facet the workspace
+    # does not define are dropped by the store.
+    facets: dict[str, list[str]] | None = None
     evidence: str | None = None
     quote: str | None = None
     locator: str | None = None
@@ -1349,6 +1399,7 @@ def _build_state() -> dict:
     agreements = _state_section(lambda: store.agreement_rows(rows), [], issues)
     syntheses = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
     tags = _state_section(store.load_tags, [], issues)
+    facets = _state_section(store.load_facets, [], issues)
     ledger = _state_section(store.load_ledger, [], issues)
     context = _state_section(store.load_context, "", issues)
     _state_section(store.retired_keys, set(), issues)
@@ -1367,6 +1418,10 @@ def _build_state() -> dict:
         "tag_counts": store.tag_counts(rows),
         "label_counts": store.label_counts(papers),
         "label_keys": store.label_keys(papers),
+        "facets": facets,
+        "facet_counts": store.facet_counts(rows, facets),
+        "facets_stale": store.stale_facet_papers(papers, facets),
+        "facet_papers_to_fill": sum(1 for p in papers if store.stale_facets(p, facets)),
         "ledger": ledger,
         "context": context,
         "tensions": tensions,
@@ -2020,6 +2075,51 @@ def patch_tag(name: str, body: RenameBody) -> dict:
 def remove_tag(name: str) -> dict:
     store.delete_tag(name)
     return {"tags": store.load_tags()}
+
+
+@app.post("/api/facets")
+def create_facet(body: FacetBody) -> dict:
+    try:
+        return {"facets": store.add_facet(body.name, body.description)}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.patch("/api/facets/{name}")
+def patch_facet(name: str, body: FacetDescriptionBody) -> dict:
+    try:
+        return {"facets": store.describe_facet(name, body.description)}
+    except KeyError:
+        raise HTTPException(404, f"no facet {name}")
+
+
+@app.delete("/api/facets/{name}")
+def remove_facet(name: str) -> dict:
+    try:
+        return {"facets": store.delete_facet(name)}
+    except KeyError:
+        raise HTTPException(404, f"no facet {name}")
+
+
+@app.post("/api/facets/{name}/values")
+def rewrite_facet_values(name: str, body: FacetValuesBody) -> dict:
+    try:
+        return {"facets": store.rewrite_facet_values(name, body.values, body.into)}
+    except KeyError:
+        raise HTTPException(404, f"no facet {name}")
+
+
+@app.post("/api/facets/fill")
+def fill_facets(body: FillFacetsBody) -> dict:
+    _require_analysis()
+    facets = store.load_facets()
+    keys = body.keys or [p["key"] for p in store.all_papers()
+                         if p.get("claims") and (body.force or store.stale_facets(p, facets))]
+    if not facets or not keys:
+        return {"queued": 0}
+    job = _new_job(f"fill facets on {len(keys)} papers")
+    _submit_job(_run_fill_facets, job, keys, body.force)
+    return {"queued": len(keys)}
 
 
 @app.post("/api/tensions")

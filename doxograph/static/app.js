@@ -59,12 +59,12 @@ const NEW_CLAIM_ID = '__new__';
 // but the reader's, so unlike a synthesis it is saved without flushing the
 // held deletes: no claim is read to write one.
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
-const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
-            graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
+            graph: { xAxis: 'connections', color: 'topic', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
 // Whether the paper's PDF is kept out of the claims view. A preference of this
@@ -101,7 +101,7 @@ function layoutPanes(reading) {
   document.body.classList.toggle('claims-collapsed', Boolean(reading) && readingClaimsCollapsed);
   fitClaimsWidth();
   const filtersOpen = document.body.classList.contains('reading-filters-open');
-  const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.unreviewed || V.unverified);
+  const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.facet || V.unreviewed || V.unverified);
   $('btn-reader-filters').textContent = filtered ? 'Claim filters · active' : 'Claim filters';
   $('btn-reader-filters').setAttribute('aria-expanded', String(filtersOpen));
   ResearchTools.mountReader(reading);
@@ -162,7 +162,7 @@ function startClaimFromPassage(paper, passage) {
 function blankClaim(paper) {
   return {
     id: NEW_CLAIM_ID, paper, text: '', kind: S.kinds[0] || 'finding',
-    strength: 'supporting', tags: [], evidence: '', quote: '', locator: '',
+    strength: 'supporting', tags: [], facets: {}, evidence: '', quote: '', locator: '',
     ledger_links: [], note: '', conditions: '', limitations: '', evidence_origin: '', evidence_relationship: 'unassessed', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
   };
 }
@@ -170,7 +170,7 @@ function blankClaim(paper) {
 function newClaimHasEdits(draft) {
   if (!draft) return false;
   const blank = blankClaim(draft.paper);
-  return ['text', 'kind', 'strength', 'tags', 'evidence', 'quote', 'locator',
+  return ['text', 'kind', 'strength', 'tags', 'facets', 'evidence', 'quote', 'locator',
     'ledger_links', 'note', 'reviewed', 'conditions', 'limitations', 'evidence_origin', 'evidence_relationship'].some((field) =>
     JSON.stringify(draft[field]) !== JSON.stringify(blank[field]));
 }
@@ -1062,6 +1062,7 @@ function currentHash() {
   if (V.paper) params.set('paper', V.paper);
   if (V.tag) params.set('tag', V.tag);
   if (V.label) params.set('label', V.label);
+  if (V.facet) params.set('facet', V.facet);
   if (V.q.trim()) params.set('q', V.q);
   if (V.kind) params.set('kind', V.kind);
   if (V.unreviewed) params.set('unreviewed', '1');
@@ -1085,7 +1086,7 @@ let restoringHistory = false;
 // the final paper/view. Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
 function navigationVersion() {
-  const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label,
+  const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden]);
   if (route !== navigationRoute) { navigationRoute = route; navigationSeq++; }
   return navigationSeq;
@@ -1182,7 +1183,7 @@ $('continue-reading').addEventListener('click', (event) => {
   parkSynthEditor();
   parkNoteEditor();
   showView('claims');
-  V.paper = key; V.tag = null; V.label = null;
+  V.paper = key; V.tag = null; V.label = null; V.facet = null;
   V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false; V.editing = null;
   $('q').value = ''; $('kind').value = '';
   $('only-unreviewed').checked = false; $('only-unverified').checked = false;
@@ -1224,6 +1225,14 @@ function dropMissingFilters() {
   // leave a filter on with nothing on screen to turn it off.
   // The filter follows the label to the spelling the sidebar shows now.
   if (V.label) V.label = findLabel(Object.keys(S.label_counts || {}), V.label) || null;
+  // A facet value the corpus no longer holds is dropped the same way, and
+  // follows a value to the spelling the sidebar shows.
+  if (V.facet) {
+    const filter = facetFilter();
+    const values = filter ? Object.keys((S.facet_counts || {})[filter.name] || {}) : [];
+    const value = filter && values.find((v) => facetValueKey(v) === facetValueKey(filter.value));
+    V.facet = value ? `${filter.name}:${value}` : null;
+  }
   if (V.kind && !(S.kinds || []).includes(V.kind)) {
     V.kind = '';
     $('kind').value = '';
@@ -1248,6 +1257,7 @@ function applyHash() {
   V.paper = V.view === 'library' ? null : params.get('paper') || null;
   V.tag = params.get('tag') || null;
   V.label = params.get('label') || null;
+  V.facet = params.get('facet') || null;
   V.q = params.get('q') || '';
   V.kind = params.get('kind') || '';
   V.unreviewed = params.get('unreviewed') === '1';
@@ -1454,12 +1464,12 @@ function resetWorkspaceView() {
   S = workspaceClient.state;
   $('sync-status').hidden = true;
   Object.assign(V, {
-    paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+    paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
-    graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
+    graph: { xAxis: 'connections', color: 'topic', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
@@ -1529,7 +1539,7 @@ async function loadWorkspaces() {
 
 // --- filtering ------------------------------------------------------------
 
-const FILTER_DEFAULTS = { paper: null, tag: null, label: null, q: '', kind: '',
+const FILTER_DEFAULTS = { paper: null, tag: null, label: null, facet: null, q: '', kind: '',
   unreviewed: false, unverified: false, tensionStatus: '', agreementStatus: '',
   tensionFocus: null, agreementFocus: null };
 let activeFiltersHTML = null;
@@ -1540,6 +1550,7 @@ function renderActiveFilters() {
   add('paper', `Paper: ${S.papers.find((p) => p.key === V.paper)?.title || V.paper}`);
   add('tag', `Topic: ${V.tag}`);
   add('label', `Label: ${V.label}`);
+  if (facetFilter()) add('facet', `${facetFilter().name}: ${facetFilter().value}`);
   if (V.q.trim()) add('q', `Search: ${V.q.trim()}`);
   add('kind', `Kind: ${V.kind}`);
   add('unreviewed', 'Unreviewed');
@@ -1688,7 +1699,7 @@ function haystack(row) {
   return [row.text, row.evidence, row.quote, row.note, row.paper, row.paper_title,
           row.paper_year, (row.paper_authors || []).join(' '),
           paperSearchTextFor(row.paper), (row.tags || []).join(' '),
-          (row.paper_labels || []).join(' ')]
+          (row.paper_labels || []).join(' '), Object.values(row.facets || {}).flat().join(' ')]
     .join(' ').toLowerCase();
 }
 
@@ -1830,9 +1841,10 @@ function matchingPapers() {
 // A paper appears once, even when several of its claims match. Papers without
 // extracted claims still belong in the library and can match their metadata.
 function visiblePapers() {
-  const claimFilters = V.tag || V.kind || V.unreviewed || V.unverified;
+  const claimFilters = V.tag || V.facet || V.kind || V.unreviewed || V.unverified;
   const owners = claimFilters ? new Set(S.claims.filter(row =>
     (!V.tag || (row.tags || []).includes(V.tag))
+    && hasFacetFilter(row)
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)).map(row => row.paper)) : null;
@@ -1913,6 +1925,39 @@ function labelledPapers() {
   return new Set(S.papers.filter((p) => findLabel(p.labels, V.label) !== undefined).map((p) => p.key));
 }
 
+// A facet filter is one value of one facet, held as `name:value`. Facet names
+// are slugs, so the first colon is the one between them.
+function facetFilter() {
+  const at = (V.facet || '').indexOf(':');
+  return at > 0 ? { name: V.facet.slice(0, at), value: V.facet.slice(at + 1) } : null;
+}
+
+// Values are one value in any case or spacing, as `store.facet_value_key` decides.
+function facetValueKey(value) {
+  return foldLabel(String(value).split(/\s+/).filter(Boolean).join(' '));
+}
+
+function hasFacetFilter(row) {
+  const filter = facetFilter();
+  if (!filter) return true;
+  const key = facetValueKey(filter.value);
+  return ((row.facets || {})[filter.name] || []).some((value) => facetValueKey(value) === key);
+}
+
+// The defined facets' values on a claim, in the order the facets are defined.
+function claimFacetValues(row) {
+  return (S.facets || []).flatMap((facet) =>
+    ((row.facets || {})[facet.name] || []).map((value) => [facet.name, value]));
+}
+
+function chooseFacet(name, value) {
+  const next = `${name}:${value}`;
+  const filter = facetFilter();
+  V.facet = filter && filter.name === name && facetValueKey(filter.value) === facetValueKey(value) ? null : next;
+  syncHash(true);
+  renderAll();
+}
+
 function visibleClaims() {
   const matches = queryMatcher();
   const labelled = labelledPapers();
@@ -1920,6 +1965,7 @@ function visibleClaims() {
     (!V.paper || row.paper === V.paper)
     && (!labelled || labelled.has(row.paper))
     && (!V.tag || (row.tags || []).includes(V.tag))
+    && hasFacetFilter(row)
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)
@@ -1939,6 +1985,7 @@ function render() {
   renderGraphNav();
   renderTags();
   renderLabels();
+  renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   renderJobs();
@@ -1970,6 +2017,7 @@ function renderAll() {
   renderGraphNav();
   renderTags();
   renderLabels();
+  renderFacets();
   renderContent();
   renderJobs();
   syncAnalysisControls();
@@ -2170,6 +2218,44 @@ function renderLabels() {
       <span>${esc(name)}</span>
       <span class="n">${count}</span>
     </li>`).join('');
+}
+
+// Which facets are open in the sidebar, by name, so a redraw keeps them so.
+const openFacets = new Set();
+let facetsHTML = null;
+
+function renderFacets() {
+  const facets = S.facets || [];
+  const filter = facetFilter();
+  const html = facets.length ? facets.map((facet) => {
+    const counts = Object.entries((S.facet_counts || {})[facet.name] || {});
+    const stale = (S.facets_stale || {})[facet.name] || 0;
+    const active = (value) => filter && filter.name === facet.name
+      && facetValueKey(filter.value) === facetValueKey(value);
+    return `<details class="facet" data-facet="${esc(facet.name)}" ${openFacets.has(facet.name) || (filter && filter.name === facet.name) ? 'open' : ''}>
+      <summary title="${esc(facet.description || '')}"><span>${esc(facet.name)}</span>
+        <span class="n">${counts.length} ${counts.length === 1 ? 'value' : 'values'}</span></summary>
+      ${facet.description ? `<p class="hint">${esc(facet.description)}</p>` : ''}
+      ${stale ? `<p class="hint">Not yet filled in on ${stale} ${stale === 1 ? 'paper' : 'papers'}.</p>` : ''}
+      <ul class="taglist">${counts.length ? counts.map(([value, n]) => `
+        <li class="${active(value) ? 'active' : ''}" data-facet-value="${esc(value)}">
+          <span>${esc(value)}</span><span class="n">${n}</span></li>`).join('')
+        : '<li class="hint">No values yet.</li>'}</ul>
+      <div class="row facet-actions">
+        <button type="button" class="mini" data-facet-act="describe">Edit description</button>
+        <button type="button" class="mini" data-facet-act="values" ${counts.length ? '' : 'disabled'}>Rename or merge values</button>
+        <button type="button" class="mini" data-facet-act="delete">Delete</button>
+      </div>
+    </details>`;
+  }).join('') : '<p class="hint">A facet records something about every claim, such as the models or datasets behind it.</p>';
+  // Polls should leave a focused value or an open disclosure where it is.
+  if (facetsHTML !== html) {
+    $('facets').innerHTML = html;
+    facetsHTML = html;
+  }
+  const toFill = S.facet_papers_to_fill || 0;
+  $('btn-fill-facets').hidden = !toFill;
+  $('btn-fill-facets').textContent = `Fill in ${toFill} ${toFill === 1 ? 'paper' : 'papers'}`;
 }
 
 function renderTags() {
@@ -2484,6 +2570,8 @@ function claimCard(row, shown, group = '') {
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
   const tags = (row.tags || []).map((t) => `<span class="tag" data-tag="${esc(t)}">#${esc(t)}</span>`).join(' ');
+  const facetChips = claimFacetValues(row).map(([name, value]) => `<span class="facet-value"
+    data-facet="${esc(name)}" data-facet-value="${esc(value)}" title="Filter by ${esc(name)}: ${esc(value)}"><span class="facet-name">${esc(name)}</span> ${esc(value)}</span>`).join(' ');
   const links = (row.ledger_links || []).map((l) => {
     const own = S.ledger.find((c) => c.id === l.claim);
     return `<div class="link"><span class="rel">${esc(l.relation)}</span>
@@ -2495,6 +2583,7 @@ function claimCard(row, shown, group = '') {
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
+      ${facetChips}
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer"
         title="${esc(row.paper_title || row.paper)}">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
@@ -3060,6 +3149,10 @@ function editForm(row, tagListId = 'taglist') {
         <div><label>Topics (space separated)</label>
           <input name="tags" value="${esc((row.tags || []).join(' '))}" list="${esc(tagListId)}" size="34"></div>
       </div>
+      ${(S.facets || []).length ? `<div class="pair facet-fields">${S.facets.map((facet, i) => `
+        <div><label title="${esc(facet.description || '')}">${esc(facet.name)} (comma separated)</label>
+          <input data-facet-input="${esc(facet.name)}" value="${esc(((row.facets || {})[facet.name] || []).join(', '))}"
+            list="${esc(`${tagListId}-facet-${i}`)}" size="28"></div>`).join('')}</div>` : ''}
       <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
       <details class="evidence-assessment" ${row.conditions || row.limitations || row.evidence_origin || (row.evidence_relationship && row.evidence_relationship !== 'unassessed') ? 'open' : ''}><summary>Your evidence assessment</summary>
         <p class="hint">Your assessment is kept locally and preserved when the paper is re-read.</p>
@@ -3081,6 +3174,8 @@ function editForm(row, tagListId = 'taglist') {
       </div>
     </form>
     <datalist id="${esc(tagListId)}">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
+    ${(S.facets || []).map((facet, i) => `<datalist id="${esc(`${tagListId}-facet-${i}`)}">${Object.keys((S.facet_counts || {})[facet.name] || {})
+      .map((value) => `<option value="${esc(value)}">`).join('')}</datalist>`).join('')}
   </div>`;
 }
 
@@ -3873,6 +3968,20 @@ async function patchClaim(paper, claim, patch) {
   }
 }
 
+// The facet inputs, as the `facets` a claim stores: a facet with no values is
+// left out, as the store leaves it out. Nothing when no facet is defined, so
+// a form without the inputs does not clear values it never showed.
+function facetFields(form) {
+  const inputs = [...form.querySelectorAll('[data-facet-input]')];
+  if (!inputs.length) return {};
+  const facets = {};
+  for (const input of inputs) {
+    const values = input.value.split(',').map((v) => v.trim()).filter(Boolean);
+    if (values.length) facets[input.dataset.facetInput] = values;
+  }
+  return { facets };
+}
+
 function readForm(form) {
   const value = (name) => (form.querySelector(`[name="${name}"]`) || {}).value || '';
   const links = [...form.querySelectorAll('.linkrow')].map((rowEl) => ({
@@ -3890,6 +3999,7 @@ function readForm(form) {
     conditions: value('conditions').trim(), limitations: value('limitations').trim(),
     evidence_origin: value('evidence_origin').trim(), evidence_relationship: value('evidence_relationship') || 'unassessed',
     tags: value('tags').split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean),
+    ...facetFields(form),
     ledger_links: links,
     // `[name="note"]` is the claim's own; a link's is `link-note`, read above.
     note: value('note').trim(),
@@ -4466,6 +4576,7 @@ $('panes').addEventListener('click', async (event) => {
       if (row && !visibleClaims().some((c) => c.id === claim)) {
         if (V.paper && row.paper !== V.paper) V.paper = null;
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
+        if (!hasFacetFilter(row)) V.facet = null;
         keepLabelFor(row.paper);
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
@@ -4615,6 +4726,11 @@ $('panes').addEventListener('click', async (event) => {
   const labelEl = event.target.closest('[data-label]');
   if (labelEl && !labelEl.dataset.act) {
     chooseLabel(labelEl.dataset.label);
+    return;
+  }
+  const facetEl = event.target.closest('.facet-value[data-facet]');
+  if (facetEl) {
+    chooseFacet(facetEl.dataset.facet, facetEl.dataset.facetValue);
     return;
   }
   const card = event.target.closest('.claim[data-claim]');
@@ -5224,6 +5340,119 @@ $('labels').addEventListener('click', (event) => {
   chooseLabel(li.dataset.label);
 });
 
+// `toggle` does not bubble, so it is caught on the way down.
+$('facets').addEventListener('toggle', (event) => {
+  const details = event.target.closest?.('details[data-facet]');
+  if (!details) return;
+  if (details.open) openFacets.add(details.dataset.facet);
+  else openFacets.delete(details.dataset.facet);
+}, true);
+
+async function facetRequest(path, method, body, failure) {
+  try {
+    await api(path, { method, headers: { 'Content-Type': 'application/json' },
+                      body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch (error) {
+    toast(`${failure}: ${error.message}`, { tone: 'warn' });
+    return false;
+  }
+  await refresh();
+  return true;
+}
+
+$('facets').addEventListener('click', async (event) => {
+  const details = event.target.closest('details[data-facet]');
+  if (!details) return;
+  const name = details.dataset.facet;
+  const path = `/api/facets/${encodeURIComponent(name)}`;
+  const value = event.target.closest('[data-facet-value]');
+  if (value) {
+    chooseFacet(name, value.dataset.facetValue);
+    return;
+  }
+  const act = event.target.closest('[data-facet-act]')?.dataset.facetAct;
+  const facet = (S.facets || []).find((f) => f.name === name);
+  if (!act || !facet) return;
+  if (act === 'describe') {
+    const description = await askText(`What should “${name}” record?`, {
+      note: 'This goes into the prompt for every claim. Changing it marks the values on every paper to be filled in again.',
+      value: facet.description || '',
+    });
+    if (description === null || description.trim() === (facet.description || '')) return;
+    await facetRequest(path, 'PATCH', { description }, 'Could not save the description');
+  } else if (act === 'values') {
+    const values = Object.keys((S.facet_counts || {})[name] || {});
+    const chosen = await askDialog({
+      title: `Which ${name} values?`,
+      note: 'Click the values to rename, merge, or remove.',
+      input: { placeholder: 'values, separated by commas', value: '' },
+      labelChoices: values, ok: 'Next',
+    });
+    if (chosen === null) return;
+    const picked = parseLabels(chosen);
+    if (!picked.length) return;
+    const into = await askText(picked.length === 1 ? `Rename “${picked[0]}” to` : `Merge ${picked.length} values into`, {
+      note: 'Every claim carrying them gets this value instead, and later reads write it too. Leave it empty to remove them.',
+      placeholder: 'leave empty to remove',
+      value: picked.length === 1 ? picked[0] : '',
+    });
+    if (into === null) return;
+    if (!into.trim() && !await confirmDialog(`Remove ${picked.length === 1 ? `“${picked[0]}”` : `${picked.length} values`} from every claim?`, {
+      note: 'Later reads will leave them out too.', ok: 'Remove',
+    })) return;
+    if (await facetRequest(`${path}/values`, 'POST', { values: picked, into }, 'Could not change the values')) {
+      const filter = facetFilter();
+      if (filter && filter.name === name && picked.some((v) => facetValueKey(v) === facetValueKey(filter.value))) {
+        V.facet = into.trim() ? `${name}:${into.trim()}` : null;
+        syncHash();
+        renderAll();
+      }
+    }
+  } else if (act === 'delete') {
+    const counts = Object.values((S.facet_counts || {})[name] || {}).reduce((a, b) => a + b, 0);
+    if (!await confirmDialog(`Delete the facet “${name}”?`, {
+      note: counts ? `Its values come off ${counts} ${counts === 1 ? 'claim' : 'claims'}, including any you set by hand.` : '',
+      ok: 'Delete facet',
+    })) return;
+    await facetRequest(path, 'DELETE', undefined, 'Could not delete the facet');
+  }
+});
+
+$('btn-facet').addEventListener('click', async () => {
+  const name = await askText('New facet', {
+    note: 'A short name for what to record about each claim, such as model, dataset, or intervention.',
+    placeholder: 'model',
+  });
+  if (!name || !name.trim()) return;
+  const description = await askText(`What should “${name.trim()}” record?`, {
+    note: 'One line telling the model what to list for each claim. It goes into the extraction prompt.',
+    placeholder: 'The specific language models a result was measured on',
+  });
+  if (description === null) return;
+  await facetRequest('/api/facets', 'POST', { name, description }, 'Could not add the facet');
+});
+
+$('btn-fill-facets').addEventListener('click', async () => {
+  const n = S.facet_papers_to_fill || 0;
+  const go = await confirmDialog(`Fill in facets on ${n} ${n === 1 ? 'paper' : 'papers'}?`, {
+    note: 'Each paper’s claims, evidence, and quotes are sent to the model, one call per paper. '
+      + 'The PDFs are not sent. Values you set by hand are left alone.',
+    ok: 'Fill in',
+  });
+  if (!go) return;
+  const workspace = await settleDeletes();
+  if (!workspace) return;
+  try {
+    await api('/api/facets/fill', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
+    });
+  } catch (error) {
+    toast(`Could not fill in the facets: ${error.message}`, { tone: 'warn' });
+    return;
+  }
+  await refresh();
+});
+
 $('tags').addEventListener('click', (event) => {
   const li = event.target.closest('[data-tag]');
   if (!li) return;
@@ -5494,6 +5723,8 @@ function graphOption(field) {
   if (name === 'xAxis') {
     V.graph.xAxis = field.value;
     GRAPH.autofit = true;
+  } else if (name === 'color') {
+    V.graph.color = field.value;
   } else if (name === 'minShared') {
     V.graph.minShared = Math.max(1, parseInt(field.value, 10) || 1);
     const label = $('content').querySelector('[data-graph-min]');
@@ -5953,7 +6184,7 @@ async function updateFromPoll() {
   // not anything in the corpus has moved.
   if (citationsFailed && V.view === 'graph') loadCitations();
   renderStats();
-  renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
+  renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels(); renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   syncHash();

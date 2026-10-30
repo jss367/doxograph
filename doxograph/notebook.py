@@ -73,6 +73,8 @@ class SavedSearch(Model):
     paper: str | None = None
     tag: str | None = None
     label: str | None = None
+    # One facet value, as `name:value`.
+    facet: str | None = Field(default=None, max_length=500)
     kind: str = ""
     unreviewed: bool = False
     unverified: bool = False
@@ -302,7 +304,7 @@ def bulk(body: Bulk) -> dict:
 # Only editable fields are captured; uploads, credentials and analysis caches
 # have no place in the reader's history.
 def claim_fields(claim: dict) -> dict:
-    defaults = {"text": "", "kind": "finding", "strength": "supporting", "tags": [],
+    defaults = {"text": "", "kind": "finding", "strength": "supporting", "tags": [], "facets": {},
                 "evidence": "", "quote": "", "locator": "", "ledger_links": [],
                 "note": "", "reviewed": False, "conditions": "", "limitations": "",
                 "evidence_origin": "", "evidence_relationship": "unassessed"}

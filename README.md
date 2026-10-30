@@ -213,6 +213,11 @@ doxograph tags                        # topics and their use counts
 doxograph label                       # labels in use, and how many papers carry each
 doxograph label <key> open-source     # label one paper, replacing the labels it has
 doxograph label <key> "open source" "reading list"  # quote labels containing spaces
+doxograph facet                       # facets defined, and how many papers each has left to fill
+doxograph facet model "The language models a result was measured on"  # define a facet, or change what it asks
+doxograph facet model                 # a facet's values, and how many claims carry each
+doxograph facet model --remove        # delete a facet and its values
+doxograph fill-facets                 # fill in facets added or redescribed since papers were read
 doxograph export --out notes.html     # one self-contained HTML file
 doxograph bibtex --out refs.bib
 ```
@@ -706,6 +711,7 @@ locks/               lock files, so two processes do not write at once
 retired-keys.json    keys of removed papers, never issued again
 pending-topic-change.json  unfinished topic rename or deletion, when recovery is needed
 tags.yaml            the topic vocabulary
+facets.yaml          the facets you defined, and the value aliases from merges
 tensions.json        where papers disagree, and what you decided about each
 syntheses.json       what the papers hold on each topic
 ledger.yaml          your own claims, for linking against
@@ -804,6 +810,38 @@ Labels are searched along with everything else, so `huggingface` in the search
 box finds the papers carrying it and their claims. `doxograph label` reads and
 sets them from the shell. They live on the paper in `papers/<key>.json`,
 under `labels`.
+
+### Facets on claims
+
+A facet is a question you ask of every claim whose answer is a short list of
+names: which models a result was measured on, which datasets, which
+intervention. Facets are yours to define, and a workspace has none until you
+add one. **New facet** under **Facets** in the sidebar asks for a short name
+and one line saying what to record. That line goes into the extraction
+prompt, so every paper read afterwards comes back with values for it on each
+claim.
+
+Papers read before a facet existed, or before its description last changed,
+are counted under the facet as not yet filled in. **Fill in** sends their
+claims, evidence, and quotes to the model, one call per paper, without the
+PDFs. `doxograph fill-facets` does the same from the shell. Values you set by
+hand in a claim's editor are yours: neither the fill nor a re-read replaces
+them, and a re-read keeps the claim.
+
+Each value in the sidebar filters the claims and papers to those carrying it,
+and the map dims the papers without it. **Color by** above the map colors each
+paper by the value most of its claims carry, with a legend for the values on
+screen.
+
+Values are open, so a new model name needs no approval. Spellings that differ
+only in case or spacing are one value, written as most claims write it.
+**Rename or merge values** rewrites the values you pick on every claim, and
+remembers the old spellings, so a later read that writes `gpt-4-0613` records
+it as the `GPT-4` you merged it into. Leaving the new name empty removes the
+values and keeps later reads from writing them. Changing a facet's description
+marks its values on every paper as needing to be filled in again. Deleting a
+facet removes its values from every claim. Facets live in `facets.yaml`, and
+values on each claim in `papers/<key>.json` under `facets`.
 
 ### ledger.yaml
 

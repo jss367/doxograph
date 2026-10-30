@@ -129,8 +129,18 @@ function graphData() {
   const byPaper = new Map(mapClient.state.papers.map((p) => [p.key, p]));
   const tagCount = new Map();     // paper -> Map(tag -> claims with it)
   const tagPapers = new Map();    // tag -> Set(paper)
+  const facetCount = new Map();   // paper -> Map(`facet:value key` -> claims with it)
+  const colorBy = graphColorFacet();
   for (const c of mapClient.state.claims) {
     if (!byPaper.has(c.paper)) continue;
+    for (const [name, values] of Object.entries(c.facets || {})) {
+      for (const value of values) {
+        if (!facetCount.has(c.paper)) facetCount.set(c.paper, new Map());
+        const counts = facetCount.get(c.paper);
+        const key = `${name}:${facetValueKey(value)}`;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    }
     for (const t of c.tags || []) {
       if (!tagCount.has(c.paper)) tagCount.set(c.paper, new Map());
       const counts = tagCount.get(c.paper);
@@ -143,10 +153,13 @@ function graphData() {
   for (const p of mapClient.state.papers) {
     const counts = tagCount.get(p.key) || new Map();
     const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const facets = facetCount.get(p.key) || new Map();
     nodes.push({
       id: `p:${p.key}`, type: 'paper', key: p.key, label: p.title || p.key, cite: graphCite(p),
       n: p.n_claims || 0, topic: ranked.length ? ranked[0][0] : null, tags: new Set(counts.keys()),
-      labels: new Set((p.labels || []).map(labelKey)),
+      labels: new Set((p.labels || []).map(labelKey)), facets: new Set(facets.keys()),
+      // Colored by a facet, a paper takes the value most of its claims carry.
+      color: colorBy ? graphDominantValue(facets, colorBy) : null,
       year: Number.isInteger(p.year) && p.year > 0 ? p.year : null,
       r: 6 + 3 * Math.sqrt(p.n_claims || 0),
     });
@@ -257,7 +270,7 @@ function graphData() {
 // set of nodes or edges changed, which is what warrants reheating.
 function graphSync() {
   const { nodes, edges, maxShared, minShared } = graphData();
-  const signature = JSON.stringify([V.graph.xAxis, nodes.map((n) => [n.id, n.n, n.topic, n.year]),
+  const signature = JSON.stringify([V.graph.xAxis, nodes.map((n) => [n.id, n.n, n.topic, n.color, n.year]),
     edges.map((e) => [e.type, e.a, e.b, e.w, e.n, e.open, e.relation])]);
   const changed = signature !== GRAPH.signature;
   GRAPH.signature = signature;
@@ -370,6 +383,36 @@ function topicColor(topic, dark) {
   return dark ? `hsl(${hue} 50% 62%)` : `hsl(${hue} 55% 46%)`;
 }
 
+// The facet the map is colored by, or null for topics. A facet deleted while
+// it was chosen puts the map back on topics.
+function graphColorFacet() {
+  const name = V.graph.color;
+  return name && name !== 'topic' && (mapClient.state.facets || []).some((f) => f.name === name) ? name : null;
+}
+
+// The value of `facet` that most of a paper's claims carry, by its key; ties
+// go to the first in sort order so a paper does not flicker between two.
+function graphDominantValue(counts, facet) {
+  const prefix = `${facet}:`;
+  let best = null, most = 0;
+  for (const [key, n] of counts) {
+    if (!key.startsWith(prefix)) continue;
+    const value = key.slice(prefix.length);
+    if (n > most || (n === most && value < best)) { best = value; most = n; }
+  }
+  return best;
+}
+
+// The spelling the sidebar shows for each value key of `facet`, commonest first.
+function graphFacetValues(facet) {
+  return Object.entries((mapClient.state.facet_counts || {})[facet] || {})
+    .map(([value, n]) => ({ key: facetValueKey(value), value, n }));
+}
+
+function graphNodeColor(n, dark) {
+  return graphColorFacet() ? topicColor(n.color, dark) : topicColor(n.topic, dark);
+}
+
 function graphRelationColor(relation, colors) {
   if (relation === 'contradicts') return colors.conflict;
   if (relation === 'supports') return colors.ok;
@@ -450,8 +493,10 @@ function graphAutofit(w, h) {
 // the same way a topic does, in any case it is spelled; a claim node carries
 // neither and is left alone by both.
 function graphDimmed(n) {
+  const facet = facetFilter();
   return n.type === 'paper'
-    && ((V.tag && !n.tags.has(V.tag)) || (V.label && !(n.labels || new Set()).has(labelKey(V.label))));
+    && ((V.tag && !n.tags.has(V.tag)) || (V.label && !(n.labels || new Set()).has(labelKey(V.label)))
+      || Boolean(facet && !(n.facets || new Set()).has(`${facet.name}:${facetValueKey(facet.value)}`)));
 }
 
 function graphDraw() {
@@ -540,7 +585,7 @@ function graphDraw() {
     const faded = ((hover || hoverEdge) && n !== hover && !linked.has(n)) || dim(n);
     ctx.globalAlpha = faded ? 0.25 : 1;
     if (n.type === 'paper') {
-      ctx.fillStyle = topicColor(n.topic, colors.dark);
+      ctx.fillStyle = graphNodeColor(n, colors.dark);
       ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 2 * Math.PI); ctx.fill();
       if (n === hover || (V.paper === n.key && !faded)) {
         ctx.strokeStyle = colors.ink; ctx.lineWidth = 2; ctx.stroke();
@@ -810,7 +855,7 @@ function graphHeader() {
   return `<div class="paperhead">
     <h2>How the papers connect</h2>
     <p class="ps">Each circle is a paper, sized by how many claims it makes and colored by the
-      topic it speaks to most. Squares are your own claims. Drag a node to move it, scroll to
+      topic it speaks to most, or by a facet you choose. Squares are your own claims. Drag a node to move it, scroll to
       zoom, drag the background to pan, and click a paper to read it.
       Hover over a paper or connection to see who cites whom.</p>
     <p class="ps" data-graph-timeline-hint ${opts.xAxis === 'year' ? '' : 'hidden'}>Earlier papers are on the left, later papers on the right, using their publication year.
@@ -829,6 +874,10 @@ function graphHeader() {
         <option value="connections" ${opts.xAxis !== 'year' ? 'selected' : ''}>Connections</option>
         <option value="year" ${opts.xAxis === 'year' ? 'selected' : ''}>Publication year</option>
       </select></label>
+      <label>Color by <select aria-label="Color by" data-graph-opt="color">
+        <option value="topic">Topic</option>
+        ${(mapClient.state.facets || []).map((f) => `<option value="${esc(f.name)}" ${graphColorFacet() === f.name ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}
+      </select></label>
       <label><input type="checkbox" data-graph-opt="topics" ${opts.topics ? 'checked' : ''}> shared topics</label>
       <label title="Hide topic edges thinner than this">at least
         <input type="range" min="1" max="${Math.max(1, GRAPH.maxShared || 1)}" value="${GRAPH.minShared || 1}" data-graph-opt="minShared">
@@ -838,6 +887,7 @@ function graphHeader() {
       <label><input type="checkbox" data-graph-opt="ledger" ${opts.ledger ? 'checked' : ''}> my claims</label>
       <span class="hint" data-graph-count style="margin-left:auto"></span>
     </div>
+    <div class="graph-legend graph-colors" data-graph-colors hidden></div>
   </div>`;
 }
 
@@ -864,7 +914,10 @@ function graphStatus() {
   const papers = [...GRAPH.nodes.values()].filter((n) => n.type === 'paper').length;
   const bits = [`${papers} papers`, `${GRAPH.edges.length} links`];
   if (V.tag) bits.push(`highlighting #${V.tag}`);
+  const facet = facetFilter();
+  if (facet) bits.push(`highlighting ${facet.name}: ${facet.value}`);
   count.textContent = bits.join(' · ');
+  graphColorLegend();
   const range = $('content').querySelector('[data-graph-opt="minShared"]');
   if (range) {
     range.max = String(Math.max(1, GRAPH.maxShared || 1));
@@ -872,6 +925,34 @@ function graphStatus() {
   }
   const label = $('content').querySelector('[data-graph-min]');
   if (label) label.textContent = String(GRAPH.minShared || 1);
+}
+
+// What each color means when the map is colored by a facet: the values that
+// color at least one paper, commonest first. A hash gives each its hue, so
+// two values can come out alike; the legend is how to tell.
+const GRAPH_LEGEND_VALUES = 12;
+function graphColorLegend() {
+  const legend = $('content').querySelector('[data-graph-colors]');
+  if (!legend) return;
+  const facet = graphColorFacet();
+  const select = $('content').querySelector('[data-graph-opt="color"]');
+  if (select) {
+    const options = ['topic', ...(mapClient.state.facets || []).map((f) => f.name)];
+    if ([...select.options].map((o) => o.value).join('\n') !== options.join('\n')) {
+      select.innerHTML = options.map((name) => `<option value="${esc(name)}">${esc(name === 'topic' ? 'Topic' : name)}</option>`).join('');
+    }
+    select.value = facet || 'topic';
+  }
+  if (!facet) { legend.hidden = true; return; }
+  const shown = new Set([...GRAPH.nodes.values()].map((n) => n.color).filter(Boolean));
+  const values = graphFacetValues(facet).filter((v) => shown.has(v.key));
+  const dark = graphColors().dark;
+  const swatch = (color) => `<i style="background:${color}"></i>`;
+  legend.innerHTML = values.slice(0, GRAPH_LEGEND_VALUES).map((v) =>
+    `<span>${swatch(topicColor(v.key, dark))}${esc(v.value)}</span>`).join('')
+    + (values.length > GRAPH_LEGEND_VALUES ? `<span>and ${values.length - GRAPH_LEGEND_VALUES} more</span>` : '')
+    + `<span>${swatch(topicColor(null, dark))}no ${esc(facet)}</span>`;
+  legend.hidden = false;
 }
 
 // Drawn in two steps so the poll can update the map in place. The first call

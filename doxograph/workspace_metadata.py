@@ -40,6 +40,34 @@ class Vocabulary(Metadata):
         return self
 
 
+class FacetDefinition(Metadata):
+    name: str
+    description: str = ""
+    # A spelling's key, as `store.facet_value_key` makes it, mapped to the
+    # value it stands for. An empty value drops the spelling wherever it
+    # turns up, so a value removed by hand does not come back on the next
+    # read of a paper.
+    aliases: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def nonblank_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("facet names must not be blank")
+        return value
+
+
+class Facets(Metadata):
+    facets: list[FacetDefinition] | None = None
+
+    @model_validator(mode="after")
+    def unique_names(self) -> Self:
+        names = [facet.name for facet in self.facets or []]
+        if len(names) != len(set(names)):
+            raise ValueError("facet names must be unique")
+        return self
+
+
 class LedgerEntry(Metadata):
     id: str
     text: str = ""

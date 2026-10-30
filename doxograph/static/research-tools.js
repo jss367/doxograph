@@ -277,7 +277,7 @@ const ResearchTools = (() => {
     el('research-body').innerHTML = `<p class="hint">Saved searches remember your view and filters. New matching papers or claims appear automatically.</p>
       ${button('save-search','Save current library filters')}
       ${notebook.searches.map(s => `<article class="reading-entry" data-search="${html(s.id)}"><h3>${html(s.name)}</h3>
-        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${client.state.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || (s.view === 'library' ? 'All papers' : 'All claims'))}</p>
+        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.facet && s.facet.replace(':', ': '), s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${client.state.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || (s.view === 'library' ? 'All papers' : 'All claims'))}</p>
         ${button('apply-search','Open search')}${button('rename-search','Rename')}${button('delete-search','Delete')}</article>`).join('')}`;
   }
   async function queue(keys) {
@@ -1066,7 +1066,7 @@ const ResearchTools = (() => {
   function dropMarkDraft(paper) { if (markEditorOn(paper)) markEditor = null; }
   function goToPaper(paper, claim = null) {
     captureOpenEditor(); parkNewClaimForNavigation(paper);
-    V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null;
+    V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null;
     V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
     V.selectedId = claim;
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
@@ -1338,7 +1338,7 @@ const ResearchTools = (() => {
       const title = await promptDialog('Name this saved search', '', {ok:'Save search'});
       if (!title?.trim()) return;
       const search = {id:uid(),name:title.trim(),view:V.view === 'library' ? 'library' : 'claims'};
-      for (const field of ['q','paper','tag','label','kind','unreviewed','unverified','group']) search[field] = V[field];
+      for (const field of ['q','paper','tag','label','facet','kind','unreviewed','unverified','group']) search[field] = V[field];
       notebook.searches.push(search); await save(); tab = 'searches'; render(); return;
     }
     if (['apply-search','rename-search','delete-search'].includes(name)) {
@@ -1349,7 +1349,7 @@ const ResearchTools = (() => {
         const params = new URLSearchParams();
         params.set('view', search.view || 'claims');
         if (workspace !== 'default') params.set('ws',workspace);
-        for (const field of ['q','paper','tag','label','kind']) if (search[field]) params.set(field, search[field]);
+        for (const field of ['q','paper','tag','label','facet','kind']) if (search[field]) params.set(field, search[field]);
         if (search.unreviewed) params.set('unreviewed','1'); if (search.unverified) params.set('unverified','1');
         if (!search.group) params.set('group','0');
         history.pushState(null,'',`#${params}`); applyHash(); dropMissingFilters(); renderAll(); return;

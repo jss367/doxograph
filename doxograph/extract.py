@@ -167,6 +167,61 @@ RETAG_SCHEMA = {
 }
 
 
+def _facet_values_schema(facets: list[dict]) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            facet["name"]: {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": facet.get("description") or facet["name"],
+            }
+            for facet in facets
+        },
+        "required": [facet["name"] for facet in facets],
+        "additionalProperties": False,
+    }
+
+
+def extraction_schema(facets: list[dict]) -> dict:
+    """The extraction schema, with a `facets` object on each claim when the
+    workspace defines any. Without facets it is `EXTRACTION_SCHEMA` itself."""
+    if not facets:
+        return EXTRACTION_SCHEMA
+    claim = {
+        **CLAIM_SCHEMA,
+        "properties": {**CLAIM_SCHEMA["properties"], "facets": _facet_values_schema(facets)},
+        "required": [*CLAIM_SCHEMA["required"], "facets"],
+    }
+    return {
+        **EXTRACTION_SCHEMA,
+        "properties": {**EXTRACTION_SCHEMA["properties"], "claims": {"type": "array", "items": claim}},
+    }
+
+
+def facet_fill_schema(facets: list[dict]) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "assignments": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "facets": _facet_values_schema(facets)},
+                    "required": ["id", "facets"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["assignments"],
+        "additionalProperties": False,
+    }
+
+
+#: How many of a facet's values in use the prompt lists, commonest first.
+FACET_VALUES_SHOWN = 100
+
+
 def client() -> MessageClient | providers.TextClient:
     if config.ai_provider() == "codex":
         return codex_cli.Client()
@@ -258,6 +313,25 @@ def vocabulary_block(tags: list[dict] | None = None) -> str:
         )
     lines = [f"- {t['name']}: {t.get('description', '')}".rstrip() for t in tags]
     return "Tag vocabulary (prefer these):\n" + "\n".join(lines)
+
+
+def facets_block(facets: list[dict], known: dict[str, dict[str, str]]) -> str:
+    """The facets each claim is to be given values for, and the spellings the
+    corpus already uses for them. Empty when the workspace defines none."""
+    if not facets:
+        return ""
+    lines = [
+        "Facets to record on every claim, under `facets`. List each value that applies to "
+        "the claim, one name per entry, as specific as the paper is. Leave a list empty "
+        "when nothing applies. When a value is one already in use, write it as it is "
+        "written here."
+    ]
+    for facet in facets:
+        lines.append(f"- {facet['name']}: {facet.get('description', '')}".rstrip())
+        values = list(known.get(facet["name"], {}).values())[:FACET_VALUES_SHOWN]
+        if values:
+            lines.append(f"  In use: {'; '.join(values)}")
+    return "\n".join(lines)
 
 
 def ledger_block() -> str:
@@ -442,7 +516,8 @@ def paper_document(key: str, api) -> dict:
     return inline_pdf(key) if isinstance(api, claude_code.Client) else _pdf_block(key)
 
 
-def _instructions(paper: dict, tags: list[dict] | None = None) -> str:
+def _instructions(paper: dict, tags: list[dict] | None = None, facets: str = "") -> str:
+    facets = f"{facets}\n\n" if facets else ""
     return f"""\
 My research:
 
@@ -450,7 +525,7 @@ My research:
 
 {vocabulary_block(tags)}
 
-{ledger_block()}
+{facets}{ledger_block()}
 
 The attached PDF is:
 
@@ -496,15 +571,19 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         # would then be unable to tell it from a name the model invented.
         tags = store.load_tags()
         prompt_tags = {t["name"] for t in tags}
+        # The same for the facets: one read, so that the merge can tell a
+        # facet deleted or redescribed during the call from one the model saw.
+        facets = store.load_facets()
+        known = store.facet_spellings(store.claim_rows(), facets) if facets else {}
         api = client()
-        instructions = {"type": "text", "text": _instructions(paper, tags)}
+        instructions = {"type": "text", "text": _instructions(paper, tags, facets_block(facets, known))}
 
         def read(pdf_block: dict):
             return _create(api, 
                 model=config.model(),
                 max_tokens=16000,
                 system=SYSTEM,
-                schema=EXTRACTION_SCHEMA,
+                schema=extraction_schema(facets),
                 effort="high",
                 messages=[{"role": "user", "content": [pdf_block, instructions]}],
             )
@@ -522,20 +601,38 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
             response = read(_pdf_block(key, force_upload=True))
         payload = _answer(response, "extraction", key)
         return merge_extraction(key, payload, response, keep_reviewed=keep_reviewed,
-                                prompt_tags=prompt_tags, claims_before=claims_before)
+                                prompt_tags=prompt_tags, claims_before=claims_before,
+                                prompt_facets=facets, known_values=known)
 
 
 def merge_extraction(key: str, payload: dict, response: ModelResponse | None = None, keep_reviewed: bool = True,
                      prompt_tags: set[str] | None = None,
-                     claims_before: dict[str, str] | None = None) -> dict:
-    with store.vocab_lock(), store.paper_lock(key):
-        return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags, claims_before)
+                     claims_before: dict[str, str] | None = None,
+                     prompt_facets: list[dict] | None = None,
+                     known_values: dict[str, dict[str, str]] | None = None) -> dict:
+    with store.facets_lock(), store.vocab_lock(), store.paper_lock(key):
+        return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags, claims_before,
+                                 prompt_facets, known_values)
+
+
+def _unchanged_facets(shown: list[dict]) -> list[dict]:
+    """The facets the model was asked about that are still defined as they
+    were. One deleted or redescribed during the call was asked a question
+    that no longer stands, and its answer is dropped."""
+    current = {facet["name"]: store.facet_basis(facet) for facet in store.load_facets()}
+    return [facet for facet in shown if current.get(facet["name"]) == store.facet_basis(facet)]
 
 
 def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = None, keep_reviewed: bool = True,
                       prompt_tags: set[str] | None = None,
-                      claims_before: dict[str, str] | None = None) -> dict:
+                      claims_before: dict[str, str] | None = None,
+                      prompt_facets: list[dict] | None = None,
+                      known_values: dict[str, dict[str, str]] | None = None) -> dict:
     paper = store.load_paper(key)
+    # Aliases are read now rather than from the prompt's snapshot: a merge of
+    # two values made during the call should apply to this paper too.
+    current_facets = {facet["name"]: facet for facet in store.load_facets()}
+    facets = [current_facets[facet["name"]] for facet in _unchanged_facets(prompt_facets or [])]
     # Derive the id high-water mark from every claim, before the reviewed-only
     # filter below hides some of them. Deriving it from the kept subset would let
     # a discarded claim's id be issued to a new one, and an in-flight retag reply
@@ -557,6 +654,8 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
             if (keep_reviewed and c.get("reviewed")) or (c.get("note") or "").strip()
             or any((c.get(field) or "").strip() for field in ("conditions", "limitations", "evidence_origin"))
             or c.get("evidence_relationship", "unassessed") != "unassessed"
+            # Facet values a person corrected are kept for the same reason.
+            or c.get("facets_hand")
             or changed_during_the_call(c)]
     known = set(store.tag_names())
 
@@ -588,6 +687,8 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
             # prompt was built: the call is long and the file can change.
             ledger_links=store.clean_ledger_links(raw.get("ledger_links")),
         )
+        if facets:
+            claim["facets"] = store.clean_claim_facets(raw.get("facets"), facets, known_values)
         if not claim["text"]:
             continue
         # The prompt asks for a verbatim quote; this is where that is checked.
@@ -601,6 +702,9 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
     paper["claim_seq"] = working.get("claim_seq", paper.get("claim_seq", 0))
     paper["summary"] = (payload.get("summary") or paper.get("summary") or "").strip()
     paper["relevance"] = (payload.get("relevance") or paper.get("relevance") or "").strip()
+    if facets:
+        paper["facet_basis"] = {**(paper.get("facet_basis") or {}),
+                                **{facet["name"]: store.facet_basis(facet) for facet in facets}}
 
     used_tags = {t for claim in paper["claims"] for t in claim["tags"]}
     proposed = {}
@@ -708,6 +812,95 @@ def retag_paper(key: str) -> dict:
             claim["tags"] = sorted(
                 {store.slugify(t) for t in assignment.get("tags", []) if store.slugify(t) in known}
             )
+        store.save_paper(paper)
+    return paper
+
+
+FACET_SYSTEM = """\
+You record facts about research claims: for each claim, the values of each
+facet you are given, such as the models or datasets a result was measured on.
+
+Use what the claim, its evidence, and its quote say, and nothing you know about
+the paper from elsewhere. List each value that applies, one name per entry, as
+specific as the claim is. Leave a list empty when nothing applies or the claim
+does not say. When a value is one already in use, write it as it is written in
+the list of values in use."""
+
+
+@config.bind_model_access
+def fill_facets(key: str, force: bool = False) -> dict:
+    """Give a paper's claims values for the facets that are stale on it.
+
+    Used after adding a facet or changing its description. Cheap in the way
+    retag is cheap: it sends claim text, evidence and quotes rather than the
+    PDF. `force` asks about every facet whether or not it is stale. A facet a
+    person has set on a claim is left alone there.
+    """
+    config.require_ai_enabled()
+    paper = store.load_paper(key)
+    facets = store.load_facets()
+    stale = set(store.stale_facets(paper, facets))
+    wanted = [facet for facet in facets if force or facet["name"] in stale]
+    claims = paper.get("claims", [])
+    if not wanted or not claims:
+        return paper
+    known = store.facet_spellings(store.claim_rows(), wanted)
+    listing = "\n".join(
+        f"- {c['id']}: {c.get('text', '')}"
+        + (f"\n  evidence: {c['evidence']}" if c.get("evidence") else "")
+        + (f"\n  quote: {c['quote']}" if c.get("quote") else "")
+        for c in claims
+    )
+
+    def state_of(claim: dict) -> str:
+        # What the answer was drawn from, and the values it would replace.
+        return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("quote", ""),
+                           claim.get("facets") or {}, claim.get("facets_hand") or []], sort_keys=True)
+
+    claims_before = {c["id"]: state_of(c) for c in claims}
+    api = client()
+    response = _create(api,
+        model=config.model(),
+        max_tokens=8000,
+        system=FACET_SYSTEM,
+        schema=facet_fill_schema(wanted),
+        effort="medium",
+        messages=[{
+            "role": "user",
+            "content": (
+                f"{facets_block(wanted, known)}\n\n"
+                f"Claims from \"{paper.get('title') or key}\":\n{listing}\n\n"
+                "Return the facet values for each claim id."
+            ),
+        }],
+    )
+    payload = _answer(response, "facet pass", key)
+    by_id = {a["id"]: a for a in payload.get("assignments", []) if isinstance(a, dict) and "id" in a}
+
+    # As retag: reload under the locks, and apply only to claims nobody
+    # touched while the model was thinking.
+    with store.facets_lock(), store.paper_lock(key):
+        current = {facet["name"]: facet for facet in store.load_facets()}
+        usable = [current[facet["name"]] for facet in _unchanged_facets(wanted)]
+        paper = store.load_paper(key)
+        for claim in paper.get("claims", []):
+            assignment = by_id.get(claim["id"])
+            if not assignment or state_of(claim) != claims_before.get(claim["id"]):
+                continue
+            answered = store.clean_claim_facets(assignment.get("facets"), usable, known)
+            values = dict(claim.get("facets") or {})
+            for facet in usable:
+                name = facet["name"]
+                if name in (claim.get("facets_hand") or []):
+                    continue
+                if answered.get(name):
+                    values[name] = answered[name]
+                else:
+                    values.pop(name, None)
+            claim["facets"] = values
+        if usable:
+            paper["facet_basis"] = {**(paper.get("facet_basis") or {}),
+                                    **{facet["name"]: store.facet_basis(facet) for facet in usable}}
         store.save_paper(paper)
     return paper
 
