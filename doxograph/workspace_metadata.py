@@ -1,5 +1,6 @@
 """Contracts for hand-edited workspace metadata and retired paper identities."""
 
+import re
 from typing import Self
 
 from pydantic import ConfigDict, Field, JsonValue, RootModel, field_validator, model_validator
@@ -51,9 +52,14 @@ class FacetDefinition(Metadata):
 
     @field_validator("name")
     @classmethod
-    def nonblank_name(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("facet names must not be blank")
+    def slug_name(cls, value: str) -> str:
+        # The form `store.slugify` gives a name. The page writes a facet
+        # filter as `name:value` and splits it at the first colon, so a name
+        # written by hand with a colon, a space, or a capital would filter on
+        # some other name.
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+            raise ValueError("facet names must be lowercase letters and digits joined by hyphens, "
+                             "such as model or training-method")
         return value
 
 

@@ -740,3 +740,22 @@ def test_restoring_one_facet_keeps_the_others_filled(api, monkeypatch, corpus):
     model, dataset = store.load_facets()
     assert not store.claim_needs_facet(claim, model)
     assert store.claim_needs_facet(claim, dataset)
+
+
+@pytest.mark.parametrize("name", ["model:size", "Model", "model size", "-model", ""])
+def test_a_hand_edited_facet_name_must_be_a_slug(api, name):
+    from doxograph import storage
+
+    config.facets_path().write_text(yaml.safe_dump({"facets": [{"name": name, "description": "x"}]}))
+    with pytest.raises(storage.StorageReadError):
+        store.load_facets()
+    state = api.get("/api/state").json()
+    assert state["facets"] == []
+    assert any(issue["path"] == str(config.facets_path()) for issue in state["storage_issues"])
+
+
+def test_slugged_names_are_valid_facet_names():
+    for name in ["model", "training-method", "gpt4", "a-b-c"]:
+        assert store.slugify(name) == name
+    store.add_facet("Training Method: Kind")
+    assert store.load_facets()[0]["name"] == "training-method-kind"

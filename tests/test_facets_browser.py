@@ -202,3 +202,41 @@ def test_the_facet_filter_follows_the_open_paper(engine):
                 assert errors == []
 
     run_browser(scenario())
+
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_choosing_a_facet_away_from_a_paper_keeps_its_note_draft(engine):
+    config.set_ai_enabled(False)
+    _paper("one", "Steering study", "steering")
+    _paper("two", "Probing study", "probing")
+    store.add_tag("steering")
+    store.add_tag("probing")
+    store.add_facet("model", "models")
+    store.update_claim("two", "two-c1", {"facets": {"model": ["Llama"]}})
+    paper = store.load_paper("one")
+    paper["notes"] = "An earlier note."
+    store.save_paper(paper)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1280, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(f"{url}/#view=claims&paper=one")
+                await page.locator('[data-act="edit-note"]').first.click()
+                note = page.locator('textarea[data-note="one"]')
+                await note.fill("A draft about the steering study.")
+                await page.locator("#facets details[data-facet='model'] summary").click()
+                await page.locator("#facets details[data-facet='model'] [data-facet-value='Llama']").click()
+                await expect(page.locator(".claim[data-claim='two-c1']")).to_be_visible()
+                await expect(page.locator(".claim[data-claim='one-c1']")).to_have_count(0)
+                await expect(note).to_have_count(0)
+                assert "paper=" not in page.url
+                assert await page.evaluate("V.noteDrafts.one") == "A draft about the steering study."
+                assert await page.evaluate("V.noteEditing") is None
+                assert errors == []
+
+    run_browser(scenario())
