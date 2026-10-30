@@ -9,14 +9,15 @@ import logging
 import os
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 from pydantic import BaseModel, Field
 
 from . import (__version__, activity, analysis_api, backups, bib, chat_api, chats, codex_cli, config, export,
@@ -38,7 +39,7 @@ STATIC = Path(__file__).parent / "static"
 fingerprint.snapshot()
 
 @contextlib.asynccontextmanager
-async def _lifespan(_: FastAPI):
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Read the dependencies once more, now that the server is fully loaded.
 
     `import uvicorn` is not the end of Uvicorn's importing: `uvicorn.run` builds
@@ -73,22 +74,22 @@ app.mount("/vendor", StaticFiles(directory=STATIC / "vendor"), name="reader-asse
 
 
 @app.exception_handler(store.StorageRecoveryError)
-async def storage_recovery_error(request: Request, exc: store.StorageRecoveryError):
+async def storage_recovery_error(request: Request, exc: store.StorageRecoveryError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=503)
 
 
 @app.exception_handler(store.PaperReadError)
-async def paper_read_error(request: Request, exc: store.PaperReadError):
+async def paper_read_error(request: Request, exc: store.PaperReadError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=500)
 
 
 @app.exception_handler(store.TopicConflictError)
-async def topic_conflict_error(request: Request, exc: store.TopicConflictError):
+async def topic_conflict_error(request: Request, exc: store.TopicConflictError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
 @app.exception_handler(storage.StorageReadError)
-async def storage_read_error(request: Request, exc: storage.StorageReadError):
+async def storage_read_error(request: Request, exc: storage.StorageReadError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=503)
 
 
@@ -107,10 +108,10 @@ class SelectWorkspace:
     as a query parameter instead.
     """
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         # These routes either do not read a corpus or are themselves how the
@@ -230,7 +231,7 @@ def favicon() -> FileResponse:
 
 
 @app.get("/api/health")
-def health() -> dict:
+def health() -> dict[str, Any]:
     """Say the server is up, and whether it is in the middle of something.
 
     The macOS launcher polls this while it waits for uvicorn to bind and asks
@@ -278,7 +279,7 @@ def health() -> dict:
 
 
 @app.get("/api/code")
-def code() -> dict:
+def code() -> dict[str, Any]:
     """Whether this server is still running the code that is on disk.
 
     `/api/health` reports a release number, and a release number is coarser than
@@ -325,7 +326,7 @@ def code() -> dict:
 #: was built from. The page polls twice a second and the corpus changes far
 #: less often than that; the signature is a directory listing, the answer is
 #: every paper file read and joined.
-_state_cache: dict[str, tuple[str, dict]] = {}
+_state_cache: dict[str, tuple[str, dict[str, Any]]] = {}
 _state_cache_lock = threading.Lock()
 
 
@@ -339,18 +340,18 @@ def _state_section[T](read: Callable[[], T], fallback: T,
         return fallback
 
 
-def _build_state() -> dict:
+def _build_state() -> dict[str, Any]:
     issues: list[records.StorageIssue] = []
     papers = store.all_papers(issues=issues)
     rows = store.claim_rows(papers)
     saved_notebook = _state_section(notebook.load, notebook.Notebook().model_dump(), issues)
-    tensions = _state_section(lambda: store.tension_rows(rows), [], issues)
-    agreements = _state_section(lambda: store.agreement_rows(rows), [], issues)
-    syntheses = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
-    tags = _state_section(store.load_tags, [], issues)
-    ledger = _state_section(store.load_ledger, [], issues)
+    tensions: list[dict[str, Any]] = _state_section(lambda: store.tension_rows(rows), [], issues)
+    agreements: list[dict[str, Any]] = _state_section(lambda: store.agreement_rows(rows), [], issues)
+    syntheses: list[dict[str, Any]] = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
+    tags: list[dict[str, Any]] = _state_section(store.load_tags, [], issues)
+    ledger: list[dict[str, Any]] = _state_section(store.load_ledger, [], issues)
     context = _state_section(store.load_context, "", issues)
-    _state_section(store.retired_keys, set(), issues)
+    _state_section(store.retired_keys, set[str](), issues)
     if any(issue["path"] == str(store.tensions_path()) for issue in issues):
         # Their text is still useful, but freshness cannot be established while
         # the judgments that contributed to it are unavailable.
@@ -407,6 +408,8 @@ def state(request: Request) -> Response:
     settings_signature = hashlib.sha256(json.dumps(
         {**config.analysis_settings(), "codex_model": config.codex_model()}, sort_keys=True).encode()).hexdigest()
     workspace_record = config.get_workspace()
+    # SelectWorkspace has already refused a request for an unknown workspace.
+    assert workspace_record is not None
     name_signature = hashlib.sha1(workspace_record["name"].encode()).hexdigest()
     signature = f"{store.corpus_signature()}-{settings_signature}-{int(ai_enabled)}-{config.ai_provider()}-{name_signature}"
     with _state_cache_lock:
@@ -434,7 +437,7 @@ def state(request: Request) -> Response:
 
 
 @app.put("/api/settings")
-def update_settings(body: SettingsBody) -> dict:
+def update_settings(body: SettingsBody) -> dict[str, Any]:
     if body.codex_model is not None:
         try:
             config.save_codex_model(body.codex_model)
@@ -463,7 +466,7 @@ def update_settings(body: SettingsBody) -> dict:
 
 
 @app.get("/api/settings/codex/models")
-def codex_models() -> dict:
+def codex_models() -> dict[str, Any]:
     try:
         return {"models": codex_cli.models()}
     except (ModelSetupError, RuntimeError) as exc:
@@ -471,13 +474,13 @@ def codex_models() -> dict:
 
 
 @app.put("/api/settings/provider")
-def update_provider(body: ProviderBody) -> dict:
+def update_provider(body: ProviderBody) -> dict[str, Any]:
     config.set_ai_provider(body.ai_provider)
     return {"ai_provider": config.ai_provider()}
 
 
 @app.get("/api/workspaces")
-def workspaces() -> dict:
+def workspaces() -> dict[str, Any]:
     try:
         return {"workspaces": config.list_workspaces()}
     except ValueError as exc:
@@ -485,7 +488,7 @@ def workspaces() -> dict:
 
 
 @app.post("/api/workspaces", status_code=201)
-def create_workspace(body: WorkspaceBody) -> dict:
+def create_workspace(body: WorkspaceBody) -> dict[str, Any]:
     try:
         workspace = config.create_workspace(body.name)
     except ValueError as exc:
@@ -494,7 +497,7 @@ def create_workspace(body: WorkspaceBody) -> dict:
 
 
 @app.patch("/api/workspaces/{workspace_id}")
-def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict:
+def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict[str, Any]:
     try:
         workspace = config.rename_workspace(workspace_id, body.name)
     except KeyError:
@@ -505,7 +508,7 @@ def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict:
 
 
 @app.delete("/api/workspaces/{workspace_id}")
-def delete_workspace(workspace_id: str) -> dict:
+def delete_workspace(workspace_id: str) -> dict[str, Any]:
     if workspace_id == config.DEFAULT_WORKSPACE_ID:
         raise HTTPException(422, "The default workspace cannot be deleted")
     identity = activity._workspace_identity(workspace_id)
@@ -548,7 +551,7 @@ def delete_workspace(workspace_id: str) -> dict:
 
 
 @app.post("/api/export")
-def api_export(body: ExportBody) -> dict:
+def api_export(body: ExportBody) -> dict[str, Any]:
     path = export.write(title=body.title)
     return {"path": str(path)}
 

@@ -1085,9 +1085,10 @@ node --test tests/frontend/*.test.cjs
 
 CI runs these checks, JavaScript syntax checks, and macOS Swift type checking
 and quit/relaunch tests. Strict type checking covers the shared storage reader,
-saved research models, model request/response contracts, and all API, local,
-and subscription provider adapters. The remaining application modules can be
-added as their dictionary-based interfaces are narrowed.
+the corpus store, saved research models, model request/response contracts, all
+API, local, and subscription provider adapters, and the web server with its
+routers and job queue. The remaining application modules can be added as their
+dictionary-based interfaces are narrowed.
 
 `analysis_types.py` defines the common request and response contracts. Provider
 responses are normalized into immutable text and usage records, then validated

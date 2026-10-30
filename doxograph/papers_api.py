@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 import anthropic
 import httpx
@@ -97,7 +97,7 @@ class ClaimPatch(BaseModel):
             return None
         return sorted({store.slugify(t) for t in value if store.slugify(t)})
 
-    def fields(self) -> dict:
+    def fields(self) -> dict[str, Any]:
         """The fields the caller sent, as plain values the store writes.
 
         A null is treated as not sent. No claim field is cleared by null (an
@@ -154,7 +154,7 @@ def _settled(key: str | None, do_extract: bool) -> str | None:
 
 
 @router.post("/api/ingest")
-def api_ingest(body: IngestBody) -> dict:
+def api_ingest(body: IngestBody) -> dict[str, Any]:
     """Queue what has to be fetched, and say outright what is already here."""
     refs, unknown = ingest.parse_refs(body.text)
     do_extract = body.extract and config.ai_enabled()
@@ -171,7 +171,7 @@ def api_ingest(body: IngestBody) -> dict:
 
 
 @router.post("/api/upload")
-async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
+async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict[str, Any]:
     """Stage every upload on disk, then hand the worker its path.
 
     Reading each file into memory kept the whole batch resident: three workers
@@ -214,7 +214,7 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict:
 
 
 @router.get("/api/papers/{key}")
-def get_paper(key: str) -> dict:
+def get_paper(key: str) -> dict[str, Any]:
     try:
         return store.load_paper(key)
     except KeyError:
@@ -222,7 +222,7 @@ def get_paper(key: str) -> dict:
 
 
 @router.patch("/api/papers/{key}")
-def patch_paper(key: str, patch: PaperPatch) -> dict:
+def patch_paper(key: str, patch: PaperPatch) -> dict[str, Any]:
     # Only the fields the caller sent: an unset field is not a field set to
     # None, and writing the whole model would blank everything left out.
     fields = patch.model_dump(exclude_unset=True)
@@ -237,7 +237,7 @@ def patch_paper(key: str, patch: PaperPatch) -> dict:
 
 
 @router.delete("/api/papers/{key}")
-def remove_paper(key: str) -> dict:
+def remove_paper(key: str) -> dict[str, Any]:
     # A key with nothing on disk has nothing to remove, and retiring it would
     # still spend the citekey for good: a stale or mistyped request must not.
     if not key.strip() or not any(path.exists() for path in
@@ -256,7 +256,7 @@ def remove_paper(key: str) -> dict:
 
 
 @router.post("/api/papers/{key}/extract")
-def reextract(key: str, keep_reviewed: bool = True) -> dict:
+def reextract(key: str, keep_reviewed: bool = True) -> dict[str, Any]:
     job_queue._require_analysis()
     if not store.paper_path(key).exists():
         raise HTTPException(404, f"no paper {key}")
@@ -266,7 +266,7 @@ def reextract(key: str, keep_reviewed: bool = True) -> dict:
 
 
 @router.post("/api/papers/{key}/review")
-def review_paper_claims(key: str, body: ReviewBody) -> dict:
+def review_paper_claims(key: str, body: ReviewBody) -> dict[str, Any]:
     """Mark a paper's claims reviewed in one write.
 
     Reviewing is the app's main work, and a paper arrives with a dozen claims
@@ -281,7 +281,7 @@ def review_paper_claims(key: str, body: ReviewBody) -> dict:
 
 
 @router.post("/api/papers/{key}/verify")
-def verify_quotes(key: str) -> dict:
+def verify_quotes(key: str) -> dict[str, Any]:
     """Re-check every quote on a paper against its PDF. Fast enough to run
     inline: the PDF text is read once and cached."""
     try:
@@ -292,7 +292,7 @@ def verify_quotes(key: str) -> dict:
 
 
 @router.get("/api/citations")
-def citations() -> dict:
+def citations() -> dict[str, Any]:
     """Which papers in the corpus cite which, from their reference lists.
 
     Read off the PDFs already on disk. The map asks for this when it opens
@@ -303,7 +303,7 @@ def citations() -> dict:
 
 
 @router.get("/api/search")
-def search_text(q: str = "", limit: int = 20, offset: int = 0) -> dict:
+def search_text(q: str = "", limit: int = 20, offset: int = 0) -> dict[str, Any]:
     """The papers whose own text holds every word of the query.
 
     The claims are searched in the page, which needs no server at all. This is
@@ -331,7 +331,7 @@ def search_text(q: str = "", limit: int = 20, offset: int = 0) -> dict:
 
 
 @router.get("/api/papers/{key}/claims/{claim_id}/similar")
-def similar_claims(key: str, claim_id: str, limit: int = 5) -> dict:
+def similar_claims(key: str, claim_id: str, limit: int = 5) -> dict[str, Any]:
     """Claims from other papers that resemble this one, by their words.
 
     No model: it compares the claims already on disk. A suggestion for reading,
@@ -359,7 +359,7 @@ def similar_claims(key: str, claim_id: str, limit: int = 5) -> dict:
 
 
 @router.get("/api/papers/{key}/claims/{claim_id}/quote-context")
-def quote_context(key: str, claim_id: str) -> dict:
+def quote_context(key: str, claim_id: str) -> dict[str, Any]:
     """The passage of the PDF a claim's quote was matched against."""
     if not store.paper_path(key).exists():
         raise HTTPException(404, f"no paper {key}")
@@ -370,7 +370,7 @@ def quote_context(key: str, claim_id: str) -> dict:
 
 
 @router.post("/api/papers/{key}/claims")
-def create_claim(key: str, patch: ClaimPatch | None = None) -> dict:
+def create_claim(key: str, patch: ClaimPatch | None = None) -> dict[str, Any]:
     try:
         return store.add_claim(key, (patch or ClaimPatch()).fields())
     except KeyError:
@@ -378,7 +378,7 @@ def create_claim(key: str, patch: ClaimPatch | None = None) -> dict:
 
 
 @router.patch("/api/papers/{key}/claims/{claim_id}")
-def patch_claim(key: str, claim_id: str, patch: ClaimPatch) -> dict:
+def patch_claim(key: str, claim_id: str, patch: ClaimPatch) -> dict[str, Any]:
     try:
         return store.update_claim(key, claim_id, patch.fields())
     except KeyError:
@@ -386,7 +386,7 @@ def patch_claim(key: str, claim_id: str, patch: ClaimPatch) -> dict:
 
 
 @router.delete("/api/papers/{key}/claims/{claim_id}")
-def remove_claim(key: str, claim_id: str) -> dict:
+def remove_claim(key: str, claim_id: str) -> dict[str, Any]:
     try:
         store.delete_claim(key, claim_id)
     except KeyError:
@@ -395,7 +395,7 @@ def remove_claim(key: str, claim_id: str) -> dict:
 
 
 @router.post("/api/papers/{key}/proposed-tags")
-def resolve_proposed_tags(key: str, body: ProposedTagsBody) -> dict:
+def resolve_proposed_tags(key: str, body: ProposedTagsBody) -> dict[str, Any]:
     """Accept proposed topics into the vocabulary, or discard them.
 
     Discarding only clears the proposal — a discarded name must not end up in

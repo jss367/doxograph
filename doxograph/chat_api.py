@@ -5,15 +5,16 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import logging
-from typing import Literal
+from collections.abc import Iterator
+from typing import Any, Literal
 
 import anthropic
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from . import agent, chat, config, fingerprint, job_queue, providers
-from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
+from . import agent, chat, config, fingerprint, job_queue
+from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError, ProviderResponseError
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class ChatBody(BaseModel):
 
     @field_validator("messages")
     @classmethod
-    def conversation(cls, messages):
+    def conversation(cls, messages: list[ChatMessage]) -> list[ChatMessage]:
         if any(m.role != ("user" if i % 2 == 0 else "assistant") or not m.content.strip()
                for i, m in enumerate(messages)) or messages[-1].role != "user":
             raise ValueError("Send alternating user and assistant messages, ending with a question.")
@@ -42,11 +43,11 @@ class ChatBody(BaseModel):
 
 
 @contextlib.contextmanager
-def _chat_errors(label: str):
+def _chat_errors(label: str) -> Iterator[None]:
     """Map the failures of a model-backed chat to the response the page shows."""
     try:
         yield
-    except providers.ProviderResponseError as exc:
+    except ProviderResponseError as exc:
         logger.exception(f"{label} received an invalid provider response")
         raise HTTPException(502, str(exc)[:500]) from exc
     except InputTooLargeError as exc:
@@ -78,12 +79,12 @@ def _chat_errors(label: str):
         raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.") from exc
 
 
-def _chat_agent(agent: str | None):
+def _chat_agent(agent: str | None) -> contextlib.AbstractContextManager[None]:
     return config.use_ai_provider(agent) if agent else contextlib.nullcontext()
 
 
 @router.post("/api/papers/{key}/chat")
-def paper_chat(key: str, body: ChatBody) -> dict:
+def paper_chat(key: str, body: ChatBody) -> dict[str, Any]:
     job_queue._require_analysis()
     with _chat_errors("Paper chat"), _chat_agent(body.agent):
         try:
@@ -110,7 +111,7 @@ def _callback_url(request: Request) -> str:
     bind answers. A server bound to one non-loopback address answers on neither, so the check
     fails with setup guidance rather than handing the agent a URL it cannot reach.
     """
-    host, port = (request.scope.get("server") or (None, 8765))[:2]
+    host, port = (request.scope.get("server") or ("", 8765))[:2]
     try:
         loopback = ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -129,7 +130,7 @@ class AgentBody(ChatBody):
 
 
 @router.post("/api/agent/chat")
-def agent_chat(body: AgentBody, request: Request) -> dict:
+def agent_chat(body: AgentBody, request: Request) -> dict[str, Any]:
     job_queue._require_analysis()
     with _chat_errors("Library agent"), _chat_agent(body.agent):
         return agent.answer([message.model_dump() for message in body.messages],

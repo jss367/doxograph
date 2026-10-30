@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -67,7 +69,7 @@ class ContextBody(BaseModel):
 
 
 @router.post("/api/retag")
-def retag(body: RetagBody) -> dict:
+def retag(body: RetagBody) -> dict[str, Any]:
     job_queue._require_analysis()
     keys = body.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
     if not keys:
@@ -78,12 +80,12 @@ def retag(body: RetagBody) -> dict:
 
 
 @router.post("/api/tags")
-def create_tag(body: TagBody) -> dict:
+def create_tag(body: TagBody) -> dict[str, Any]:
     return {"tags": store.add_tag(body.name, body.description)}
 
 
 @router.patch("/api/tags/{name}")
-def patch_tag(name: str, body: RenameBody) -> dict:
+def patch_tag(name: str, body: RenameBody) -> dict[str, Any]:
     try:
         store.rename_tag(name, body.name)
     except storage.StorageReadError:
@@ -96,13 +98,13 @@ def patch_tag(name: str, body: RenameBody) -> dict:
 
 
 @router.delete("/api/tags/{name}")
-def remove_tag(name: str) -> dict:
+def remove_tag(name: str) -> dict[str, Any]:
     store.delete_tag(name)
     return {"tags": store.load_tags()}
 
 
 @router.post("/api/tensions")
-def find_tensions(body: TensionsBody) -> dict:
+def find_tensions(body: TensionsBody) -> dict[str, Any]:
     """Queue a pass over every topic where two papers could disagree.
 
     Topics named in the body are deduplicated and kept only where a tension is
@@ -120,7 +122,7 @@ def find_tensions(body: TensionsBody) -> dict:
 
 
 @router.patch("/api/tensions/{tension_id}")
-def patch_tension(tension_id: str, body: TensionStatusBody) -> dict:
+def patch_tension(tension_id: str, body: TensionStatusBody) -> dict[str, Any]:
     try:
         return store.set_tension_status(tension_id, body.status)
     except storage.StorageReadError:
@@ -132,7 +134,7 @@ def patch_tension(tension_id: str, body: TensionStatusBody) -> dict:
 
 
 @router.delete("/api/tensions/{tension_id}")
-def remove_tension(tension_id: str) -> dict:
+def remove_tension(tension_id: str) -> dict[str, Any]:
     try:
         store.delete_tension(tension_id)
     except KeyError:
@@ -141,7 +143,7 @@ def remove_tension(tension_id: str) -> dict:
 
 
 @router.post("/api/agreements")
-def find_agreements(body: AgreementsBody) -> dict:
+def find_agreements(body: AgreementsBody) -> dict[str, Any]:
     """Queue a pass over every topic where two papers could agree: the same
     topics a tension is possible in."""
     job_queue._require_analysis()
@@ -155,7 +157,7 @@ def find_agreements(body: AgreementsBody) -> dict:
 
 
 @router.patch("/api/agreements/{agreement_id}")
-def patch_agreement(agreement_id: str, body: AgreementStatusBody) -> dict:
+def patch_agreement(agreement_id: str, body: AgreementStatusBody) -> dict[str, Any]:
     try:
         return store.set_agreement_status(agreement_id, body.status)
     except storage.StorageReadError:
@@ -167,7 +169,7 @@ def patch_agreement(agreement_id: str, body: AgreementStatusBody) -> dict:
 
 
 @router.delete("/api/agreements/{agreement_id}")
-def remove_agreement(agreement_id: str) -> dict:
+def remove_agreement(agreement_id: str) -> dict[str, Any]:
     try:
         store.delete_agreement(agreement_id)
     except KeyError:
@@ -176,7 +178,7 @@ def remove_agreement(agreement_id: str) -> dict:
 
 
 @router.post("/api/syntheses")
-def synthesize(body: SynthesesBody) -> dict:
+def synthesize(body: SynthesesBody) -> dict[str, Any]:
     """Queue a synthesis for each topic.
 
     Named topics are deduplicated and kept only where they have a claim; with
@@ -197,7 +199,7 @@ def synthesize(body: SynthesesBody) -> dict:
 
 
 @router.patch("/api/syntheses/{topic}")
-def patch_synthesis(topic: str, body: SynthesisTextBody) -> dict:
+def patch_synthesis(topic: str, body: SynthesisTextBody) -> dict[str, Any]:
     try:
         return store.set_synthesis_text(topic, body.text)
     except storage.StorageReadError:
@@ -209,7 +211,7 @@ def patch_synthesis(topic: str, body: SynthesisTextBody) -> dict:
 
 
 @router.delete("/api/syntheses/{topic}")
-def remove_synthesis(topic: str) -> dict:
+def remove_synthesis(topic: str) -> dict[str, Any]:
     try:
         store.delete_synthesis(topic)
     except KeyError:
@@ -218,7 +220,7 @@ def remove_synthesis(topic: str) -> dict:
 
 
 @router.put("/api/ledger")
-def put_ledger(body: LedgerBody) -> dict:
+def put_ledger(body: LedgerBody) -> dict[str, Any]:
     """Replace the ledger: the user's own claims, which extraction links to.
 
     Ids must be present and unique, since a link names a claim by id alone.
@@ -240,7 +242,7 @@ def put_ledger(body: LedgerBody) -> dict:
 
 
 @router.put("/api/context")
-def put_context(body: ContextBody) -> dict:
+def put_context(body: ContextBody) -> dict[str, Any]:
     """Replace the research context given to every model pass."""
     store.save_context(body.text)
     return {"context": store.load_context()}

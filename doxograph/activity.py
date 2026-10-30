@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import threading
+from collections.abc import Iterator
 
 from fastapi import HTTPException
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import config, origins
 
@@ -21,7 +23,7 @@ def _workspace_identity(value: str) -> tuple[str, str]:
 
 
 @contextlib.contextmanager
-def _using_workspace(value: str):
+def _using_workspace(value: str) -> Iterator[None]:
     """Keep deletion out of requests and the entire lifetime of worker calls."""
     identity = _workspace_identity(value)
     with contextlib.ExitStack() as leases:
@@ -94,10 +96,10 @@ class CountArrivingRequests:
     stream to do the counting.
     """
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method", "GET") in origins.SAFE_METHODS:
             return await self.app(scope, receive, send)
         global _requests_arriving

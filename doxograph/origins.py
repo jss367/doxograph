@@ -7,6 +7,7 @@ import os
 from urllib.parse import urlsplit
 
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 #: Methods that cannot make work, and so are not counted. Everything else is.
@@ -187,10 +188,10 @@ class RejectCrossSiteRequests:
     work in flight and never selects a workspace.
     """
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers") or [])
@@ -213,7 +214,7 @@ class RejectCrossSiteRequests:
         return await self.app(scope, receive, send)
 
     @staticmethod
-    async def _refuse(detail: str, scope, receive, send):
+    async def _refuse(detail: str, scope: Scope, receive: Receive, send: Send) -> None:
         # 403 rather than 421: a 421 invites an HTTP/2 client to retry on a
         # fresh connection, and the objection is to the request itself.
         response = JSONResponse({"detail": detail}, status_code=403)

@@ -10,8 +10,10 @@ import threading
 import time
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, Concatenate
 
 import anthropic
 import httpx
@@ -23,13 +25,13 @@ router = APIRouter()
 
 
 _pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="doxograph")
-_jobs: dict[int, dict] = {}
+_jobs: dict[int, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
 _job_counter = time.time_ns() // 1000  # Below JavaScript's integer limit; survives process restarts.
 _job_recovery_issues: dict[str, list[str]] = {}
 
 
-def _finish(job: dict, key: str) -> None:
+def _finish(job: dict[str, Any], key: str) -> None:
     """Close a job, saying so when the paper arrived without its PDF.
 
     A paper with no PDF cannot be read, and marking the job plainly done hides
@@ -56,7 +58,7 @@ def _finish(job: dict, key: str) -> None:
     _forget_import(job)
 
 
-def _new_job(label: str, **fields) -> dict:
+def _new_job(label: str, **fields: Any) -> dict[str, Any]:
     global _job_counter
     # A job made inside a request the middleware already counted is that
     # request's work arriving in its second form, not a second acceptance.
@@ -65,7 +67,7 @@ def _new_job(label: str, **fields) -> dict:
         activity._take_work()
     with _jobs_lock:
         _job_counter += 1
-        job = {"id": _job_counter, "label": label, "state": "queued",
+        job: dict[str, Any] = {"id": _job_counter, "label": label, "state": "queued",
                "detail": "", "key": None, "started": store.now()}
         job["workspace"] = config.workspace_id()
         job["ai_provider"] = config.ai_provider()
@@ -75,18 +77,18 @@ def _new_job(label: str, **fields) -> dict:
         return job
 
 
-def _set(job: dict, **fields) -> None:
+def _set(job: dict[str, Any], **fields: Any) -> None:
     with _jobs_lock:
         job.update(fields)
         job_journal.save(job)
 
 
-def _new_import_job(label: str, do_extract: bool, **source) -> dict:
+def _new_import_job(label: str, do_extract: bool, **source: Any) -> dict[str, Any]:
     return _new_job(label, kind="import", retryable=True,
                     _import={**source, "extract": do_extract})
 
 
-def _forget_import(job: dict) -> None:
+def _forget_import(job: dict[str, Any]) -> None:
     """Release retained upload bytes when a notification no longer needs them."""
     with _jobs_lock:
         source = job.pop("_import", {})
@@ -120,7 +122,7 @@ def _recover_jobs() -> None:
     with activity._workspace_activity_lock, _jobs_lock:
         for workspace in workspaces:
             with config.use_workspace(workspace["id"]):
-                issues = []
+                issues: list[str] = []
                 try:
                     # Browsing a healthy, read-only library needs no lock file.
                     if any((config.data_dir() / '.jobs').glob('*.json')):
@@ -137,7 +139,7 @@ def _recover_jobs() -> None:
                 _job_recovery_issues[str(config.data_dir())] = issues
 
 
-def _import_failed(job: dict, exc: Exception) -> None:
+def _import_failed(job: dict[str, Any], exc: Exception) -> None:
     if isinstance(exc, (httpx.TimeoutException, anthropic.APITimeoutError)):
         explanation = "The service took too long to respond. Retry to try again."
     elif isinstance(exc, (httpx.RequestError, anthropic.APIConnectionError)):
@@ -181,7 +183,7 @@ def _prune_jobs() -> None:
 
 def _prune_workspace_jobs() -> None:
     with _jobs_lock:
-        by_workspace: dict[str, list[dict]] = {}
+        by_workspace: dict[str, list[dict[str, Any]]] = {}
         for job in _jobs.values():
             if job["state"] not in ("done", "error") or (job.get("interrupted") and job.get("retryable")):
                 continue
@@ -212,7 +214,7 @@ def _prune_workspace_jobs() -> None:
                 raise
 
 
-def _submit_job(function, job: dict, *args):
+def _submit_job(function: Callable[..., None], job: dict[str, Any], *args: Any) -> Future[None]:
     """Capture accepted settings before a job waits in the outer worker pool."""
     with config.use_model_access():
         # Queue submission is the acceptance point for both selections.
@@ -238,11 +240,13 @@ def _submit_job(function, job: dict, *args):
     return future
 
 
-def _workspace_job(function):
+def _workspace_job[**P](
+        function: Callable[Concatenate[dict[str, Any], P], None],
+) -> Callable[Concatenate[dict[str, Any], P], None]:
     """Keep the workspace and model access selected when the job was queued."""
     @functools.wraps(function)
     @config.analysis_session
-    def wrapped(job: dict, *args, **kwargs):
+    def wrapped(job: dict[str, Any], /, *args: P.args, **kwargs: P.kwargs) -> None:
         with (
             config.use_workspace(job.get("workspace", config.DEFAULT_WORKSPACE_ID)),
             config.use_ai_provider(job.get("ai_provider", config.ai_provider())),
@@ -255,7 +259,7 @@ def _workspace_job(function):
 # --- background work ------------------------------------------------------
 
 @_workspace_job
-def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
+def _run_ingest(job: dict[str, Any], ref: ingest.Ref, do_extract: bool) -> None:
     try:
         _set(job, state="fetching")
         key, created = ingest.ingest_ref(ref)
@@ -276,7 +280,7 @@ def _run_ingest(job: dict, ref: ingest.Ref, do_extract: bool) -> None:
 
 
 @_workspace_job
-def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> None:
+def _run_upload(job: dict[str, Any], staged: Path, filename: str, do_extract: bool) -> None:
     attempt = staged
     try:
         _set(job, state="fetching")
@@ -301,7 +305,7 @@ def _run_upload(job: dict, staged: Path, filename: str, do_extract: bool) -> Non
 
 
 @_workspace_job
-def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
+def _run_extract(job: dict[str, Any], key: str, keep_reviewed: bool) -> None:
     try:
         _set(job, state="reading", key=key)
         extract.extract_paper(key, keep_reviewed=keep_reviewed)
@@ -313,7 +317,7 @@ def _run_extract(job: dict, key: str, keep_reviewed: bool) -> None:
         _prune_jobs()
 
 
-def _finish_pass(job: dict, total: int, unit: str, failed: int, last_failure: str, summary: str) -> None:
+def _finish_pass(job: dict[str, Any], total: int, unit: str, failed: int, last_failure: str, summary: str) -> None:
     if failed:
         _set(job, state="error", detail=f"{failed} of {total} {unit} failed, {summary}; {last_failure}")
     else:
@@ -321,7 +325,7 @@ def _finish_pass(job: dict, total: int, unit: str, failed: int, last_failure: st
 
 
 @_workspace_job
-def _run_tensions(job: dict, topics: list[str], force: bool = False) -> None:
+def _run_tensions(job: dict[str, Any], topics: list[str], force: bool = False) -> None:
     try:
         rows, tags = store.claim_rows(), store.load_tags()
         added = reopened = skipped = failed = done = 0
@@ -350,7 +354,7 @@ def _run_tensions(job: dict, topics: list[str], force: bool = False) -> None:
 
 
 @_workspace_job
-def _run_agreements(job: dict, topics: list[str], force: bool = False) -> None:
+def _run_agreements(job: dict[str, Any], topics: list[str], force: bool = False) -> None:
     try:
         rows, tags = store.claim_rows(), store.load_tags()
         added = grown = skipped = failed = done = 0
@@ -379,7 +383,7 @@ def _run_agreements(job: dict, topics: list[str], force: bool = False) -> None:
 
 
 @_workspace_job
-def _run_syntheses(job: dict, topics: list[str], force: bool = False) -> None:
+def _run_syntheses(job: dict[str, Any], topics: list[str], force: bool = False) -> None:
     try:
         rows, tags = store.claim_rows(), store.load_tags()
         written = skipped = failed = done = 0
@@ -414,7 +418,7 @@ def _run_syntheses(job: dict, topics: list[str], force: bool = False) -> None:
 
 
 @_workspace_job
-def _run_retag(job: dict, keys: list[str]) -> None:
+def _run_retag(job: dict[str, Any], keys: list[str]) -> None:
     try:
         failed = done = 0
         last_failure = ""
@@ -447,7 +451,7 @@ def _require_analysis() -> None:
 
 
 @router.get("/api/jobs")
-def jobs() -> dict:
+def jobs() -> dict[str, Any]:
     """The recent background jobs in this workspace, newest first."""
     with _jobs_lock:
         recent = sorted(
@@ -461,7 +465,7 @@ def jobs() -> dict:
 
 
 @router.post("/api/jobs/{job_id}/retry")
-def retry_import(job_id: int) -> dict:
+def retry_import(job_id: int) -> dict[str, Any]:
     """Retry a failed import in place, once, in its original workspace."""
     with _jobs_lock:
         job = _jobs.get(job_id)

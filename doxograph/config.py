@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -105,7 +106,7 @@ def analysis_identity() -> list[str]:
 
 
 @contextlib.contextmanager
-def use_analysis():
+def use_analysis() -> Iterator[None]:
     """Bind one provider for an operation and its copied worker contexts."""
     token = _analysis.set(analysis_config())
     try:
@@ -114,10 +115,10 @@ def use_analysis():
         _analysis.reset(token)
 
 
-def analysis_session(operation):
+def analysis_session[**P, R](operation: Callable[P, R]) -> Callable[P, R]:
     """Keep requests and provenance on one provider even if Settings changes."""
     @functools.wraps(operation)
-    def run(*args, **kwargs):
+    def run(*args: P.args, **kwargs: P.kwargs) -> R:
         with use_analysis():
             return operation(*args, **kwargs)
     return run
@@ -259,17 +260,17 @@ def save_codex_model(model: str) -> None:
     _update_settings(codex_model=model)
 
 
-def bind_model_access(work):
+def bind_model_access[**P, R](work: Callable[P, R]) -> Callable[P, R]:
     """Keep a running operation on the provider it started with."""
     @functools.wraps(work)
-    def bound(*args, **kwargs):
+    def bound(*args: P.args, **kwargs: P.kwargs) -> R:
         with use_model_access():
             return work(*args, **kwargs)
     return bound
 
 
 @contextlib.contextmanager
-def use_model_access():
+def use_model_access() -> Iterator[None]:
     """Capture access mode and API/local profile from one saved settings read."""
     settings = _settings()
     access = _analysis_provider.get()
@@ -290,7 +291,7 @@ def use_model_access():
 
 
 @contextlib.contextmanager
-def use_ai_provider(provider: str):
+def use_ai_provider(provider: str) -> Iterator[None]:
     """Use an operation's saved provider without changing installation settings."""
     token = _analysis_provider.set(provider)
     try:
@@ -315,7 +316,7 @@ def workspace_id() -> str:
 
 
 @contextlib.contextmanager
-def use_workspace(value: str):
+def use_workspace(value: str) -> Iterator[None]:
     """Use one workspace for the current request or background operation."""
     token = _workspace_id.set(value)
     try:
@@ -381,7 +382,7 @@ def _windows_workspace_activity(path: Path, *, exclusive: bool):
 
 
 @contextlib.contextmanager
-def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool = False):
+def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool = False) -> Iterator[None]:
     """Nonblocking corpus lease shared by every server using this data root.
 
     POSIX leases lock the existing corpus directory through a read-only handle,
