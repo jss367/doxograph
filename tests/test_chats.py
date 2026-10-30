@@ -5,6 +5,7 @@ import os
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -157,7 +158,18 @@ def test_listing_reads_conversations_while_holding_the_lock_deletion_takes(clien
     assert blocked == [True]
 
 
-def test_conversations_saved_within_one_second_list_newest_first(client):
+def test_conversations_saved_within_one_second_list_newest_first(client, monkeypatch):
+    # Every save lands in one second: whole-second stamps tie, so only finer ones order them.
+    second = datetime(2026, 10, 30, 5, 0, 0, tzinfo=timezone.utc)
+    ticks = iter(range(1, 1000))
+
+    class Clock:
+        @staticmethod
+        def now(tz=None):
+            return second.replace(microsecond=next(ticks))
+
+    monkeypatch.setattr(chats, 'datetime', Clock)
+    monkeypatch.setattr(store, 'now', lambda: second.isoformat(timespec='seconds'))
     ids = ['b' * 32, 'c' * 32, 'd' * 32]
     for chat_id in ids:
         client.put(f'/api/chats/{chat_id}', json={'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()})
