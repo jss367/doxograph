@@ -438,6 +438,54 @@ def test_an_older_conversation_list_arriving_last_is_ignored(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_draft_survives_another_window_deleting_its_conversation(engine):
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ask, open_chat = await _paper_chat_with_answers(page)
+            await page.goto(url)
+            await open_chat()
+            await ask('First')
+            [first] = _saved_chats()
+            await page.locator('#chat-close').click()
+            taken, release = asyncio.Event(), asyncio.Event()
+
+            async def held_list(route):
+                taken.set()
+                await release.wait()
+                await route.continue_()
+
+            await page.route('**/api/chats?paper=study', held_list)
+            await open_chat()
+            await asyncio.wait_for(taken.wait(), timeout=10)
+            await page.locator('#chat-question').fill('An unsent follow-up')
+            # Another window deletes the conversation before this list is read.
+            assert httpx.delete(f"{url}/api/chats/{first['id']}?revision={first['revision']}").status_code == 200
+            release.set()
+            await page.get_by_text('kept as a separate conversation', exact=False).wait_for()
+            assert await page.locator('#chat-question').input_value() == 'An unsent follow-up'
+            assert await page.locator('#chat-messages p').all_text_contents() == ['First', 'Answer 1.']
+            assert await _saved_contents(1) == [['First', 'Answer 1.']]
+            await page.unroute('**/api/chats?paper=study')
+            await page.locator('#chat-send').click()
+            await page.get_by_text('Answer 2.', exact=True).wait_for()
+            assert await _saved_contents(1) == [['First', 'Answer 1.', 'An unsent follow-up', 'Answer 2.']]
+            [kept] = _saved_chats()
+            assert kept['id'] != first['id']
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
     config.set_ai_provider('claude_code')
     store.save_paper(store.new_paper('study', title='Memory Study'))

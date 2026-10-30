@@ -18,7 +18,7 @@ const ChatThreads = (() => {
     return `${name}${['anthropic', 'openai'].includes(provider) ? ' API' : ''}${model ? ` · ${model}` : ''}`;
   }
 
-  const KEPT = 'This conversation changed in another window, so this version was kept as a separate conversation.';
+  const KEPT = 'This conversation changed or was deleted in another window, so this version was kept as a separate conversation.';
 
   function title(thread) {
     const question = (thread.messages[0]?.content || thread.pending || '').replace(/\s+/g, ' ').trim();
@@ -91,7 +91,8 @@ const ChatThreads = (() => {
         if (threads.includes(thread) || kept.includes(thread)) continue;
         // Saved after this list began, so it is new rather than deleted in another window.
         if (thread.savedAt > started) threads.unshift(thread);
-        else if (thread.dirty && thread.revision && !writing(thread)) {
+        // Deleted elsewhere: keep an unsaved answer or an unsent draft, with its context, as its own conversation.
+        else if ((thread.dirty || thread.draft.trim()) && thread.revision && !writing(thread)) {
           fork(thread);
           kept.push(thread);
         } else if (writing(thread) || thread.dirty) threads.push(thread);
