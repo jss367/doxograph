@@ -283,3 +283,39 @@ def test_a_rename_follows_the_filter_when_the_read_after_it_fails(engine):
                 assert errors == []
 
     run_browser(scenario())
+
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_merging_the_filtered_value_into_an_old_spelling_follows_it(engine):
+    config.set_ai_enabled(False)
+    _paper("one", "Steering study", "steering")
+    _paper("two", "Probing study", "probing")
+    store.add_tag("steering")
+    store.add_tag("probing")
+    store.add_facet("model", "models")
+    store.update_claim("one", "one-c1", {"facets": {"model": ["A"]}})
+    store.update_claim("two", "two-c1", {"facets": {"model": ["C"]}})
+    store.rewrite_facet_values("model", ["A"], "B")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1280, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(f"{url}/#facet=model%3AC")
+                chips = page.get_by_role("group", name="Active filters", exact=True)
+                await expect(page.locator(".library-paper")).to_have_count(1)
+                await page.locator("#facets details[data-facet='model'] [data-facet-act='values']").click()
+                await page.locator("#ask-label-choices [data-label='C']").click()
+                await page.locator("#ask-ok").click()
+                await page.locator("#ask-input").fill("A")
+                await page.locator("#ask-ok").click()
+                await expect(chips.get_by_role("button", name="Remove filter: model: B", exact=True)).to_be_visible()
+                await expect(page.locator(".library-paper")).to_have_count(2)
+                assert "facet=model%3AB" in page.url
+                assert errors == []
+
+    run_browser(scenario())

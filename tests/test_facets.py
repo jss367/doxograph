@@ -798,3 +798,13 @@ def test_hand_edited_aliases_are_read_as_stored_values(corpus):
     assert store.clean_facet_values(["llama2-7b"], facet) == ["Llama 2 7B"]
     assert store.clean_facet_values(["old"], facet) == ["Llama 2 7B"]
     assert len(store.clean_facet_values(["x"], facet)) == 1   # a cycle ends rather than loops
+
+
+def test_the_values_route_answers_with_the_value_written(api, corpus):
+    first, second = corpus
+    store.add_facet("model", "models")
+    store.update_claim("doe2026study", first, {"facets": {"model": ["A"]}})
+    store.update_claim("doe2026study", second, {"facets": {"model": ["C"]}})
+    assert api.post("/api/facets/model/values", json={"values": ["A"], "into": "B"}).json()["value"] == "B"
+    assert api.post("/api/facets/model/values", json={"values": ["C"], "into": "A"}).json()["value"] == "B"
+    assert api.post("/api/facets/model/values", json={"values": ["B"], "into": ""}).json()["value"] == ""

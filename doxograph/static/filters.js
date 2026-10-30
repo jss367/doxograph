@@ -580,18 +580,20 @@ $('facets').addEventListener('toggle', (event) => {
   else openFacets.delete(details.dataset.facet);
 }, true);
 
+// The server's answer to a facet change, or null when the change failed.
 async function facetRequest(path, method, body, failure) {
+  let answer;
   try {
-    await api(path, { method, headers: { 'Content-Type': 'application/json' },
-                      body: body === undefined ? undefined : JSON.stringify(body) });
+    answer = await api(path, { method, headers: { 'Content-Type': 'application/json' },
+                               body: body === undefined ? undefined : JSON.stringify(body) });
   } catch (error) {
     toast(`${failure}: ${error.message}`, { tone: 'warn' });
-    return false;
+    return null;
   }
   // The change is saved; a read failing after it is a sync problem, which the
   // sync notice reports and the poll retries, not a failed change.
   await refreshShowingError();
-  return true;
+  return answer || {};
 }
 
 $('facets').addEventListener('click', async (event) => {
@@ -637,9 +639,13 @@ $('facets').addEventListener('click', async (event) => {
     // Read before the request: its refresh drops a filter on a value that is
     // gone, and the filter should follow the value to its new name instead.
     const filter = facetFilter();
-    if (await facetRequest(`${path}/values`, 'POST', { values: picked, into }, 'Could not change the values')) {
+    const answer = await facetRequest(`${path}/values`, 'POST', { values: picked, into }, 'Could not change the values');
+    if (answer) {
       if (filter && filter.name === name && picked.some((v) => facetValueKey(v) === facetValueKey(filter.value))) {
-        V.facet = into.trim() ? `${name}:${into.trim()}` : null;
+        // The value the claims carry now, which the server resolved through
+        // the aliases: a merge into an old spelling lands on what it became.
+        const value = typeof answer.value === 'string' ? answer.value : into.trim();
+        V.facet = value ? `${name}:${value}` : null;
         syncHash();
         renderAll();
       }

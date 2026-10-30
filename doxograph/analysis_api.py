@@ -151,10 +151,16 @@ def remove_facet(name: str) -> dict[str, Any]:
 
 @router.post("/api/facets/{name}/values")
 def rewrite_facet_values(name: str, body: FacetValuesBody) -> dict[str, Any]:
+    """Also answers with the value the claims now carry: `into` resolved
+    through the aliases, so a merge into a spelling an earlier rename
+    replaced names what it became, and "" for a removal."""
     try:
-        return {"facets": store.rewrite_facet_values(name, body.values, body.into)}
+        facets = store.rewrite_facet_values(name, body.values, body.into)
     except KeyError:
         raise HTTPException(404, f"no facet {name}") from None
+    facet = next(facet for facet in facets if facet["name"] == name)
+    value = store.resolve_facet_value(store.facet_value_text(body.into), store.facet_aliases(facet))
+    return {"facets": facets, "value": value}
 
 
 @router.post("/api/facets/fill")
