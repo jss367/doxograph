@@ -1461,10 +1461,12 @@ def state(request: Request) -> Response:
     """
     workspace = config.workspace_id()
     recovery_error = None
+    recovery_path = store.tag_change_path()
     try:
         store.recover_storage()
     except store.StorageRecoveryError as exc:
         recovery_error = str(exc)
+        recovery_path = exc.path
     # Credentials and installation settings live outside the corpus, but
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
@@ -1484,7 +1486,7 @@ def state(request: Request) -> Response:
         payload["ai_enabled"] = ai_enabled
         payload["workspace"] = workspace_record
         if recovery_error is not None:
-            payload["storage_issues"].append({"path": str(store.tag_change_path()), "detail": recovery_error})
+            payload["storage_issues"].append({"path": str(recovery_path), "detail": recovery_error})
         else:
             with _state_cache_lock:
                 _state_cache[workspace] = (signature, payload)

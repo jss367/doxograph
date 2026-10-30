@@ -902,7 +902,12 @@ def add_tag(name: str, description: str = "") -> list[dict]:
 
 
 class StorageRecoveryError(RuntimeError):
-    """An interrupted topic change still needs to finish."""
+    """An interrupted topic or facet change still needs to finish."""
+
+    def __init__(self, message: str, path: Path | None = None):
+        super().__init__(message)
+        # The intent file the reader is told to keep.
+        self.path = path if path is not None else tag_change_path()
 
 
 def tag_change_path() -> Path:
@@ -958,6 +963,16 @@ def recover_storage() -> None:
         raise StorageRecoveryError(
             f"Cannot resume the unfinished topic change: {exc}. "
             f"Keep {tag_change_path()}; Doxograph will retry automatically."
+        ) from exc
+    try:
+        if facet_change_path().exists():
+            with facets_lock():
+                pass
+    except OSError as exc:
+        raise StorageRecoveryError(
+            f"Cannot resume the unfinished facet change: {exc}. "
+            f"Keep {facet_change_path()}; Doxograph will retry automatically.",
+            path=facet_change_path(),
         ) from exc
 
 
@@ -1157,7 +1172,8 @@ def corpus_signature() -> str:
                         parts.append((entry.name, st.st_size, st.st_mtime_ns, st.st_ino, st.st_mode, st.st_ctime_ns))
         except FileNotFoundError:
             pass
-    for path in (config.tags_path(), config.facets_path(), config.ledger_path(), tensions_path(), syntheses_path(),
+    for path in (config.tags_path(), config.facets_path(), facet_change_path(), config.ledger_path(),
+                 tensions_path(), syntheses_path(),
                  agreements_path(), context_path(), config.data_dir() / "notebook.json",
                  tag_change_path(), retired_keys_path()):
         try:
@@ -1291,9 +1307,80 @@ def tag_counts(rows: list[dict]) -> dict[str, int]:
 # from the next paper lands on "GPT-4" without anyone asking twice.
 #
 # Lock order is facets before vocabulary before paper.
+#
+# Deleting a facet and rewriting its values touch every paper and then the
+# definitions, so each is recorded first as an intent, as a topic change is.
+# Whoever takes the facets lock next finishes one that was cut short.
 
-def facets_lock() -> contextlib.AbstractContextManager[None]:
-    return document_lock("facets")
+def facet_change_path() -> Path:
+    return config.data_dir() / "pending-facet-change.json"
+
+
+@contextlib.contextmanager
+def facets_lock() -> Iterator[None]:
+    with document_lock("facets"):
+        _recover_facet_change()
+        yield
+
+
+FACET_CHANGES = ("values", "delete")
+
+
+def _recover_facet_change() -> None:
+    """Finish a recorded facet change; caller holds the facets lock.
+
+    The change is applied to the papers as they are now rather than replayed
+    from snapshots, so edits made since survive, and each step is idempotent.
+    The definitions are written last and the intent removed after them:
+    until then the intent is what explains values the papers already carry.
+    """
+    path = facet_change_path()
+    try:
+        try:
+            change = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        if (not isinstance(change, dict) or change.get("version") != 1
+                or change.get("kind") not in FACET_CHANGES
+                or not isinstance(change.get("facet"), str)
+                or not isinstance(change.get("facets"), list)
+                or not isinstance(change.get("old"), list)
+                or any(not isinstance(key, str) for key in change["old"])
+                or not isinstance(change.get("new"), str)):
+            raise ValueError("invalid pending facet change")
+        # A damaged definitions file must block recovery before papers move.
+        _facets_file()
+        workspace_metadata.Facets.model_validate({"facets": change["facets"]}, strict=True)
+        if change["kind"] == "delete":
+            _rewrite_papers(lambda paper: _strip_facet(paper, change["facet"]))
+        else:
+            old, new = set(change["old"]), change["new"]
+            _rewrite_papers(lambda paper: _rewrite_values(paper, change["facet"], old, new))
+        _save_facets(change["facets"])
+        path.unlink()
+        _sync_directory(path.parent)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise StorageRecoveryError(
+            f"A facet change is unfinished: {exc}. Doxograph will retry automatically. "
+            f"Keep {path} until recovery finishes.",
+            path=path,
+        ) from exc
+
+
+def _change_facets(kind: str, name: str, facets: list[dict], old: list[str] | None = None,
+                   new: str = "") -> None:
+    """Record a facet change, then carry it out; caller holds the facets lock."""
+    # Refuse known damage before starting: an unreadable paper part way
+    # through would leave the change recorded and stuck.
+    for key in paper_keys():
+        try:
+            load_paper(key)
+        except KeyError:
+            continue
+    workspace_metadata.Facets.model_validate({"facets": facets}, strict=True)
+    write_json(facet_change_path(), {"version": 1, "kind": kind, "facet": name, "facets": facets,
+                                     "old": sorted(old or []), "new": new})
+    _recover_facet_change()
 
 
 def _facets_file() -> dict:
@@ -1502,22 +1589,38 @@ def delete_facet(name: str) -> list[dict]:
     with facets_lock():
         if not any(facet["name"] == name for facet in load_facets()):
             raise KeyError(name)
+        _change_facets("delete", name, [facet for facet in load_facets() if facet["name"] != name])
+        return load_facets()
 
-        def strip(paper: dict) -> bool:
-            changed = False
-            for claim in paper.get("claims", []):
-                changed |= (claim.get("facets") or {}).pop(name, None) is not None
-                changed |= (claim.get("facet_basis") or {}).pop(name, None) is not None
-                hand = claim.get("facets_hand") or []
-                if name in hand:
-                    claim["facets_hand"] = [n for n in hand if n != name]
-                    changed = True
-            return changed
 
-        _rewrite_papers(strip)
-        facets = [facet for facet in load_facets() if facet["name"] != name]
-        _save_facets(facets)
-        return facets
+def _strip_facet(paper: dict, name: str) -> bool:
+    changed = False
+    for claim in paper.get("claims", []):
+        changed |= (claim.get("facets") or {}).pop(name, None) is not None
+        changed |= (claim.get("facet_basis") or {}).pop(name, None) is not None
+        hand = claim.get("facets_hand") or []
+        if name in hand:
+            claim["facets_hand"] = [n for n in hand if n != name]
+            changed = True
+    return changed
+
+
+def _rewrite_values(paper: dict, name: str, old_keys: set[str], new: str) -> bool:
+    """Put `new` in place of the values `old_keys` names, or drop them when
+    `new` is empty. Running it twice changes nothing more."""
+    changed = False
+    for claim in paper.get("claims", []):
+        values = (claim.get("facets") or {}).get(name)
+        if not values or not any(facet_value_key(v) in old_keys for v in values):
+            continue
+        kept = [v for v in values if facet_value_key(v) not in old_keys] + ([new] if new else [])
+        cleaned = clean_facet_values(kept, {"name": name})
+        if cleaned:
+            claim["facets"][name] = cleaned
+        else:
+            claim["facets"].pop(name)
+        changed = True
+    return changed
 
 
 def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict]:
@@ -1545,25 +1648,8 @@ def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict]:
         if new_key is not None:
             aliases.pop(new_key, None)
         facet["aliases"] = dict(sorted(aliases.items()))
-
-        def rewrite(paper: dict) -> bool:
-            changed = False
-            for claim in paper.get("claims", []):
-                values = (claim.get("facets") or {}).get(name)
-                if not values or not any(facet_value_key(v) in old_keys for v in values):
-                    continue
-                kept = [v for v in values if facet_value_key(v) not in old_keys] + ([new] if new else [])
-                cleaned = clean_facet_values(kept, {"name": name})
-                if cleaned:
-                    claim["facets"][name] = cleaned
-                else:
-                    claim["facets"].pop(name)
-                changed = True
-            return changed
-
-        _rewrite_papers(rewrite)
-        _save_facets(facets)
-        return facets
+        _change_facets("values", name, facets, sorted(old_keys), new)
+        return load_facets()
 
 
 def needs_extraction(key: str) -> bool:

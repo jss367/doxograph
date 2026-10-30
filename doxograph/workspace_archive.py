@@ -84,6 +84,8 @@ def _snapshot_locks():
         # Leave that work to normal storage recovery, never start it mid-export.
         if store.tag_change_path().exists():
             raise HTTPException(409, 'A topic change needs recovery. Reload the library before exporting.')
+        if store.facet_change_path().exists():
+            raise HTTPException(409, 'A facet change needs recovery. Reload the library before exporting.')
         yield keys
 
 

@@ -511,3 +511,89 @@ def test_an_archive_waits_out_a_facet_rewrite_instead_of_capturing_half_of_it(mo
                 assert next(c for c in paper["claims"] if c["id"] == claim_id)["facets"] == {"model": ["GPT-4"]}
     finally:
         path.unlink()
+
+
+# --- interrupted facet changes ----------------------------------------------------
+
+def _two_papers_with(value: str) -> tuple[str, str]:
+    store.save_paper(store.new_paper("a2026", title="A"))
+    store.save_paper(store.new_paper("b2026", title="B"))
+    store.add_facet("model", "models")
+    first = store.add_claim("a2026", {"text": "x", "facets": {"model": [value]}})["id"]
+    second = store.add_claim("b2026", {"text": "y", "facets": {"model": [value]}})["id"]
+    return first, second
+
+
+def _fail_once(monkeypatch, module, name: str, after: int = 0):
+    """Make `module.name` raise on its call after `after` successful ones, once."""
+    original = getattr(module, name)
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == after + 1:
+            raise OSError("disk went away")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, flaky)
+    return original
+
+
+@pytest.mark.parametrize("failing, after", [("save_paper", 1), ("_save_facets", 0)])
+def test_an_interrupted_value_rename_finishes_on_the_next_lock(monkeypatch, failing, after):
+    first, second = _two_papers_with("gpt4")
+    original = _fail_once(monkeypatch, store, failing, after)
+    with pytest.raises(store.StorageRecoveryError):
+        store.rewrite_facet_values("model", ["gpt4"], "GPT-4")
+    assert store.facet_change_path().exists()
+    monkeypatch.setattr(store, failing, original)
+
+    store.recover_storage()
+
+    assert not store.facet_change_path().exists()
+    assert claims("a2026")[first]["facets"] == {"model": ["GPT-4"]}
+    assert claims("b2026")[second]["facets"] == {"model": ["GPT-4"]}
+    assert store.clean_facet_values(["gpt4"], store.load_facets()[0]) == ["GPT-4"]
+
+
+def test_an_interrupted_removal_does_not_let_the_value_come_back(monkeypatch):
+    first, second = _two_papers_with("none")
+    original = _fail_once(monkeypatch, store, "_save_facets")
+    with pytest.raises(store.StorageRecoveryError):
+        store.rewrite_facet_values("model", ["none"], "")
+    monkeypatch.setattr(store, "_save_facets", original)
+
+    # Any later facet edit takes the lock and finishes the change first.
+    store.update_claim("a2026", first, {"facets": {"model": ["None", "GPT-4"]}})
+
+    assert claims("a2026")[first]["facets"] == {"model": ["GPT-4"]}
+    assert not claims("b2026")[second].get("facets")
+    assert not store.facet_change_path().exists()
+
+
+def test_an_interrupted_delete_finishes_and_blocks_archives_until_then(monkeypatch, api):
+    from fastapi import HTTPException
+
+    from doxograph import workspace_archive
+
+    first, second = _two_papers_with("GPT-4")
+    original = _fail_once(monkeypatch, store, "save_paper", 1)
+    with pytest.raises(store.StorageRecoveryError):
+        store.delete_facet("model")
+    monkeypatch.setattr(store, "save_paper", original)
+    with pytest.raises(HTTPException) as refused:
+        workspace_archive.build()
+    assert refused.value.status_code == 409
+
+    state = api.get("/api/state").json()   # the state read runs recovery
+
+    assert state["facets"] == []
+    assert not claims("a2026")[first].get("facets") and not claims("b2026")[second].get("facets")
+    assert not store.facet_change_path().exists()
+
+
+def test_a_recovery_that_cannot_finish_is_reported_with_its_intent_file(monkeypatch, api):
+    _two_papers_with("gpt4")
+    store.write_json(store.facet_change_path(), {"version": 1, "kind": "bogus"})
+    state = api.get("/api/state").json()
+    assert any(issue["path"] == str(store.facet_change_path()) for issue in state["storage_issues"])

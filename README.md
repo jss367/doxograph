@@ -719,6 +719,7 @@ text/<key>.txt       its text, extracted once and reused (pages split by \f)
 locks/               lock files, so two processes do not write at once
 retired-keys.json    keys of removed papers, never issued again
 pending-topic-change.json  unfinished topic rename or deletion, when recovery is needed
+pending-facet-change.json  unfinished facet deletion or value rename, when recovery is needed
 tags.yaml            the topic vocabulary
 facets.yaml          the facets you defined, and the value aliases from merges
 tensions.json        where papers disagree, and what you decided about each
