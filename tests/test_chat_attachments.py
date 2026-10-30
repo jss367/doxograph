@@ -116,6 +116,7 @@ def test_codex_passes_temporary_image_files_and_cleans_them_up(monkeypatch):
 
     def inspect(args, **kwargs):
         if '--image' in args:
+            assert args.index('-') < args.index('--image')
             path = Path(args[args.index('--image') + 1])
             paths.append(path)
             with Image.open(path) as image:

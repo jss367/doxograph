@@ -176,9 +176,10 @@ class Client:
                 args.extend(["--output-schema", str(schema_path)])
             if self.mcp_server is not None:
                 args.extend(self.mcp_server().config_args())
+            # Keep the positional prompt out of the variadic image option.
+            args.append("-")
             for image_path in images:
                 args.extend(["--image", str(image_path)])
-            args.append("-")
             config.require_ai_enabled()
             result = _run(args, env=env, cwd=cwd, input=stdin)
             try:
