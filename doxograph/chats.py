@@ -9,6 +9,7 @@ written by one of them is still this page's own, not another window's.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -67,6 +68,11 @@ class SavedChat(Conversation):
     operation: OperationId
     created: str
     updated: str
+
+
+def _now() -> str:
+    """Microseconds, so saves within one second still list newest first."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def chats_dir():
@@ -131,7 +137,7 @@ def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict:
             raise HTTPException(409, "This conversation belongs to a different chat.")
         if saved is None and body.paper is not None and not store.paper_path(body.paper).is_file():
             raise HTTPException(404, f"no paper {body.paper}")
-        now = store.now()
+        now = _now()
         chat = dict(body.model_dump(exclude={"revision", "unconfirmed"}), id=chat_id,
                     revision=(saved["revision"] if saved else 0) + 1,
                     created=saved["created"] if saved else now, updated=now)

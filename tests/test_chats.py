@@ -155,3 +155,12 @@ def test_listing_reads_conversations_while_holding_the_lock_deletion_takes(clien
     monkeypatch.setattr(storage, 'read_model', read_while_deleting)
     assert [c['id'] for c in client.get('/api/chats').json()['chats']] == [ID]
     assert blocked == [True]
+
+
+def test_conversations_saved_within_one_second_list_newest_first(client):
+    ids = ['b' * 32, 'c' * 32, 'd' * 32]
+    for chat_id in ids:
+        client.put(f'/api/chats/{chat_id}', json={'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()})
+    # Update the first one last; it must now lead whatever its ID.
+    client.put(f'/api/chats/{ids[0]}', json={'agent': 'codex', 'messages': PAIR * 2, 'revision': 1, 'operation': op()})
+    assert [c['id'] for c in client.get('/api/chats').json()['chats']] == [ids[0], ids[2], ids[1]]
