@@ -116,16 +116,18 @@ const ChatThreads = (() => {
 
     // Write the whole conversation, adding it to the list on its first save. One tab's saves
     // of a conversation run in order, so each sends the revision the previous one returned.
+    // Resolves to whether this save reached disk.
     function save(target, thread) {
       if (!target.threads.includes(thread)) target.threads.unshift(thread);
       thread.saves = (thread.saves || Promise.resolve()).then(async () => {
         const id = thread.id;
-        await write(target, thread);
+        const saved = await write(target, thread);
         // A conflict kept this version under a new ID; list the other window's version beside it.
         if (thread.id !== id && !thread.dirty) {
           try { await refresh(target); } catch (_) { /* the other version appears on the next open */ }
           if (box === target) sync();
         }
+        return saved;
       });
       return thread.saves;
     }
@@ -146,6 +148,7 @@ const ChatThreads = (() => {
         thread.unconfirmed = [];
         if (thread.dirty) thread.error = thread.kept ? KEPT : '';
         thread.dirty = thread.kept = false;
+        return true;
       } catch (error) {
         if (!retried && (error.status === 409 || (error.status === 404 && thread.revision))) {
           fork(thread);
@@ -156,6 +159,7 @@ const ChatThreads = (() => {
         thread.unconfirmed = [...thread.unconfirmed, id].slice(-20);
         thread.dirty = true;
         thread.error = `This conversation is not saved yet: ${error.message}`;
+        return false;
       } finally {
         thread.saving = false;
       }

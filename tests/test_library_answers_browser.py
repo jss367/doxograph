@@ -301,8 +301,19 @@ def test_note_save_with_lost_response_keeps_its_key_across_a_reload(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page()
-            errors, keys = [], []
+            errors, keys, puts = [], [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
+
+            async def conversation(route):
+                if route.request.method != 'PUT':
+                    await route.continue_()
+                    return
+                puts.append(route.request.post_data_json)
+                if len(puts) == 2:
+                    # The save that should hold the note key before the note is posted.
+                    await route.fulfill(status=503, json={'detail': 'Disk unavailable.'})
+                else:
+                    await route.continue_()
 
             async def save(route):
                 if route.request.method != 'POST':
@@ -318,6 +329,7 @@ def test_note_save_with_lost_response_keeps_its_key_across_a_reload(engine):
 
             await page.route('**/api/agent/chat', lambda route: route.fulfill(json={'answer': ANSWER, 'assistant': 'Claude'}))
             await page.route('**/api/research-notes', save)
+            await page.route('**/api/chats/*', conversation)
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#btn-agent:enabled').click()
@@ -325,7 +337,12 @@ def test_note_save_with_lost_response_keeps_its_key_across_a_reload(engine):
                 await page.locator('#agent-send').click()
                 await page.locator('#agent-messages .note-prose h2').wait_for()
                 await page.get_by_role('button', name='Save as research note', exact=True).click()
-                await page.get_by_role('alert').filter(has_text='Could not save this answer').wait_for()
+                await page.get_by_role('alert').filter(has_text='the conversation could not be saved first').wait_for()
+                # No note is posted until its key is on disk.
+                assert keys == [] and httpx.get(url + '/api/research-notes').json()['notes'] == []
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('alert').filter(has_text='Could not save this answer', has_not_text='saved first').wait_for()
+                assert puts[2]['messages'][1]['note_operation'] == keys[0]
                 await page.reload()
                 await page.locator('#btn-agent:enabled').click()
                 await page.get_by_role('button', name='Save as research note', exact=True).click()

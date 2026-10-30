@@ -83,13 +83,11 @@ $('agent-messages').addEventListener('click', async (event) => {
   message.saveError = '';
   agentChats.sync();
   try {
-    // Reuse the operation even when the server committed but its response was lost. Save it with
-    // the conversation first, so a retry after a reload also returns the committed note.
-    if (!message.note_operation) {
-      message.note_operation = Array.from(crypto.getRandomValues(new Uint8Array(16)),
-        byte => byte.toString(16).padStart(2, '0')).join('');
-      await agentChats.save(chat);
-    }
+    // Reuse the operation even when the server committed but its response was lost. Post only once
+    // the conversation holding it is on disk, so a retry after a reload also returns the committed note.
+    message.note_operation ||= Array.from(crypto.getRandomValues(new Uint8Array(16)),
+      byte => byte.toString(16).padStart(2, '0')).join('');
+    if (!await agentChats.save(chat)) throw new Error('the conversation could not be saved first. Try again.');
     const note = await api('/api/research-notes', {
       method: 'POST', headers: {'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace,
         'Idempotency-Key': message.note_operation},
