@@ -8,7 +8,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import config, ingest, server, store
+from doxograph import config, ingest, job_queue, server, store
 
 
 @pytest.mark.parametrize("first,second", [
@@ -873,8 +873,8 @@ def test_a_landing_page_is_resolved_before_it_can_be_recognized(monkeypatch):
 
 @pytest.fixture
 def web(monkeypatch):
-    monkeypatch.setattr(server, "_jobs", {})
-    monkeypatch.setattr(server._pool, "submit", refuse)
+    monkeypatch.setattr(job_queue, "_jobs", {})
+    monkeypatch.setattr(job_queue._pool, "submit", refuse)
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         yield client
 
@@ -893,9 +893,9 @@ def test_a_reference_already_here_is_reported_without_a_job(web):
 
 def test_a_paper_still_waiting_to_be_read_is_queued(monkeypatch):
     """Re-pasting a reference is how an extraction that failed is retried."""
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *args: submitted.append(args))
     paper_on_file("doe2026study", source={"kind": "arxiv", "id": "2602.06941", "url": ""})
 
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:

@@ -13,7 +13,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, config, extract, ingest, server, store
+from doxograph import __main__, config, extract, ingest, job_queue, server, store
 
 
 def test_concurrent_uploads_of_the_same_filename_keep_their_own_pdfs(monkeypatch):
@@ -554,8 +554,8 @@ def test_a_failed_retry_is_still_tolerated(monkeypatch):
 def run_ingest_job(ref, monkeypatch, do_extract=False):
     """Drive the server's ingest worker synchronously and return its job."""
     job = {"id": 1, "label": "t", "state": "queued", "detail": "", "key": None}
-    monkeypatch.setattr(server, "_prune_jobs", lambda: None)
-    server._run_ingest(job, ref, do_extract)
+    monkeypatch.setattr(job_queue, "_prune_jobs", lambda: None)
+    job_queue._run_ingest(job, ref, do_extract)
     return job
 
 
@@ -647,7 +647,7 @@ def test_a_download_is_not_read_back_into_memory(monkeypatch):
 def test_an_upload_is_staged_on_disk_not_held_in_memory(monkeypatch):
     """The worker gets a path; the batch no longer costs one buffer per file."""
     handed = []
-    monkeypatch.setattr(server._pool, "submit",
+    monkeypatch.setattr(job_queue._pool, "submit",
                         lambda fn, job, staged, name, extract_now: handed.append((staged, name)))
 
     body = b"%PDF-1.4\n" + b"x" * 200_000
@@ -709,7 +709,7 @@ def test_upload_staging_does_not_run_on_the_event_loop(monkeypatch):
         return real_stage(source, filename)
 
     monkeypatch.setattr(ingest, "stage_upload", watched)
-    monkeypatch.setattr(server._pool, "submit",
+    monkeypatch.setattr(job_queue._pool, "submit",
                         lambda fn, job, staged, name, extract_now: staged.unlink(missing_ok=True))
 
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
@@ -810,8 +810,8 @@ def test_a_dropped_file_already_here_is_reported_without_a_worker(monkeypatch):
     The Mac app posts a Dock drop to this route and reads nothing back, so the
     job strip is the only report it has: the notice has to be a job.
     """
-    monkeypatch.setattr(server, "_jobs", {})
-    monkeypatch.setattr(server._pool, "submit", lambda *args: pytest.fail("a worker was given the file"))
+    monkeypatch.setattr(job_queue, "_jobs", {})
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *args: pytest.fail("a worker was given the file"))
     body = b"%PDF-1.4\nbody" + bytes(64)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     store.pdf_path("doe2026study").write_bytes(body)
@@ -829,9 +829,9 @@ def test_a_dropped_file_already_here_is_reported_without_a_worker(monkeypatch):
 
 
 def test_a_dropped_file_that_still_needs_reading_is_queued(monkeypatch):
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *args: submitted.append(args))
     body = b"%PDF-1.4\nbody" + bytes(64)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     store.pdf_path("doe2026study").write_bytes(body)
@@ -897,7 +897,7 @@ def test_concurrent_drops_of_one_file_make_one_paper(monkeypatch):
 
 def test_repeated_recognized_drops_do_not_pile_up_jobs(monkeypatch):
     """The notice never reaches a worker, so nothing else prunes it."""
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     body = b"%PDF-1.4\nbody" + bytes(64)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     store.pdf_path("doe2026study").write_bytes(body)
@@ -908,7 +908,7 @@ def test_repeated_recognized_drops_do_not_pile_up_jobs(monkeypatch):
             client.post("/api/upload?extract_now=false",
                         files={"files": ("paper.pdf", body, "application/pdf")})
 
-    assert len(server._jobs) == 40, f"jobs are piling up: {len(server._jobs)}"
+    assert len(job_queue._jobs) == 40, f"jobs are piling up: {len(job_queue._jobs)}"
 
 
 def test_a_pdf_replaced_by_hand_is_hashed_again(unidentifiable):

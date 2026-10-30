@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import config, server, store
+from doxograph import activity, config, job_queue, server, store
 
 
 def _create_workspace_in_process(data_dir: str, start, results) -> None:
@@ -39,29 +39,29 @@ def _hold_workspace_in_another_server(data_dir, workspace, mode, ready, release)
     os.environ["DOXOGRAPH_DATA"] = data_dir
     with config.use_workspace(workspace):
         if mode == "request":
-            with server._using_workspace(workspace):
+            with activity._using_workspace(workspace):
                 ready.set()
                 assert release.wait(10)
         elif mode == "worker":
-            @server._workspace_job
+            @job_queue._workspace_job
             def work(job):
-                server._set(job, state="done")
+                job_queue._set(job, state="done")
                 ready.set()
                 assert release.wait(10)
                 store.save_context("Worker finished")
 
-            work(server._new_job("Finishing worker"))
+            work(job_queue._new_job("Finishing worker"))
         else:
             with ThreadPoolExecutor(1) as pool:
-                server._pool = pool
+                job_queue._pool = pool
                 blocker = pool.submit(release.wait, 10)
 
-                @server._workspace_job
+                @job_queue._workspace_job
                 def work(job):
                     store.save_context("Queued worker finished")
-                    server._set(job, state="done")
+                    job_queue._set(job, state="done")
 
-                future = server._submit_job(work, server._new_job("Queued worker"))
+                future = job_queue._submit_job(work, job_queue._new_job("Queued worker"))
                 ready.set()
                 assert blocker.result(timeout=10)
                 future.result(timeout=10)
@@ -83,8 +83,8 @@ def _pause_foreign_deletion(data_dir, workspace, ready, release):
 def _hold_foreign_job_owner(data_dir, workspace, ready, release):
     os.environ["DOXOGRAPH_DATA"] = data_dir
     with config.use_workspace(workspace):
-        job = server._new_job("Finished import in another server")
-        server._set(job, state="done")
+        job = job_queue._new_job("Finished import in another server")
+        job_queue._set(job, state="done")
         ready.set()
         assert release.wait(10)
 
@@ -104,7 +104,7 @@ def _hold_legacy_job_owner(data_dir, workspace, ready, release):
 
 
 def test_delete_waits_for_live_version_one_journal_owner_without_instance_marker(monkeypatch):
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     target = config.create_workspace("Research")
     context = multiprocessing.get_context("spawn")
     ready, release = context.Event(), context.Event()
@@ -162,8 +162,8 @@ def test_delete_refuses_live_foreign_journal_owner_then_removes_corpus():
 def test_deletion_releases_local_owner_handles_after_retirement_before_removal(monkeypatch):
     target = config.create_workspace("Research")
     with config.use_workspace(target["id"]):
-        job = server._new_job("Finished import")
-        server._set(job, state="done")
+        job = job_queue._new_job("Finished import")
+        job_queue._set(job, state="done")
         folder = config.data_dir()
     assert any(path.parent == folder / '.jobs' for path in server.job_journal._leases)
     rmtree = config.shutil.rmtree
@@ -283,7 +283,7 @@ def test_existing_corpus_is_the_default_and_new_workspaces_are_isolated():
 
 
 def test_deletion_waits_for_initialization_before_workspace_is_published(monkeypatch):
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     initializing, release, exclusive_taken = threading.Event(), threading.Event(), threading.Event()
     ensure, activity = config.ensure_dirs, config.workspace_activity
 
@@ -403,12 +403,12 @@ def test_workspace_api_scopes_state_and_downloads():
 def test_background_job_keeps_the_workspace_where_it_was_queued():
     animal = config.create_workspace("Animal locomotion")
 
-    @server._workspace_job
+    @job_queue._workspace_job
     def write_paper(job):
         store.save_paper(store.new_paper("queued", title="Queued in animal locomotion"))
 
     with config.use_workspace(animal["id"]):
-        job = server._new_job("queued paper")
+        job = job_queue._new_job("queued paper")
 
     # Run after the submitting request's context has gone back to default.
     write_paper(job)
@@ -416,30 +416,30 @@ def test_background_job_keeps_the_workspace_where_it_was_queued():
     assert store.all_papers() == []
     with config.use_workspace(animal["id"]):
         assert [paper["key"] for paper in store.all_papers()] == ["queued"]
-    server._jobs.pop(job["id"], None)
+    job_queue._jobs.pop(job["id"], None)
 
 
 def test_completed_job_retention_is_applied_per_workspace():
     animal = config.create_workspace("Animal locomotion")
-    server._jobs.clear()
+    job_queue._jobs.clear()
     try:
-        default_job = server._new_job("default result")
-        server._set(default_job, state="done")
+        default_job = job_queue._new_job("default result")
+        job_queue._set(default_job, state="done")
 
         animal_jobs = []
         with config.use_workspace(animal["id"]):
             for index in range(41):
-                job = server._new_job(f"animal result {index}")
-                server._set(job, state="done")
+                job = job_queue._new_job(f"animal result {index}")
+                job_queue._set(job, state="done")
                 animal_jobs.append(job)
 
-        server._prune_jobs()
+        job_queue._prune_jobs()
 
-        assert default_job["id"] in server._jobs
-        assert animal_jobs[0]["id"] not in server._jobs
-        assert all(job["id"] in server._jobs for job in animal_jobs[1:])
+        assert default_job["id"] in job_queue._jobs
+        assert animal_jobs[0]["id"] not in job_queue._jobs
+        assert all(job["id"] in job_queue._jobs for job in animal_jobs[1:])
     finally:
-        server._jobs.clear()
+        job_queue._jobs.clear()
 
 
 def test_duplicate_workspace_names_receive_distinct_stable_ids():
@@ -460,8 +460,8 @@ def test_delete_removes_only_selected_corpus_and_retires_its_id():
         store.pdf_path("remove").write_bytes(b"%PDF-1.4\n")
         store.save_context("Private research notes")
         folder = config.data_dir()
-        finished = server._new_job("Finished import")
-        server._set(finished, state="done")
+        finished = job_queue._new_job("Finished import")
+        job_queue._set(finished, state="done")
     with config.use_workspace(other["id"]):
         store.save_paper(store.new_paper("other", title="Other paper"))
     client = TestClient(server.app, base_url="http://127.0.0.1:8765")
@@ -475,7 +475,7 @@ def test_delete_removes_only_selected_corpus_and_retires_its_id():
     assert not folder.exists()
     assert not list(folder.parent.glob(".deleted-*"))
     assert config.get_workspace(target["id"]) is None
-    assert finished["id"] not in server._jobs
+    assert finished["id"] not in job_queue._jobs
     assert target["id"] not in server._state_cache
     assert client.get("/api/state", headers=headers).status_code == 404
     assert client.post("/api/ingest", headers=headers, json={"text": "anything"}).status_code == 404
@@ -536,10 +536,10 @@ def test_registry_only_retirement_does_not_remove_a_concurrently_restored_direct
 def test_committed_deletion_succeeds_when_corpus_and_journal_cleanup_fail(monkeypatch, caplog):
     target = config.create_workspace("Research")
     with config.use_workspace(target["id"]):
-        first = server._new_job("First finished import")
-        second = server._new_job("Second finished import")
-        server._set(first, state="done")
-        server._set(second, state="done")
+        first = job_queue._new_job("First finished import")
+        second = job_queue._new_job("Second finished import")
+        job_queue._set(first, state="done")
+        job_queue._set(second, state="done")
         first_path = server.job_journal._paths[first["id"]]
         second_path = server.job_journal._paths[second["id"]]
     original_unlink = type(first_path).unlink
@@ -560,8 +560,8 @@ def test_committed_deletion_succeeds_when_corpus_and_journal_cleanup_fail(monkey
     assert response.status_code == 200
     assert [item["id"] for item in response.json()["workspaces"]] == ["default"]
     assert config.get_workspace(target["id"]) is None
-    assert first["id"] not in server._jobs
-    assert second["id"] not in server._jobs
+    assert first["id"] not in job_queue._jobs
+    assert second["id"] not in job_queue._jobs
     assert first["id"] not in server.job_journal._paths
     assert second["id"] not in server.job_journal._paths
     assert first_path.exists()
@@ -606,8 +606,8 @@ def test_failed_retirement_directory_sync_keeps_original_corpus(monkeypatch, cap
         before = path.read_bytes()
         retained = config.pdfs_dir() / ".incoming-retry.pdf"
         retained.write_bytes(b"%PDF-1.4\nSaved retry input")
-        job = server._new_import_job("Retry upload", False, staged=retained, filename="input.pdf")
-        server._set(job, state="error")
+        job = job_queue._new_import_job("Retry upload", False, staged=retained, filename="input.pdf")
+        job_queue._set(job, state="error")
         folder = config.data_dir()
         files_before = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
     fsync = os.fsync
@@ -624,7 +624,7 @@ def test_failed_retirement_directory_sync_keeps_original_corpus(monkeypatch, cap
     assert config.get_workspace(target["id"]) is None
     assert path.read_bytes() == before
     assert {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()} == files_before
-    assert job["id"] not in server._jobs
+    assert job["id"] not in job_queue._jobs
     assert job["id"] not in server.job_journal._paths
     assert "corpus kept" in caplog.text
     assert "Directory sync unavailable" in caplog.text
@@ -663,15 +663,15 @@ def test_delete_rejects_broken_registry_without_touching_data():
 def test_delete_waits_for_queued_and_running_jobs(state):
     target = config.create_workspace("Research")
     with config.use_workspace(target["id"]):
-        job = server._new_job("Active import", state=state)
+        job = job_queue._new_job("Active import", state=state)
     try:
         client = TestClient(server.app, base_url="http://127.0.0.1:8765")
         assert client.delete(f"/api/workspaces/{target['id']}").status_code == 409
         assert config.get_workspace(target["id"]) == target
-        server._set(job, state="done")
+        job_queue._set(job, state="done")
         assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
     finally:
-        server._jobs.pop(job["id"], None)
+        job_queue._jobs.pop(job["id"], None)
 
 
 def test_delete_waits_for_inflight_requests(monkeypatch):
@@ -753,15 +753,15 @@ def test_delete_waits_until_worker_returns_even_after_terminal_state():
     target = config.create_workspace("Research")
     held, release = threading.Event(), threading.Event()
 
-    @server._workspace_job
+    @job_queue._workspace_job
     def worker(job):
-        server._set(job, state="done")
+        job_queue._set(job, state="done")
         held.set()
         assert release.wait(5)
         store.save_paper(store.new_paper("last-write", title="Final cleanup"))
 
     with config.use_workspace(target["id"]):
-        job = server._new_job("Finishing import")
+        job = job_queue._new_job("Finishing import")
     try:
         client = TestClient(server.app, base_url="http://127.0.0.1:8765")
         with ThreadPoolExecutor(1) as pool:
@@ -774,19 +774,19 @@ def test_delete_waits_until_worker_returns_even_after_terminal_state():
             pending.result(timeout=5)
         assert client.delete(f"/api/workspaces/{target['id']}").status_code == 200
     finally:
-        server._jobs.pop(job["id"], None)
+        job_queue._jobs.pop(job["id"], None)
 
 
 def test_refused_pruning_lease_preserves_notifications_journals_and_retry_inputs(monkeypatch):
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     target = config.create_workspace("Research")
     jobs, inputs, journals = [], [], []
     with config.use_workspace(target["id"]):
         for index in range(42):
             staged = config.pdfs_dir() / f".incoming-retry-{index}.pdf"
             staged.write_bytes(b"%PDF-1.4\nRetry input")
-            job = server._new_import_job(f"Import {index}", False, staged=staged, filename="input.pdf")
-            server._set(job, state="error")
+            job = job_queue._new_import_job(f"Import {index}", False, staged=staged, filename="input.pdf")
+            job_queue._set(job, state="error")
             jobs.append(job)
             inputs.append(staged)
             journals.append(server.job_journal._paths[job["id"]])
@@ -801,14 +801,14 @@ def test_refused_pruning_lease_preserves_notifications_journals_and_retry_inputs
             yield
 
     monkeypatch.setattr(config, "workspace_activity", lease)
-    server._prune_jobs()
-    assert set(server._jobs) == {job["id"] for job in jobs}
+    job_queue._prune_jobs()
+    assert set(job_queue._jobs) == {job["id"] for job in jobs}
     assert all(path.exists() for path in inputs + journals)
     assert all(job["_import"]["staged"] == path for job, path in zip(jobs, inputs, strict=True))
 
     busy = False
-    server._prune_jobs()
-    assert set(server._jobs) == {job["id"] for job in jobs[2:]}
+    job_queue._prune_jobs()
+    assert set(job_queue._jobs) == {job["id"] for job in jobs[2:]}
     assert all(not path.exists() for path in inputs[:2] + journals[:2])
     assert all(path.exists() for path in inputs[2:] + journals[2:])
 

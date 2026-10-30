@@ -10,15 +10,15 @@ import types
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __version__, config, fingerprint, server, store
+from doxograph import __version__, activity, config, fingerprint, ingest, job_queue, server, store
 
 
 @pytest.fixture(autouse=True)
 def no_stray_jobs():
-    """`server._jobs` outlives any one test, and `busy` counts every entry."""
-    server._jobs.clear()
+    """`job_queue._jobs` outlives any one test, and `busy` counts every entry."""
+    job_queue._jobs.clear()
     yield
-    server._jobs.clear()
+    job_queue._jobs.clear()
 
 
 def test_health_identifies_the_app_and_is_idle_by_default():
@@ -34,18 +34,18 @@ def test_health_identifies_the_app_and_is_idle_by_default():
 def test_health_counts_only_unfinished_jobs():
     """The launcher warns before quitting on a nonzero count, so a finished job
     must not keep it warning forever."""
-    running = server._new_job("reading.pdf")
-    server._set(running, state="reading")
-    done = server._new_job("done.pdf")
-    server._set(done, state="done")
-    failed = server._new_job("failed.pdf")
-    server._set(failed, state="error")
+    running = job_queue._new_job("reading.pdf")
+    job_queue._set(running, state="reading")
+    done = job_queue._new_job("done.pdf")
+    job_queue._set(done, state="done")
+    failed = job_queue._new_job("failed.pdf")
+    job_queue._set(failed, state="error")
     try:
         with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
             assert client.get("/api/health").json()["busy"] == 1
     finally:
         for job in (running, done, failed):
-            server._jobs.pop(job["id"], None)
+            job_queue._jobs.pop(job["id"], None)
 
 
 def test_health_does_not_read_the_corpus(monkeypatch):
@@ -114,25 +114,25 @@ def test_a_job_with_no_request_to_count_it_counts_itself():
     """Not every job comes from a counted request: a GET is not counted as
     arriving, and a few of them make jobs. Those would go unseen if the count
     lived only in the middleware."""
-    before = server._work_taken
-    job = server._new_job("reading.pdf")          # no request context at all
+    before = activity._work_taken
+    job = job_queue._new_job("reading.pdf")          # no request context at all
     try:
-        assert server._work_taken == before + 1
+        assert activity._work_taken == before + 1
     finally:
-        server._jobs.pop(job["id"], None)
+        job_queue._jobs.pop(job["id"], None)
 
 
 def test_a_job_inside_a_counted_request_does_not_count_again():
     """The other half of the same rule, checked at the seam rather than through
     the wire, so it stays pinned if the middleware moves."""
-    token = server._request_counted.set(True)
-    before = server._work_taken
-    job = server._new_job("reading.pdf")
+    token = activity._request_counted.set(True)
+    before = activity._work_taken
+    job = job_queue._new_job("reading.pdf")
     try:
-        assert server._work_taken == before
+        assert activity._work_taken == before
     finally:
-        server._jobs.pop(job["id"], None)
-        server._request_counted.reset(token)
+        job_queue._jobs.pop(job["id"], None)
+        activity._request_counted.reset(token)
 
 
 def test_code_and_health_say_who_they_came_from():
@@ -438,7 +438,7 @@ def test_health_counts_an_upload_whose_body_is_still_arriving(monkeypatch):
     request arrives in full there is no job either, and the launcher reading
     `busy: 0` stops the server it started on top of a paper mid-flight.
     """
-    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *a, **k: None)
     seen = []
 
     def body():
@@ -470,9 +470,9 @@ def test_health_reports_reading_and_arriving_apart(monkeypatch):
 
     `busy` stays the sum of the two, unchanged, for anything reading only that.
     """
-    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
-    reading = server._new_job("reading.pdf")
-    server._set(reading, state="reading")
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *a, **k: None)
+    reading = job_queue._new_job("reading.pdf")
+    job_queue._set(reading, state="reading")
     seen = []
 
     def body():
@@ -486,7 +486,7 @@ def test_health_reports_reading_and_arriving_apart(monkeypatch):
                 headers={"content-type": "multipart/form-data; boundary=b0undary"})
             idle = client.get("/api/health").json()
     finally:
-        server._jobs.pop(reading["id"], None)
+        job_queue._jobs.pop(reading["id"], None)
 
     assert seen[0]["jobs"] == 1, "the reading job was not reported on its own"
     assert seen[0]["arriving"] == 1, "the upload on the wire was not reported on its own"
@@ -512,9 +512,9 @@ def test_health_reads_the_arrival_count_before_the_job_count(monkeypatch):
     fired = []
 
     def finish_the_upload():
-        server._new_job("paper.pdf")
-        with server._arrivals_lock:
-            server._requests_arriving -= 1
+        job_queue._new_job("paper.pdf")
+        with activity._arrivals_lock:
+            activity._requests_arriving -= 1
 
     class SlippingLock:
         """Lets that upload land in the gap between health's two samples."""
@@ -533,15 +533,15 @@ def test_health_reads_the_arrival_count_before_the_job_count(monkeypatch):
                 finish_the_upload()
             return released
 
-    monkeypatch.setattr(server, "_requests_arriving", 1)
-    monkeypatch.setattr(server, "_jobs_lock", SlippingLock(server._jobs_lock))
-    monkeypatch.setattr(server, "_arrivals_lock", SlippingLock(server._arrivals_lock))
+    monkeypatch.setattr(activity, "_requests_arriving", 1)
+    monkeypatch.setattr(job_queue, "_jobs_lock", SlippingLock(job_queue._jobs_lock))
+    monkeypatch.setattr(activity, "_arrivals_lock", SlippingLock(activity._arrivals_lock))
 
     body = server.health()
 
     assert fired, "health took no sample at all"
-    assert server._requests_arriving == 0, "the upload never finished"
-    assert len(server._jobs) == 1, "the upload left no job behind"
+    assert activity._requests_arriving == 0, "the upload never finished"
+    assert len(job_queue._jobs) == 1, "the upload left no job behind"
     assert (body["jobs"], body["arriving"], body["busy"]) == (1, 1, 2), (
         "health sampled the job count before the arrival count, so the paper "
         "that landed between the two reads was invisible to both"
@@ -551,14 +551,14 @@ def test_health_reads_the_arrival_count_before_the_job_count(monkeypatch):
 def test_health_counts_an_upload_that_is_staged_but_not_yet_a_job(monkeypatch):
     """Staging a large PDF takes a while, and `_new_job` only runs after it."""
     seen = []
-    real_stage = server.ingest.stage_upload
+    real_stage = ingest.stage_upload
 
     def watched(stream, name):
         seen.append(server.health()["busy"])
         return real_stage(stream, name)
 
-    monkeypatch.setattr(server.ingest, "stage_upload", watched)
-    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    monkeypatch.setattr(ingest, "stage_upload", watched)
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *a, **k: None)
 
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.post("/api/upload?extract_now=false",
@@ -571,14 +571,14 @@ def test_health_counts_an_upload_that_is_staged_but_not_yet_a_job(monkeypatch):
 
 def test_a_finished_upload_stops_being_counted(monkeypatch):
     """Otherwise the launcher would warn about a paper forever after."""
-    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *a, **k: None)
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.post("/api/upload?extract_now=false",
                     files={"files": ("paper.pdf", b"%PDF-1.4\n", "application/pdf")})
         # The job it made outlives the request, so settle that separately: what
         # is being checked here is that the request stopped being counted.
-        for job in list(server._jobs.values()):
-            server._set(job, state="done")
+        for job in list(job_queue._jobs.values()):
+            job_queue._set(job, state="done")
         assert client.get("/api/health").json()["busy"] == 0
     for staged in config.pdfs_dir().glob(".incoming-*"):
         staged.unlink()
@@ -589,7 +589,7 @@ def test_a_failed_upload_stops_being_counted(monkeypatch):
     def explode(*args, **kwargs):
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(server.ingest, "stage_upload", explode)
+    monkeypatch.setattr(ingest, "stage_upload", explode)
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         with pytest.raises(RuntimeError):
             client.post("/api/upload?extract_now=false",
@@ -605,16 +605,16 @@ def test_health_counts_an_ingest_that_is_still_being_handled(monkeypatch):
     small, so the window is short, but a quit that falls in it stops an owned
     server and the papers are never fetched.
     """
-    monkeypatch.setattr(server._pool, "submit", lambda *a, **k: None)
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *a, **k: None)
     seen = []
-    real_parse = server.ingest.parse_refs
+    real_parse = ingest.parse_refs
 
     def watched(text):
         # Inside the handler, before a single job exists.
         seen.append(server.health())
         return real_parse(text)
 
-    monkeypatch.setattr(server.ingest, "parse_refs", watched)
+    monkeypatch.setattr(ingest, "parse_refs", watched)
 
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
@@ -641,9 +641,9 @@ def test_only_reads_escape_the_arrival_count():
     seen = {}
 
     async def app(scope, receive, send):
-        seen[scope["method"]] = server._requests_arriving
+        seen[scope["method"]] = activity._requests_arriving
 
-    counter = server.CountArrivingRequests(app)
+    counter = activity.CountArrivingRequests(app)
     for method in ("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"):
         asyncio.run(counter({"type": "http", "method": method, "path": "/api/whatever"},
                             None, None))
@@ -651,7 +651,7 @@ def test_only_reads_escape_the_arrival_count():
     assert sorted(m for m, count in seen.items() if count == 1) == [
         "DELETE", "PATCH", "POST", "PUT"]
     assert sorted(m for m, count in seen.items() if count == 0) == ["GET", "HEAD", "OPTIONS"]
-    assert server._requests_arriving == 0, "the count did not come back down"
+    assert activity._requests_arriving == 0, "the count did not come back down"
 
 
 def test_health_does_not_count_itself():
@@ -665,7 +665,7 @@ def test_a_finished_mutating_request_stops_being_counted():
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/ingest", json={"text": "", "extract": False}).status_code == 200
         assert client.get("/api/health").json()["busy"] == 0
-        assert server._requests_arriving == 0
+        assert activity._requests_arriving == 0
 
 
 def test_pdf_is_an_attachment_by_default():
