@@ -8,7 +8,7 @@ from playwright.async_api import async_playwright
 
 from browser_support import browser_session, run_browser
 from doxograph import config, store
-from test_browser import _server
+from test_browser import _answer, _server
 
 
 @pytest.mark.browser
@@ -138,6 +138,84 @@ def test_long_chat_keeps_draft_and_explains_how_to_start_over(answer, turns):
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_paper_conversations_run_side_by_side_on_their_own_agents_and_survive_reload(engine):
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors, requests = [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            held, release = asyncio.Event(), asyncio.Event()
+
+            async def respond(route):
+                body = route.request.post_data_json
+                requests.append((body['agent'], [m['content'] for m in body['messages']]))
+                if body['messages'][0]['content'] == 'First question' and len(body['messages']) == 1:
+                    held.set()
+                    await release.wait()
+                assistant = {'codex': 'ChatGPT', 'api': 'Anthropic'}.get(body['agent'], 'Claude')
+                await route.fulfill(json={'answer': f'{assistant} answer {len(requests)}.', 'model': 'test',
+                                          'assistant': assistant})
+
+            async def open_chat():
+                await page.locator('#papers [data-paper="study"]').click()
+                await page.get_by_role('button', name='Ask about this paper', exact=True).click()
+
+            await page.route('**/api/papers/study/chat', respond)
+            await page.goto(url)
+            await open_chat()
+            assert await page.locator('#chat-agent').input_value() == 'claude_code'
+            await page.locator('#chat-question').fill('First question')
+            await page.locator('#chat-send').click()
+            await asyncio.wait_for(held.wait(), timeout=10)
+            # Start another conversation, on another agent, while the first is still answering.
+            await page.locator('#chat-clear').click()
+            await page.locator('#chat-agent').select_option('codex')
+            await page.locator('#chat-question').fill('Second question')
+            await page.locator('#chat-send').click()
+            await page.get_by_text('ChatGPT answer 2.', exact=True).wait_for()
+            release.set()
+            await page.locator('#chat-thread option', has_text='First question').filter(
+                has_not_text='answering').wait_for(state='attached')
+            assert requests == [('claude_code', ['First question']), ('codex', ['Second question'])]
+
+            await page.reload()
+            await open_chat()
+            # The most recently answered conversation reopens; the held first answer may have landed last.
+            await page.locator('#chat-thread option').nth(1).wait_for(state='attached')
+            assert sorted(await page.locator('#chat-thread option').all_text_contents()) == ['First question', 'Second question']
+            await page.locator('#chat-thread').select_option(label='Second question')
+            await page.get_by_text('ChatGPT answer 2.', exact=True).wait_for()
+            assert await page.locator('#chat-agent').input_value() == 'codex'
+            await page.locator('#chat-thread').select_option(label='First question')
+            assert await page.locator('#chat-agent').input_value() == 'claude_code'
+            await page.get_by_text('Claude answer 2.', exact=True).wait_for()
+            await page.locator('#chat-question').fill('Follow up')
+            await page.locator('#chat-send').click()
+            await page.get_by_text('Claude answer 3.', exact=True).wait_for()
+            assert requests[-1] == ('claude_code', ['First question', 'Claude answer 2.', 'Follow up'])
+
+            await page.locator('#chat-thread').select_option(label='Second question')
+            await page.locator('#chat-delete').click()
+            await _answer(page, 'Delete conversation')
+            await page.locator('#chat-thread option', has_text='Second question').wait_for(state='detached')
+            assert await page.locator('#chat-thread option').all_text_contents() == ['First question']
+            await page.get_by_text('Claude answer 3.', exact=True).wait_for()
+            [saved] = store.config.data_dir().joinpath('chats').glob('*.json')
+            saved = json.loads(saved.read_text())
+            assert saved['paper'] == 'study' and saved['agent'] == 'claude_code'
+            assert [m['assistant'] for m in saved['messages'][1::2]] == ['Claude', 'Claude']
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
 @pytest.mark.parametrize('provider,assistant', [('claude_code', 'Claude'), ('codex', 'ChatGPT')])
 def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider, assistant):
     config.set_ai_provider(provider)
@@ -178,7 +256,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider,
 
 
 @pytest.mark.browser
-def test_library_agent_cannot_send_outside_subscription_mode():
+def test_library_agent_offers_only_subscriptions_when_settings_choose_an_api():
     config.set_ai_provider('api')
 
     async def check(url):
@@ -186,13 +264,20 @@ def test_library_agent_cannot_send_outside_subscription_mode():
             browser = await playwright.chromium.launch()
             page = await browser.new_page()
             requests = []
-            await page.route('**/api/agent/chat', lambda route: requests.append(route))
+
+            async def respond(route):
+                requests.append(route.request.post_data_json['agent'])
+                await route.fulfill(json={'answer': 'From the library.', 'assistant': 'Claude'})
+
+            await page.route('**/api/agent/chat', respond)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
+            assert await page.locator('#agent-agent option').evaluate_all('options => options.map(o => o.value)') \
+                == ['claude_code', 'codex']
             await page.locator('#agent-question').fill('Anything?')
-            assert await page.locator('#agent-send').is_disabled()
-            assert 'Claude subscription' in await page.locator('#agent-status').text_content()
-            assert requests == []
+            await page.locator('#agent-send').click()
+            await page.get_by_text('From the library.', exact=True).wait_for()
+            assert requests == ['claude_code']
             await browser.close()
 
     with _server() as url:
@@ -201,7 +286,7 @@ def test_library_agent_cannot_send_outside_subscription_mode():
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_library_agent_updates_provider_without_losing_drafts_or_answer_labels(engine):
+def test_library_agent_switches_agent_without_losing_drafts_or_answer_labels(engine):
     config.set_ai_provider('claude_code')
 
     async def check(url):
@@ -209,7 +294,7 @@ def test_library_agent_updates_provider_without_losing_drafts_or_answer_labels(e
             page = await browser.new_page()
 
             async def respond(route):
-                assistant = 'ChatGPT' if config.ai_provider() == 'codex' else 'Claude'
+                assistant = 'ChatGPT' if route.request.post_data_json['agent'] == 'codex' else 'Claude'
                 await route.fulfill(json={'answer': f'{assistant} answer.', 'assistant': assistant})
 
             await page.route('**/api/agent/chat', respond)
@@ -219,12 +304,12 @@ def test_library_agent_updates_provider_without_losing_drafts_or_answer_labels(e
             await page.locator('#agent-send').click()
             await page.get_by_text('Claude answer.', exact=True).wait_for()
             await page.locator('#agent-question').fill('Follow up')
+            # Settings changes do not move a conversation off the agent it uses.
             config.set_ai_provider('api')
             await page.evaluate('pollOnce()')
-            assert await page.locator('#agent-send').is_disabled()
-            config.set_ai_provider('codex')
-            await page.evaluate('pollOnce()')
+            assert await page.locator('#agent-agent').input_value() == 'claude_code'
             assert await page.locator('#agent-send').is_enabled()
+            await page.locator('#agent-agent').select_option('codex')
             assert await page.locator('#agent-question').input_value() == 'Follow up'
             assert await page.locator('#agent-codex-guidance').is_visible()
             await page.locator('#agent-send').click()
@@ -261,8 +346,6 @@ def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider)
             await page.locator('#btn-agent').click()
             assert await page.locator('#library-agent').is_visible()
             assert 'Enable AI analysis in Settings.' in await page.locator('#agent-status').inner_text()
-            if provider == 'api':
-                assert 'Choose Claude subscription' in await page.locator('#agent-status').inner_text()
             await page.locator('#agent-question').fill('Keep my question')
             assert await page.locator('#agent-send').is_disabled()
             assert requests == []
@@ -272,9 +355,6 @@ def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider)
             assert await page.locator('#settings-menu').is_visible()
             await page.locator('#ai-enabled').check()
             await page.get_by_text('AI analysis enabled.', exact=True).wait_for()
-            if provider == 'api':
-                await page.locator('#ai-access').select_option('claude_code')
-                await page.get_by_text('Model access saved.', exact=True).wait_for()
             await page.locator('#btn-close-settings').click()
             await page.locator('#btn-agent').click()
             assert await page.locator('#agent-question').input_value() == 'Keep my question'

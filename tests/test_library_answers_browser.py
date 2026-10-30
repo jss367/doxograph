@@ -119,9 +119,11 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 exported = Path(await (await download.value).path()).read_text()
                 assert exported.startswith('# Recovery across the project\n\n')
                 assert ANSWER in exported
+                # The conversation, and the note it was saved to, survive the reload.
                 await page.get_by_role('button', name='Close research notes', exact=True).click()
                 await page.locator('#btn-agent').click()
-                assert await page.locator('#agent-messages').inner_text() == ''
+                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
+                assert await page.locator('#agent-thread option').all_text_contents() == [QUESTION]
                 assert not errors and not external
 
     run_browser(scenario())
@@ -267,7 +269,7 @@ def test_library_answer_safe_rendering_and_failed_save_retry(engine):
                 await asyncio.wait_for(held.wait(), timeout=10)
                 try:
                     assert await page.get_by_role('button', name='Saving…', exact=True).is_disabled()
-                    assert await page.locator('#agent-clear').is_disabled()
+                    assert await page.locator('#agent-delete').is_disabled()
                     await page.locator('#agent-close').click()
                 finally:
                     release.set()

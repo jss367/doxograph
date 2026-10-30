@@ -64,7 +64,7 @@ def _snapshot_locks():
         locks = contextlib.ExitStack()
         try:
             for name in ('vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
-                         'agreements', 'tensions', 'syntheses', 'retired-keys'):
+                         'agreements', 'tensions', 'syntheses', 'retired-keys', 'chats'):
                 locks.enter_context(store.document_lock(name, blocking=False))
             keys = store.paper_keys()
             for key in keys:
@@ -96,7 +96,7 @@ def build() -> Path:
                 'created': store.now(), 'files': {}, 'skipped': []}
     try:
         with _snapshot_locks() as keys:
-            for name in [*backups.DOCUMENTS, research_notes.REVISION_FILE, 'papers', 'pdfs', 'note-images']:
+            for name in [*backups.DOCUMENTS, research_notes.REVISION_FILE, 'papers', 'pdfs', 'note-images', 'chats']:
                 if (root / name).is_symlink():
                     raise HTTPException(409, f'The archive cannot include symbolic links: {name}')
             for key in keys:
@@ -135,6 +135,8 @@ def build() -> Path:
                 for path in sorted((root / 'note-images').glob('*')):
                     if not path.name.startswith('.'):
                         copy(path, f'data/note-images/{path.name}')
+                for path in sorted((root / 'chats').glob('*.json')):
+                    copy(path, f'data/chats/{path.name}')
                 saved_papers = []
                 for key in keys:
                     path = store.paper_path(key)

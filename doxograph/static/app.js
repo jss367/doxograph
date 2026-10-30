@@ -4721,9 +4721,10 @@ function syncAnalysisControls() {
     codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Includes your global Codex instructions along with extracted PDF text; figures and scanned pages are unavailable. API billing is never used as a fallback.',
   };
   $('ai-access-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
-  $('chat-access-help').textContent = S.ai_provider === 'codex'
+  const chatAgent = activeChat()?.agent || S.ai_provider;
+  $('chat-access-help').textContent = chatAgent === 'codex'
     ? 'ChatGPT receives page-labeled PDF text and your global Codex instructions. Choose Claude to omit that global guidance. Figures and scanned pages are unavailable.'
-    : S.ai_provider === 'api' && S.provider !== 'anthropic'
+    : chatAgent === 'api' && S.provider !== 'anthropic'
       ? 'The selected API or local model receives page-labeled PDF text; images are unavailable.'
       : 'Claude receives the PDF, including its page images.';
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
@@ -4733,7 +4734,7 @@ function syncAnalysisControls() {
   $('codex-model-save').disabled = savingCodexModel || savingProviderSetting;
   $('codex-model-refresh').disabled = loadingCodexModels;
   $('codex-current-model').textContent = `Current model: ${S.codex_model || 'Codex default (automatic)'}`;
-  $('chat-send').disabled = !enabled || Boolean(activeChat && activeChat.busy);
+  $('chat-send').disabled = !enabled || Boolean(activeChat()?.busy);
   $('ai-action-status').hidden = enabled;
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;
@@ -4863,29 +4864,28 @@ $('codex-model-form').addEventListener('submit', async (event) => {
   }
 });
 
-// Conversations are scoped by workspace and paper, and live only in this tab.
-const paperChats = new Map();
-let activeChat = null;
-function renderPaperChat() {
-  if (!activeChat) return;
-  $('chat-messages').innerHTML = activeChat.messages.map((m) =>
-    `<div class="note"><span class="who">${m.role === 'user' ? 'You' : esc(m.assistant || 'Claude')}</span>
-      ${paragraphs(m.content).map((p) => `<p>${esc(p)}</p>`).join('')}</div>`).join('');
-  $('chat-question').value = activeChat.draft;
-  $('chat-question').disabled = activeChat.busy;
-  $('chat-clear').disabled = activeChat.busy;
-  $('chat-status').textContent = activeChat.busy ? 'Reading the paper…' : activeChat.error || '';
-  syncAnalysisControls();
-}
+// Each paper keeps its saved conversations in its workspace, and each conversation its own agent.
+let paperChatKey = null;
+const paperChats = ChatThreads.create({
+  prefix: 'chat',
+  agents: () => ['api', 'claude_code', 'codex'],
+  render(chat) {
+    $('chat-messages').innerHTML = chat.messages.map((m) =>
+      `<div class="note"><span class="who">${m.role === 'user' ? 'You' : esc(m.assistant || 'Claude')}</span>
+        ${paragraphs(m.content).map((p) => `<p>${esc(p)}</p>`).join('')}</div>`).join('');
+    $('chat-question').value = chat.draft;
+    $('chat-question').disabled = chat.busy;
+    $('chat-status').textContent = chat.busy ? 'Reading the paper…' : chat.error || paperChats.issues.join(' ');
+    syncAnalysisControls();
+  },
+});
+const activeChat = () => paperChats.active;
 document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-paper-chat]');
   if (!button || button.disabled) return;
-  const key = button.dataset.paperChat;
-  const id = JSON.stringify([workspaceClient.workspaceId, key]);
-  if (!paperChats.has(id)) paperChats.set(id, { key, workspace: workspaceClient.workspaceId, messages: [], draft: '', busy: false, error: '' });
-  activeChat = paperChats.get(id);
-  $('chat-paper-title').textContent = (S.papers.find((p) => p.key === key) || {}).title || key;
-  renderPaperChat();
+  paperChatKey = button.dataset.paperChat;
+  $('chat-paper-title').textContent = (S.papers.find((p) => p.key === paperChatKey) || {}).title || paperChatKey;
+  paperChats.open(workspaceClient.workspaceId, paperChatKey);
   $('paper-chat').showModal();
   $('chat-question').focus();
 });
@@ -4901,40 +4901,19 @@ function sendOnEnter(field) {
   });
 }
 sendOnEnter($('chat-question'));
-$('chat-question').addEventListener('input', () => { if (activeChat) activeChat.draft = $('chat-question').value; });
+$('chat-question').addEventListener('input', () => { if (activeChat()) activeChat().draft = $('chat-question').value; });
 $('chat-close').addEventListener('click', () => $('paper-chat').close());
-$('chat-clear').addEventListener('click', () => {
-  if (!activeChat || activeChat.busy) return;
-  activeChat.messages = []; activeChat.draft = ''; activeChat.error = '';
-  renderPaperChat();
-});
-$('chat-form').addEventListener('submit', async (event) => {
+$('chat-form').addEventListener('submit', (event) => {
   event.preventDefault();
-  const chat = activeChat;
-  if (!chat || chat.busy || S.ai_enabled !== true || !chat.draft.trim()) return;
-  const question = chat.draft.trim();
-  const messages = [...chat.messages, { role: 'user', content: question }];
-  const lengths = messages.map((message) => Array.from(message.content).length);
-  if (messages.length > 40 || lengths.some((length) => length > 32000)
-      || lengths.reduce((total, length) => total + length, 0) > 80000) {
-    chat.error = 'Start a new conversation; this one is too long.';
-    renderPaperChat();
-    return;
-  }
-  chat.busy = true; chat.error = '';
-  renderPaperChat();
-  try {
-    const result = await api(`/api/papers/${encodeURIComponent(chat.key)}/chat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': chat.workspace },
-      body: JSON.stringify({ messages: messages.map(({ role, content }) => ({ role, content })) }),
+  if (S.ai_enabled !== true) return;
+  const key = paperChatKey, workspace = paperChats.workspace;
+  paperChats.ask(async (chat, messages) => {
+    const result = await api(`/api/papers/${encodeURIComponent(key)}/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+      body: JSON.stringify({ messages, agent: chat.agent }),
     });
-    chat.messages = [...messages, { role: 'assistant', content: result.answer, assistant: result.assistant || 'Claude' }];
-    chat.draft = '';
-  } catch (error) { chat.error = error.message; }
-  finally {
-    chat.busy = false;
-    if (activeChat === chat) renderPaperChat();
-  }
+    return { content: result.answer, assistant: result.assistant || 'Claude', model: result.model || '' };
+  });
 });
 
 let providerDrafts = {};
