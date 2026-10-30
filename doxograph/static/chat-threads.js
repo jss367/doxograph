@@ -4,7 +4,8 @@
 // Each conversation keeps its own agent. The page asks the model, then saves the whole
 // conversation with the revision it last saw. Unsaved answers stay in this tab until a save works.
 // If another window changed or deleted the conversation first, this tab's version becomes its own.
-// Loaded before app.js, which owns `$`, `api`, `esc`, `confirmDialog`, and `S`; these run only after it loads.
+// Loaded before app.js, which owns `$`, `api`, `esc`, and `S`, and dialogs.js, which owns `confirmDialog`;
+// these run only after they load.
 const ChatThreads = (() => {
   const operation = () => Array.from(crypto.getRandomValues(new Uint8Array(16)),
     byte => byte.toString(16).padStart(2, '0')).join('');
