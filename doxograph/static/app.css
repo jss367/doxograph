@@ -678,6 +678,9 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 #agent-messages .activity { margin-top: .75rem; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 #agent-messages .activity summary { cursor: pointer; }
 #agent-messages .activity ul { padding-left: 1.25rem; }
+.chat-threads { flex-wrap: wrap; gap: .5rem 1rem; margin-top: .75rem; }
+.chat-threads label { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.chat-threads select { max-width: 22rem; }
 #chat-form, #agent-form { margin-top: 1rem; }
 #chat-form .row, #agent-form .row { margin-top: .75rem; }
 .sheet h2 { font-size: 1rem; margin: 0 0 .5rem; }

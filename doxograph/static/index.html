@@ -461,8 +461,13 @@
     <button type="button" id="chat-close" style="margin-left:auto" aria-label="Close paper chat">×</button></div>
   <p class="hint" id="chat-paper-title"></p>
   <p class="hint" id="chat-access-help"></p>
-  <p class="hint">Sends this paper and conversation to the selected model. Your Doxograph notes stay private.
-    Chat lasts for this page session. Check answers against the paper.</p>
+  <p class="hint">Sends this paper and conversation to the chosen agent. Your Doxograph notes stay private.
+    Conversations are saved in this workspace. Check answers against the paper.</p>
+  <div class="row chat-threads">
+    <label>Conversation <select id="chat-thread"></select></label>
+    <label>Agent <select id="chat-agent"></select></label>
+    <button type="button" id="chat-delete" hidden>Delete</button>
+  </div>
   <div id="chat-messages" role="log" aria-live="polite"></div>
   <form id="chat-form">
     <label for="chat-question">Question about the paper</label>
@@ -476,10 +481,15 @@
 <dialog id="library-agent" class="sheet paper-chat" aria-labelledby="library-agent-title">
   <div class="row"><h2 id="library-agent-title">Ask the library</h2>
     <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
-  <p class="hint">Uses your Claude or ChatGPT subscription selected in Settings → Model access to look through this workspace's papers, claims,
+  <p class="hint">Uses your Claude or ChatGPT subscription to look through this workspace's papers, claims,
     topics, agreements, and tensions. It cannot change anything. Your Doxograph notes stay private.
-    Save answers as research notes to keep them after this page session. Check answers against the papers.</p>
+    Conversations are saved in this workspace; save an answer as a research note to edit it. Check answers against the papers.</p>
   <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
+  <div class="row chat-threads">
+    <label>Conversation <select id="agent-thread"></select></label>
+    <label>Agent <select id="agent-agent"></select></label>
+    <button type="button" id="agent-delete" hidden>Delete</button>
+  </div>
   <div id="agent-messages" role="log" aria-live="polite"></div>
   <form id="agent-form">
     <label for="agent-question">Question about the library</label>
@@ -536,6 +546,7 @@
 <script src="/appearance.js"></script>
 <script src="/paper-map.js"></script>
 <script src="/focused-review.js"></script>
+<script src="/chat-threads.js"></script>
 <script src="/app.js"></script>
 <script src="/agent-chat.js"></script>
 <script src="/workspace-recovery.js"></script>

@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import backups, bib, config, notebook, research_notes, store
+from . import backups, bib, chats, config, notebook, research_notes, storage, store
 
 router = APIRouter(prefix='/api/workspace')
 _downloads: dict[str, tuple[Path, str, float]] = {}
@@ -64,7 +64,7 @@ def _snapshot_locks():
         locks = contextlib.ExitStack()
         try:
             for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
-                         'agreements', 'tensions', 'syntheses', 'retired-keys'):
+                         'agreements', 'tensions', 'syntheses', 'retired-keys', 'chats'):
                 locks.enter_context(store.document_lock(name, blocking=False))
             keys = store.paper_keys()
             for key in keys:
@@ -96,7 +96,7 @@ def build() -> Path:
                 'created': store.now(), 'files': {}, 'skipped': []}
     try:
         with _snapshot_locks() as keys:
-            for name in [*backups.DOCUMENTS, research_notes.REVISION_FILE, 'papers', 'pdfs', 'note-images']:
+            for name in [*backups.DOCUMENTS, research_notes.REVISION_FILE, 'papers', 'pdfs', 'note-images', 'chats']:
                 if (root / name).is_symlink():
                     raise HTTPException(409, f'The archive cannot include symbolic links: {name}')
             for key in keys:
@@ -135,6 +135,20 @@ def build() -> Path:
                 for path in sorted((root / 'note-images').glob('*')):
                     if not path.name.startswith('.'):
                         copy(path, f'data/note-images/{path.name}')
+                # Paper removal can finish while this waits for paper locks; its
+                # conversations go with it, so keep only those of the locked papers.
+                regular = set(chats.files())
+                for path in sorted((root / 'chats').glob('*.json')):
+                    if path not in regular:
+                        manifest['skipped'].append(path.relative_to(root).as_posix())
+                        continue
+                    try:
+                        paper = storage.read_model(path, chats.SavedChat).paper
+                    except storage.StorageReadError:
+                        manifest['skipped'].append(path.relative_to(root).as_posix())
+                        continue
+                    if paper is None or paper in keys:
+                        copy(path, f'data/chats/{path.name}')
                 saved_papers = []
                 for key in keys:
                     path = store.paper_path(key)
