@@ -759,3 +759,42 @@ def test_slugged_names_are_valid_facet_names():
         assert store.slugify(name) == name
     store.add_facet("Training Method: Kind")
     assert store.load_facets()[0]["name"] == "training-method-kind"
+
+
+def test_merging_into_a_renamed_spelling_merges_into_what_it_became(corpus):
+    first, second = corpus
+    store.add_facet("model", "models")
+    store.update_claim("doe2026study", first, {"facets": {"model": ["A"]}})
+    store.update_claim("doe2026study", second, {"facets": {"model": ["C"]}})
+    store.rewrite_facet_values("model", ["A"], "B")
+    store.rewrite_facet_values("model", ["C"], "A")
+
+    assert claims()[first]["facets"] == {"model": ["B"]}
+    assert claims()[second]["facets"] == {"model": ["B"]}
+    facet = store.load_facets()[0]
+    assert store.clean_facet_values(["a", "c", "b"], facet) == ["B"]
+    assert all(target == "B" for target in facet["aliases"].values())
+
+
+def test_a_rename_can_be_undone(corpus):
+    first, _ = corpus
+    store.add_facet("model", "models")
+    store.update_claim("doe2026study", first, {"facets": {"model": ["A"]}})
+    store.rewrite_facet_values("model", ["A"], "B")
+    store.rewrite_facet_values("model", ["B"], "A")
+
+    assert claims()[first]["facets"] == {"model": ["A"]}
+    facet = store.load_facets()[0]
+    # "b" now reads as A, and "a" is A in another case: one value.
+    assert [store.facet_value_key(v) for v in store.clean_facet_values(["a", "b"], facet)] == ["a"]
+
+
+def test_hand_edited_aliases_are_read_as_stored_values(corpus):
+    config.facets_path().write_text(yaml.safe_dump({"facets": [{
+        "name": "model", "description": "models",
+        "aliases": {"LLAMA2-7B": "Llama 2, 7B", "x": "y", "y": "x", "old": "LLAMA2-7B"},
+    }]}))
+    facet = store.load_facets()[0]
+    assert store.clean_facet_values(["llama2-7b"], facet) == ["Llama 2 7B"]
+    assert store.clean_facet_values(["old"], facet) == ["Llama 2 7B"]
+    assert len(store.clean_facet_values(["x"], facet)) == 1   # a cycle ends rather than loops

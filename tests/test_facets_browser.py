@@ -240,3 +240,46 @@ def test_choosing_a_facet_away_from_a_paper_keeps_its_note_draft(engine):
                 assert errors == []
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_a_rename_follows_the_filter_when_the_read_after_it_fails(engine):
+    config.set_ai_enabled(False)
+    _paper("one", "Steering study", "steering")
+    store.add_tag("steering")
+    store.add_facet("model", "models")
+    store.update_claim("one", "one-c1", {"facets": {"model": ["GPT-4"]}})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1280, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            fail = {"next": False}
+
+            async def state(route):
+                if fail["next"]:
+                    fail["next"] = False
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            with _server() as url:
+                await page.route("**/api/state**", state)
+                await page.goto(f"{url}/#facet=model%3AGPT-4")
+                chips = page.get_by_role("group", name="Active filters", exact=True)
+                await expect(chips.get_by_role("button", name="Remove filter: model: GPT-4", exact=True)).to_be_visible()
+                await page.locator("#facets details[data-facet='model'] [data-facet-act='values']").click()
+                await page.locator("#ask-label-choices [data-label='GPT-4']").click()
+                await page.locator("#ask-ok").click()
+                await page.locator("#ask-input").fill("GPT-4o")
+                fail["next"] = True
+                await page.locator("#ask-ok").click()
+                await expect(chips.get_by_role("button", name="Remove filter: model: GPT-4o", exact=True)).to_be_visible()
+                assert store.load_paper("one")["claims"][0]["facets"] == {"model": ["GPT-4o"]}
+                await _poll(page)
+                await expect(page.locator(".library-paper")).to_have_count(1)
+                assert errors == []
+
+    run_browser(scenario())

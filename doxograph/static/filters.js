@@ -588,7 +588,9 @@ async function facetRequest(path, method, body, failure) {
     toast(`${failure}: ${error.message}`, { tone: 'warn' });
     return false;
   }
-  await refresh();
+  // The change is saved; a read failing after it is a sync problem, which the
+  // sync notice reports and the poll retries, not a failed change.
+  await refreshShowingError();
   return true;
 }
 
@@ -684,7 +686,7 @@ $('btn-fill-facets').addEventListener('click', async () => {
     toast(`Could not fill in the facets: ${error.message}`, { tone: 'warn' });
     return;
   }
-  await refresh();
+  await refreshShowingError();
 });
 
 $('tags').addEventListener('click', (event) => {

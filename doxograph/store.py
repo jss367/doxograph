@@ -1434,20 +1434,37 @@ def facet_value_text(value: str) -> str:
     return " ".join(value.replace(",", " ").split())
 
 
+def facet_aliases(facet: dict[str, Any]) -> dict[str, str]:
+    """A facet's aliases keyed and valued as values are stored, whatever a
+    hand edit of the file wrote: a key in any case, a target with a comma."""
+    return {facet_value_key(key): facet_value_text(target)
+            for key, target in (facet.get("aliases") or {}).items()}
+
+
+def resolve_facet_value(value: str, aliases: dict[str, str]) -> str:
+    """Follow aliases to the value they end on, or "" for a removed one. A
+    chain from renames made one after another resolves to its end, and a
+    cycle, which only a hand edit can make, stops where it would repeat."""
+    seen = set()
+    while (key := facet_value_key(value)) in aliases and key not in seen:
+        seen.add(key)
+        value = aliases[key]
+        if not value:
+            return ""
+    return value
+
+
 def clean_facet_values(values: Any, facet: dict[str, Any], known: dict[str, str] | None = None) -> list[str]:
     """A facet's values as they are stored: commas and whitespace collapsed,
     aliases applied, one spelling per value, sorted."""
-    aliases: dict[str, str] = facet.get("aliases") or {}
+    aliases = facet_aliases(facet)
     cleaned: dict[str, str] = {}
     for raw in values if isinstance(values, list) else []:
         if not isinstance(raw, str) or not (value := facet_value_text(raw)):
             continue
+        if not (value := resolve_facet_value(value, aliases)):
+            continue
         key = facet_value_key(value)
-        if key in aliases:
-            value = aliases[key]
-            if not value:
-                continue
-            key = facet_value_key(value)
         cleaned.setdefault(key, known.get(key, value) if known else value)
     return sorted(cleaned.values(), key=lambda value: (facet_value_key(value), value))
 
@@ -1652,11 +1669,18 @@ def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict[str, 
         if facet is None:
             raise KeyError(name)
         old_keys = {facet_value_key(value) for value in old if value.strip()}
+        aliases = facet_aliases(facet)
+        # Merging into a spelling an earlier rename replaced means merging
+        # into what it became. Not when that is one of the values being
+        # renamed: then this is the rename being undone, and `new` is meant.
+        if new:
+            resolved = resolve_facet_value(new, aliases)
+            if resolved and facet_value_key(resolved) not in old_keys:
+                new = resolved
         new_key = facet_value_key(new) if new else None
         old_keys.discard(new_key)
         if not old_keys:
             return facets
-        aliases = dict[str, Any](facet.get("aliases") or {})
         # An alias that pointed at a value being renamed follows it.
         for key, target in aliases.items():
             if target and facet_value_key(target) in old_keys:
@@ -1665,7 +1689,7 @@ def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict[str, 
             aliases[key] = new
         if new_key is not None:
             aliases.pop(new_key, None)
-        facet["aliases"] = dict[str, Any](sorted(aliases.items()))
+        facet["aliases"] = dict(sorted(aliases.items()))
         _change_facets("values", name, facets, sorted(old_keys), new)
         return load_facets()
 
