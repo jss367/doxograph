@@ -178,6 +178,10 @@ def test_committed_save_with_lost_response_retries_once_and_deleted_note_can_be_
                 [first] = httpx.get(url + '/api/research-notes', headers=headers).json()['notes']
                 assert first['id'] == operations[0][0]
                 assert ANSWER in first['body']
+                # Reopening reloads saved conversations; the retry must keep the same key.
+                await page.locator('#agent-close').click()
+                await page.locator('#btn-agent').click()
+                await page.locator('#agent-messages .note-prose h2').wait_for()
                 assert await page.locator('#agent-question').input_value() == 'Keep this follow-up'
                 await page.get_by_role('button', name='Save as research note', exact=True).click()
                 await page.get_by_role('button', name='Open saved note', exact=True).wait_for()

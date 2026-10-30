@@ -137,7 +137,11 @@ def build() -> Path:
                         copy(path, f'data/note-images/{path.name}')
                 # Paper removal can finish while this waits for paper locks; its
                 # conversations go with it, so keep only those of the locked papers.
+                regular = set(chats.files())
                 for path in sorted((root / 'chats').glob('*.json')):
+                    if path not in regular:
+                        manifest['skipped'].append(path.relative_to(root).as_posix())
+                        continue
                     try:
                         paper = storage.read_model(path, chats.SavedChat).paper
                     except storage.StorageReadError:

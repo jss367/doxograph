@@ -9,6 +9,7 @@ written by one of them is still this page's own, not another window's.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -74,9 +75,20 @@ def _path(chat_id: str):
     return chats_dir() / f"{chat_id}.json"
 
 
+def _regular(path: Path) -> bool:
+    """A link or special file is never read: it could name something outside the
+    workspace, or block a read made while holding locks."""
+    return path.is_file() and not path.is_symlink()
+
+
+def files() -> list[Path]:
+    return [path for path in sorted(chats_dir().glob("*.json"))
+            if re.fullmatch(r"[a-f0-9]{32}\.json", path.name) and _regular(path)]
+
+
 def _load(chat_id: str) -> dict | None:
     path = _path(chat_id)
-    return storage.read_model(path, SavedChat).model_dump() if path.is_file() else None
+    return storage.read_model(path, SavedChat).model_dump() if _regular(path) else None
 
 
 def _shown(chat: dict) -> dict:
@@ -88,9 +100,7 @@ def _shown(chat: dict) -> dict:
 def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None) -> dict:
     """A paper's conversations, or the library's when no paper is given, newest first."""
     chats, issues = [], []
-    for path in sorted(chats_dir().glob("*.json")):
-        if not re.fullmatch(r"[a-f0-9]{32}\.json", path.name):
-            continue
+    for path in files():
         try:
             chat = storage.read_model(path, SavedChat).model_dump()
         except storage.StorageReadError as exc:
@@ -140,7 +150,7 @@ def delete_chat(chat_id: ChatId, revision: Annotated[int, Query(ge=1)]) -> dict:
 def delete_paper_chats(key: str) -> None:
     """A removed paper takes its conversations with it."""
     with store.document_lock("chats"):
-        for path in chats_dir().glob("*.json"):
+        for path in files():
             try:
                 paper = storage.read_model(path, SavedChat).paper
             except storage.StorageReadError:

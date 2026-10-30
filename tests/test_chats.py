@@ -1,6 +1,7 @@
 """Saved conversations stay with their workspace and paper, each on its own agent."""
 import io
 import json
+import os
 import uuid
 import zipfile
 
@@ -120,3 +121,15 @@ def test_paper_chat_answers_with_the_conversation_agent(client, monkeypatch, age
     assert response.status_code == 200
     assert client.post('/api/papers/study/chat', json={'messages': PAIR[:1]}).status_code == 200
     assert seen == [agent, 'api']
+
+
+def test_links_and_special_files_among_conversations_are_never_read(client):
+    client.put(f'/api/chats/{ID}', json={'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()})
+    (chats.chats_dir() / f'{"b" * 32}.json').symlink_to(chats.chats_dir() / 'missing.json')
+    os.mkfifo(chats.chats_dir() / f'{"c" * 32}.json')
+    assert [c['id'] for c in client.get('/api/chats').json()['chats']] == [ID]
+    download = client.post('/api/workspace/archive').json()['download']
+    with zipfile.ZipFile(io.BytesIO(client.get(download).content)) as archive:
+        manifest = json.loads(archive.read('manifest.json'))
+        assert f'data/chats/{ID}.json' in manifest['files']
+        assert {f'chats/{"b" * 32}.json', f'chats/{"c" * 32}.json'} <= set(manifest['skipped'])

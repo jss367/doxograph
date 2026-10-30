@@ -63,12 +63,13 @@ const ChatThreads = (() => {
       const response = await api(`/api/chats${target.paper ? `?paper=${encodeURIComponent(target.paper)}` : ''}`,
         { headers: { 'X-Doxograph-Workspace': target.workspace } });
       const local = new Map(target.threads.map(t => [t.id, t]));
-      // Keep what this tab is still writing or has not saved. Take everything else from disk,
-      // and keep an unsaved version that another window replaced or deleted as its own conversation.
+      // Keep what this tab is still writing, has not saved, or holds as new as disk (a list that
+      // began loading before a save finished is older). Take newer versions from disk, and keep an
+      // unsaved version that another window replaced or deleted as its own conversation.
       const threads = [], kept = [];
       for (const saved of response.chats) {
         let thread = local.get(saved.id);
-        if (thread && (writing(thread) || (thread.dirty && ahead(thread, saved)))) {
+        if (thread && (writing(thread) || (thread.dirty ? ahead(thread, saved) : saved.revision <= thread.revision))) {
           threads.push(thread);
           continue;
         }
@@ -77,8 +78,13 @@ const ChatThreads = (() => {
           kept.push(thread);
           thread = null;
         }
+        // A note save whose response was lost must retry with the same key, or it saves twice.
+        const messages = saved.messages.map((message, index) => {
+          const mine = thread?.messages[index];
+          return mine?.saveOperation && mine.content === message.content ? { ...message, saveOperation: mine.saveOperation } : message;
+        });
         threads.push(Object.assign(thread || { draft: '', busy: false, error: '', dirty: false, unconfirmed: [] },
-          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages }));
+          { id: saved.id, revision: saved.revision, agent: saved.agent, messages }));
       }
       for (const thread of target.threads) {
         if (threads.includes(thread) || kept.includes(thread)) continue;
