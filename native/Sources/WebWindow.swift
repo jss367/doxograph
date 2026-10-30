@@ -290,6 +290,26 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         }
     }
 
+    // HTML file inputs (including chat attachments) use a native sheet in the app.
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        if let parent = webView.window {
+            panel.beginSheetModal(for: parent) { response in
+                completionHandler(response == .OK ? panel.urls : nil)
+            }
+        } else {
+            completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+        }
+    }
+
     // MARK: - Page dialogs
     //
     // The page asks its own questions in HTML now, so nothing here is reached

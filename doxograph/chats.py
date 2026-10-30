@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import config, storage, store
+from .chat_attachments import Attachment, check_attachments
 
 router = APIRouter(prefix="/api/chats")
 ChatId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
@@ -30,7 +31,8 @@ LIBRARY_AGENTS = ("claude_code", "codex")
 class Message(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=200_000)
+    content: str = Field(default="", max_length=200_000)
+    attachments: list[Attachment] = Field(default_factory=list, max_length=5)
     assistant: str = Field(default="", max_length=100)
     model: str = Field(default="", max_length=200)
     activity: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=500)
@@ -49,6 +51,7 @@ class Conversation(BaseModel):
     @field_validator("messages")
     @classmethod
     def answered(cls, messages):
+        check_attachments(messages)
         if any(m.role != ("user" if i % 2 == 0 else "assistant") for i, m in enumerate(messages)) \
                 or messages[-1].role != "assistant":
             raise ValueError("Save alternating questions and answers, ending with an answer.")
@@ -100,7 +103,8 @@ def _load(chat_id: str) -> dict | None:
 
 
 def _shown(chat: dict) -> dict:
-    question = re.sub(r"\s+", " ", chat["messages"][0]["content"]).strip()
+    question = re.sub(r"\s+", " ", chat["messages"][0]["content"]).strip() or next(
+        (a["name"] for a in chat["messages"][0].get("attachments", [])), "New conversation")
     return dict(chat, title=question if len(question) <= 80 else question[:79].rstrip() + "…")
 
 

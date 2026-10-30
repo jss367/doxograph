@@ -453,7 +453,7 @@
   <p class="hint" id="chat-paper-title"></p>
   <p class="hint" id="chat-access-help"></p>
   <p class="hint">Sends this paper and conversation to the chosen agent. Your Doxograph notes stay private.
-    Conversations are saved in this workspace. Check answers against the paper.</p>
+    Conversations and attachments are saved in this workspace. Attached files are sent to the agent. Check answers against the paper.</p>
   <div class="row chat-threads">
     <label>Conversation <select id="chat-thread"></select></label>
     <label>Agent <select id="chat-agent"></select></label>
@@ -463,6 +463,12 @@
   <form id="chat-form">
     <label for="chat-question">Question about the paper</label>
     <textarea id="chat-question" rows="3" maxlength="8000" required></textarea>
+    <div id="chat-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
+    <div class="chat-attachment-picker">
+      <button type="button" id="chat-attach">Attach files…</button>
+      <input type="file" id="chat-files" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.tsv,.json,.jsonl,.log,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.toml,.tex,.rst">
+      <span class="hint">Drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.</span>
+    </div>
     <p class="hint" id="chat-status" role="status"></p>
     <div class="row right"><button type="button" id="chat-clear">New conversation</button>
       <button type="submit" class="primary" id="chat-send">Send</button></div>
@@ -474,7 +480,7 @@
     <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
   <p class="hint">Uses your Claude or ChatGPT subscription to look through this workspace's papers, claims,
     topics, agreements, and tensions. It cannot change anything. Your Doxograph notes stay private.
-    Conversations are saved in this workspace; save an answer as a research note to edit it. Check answers against the papers.</p>
+    Conversations and attachments are saved in this workspace. Attached files are sent to the agent; save an answer as a research note to edit it. Check answers against the papers.</p>
   <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
   <div class="row chat-threads">
     <label>Conversation <select id="agent-thread"></select></label>
@@ -485,6 +491,12 @@
   <form id="agent-form">
     <label for="agent-question">Question about the library</label>
     <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
+    <div id="agent-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
+    <div class="chat-attachment-picker">
+      <button type="button" id="agent-attach">Attach files…</button>
+      <input type="file" id="agent-files" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.tsv,.json,.jsonl,.log,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.toml,.tex,.rst">
+      <span class="hint">Drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.</span>
+    </div>
     <p class="hint" id="agent-status" role="status"></p>
     <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
       <button type="button" id="agent-clear">New conversation</button>

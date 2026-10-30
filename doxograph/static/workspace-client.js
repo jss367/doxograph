@@ -14,6 +14,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     if (!response.ok) {
       let detail = response.statusText;
       try { detail = (await response.json()).detail || detail; } catch (_) { /* keep statusText */ }
+      if (Array.isArray(detail)) detail = [...new Set(detail.map(issue => issue.msg || 'Invalid input.'))].join(' ');
       throw Object.assign(new Error(detail), { status: response.status });
     }
     return response;

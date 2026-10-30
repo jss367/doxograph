@@ -707,7 +707,8 @@ const paperChats = ChatThreads.create({
   render(chat) {
     $('chat-messages').innerHTML = chat.messages.map((m) =>
       `<div class="note"><span class="who">${m.role === 'user' ? 'You' : esc(m.assistant || 'Claude')}</span>
-        ${paragraphs(m.content).map((p) => `<p>${esc(p)}</p>`).join('')}</div>`).join('');
+        ${paragraphs(m.content).map((p) => `<p>${esc(p)}</p>`).join('')}
+        <div class="chat-attachments">${ChatThreads.attachmentsHTML(m.attachments || [])}</div></div>`).join('');
     $('chat-question').value = chat.draft;
     $('chat-question').disabled = chat.busy;
     $('chat-status').textContent = chat.busy ? 'Reading the paper…' : chat.error || paperChats.issues.join(' ');

@@ -105,8 +105,9 @@ save Claude Code sessions. Removing a paper while using a subscription still req
 if that paper has older Anthropic uploads to delete.
 
 The ChatGPT route sends extracted PDF text with page numbers, up to 600,000
-characters including the conversation. Figures and scanned pages are unavailable;
-a paper without readable text requires one of the Claude options. Codex runs in
+characters including the conversation. Figures and scanned pages in PDFs are
+unavailable; attached images are sent directly to Codex. A paper without readable
+text requires one of the Claude options. Codex runs in
 a temporary directory with shell commands, browsing, hooks, plugins, apps, and
 delegation disabled. User `config.toml` settings and project instructions are
 excluded, and the run is ephemeral. **Codex still loads global instructions**
@@ -166,6 +167,23 @@ deleted a conversation before this one saved its answer, this window's version
 is kept as a separate conversation. Failed questions keep their draft so you can
 retry. Chat is disabled when AI analysis is off. Removing a paper
 removes its conversations.
+
+Use **Attach files…**, drop files into the chat, or paste an image into the
+question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files
+(including Markdown, CSV, JSON, and source code) are supported. You can send files
+with or without a typed question, preview images, remove files before sending,
+and download them from saved messages. Up to five files per message, 4 MB per
+file, and 6 MB total across a conversation are allowed. PDFs must be unencrypted
+and have at most 100 pages. Files are sent to the selected agent on each follow-up
+and saved inside the workspace conversation, including in workspace exports;
+they are not imported as library papers. Unsent files stay in the current tab,
+including after a failed request, and are lost on reload.
+
+Claude receives images and PDFs directly. Codex receives images and extracted,
+page-numbered PDF text. API and local providers receive images using their vision
+input format and extracted PDF text; choose a model that supports images. Scanned
+PDF attachments require Claude or OCR first. Combined provider input limits still
+apply, including the original paper in paper chat.
 
 ## Ask the library
 
