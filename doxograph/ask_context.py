@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import query, store
+from . import query
 
 Key = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,200}$")]
 
@@ -46,12 +46,17 @@ def resolve_scope(scope: Scope) -> Scope:
     """Resolve focus from storage, never from client-supplied wording or notes."""
     resolved = scope.model_copy(deep=True)
     if scope.mode == "library":
-        resolved.papers = store.paper_keys()
+        # Match the library view: unreadable records are already reported there
+        # and must not prevent asking about the remaining readable sources.
+        saved, _ = query.papers_and_issues()
+        resolved.papers = [p["key"] for p in saved]
+    else:
+        saved, _ = query.papers_and_issues(resolved.papers)
     if len(resolved.papers) > 10000:
         raise HTTPException(413, "Choose a selection of papers; this library exceeds the conversation source limit.")
     if not resolved.papers:
         raise HTTPException(422, "Add a source before asking a question.")
-    papers = {p["key"]: p for p in query.papers_and_issues(resolved.papers)[0]}
+    papers = {p["key"]: p for p in saved}
     for focus in resolved.focus:
         paper = papers.get(focus.paper)
         if paper is None:

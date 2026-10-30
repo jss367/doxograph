@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp.server.mcpserver.exceptions import ToolError
 
-from doxograph import agent, ask_context, chat, config, mcp_server, search, server, store
+from doxograph import agent, ask_context, chat, config, mcp_server, query, search, server, store
 
 
 def seed(key, text=None):
@@ -287,3 +287,25 @@ def test_invalid_snapshot_file_never_starts_an_unscoped_server(payload, monkeypa
     monkeypatch.setattr(mcp_server.MCPServer, 'run', lambda *a, **kw: pytest.fail('invalid scope started server'))
     with pytest.raises(ValueError):
         mcp_server.run(workspace='default', papers_file=str(path))
+
+
+def test_library_ask_snapshots_readable_sources_while_explicit_scope_stays_strict(monkeypatch):
+    seed('readable')
+    store.paper_path('damaged').write_text('{broken json')
+    config.set_ai_provider('codex')
+    def answer(messages, callback):
+        assert ask_context.active.get().scope.papers == ['readable']
+        return {'answer': 'Answer from the readable paper'}
+    monkeypatch.setattr(agent, 'answer', answer)
+    with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+        body = {'scope': {'mode': 'library'}, 'messages': [{'role': 'user', 'content': 'Explain'}]}
+        response = client.post('/api/ask', json=body)
+        assert response.status_code == 200, response.text
+        assert response.json()['scope']['papers'] == ['readable']
+        assert query.papers_and_issues()[1]  # The normal library warning remains available.
+        # Explicit selections cannot silently drop a requested source.
+        body['scope'] = {'mode': 'selected', 'papers': ['readable', 'damaged']}
+        assert client.post('/api/ask', json=body).status_code == 500
+        store.paper_path('readable').unlink()
+        body['scope'] = {'mode': 'library'}
+        assert client.post('/api/ask', json=body).status_code == 422
