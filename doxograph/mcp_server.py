@@ -235,6 +235,21 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
 
 
 def run(base_url: str = DEFAULT_URL, *, without_notes: bool = False, workspace: str | None = None,
-        papers: list[str] | None = None, evidence_log: str | None = None, library_snapshot: bool = False) -> None:
+        papers: list[str] | None = None, papers_file: str | None = None,
+        evidence_log: str | None = None, library_snapshot: bool = False) -> None:
+    if papers_file is not None:
+        if papers is not None:
+            raise ValueError("Use either --papers or --papers-file")
+        try:
+            with Path(papers_file).open("rb") as stream:
+                raw = stream.read(2_100_001)
+            if len(raw) > 2_100_000:
+                raise ValueError("Source snapshot is too large")
+            snapshot = json.loads(raw)
+        except (OSError, ValueError) as exc:
+            raise ValueError("Cannot read the source snapshot") from exc
+        if not isinstance(snapshot, list) or any(not isinstance(key, str) for key in snapshot):
+            raise ValueError("Source snapshot must contain paper keys")
+        papers = snapshot
     create_server(base_url, without_notes=without_notes, workspace=workspace,
                   papers=papers, evidence_log=evidence_log, library_snapshot=library_snapshot).run(transport="stdio")

@@ -172,8 +172,16 @@ class Capture:
     direct: list[dict[str, Any]] = field(default_factory=list)
 
     def prompt(self) -> str:
+        scope = self.scope.model_dump()
+        # The MCP connection enforces exact membership. Listing thousands of keys
+        # is unnecessary context; focused claim text already appears as evidence.
+        if self.scope.mode == "library":
+            scope["paper_count"] = len(scope.pop("papers"))
+        for focus in scope["focus"]:
+            if focus["claim"]:
+                focus.pop("text")
         return (CITATION_INSTRUCTIONS + "\nQuestion focus and permitted evidence:\n"
-                + self.scope.model_dump_json() + "\nEvidence available from this conversation:\n"
+                + json.dumps(scope, ensure_ascii=False) + "\nEvidence available from this conversation:\n"
                 + json.dumps(self.prior + self.direct, ensure_ascii=False))
 
 

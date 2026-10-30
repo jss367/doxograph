@@ -86,7 +86,8 @@ def test_scoped_agent_command_binds_evidence_and_never_enables_topics(tmp_path):
     try:
         command = agent.command("claude", "http://127.0.0.1:8765", "default", None)
         settings = json.loads(command[command.index("--mcp-config") + 1])["mcpServers"]["doxograph"]
-        assert settings["args"][-5:] == ["--papers", "a", "b", "--evidence-log", str(capture.log)]
+        assert settings["args"][-4:] == ["--papers-file", str(tmp_path / "papers.json"), "--evidence-log", str(capture.log)]
+        assert json.loads((tmp_path / "papers.json").read_text()) == ["a", "b"]
         assert "list_topics" not in command[command.index("--allowedTools") + 1]
         assert "[[e:REFERENCE]]" in command[command.index("--system-prompt") + 1]
     finally:
@@ -226,3 +227,63 @@ def test_ask_captures_model_before_resolving_sources(monkeypatch):
     assert result.status_code == 200
     assert result.json()['model'] == 'submitted-model'
     assert config.codex_model() == 'later-model'
+
+
+@pytest.mark.parametrize('provider', ['claude_code', 'codex'])
+def test_large_library_snapshot_stays_out_of_cli_arguments(provider, monkeypatch, tmp_path):
+    from test_agent import fake_claude, fake_codex, stream
+    keys = [f'{i:05d}-' + 'x' * 194 for i in range(10000)]
+    seed(keys[0])
+    capture = ask_context.Capture(ask_context.Scope(mode='library', papers=keys), tmp_path / 'evidence.jsonl')
+    config.set_ai_provider(provider)
+    seen = (fake_claude(monkeypatch, stream({'type':'result', 'result':'Answer'})) if provider == 'claude_code'
+            else fake_codex(monkeypatch, stream({'type':'turn.completed'})))
+    token = ask_context.active.set(capture)
+    try:
+        agent.answer([{'role':'user', 'content':'What does the library say?'}], lambda: 'http://127.0.0.1:8765')
+    finally:
+        ask_context.active.reset(token)
+    assert sum(len(arg.encode()) + 1 for arg in seen['args']) < 16000
+    snapshot = tmp_path / 'papers.json'
+    assert json.loads(snapshot.read_text()) == keys
+    assert keys[-1] not in seen['prompt']
+    # The actual CLI loader reads every key and installs the same read boundary.
+    servers = []
+    monkeypatch.setattr(mcp_server.MCPServer, 'run', lambda self, **kw: servers.append(self))
+    mcp_server.run(workspace='default', papers_file=str(snapshot), library_snapshot=True)
+    assert servers
+    with pytest.raises(ToolError, match='outside'):
+        call(servers[0], 'get_paper', key='excluded')
+
+
+def test_large_focus_uses_stdin_and_combined_input_budget(monkeypatch, tmp_path):
+    from test_agent import fake_claude, stream
+    config.set_ai_provider('claude_code')
+    text = '研究' * 10000
+    capture = ask_context.Capture(ask_context.Scope(mode='selected', papers=['a'],
+        focus=[ask_context.Focus(paper='a', claim=f'claim-{i}', text=text) for i in range(30)]), tmp_path / 'evidence.jsonl')
+    capture.direct = [ask_context.entry(kind='claim', paper='a', claim=f'claim-{i}', text=text) for i in range(30)]
+    seen = fake_claude(monkeypatch, stream({'type':'result', 'result':'Answer'}))
+    token = ask_context.active.set(capture)
+    try:
+        agent.answer([{'role':'user', 'content':'Compare these claims'}], lambda: 'http://127.0.0.1:8765')
+        assert sum(len(arg.encode()) + 1 for arg in seen['args']) < 16000
+        assert seen['prompt'].count(text) == 30  # Focus identifiers do not duplicate evidence text.
+        assert len(seen['prompt'].encode()) > 1_000_000
+        from doxograph.model_errors import InputTooLargeError
+        from doxograph import claude_code
+        monkeypatch.setattr(claude_code, '_run', lambda *a, **kw: pytest.fail('oversized input reached CLI'))
+        capture.direct *= 6
+        with pytest.raises(InputTooLargeError, match='fewer sources'):
+            agent.answer([{'role':'user', 'content':'Compare'}], lambda: 'http://127.0.0.1:8765')
+    finally:
+        ask_context.active.reset(token)
+
+
+@pytest.mark.parametrize('payload', ['{}', '[1]', '[]', '["../outside"]', 'x' * 2_100_001])
+def test_invalid_snapshot_file_never_starts_an_unscoped_server(payload, monkeypatch, tmp_path):
+    path = tmp_path / 'papers.json'
+    path.write_text(payload)
+    monkeypatch.setattr(mcp_server.MCPServer, 'run', lambda *a, **kw: pytest.fail('invalid scope started server'))
+    with pytest.raises(ValueError):
+        mcp_server.run(workspace='default', papers_file=str(path))
