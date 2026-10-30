@@ -258,6 +258,7 @@ function readingHeader(p, title, reading) {
           <button type="button" data-act="verify" data-paper="${key}">Check quotes</button>` : ''}
           ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${key}">Mark ${p.n_unreviewed} reviewed</button>` : ''}
           <button type="button" data-act="labels" data-paper="${key}">Labels</button>
+          <button type="button" data-act="edit-title" data-paper="${key}">Edit title…</button>
           <button type="button" data-tool="history" data-paper="${key}">Edit history</button>
           <hr>
           <button type="button" data-act="reextract" data-paper="${key}" data-ai-action ${ai}>Re-read paper</button>
@@ -408,6 +409,38 @@ async function saveNote(key) {
     // frozen otherwise, with nothing left to hand it back.
     V.noteSaving = null;
     await refreshAllShowingError();
+  }
+}
+
+async function editPaperTitle(key) {
+  const paper = S.papers.find((x) => x.key === key);
+  if (!paper) return;
+  const workspace = workspaceClient.workspaceId;
+  let value = paper.title || '', note = '';
+  while (workspace === workspaceClient.workspaceId) {
+    const answer = await askDialog({
+      title: 'Edit paper title', note, input: { value }, ok: 'Save',
+    });
+    if (answer === null || workspace !== workspaceClient.workspaceId) return;
+    value = answer.trim();
+    if (!value) {
+      note = 'Enter a title for this paper.';
+      continue;
+    }
+    if (value === paper.title) return;
+    try {
+      await api(`/api/papers/${encodeURIComponent(key)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+        body: JSON.stringify({ title: value }),
+      });
+    } catch (error) {
+      // Keep the correction available for another attempt or for copying.
+      note = `Could not save the title: ${error.message}`;
+      continue;
+    }
+    await refreshAllShowingError();
+    return;
   }
 }
 
@@ -774,6 +807,7 @@ function openPaperMenu(paper, x, y, trigger = null) {
     <li class="mh">${esc(p ? p.title || paper : paper)}</li>
     ${p && p.has_pdf ? `<li><button type="button" data-act="open-pdf" data-paper="${esc(paper)}">Open the PDF</button></li>` : ''}
     <li><button type="button" data-act="labels" data-paper="${esc(paper)}">${p?.labels?.length ? 'Edit labels…' : 'Add labels…'}</button></li>
+    <li><button type="button" data-act="edit-title" data-paper="${esc(paper)}">Edit title…</button></li>
     <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
   menu.hidden = false;
   // Measure after showing, then keep the whole menu inside the window.
@@ -804,9 +838,10 @@ $('ctxmenu').addEventListener('click', async (event) => {
   if (!button) return;
   const trigger = closePaperMenu({ restoreFocus: true });
   const paper = button.dataset.paper;
-  if (button.dataset.act === 'labels') {
+  if (button.dataset.act === 'labels' || button.dataset.act === 'edit-title') {
     try {
-      await editLabels(paper);
+      if (button.dataset.act === 'edit-title') await editPaperTitle(paper);
+      else await editLabels(paper);
     } finally {
       // A save replaces the restored button. Recover focus only if it fell
       // back to the document, preserving any new focus chosen during the save.

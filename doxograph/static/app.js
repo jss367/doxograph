@@ -1212,6 +1212,10 @@ $('panes').addEventListener('click', async (event) => {
       renderContent();
       return;
     }
+    if (act === 'edit-title') {
+      await editPaperTitle(paper);
+      return;
+    }
     if (act === 'labels') {
       // Nothing to guard against a removal in flight: the dialog is modal, and
       // a PATCH landing on a paper that has gone comes back 404 and says so.
