@@ -35,6 +35,8 @@ class Message(BaseModel):
     activity: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=500)
     created: str = Field(default="", max_length=40)
     saved_note: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
+    # The research note's idempotency key, saved before the note is posted.
+    note_operation: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
 
 
 class Conversation(BaseModel):

@@ -59,7 +59,7 @@ $('agent-messages').addEventListener('click', async (event) => {
       const {notes} = await api('/api/research-notes', {headers: {'X-Doxograph-Workspace': workspace}});
       if (!notes.some(note => note.id === message.saved_note)) {
         message.saved_note = null;
-        message.saveOperation = null;
+        message.note_operation = null;
         message.saveError = 'The saved note was deleted. You can save this answer again.';
         await agentChats.save(chat);
         return;
@@ -83,12 +83,16 @@ $('agent-messages').addEventListener('click', async (event) => {
   message.saveError = '';
   agentChats.sync();
   try {
-    // Reuse the operation even when the server committed but its response was lost.
-    message.saveOperation ||= Array.from(crypto.getRandomValues(new Uint8Array(16)),
-      byte => byte.toString(16).padStart(2, '0')).join('');
+    // Reuse the operation even when the server committed but its response was lost. Save it with
+    // the conversation first, so a retry after a reload also returns the committed note.
+    if (!message.note_operation) {
+      message.note_operation = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+        byte => byte.toString(16).padStart(2, '0')).join('');
+      await agentChats.save(chat);
+    }
     const note = await api('/api/research-notes', {
       method: 'POST', headers: {'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace,
-        'Idempotency-Key': message.saveOperation},
+        'Idempotency-Key': message.note_operation},
       body: JSON.stringify(libraryAnswerNote(chat, index)),
     });
     message.saved_note = note.id;

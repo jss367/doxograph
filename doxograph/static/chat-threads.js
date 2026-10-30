@@ -81,13 +81,8 @@ const ChatThreads = (() => {
           kept.push(thread);
           thread = null;
         }
-        // A note save whose response was lost must retry with the same key, or it saves twice.
-        const messages = saved.messages.map((message, index) => {
-          const mine = thread?.messages[index];
-          return mine?.saveOperation && mine.content === message.content ? { ...message, saveOperation: mine.saveOperation } : message;
-        });
         threads.push(Object.assign(thread || { draft: '', busy: false, error: '', dirty: false, unconfirmed: [] },
-          { id: saved.id, revision: saved.revision, agent: saved.agent, messages }));
+          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages }));
       }
       for (const thread of target.threads) {
         if (threads.includes(thread) || kept.includes(thread)) continue;
@@ -143,8 +138,8 @@ const ChatThreads = (() => {
           method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': target.workspace },
           body: JSON.stringify({ paper: target.paper, agent: thread.agent, revision: thread.revision,
             operation: id, unconfirmed: thread.unconfirmed,
-            messages: thread.messages.map(({ role, content, assistant, model, activity, created, saved_note }) =>
-              ({ role, content, assistant, model, activity, created, saved_note })) }),
+            messages: thread.messages.map(({ role, content, assistant, model, activity, created, saved_note, note_operation }) =>
+              ({ role, content, assistant, model, activity, created, saved_note, note_operation })) }),
         });
         thread.revision = saved.revision;
         thread.savedAt = ++clock;

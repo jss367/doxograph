@@ -291,3 +291,47 @@ def test_library_answer_safe_rendering_and_failed_save_retry(engine):
                 assert not errors and not external
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_note_save_with_lost_response_keeps_its_key_across_a_reload(engine):
+    config.set_ai_provider('claude_code')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors, keys = [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            async def save(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                keys.append(route.request.headers['idempotency-key'])
+                if len(keys) == 1:
+                    # Commit on the test server, then lose only the response.
+                    assert (await route.fetch()).status == 201
+                    await route.abort('failed')
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/agent/chat', lambda route: route.fulfill(json={'answer': ANSWER, 'assistant': 'Claude'}))
+            await page.route('**/api/research-notes', save)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill(QUESTION)
+                await page.locator('#agent-send').click()
+                await page.locator('#agent-messages .note-prose h2').wait_for()
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('alert').filter(has_text='Could not save this answer').wait_for()
+                await page.reload()
+                await page.locator('#btn-agent:enabled').click()
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
+                notes = httpx.get(url + '/api/research-notes').json()['notes']
+                assert len(keys) == 2 and keys[0] == keys[1] == notes[0]['id'] and len(notes) == 1
+                assert not errors
+
+    run_browser(scenario())
