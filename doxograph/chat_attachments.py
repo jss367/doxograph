@@ -33,12 +33,20 @@ class Attachment(BaseModel):
         if self.media_type.startswith("image/"):
             try:
                 with Image.open(io.BytesIO(raw)) as image:
-                    detected_format = "JPEG" if image.format == "MPO" else image.format or ""
+                    multi_picture = image.format == "MPO"
+                    detected_format = "JPEG" if multi_picture else image.format or ""
                     if Image.MIME.get(detected_format) != self.media_type:
                         raise ValueError("The image format does not match its file type.")
-                    if image.width > 8000 or image.height > 8000 or image.width * image.height > 25_000_000:
-                        raise ValueError("Images must be at most 8000 pixels per side and 25 megapixels.")
-                    image.verify()
+                    picture_count = getattr(image, "n_frames", 1) if multi_picture else 1
+                    for picture in range(picture_count):
+                        image.seek(picture)
+                        if image.width > 8000 or image.height > 8000 or image.width * image.height > 25_000_000:
+                            raise ValueError("Images must be at most 8000 pixels per side and 25 megapixels.")
+                        if multi_picture:
+                            # The original bytes reach providers, including every embedded JPEG.
+                            image.load()
+                        else:
+                            image.verify()
             except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
                 raise ValueError("This image could not be read. Use PNG, JPEG, GIF, or WebP.") from exc
         elif self.media_type == "application/pdf":

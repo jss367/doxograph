@@ -71,6 +71,22 @@ def test_multi_picture_jpeg_is_accepted_without_weakening_format_validation():
         Attachment.model_validate(file | {'media_type': 'image/png'})
 
 
+@pytest.mark.parametrize('failure', ['oversized', 'truncated'])
+def test_multi_picture_jpeg_validates_secondary_pictures(failure):
+    raw = io.BytesIO()
+    first = Image.new('RGB', (4, 3), 'red')
+    second = Image.new('RGB', (8001, 1) if failure == 'oversized' else (4, 3), 'blue')
+    first.save(raw, format='MPO', save_all=True, append_images=[second])
+    data = raw.getvalue()
+    if failure == 'truncated':
+        data = data[:-10]
+    with Image.open(io.BytesIO(data)) as primary:
+        assert primary.format == 'MPO' and primary.size == (4, 3)
+        primary.load()
+    with pytest.raises(ValidationError, match='8000 pixels' if failure == 'oversized' else 'could not be read'):
+        Attachment.model_validate(attachment('photo.jpg', data, 'image/jpeg'))
+
+
 def test_message_and_conversation_limits_apply_on_send_and_save():
     file = attachment()
     for messages in ([{'role': 'user', 'content': '', 'attachments': [file] * 6}],
