@@ -87,6 +87,42 @@ def test_multi_picture_jpeg_validates_secondary_pictures(failure):
         Attachment.model_validate(attachment('photo.jpg', data, 'image/jpeg'))
 
 
+@pytest.mark.parametrize('image_format,media', [('JPEG', 'image/jpeg'), ('GIF', 'image/gif'), ('WEBP', 'image/webp')])
+def test_supported_image_formats_still_accept_valid_pixels(image_format, media):
+    raw = io.BytesIO()
+    Image.new('RGB', (16, 12), 'blue').save(raw, format=image_format)
+    file = attachment('valid-image', raw.getvalue(), media)
+    assert Attachment.model_validate(file).data == file['data']
+
+
+@pytest.mark.parametrize('image_format,media', [('JPEG', 'image/jpeg'), ('GIF', 'image/gif')])
+def test_header_valid_but_truncated_pixels_are_rejected(image_format, media):
+    raw = io.BytesIO()
+    image = Image.new('RGB', (32, 32))
+    image.putdata([(i % 256, i * 7 % 256, i * 13 % 256) for i in range(32 * 32)])
+    image.save(raw, format=image_format)
+    truncated = raw.getvalue()[:-20]
+    # These bytes pass the old header/verify-only path, but fail full decoding.
+    with Image.open(io.BytesIO(truncated)) as header:
+        assert header.size == (32, 32)
+        header.verify()
+    with pytest.raises(ValidationError, match='could not be read'):
+        Attachment.model_validate(attachment('broken-image', truncated, media))
+
+
+def test_gif_secondary_frames_are_decoded_before_acceptance():
+    raw = io.BytesIO()
+    first = Image.new('RGB', (32, 32), 'white')
+    second = Image.new('RGB', (32, 32))
+    second.putdata([(i % 256, i * 7 % 256, i * 13 % 256) for i in range(32 * 32)])
+    first.save(raw, format='GIF', save_all=True, append_images=[second])
+    truncated = raw.getvalue()[:-20]
+    with Image.open(io.BytesIO(truncated)) as primary:
+        primary.load()
+    with pytest.raises(ValidationError, match='could not be read'):
+        Attachment.model_validate(attachment('animation.gif', truncated, 'image/gif'))
+
+
 def test_message_and_conversation_limits_apply_on_send_and_save():
     file = attachment()
     for messages in ([{'role': 'user', 'content': '', 'attachments': [file] * 6}],
