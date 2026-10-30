@@ -1512,7 +1512,8 @@ const ResearchTools = (() => {
     // switch leaves the note where it was.
     return true;
   }
-  return {connect(value) { client = value; }, sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+  return {selection: () => ({papers: selectedPapers(), focus: refs().map(r => ({paper: r.paper, claim: r.claim}))}),
+    connect(value) { client = value; }, sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     hasUnsavedChanges: () => Boolean(unsaved() || busy),
     openBoard: id => run(() => open('boards', id))};
 })();

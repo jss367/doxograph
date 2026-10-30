@@ -27,7 +27,7 @@ const ChatThreads = (() => {
     return Array.from(question).length > 80 ? `${Array.from(question).slice(0, 79).join('').trimEnd()}…` : question;
   }
 
-  function create({ prefix, agents, render }) {
+  function create({ prefix, agents, render, unified = false }) {
     const boxes = new Map();
     let box = null;
     // Orders list requests against finished saves: a list can only include saves finished before it began.
@@ -35,7 +35,8 @@ const ChatThreads = (() => {
 
     const defaultAgent = () => agents().includes(S.ai_provider) ? S.ai_provider : agents()[0];
     const blank = () => ({ id: operation(), revision: 0, agent: defaultAgent(), messages: [],
-      draft: '', draftAttachments: [], busy: false, error: '', dirty: false, unconfirmed: [] });
+      draft: '', draftAttachments: [], busy: false, error: '', dirty: false, unconfirmed: [],
+      ...(unified ? {scope: {mode: 'library', papers: [], focus: []}, paper: null} : {}) });
     const headers = (extra = {}) => ({ 'X-Doxograph-Workspace': box.workspace, ...extra });
     const writing = (thread) => thread.busy || thread.reading || thread.saving || thread.messages.some(m => m.saving);
     // Whether a dirty thread still extends what is on disk: nothing newer was saved, or the newest
@@ -73,7 +74,7 @@ const ChatThreads = (() => {
     async function refresh(target) {
       const started = ++clock;
       target.listing = started;
-      const response = await api(`/api/chats${target.paper ? `?paper=${encodeURIComponent(target.paper)}` : ''}`,
+      const response = await api(`/api/chats${unified ? '?all_scopes=true' : target.paper ? `?paper=${encodeURIComponent(target.paper)}` : ''}`,
         { headers: { 'X-Doxograph-Workspace': target.workspace } });
       // A later list already answered or will answer; this one may predate what it loaded.
       if (target.listing !== started) return;
@@ -96,7 +97,8 @@ const ChatThreads = (() => {
           thread = null;
         }
         threads.push(Object.assign(thread || { draft: '', draftAttachments: [], busy: false, error: '', dirty: false, unconfirmed: [] },
-          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages }));
+          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages, paper: saved.paper,
+            ...(unified ? {scope: saved.scope || {mode: saved.paper ? 'paper' : 'library', papers: saved.paper ? [saved.paper] : [], focus: []}} : {}) }));
       }
       for (const thread of target.threads) {
         if (threads.includes(thread) || kept.includes(thread)) continue;
@@ -106,7 +108,7 @@ const ChatThreads = (() => {
         else if ((thread.dirty || thread.draft.trim() || thread.draftAttachments?.length) && thread.revision && !writing(thread)) {
           fork(thread);
           kept.push(thread);
-        } else if (writing(thread) || thread.dirty) threads.push(thread);
+        } else if (writing(thread) || thread.dirty || thread.draft.trim() || thread.draftAttachments?.length) threads.push(thread);
       }
       target.threads = [...kept, ...threads];
       kept.forEach(thread => save(target, thread));
@@ -117,11 +119,19 @@ const ChatThreads = (() => {
       target.loaded = true;
     }
 
-    async function open(workspace, paper) {
+    async function open(workspace, paper, options = {}) {
       const id = JSON.stringify([workspace, paper]);
       if (!boxes.has(id)) boxes.set(id, { workspace, paper, threads: [], active: null, loaded: false, issues: [], deleted: new Set() });
       box = boxes.get(id);
       box.active ||= blank();
+      if (options.fresh) {
+        if ((box.active.draft || box.active.draftAttachments?.length || box.active.reading) && !box.threads.includes(box.active)) box.threads.unshift(box.active);
+        box.active = blank();
+        box.active.scope = structuredClone(options.scope);
+        box.loaded = true;
+      } else if (!box.active.messages.length && !box.active.draft && !box.active.busy) {
+        box.loaded = false;
+      }
       sync();
       const target = box;
       try { await refresh(target); }
@@ -153,10 +163,11 @@ const ChatThreads = (() => {
       try {
         const saved = await api(`/api/chats/${thread.id}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': target.workspace },
-          body: JSON.stringify({ paper: target.paper, agent: thread.agent, revision: thread.revision,
+          body: JSON.stringify({ paper: thread.paper ?? target.paper, agent: thread.agent, revision: thread.revision,
+            ...(unified ? {scope: thread.scope} : {}),
             operation: id, unconfirmed: thread.unconfirmed,
-            messages: thread.messages.map(({ role, content, attachments, assistant, model, activity, created, saved_note, note_operation }) =>
-              ({ role, content, attachments, assistant, model, activity, created, saved_note, note_operation })) }),
+            messages: thread.messages.map(({ role, content, attachments, assistant, model, activity, created, saved_note, note_operation, scope, evidence, citations }) =>
+              ({ role, content, attachments, assistant, model, activity, created, saved_note, note_operation, scope, evidence, citations })) }),
         });
         thread.revision = saved.revision;
         thread.savedAt = ++clock;
@@ -185,6 +196,7 @@ const ChatThreads = (() => {
       const target = box;
       const thread = target?.active;
       if (!thread || thread.busy || thread.reading || (!thread.draft.trim() && !thread.draftAttachments?.length)) return;
+      const submittedScope = unified ? structuredClone(thread.scope) : null;
       const messages = [...thread.messages, { role: 'user', content: thread.draft.trim(),
         ...(thread.draftAttachments?.length ? { attachments: thread.draftAttachments } : {}), created: new Date().toISOString() }];
       const lengths = messages.map((message) => Array.from(message.content).length);
@@ -198,7 +210,17 @@ const ChatThreads = (() => {
       if (!target.threads.includes(thread)) target.threads.unshift(thread);
       sync();
       try {
-        const answer = await request(thread, messages.map(({ role, content, attachments }) => ({ role, content, ...(attachments?.length ? { attachments } : {}) })));
+        // Follow-ups are checked against durable history by /api/ask. Finish queued
+        // writes and retry a failed save before asking the model for another turn.
+        if (unified && thread.messages.length) {
+          if (thread.saves) await thread.saves;
+          if ((thread.dirty || !thread.revision) && !await save(target, thread)) return;
+        }
+        const answer = await request(thread, messages.map(({ role, content, attachments }) => ({ role, content, ...(attachments?.length ? { attachments } : {}) })), submittedScope);
+        if (unified) {
+          messages[messages.length - 1].scope = answer.scope || submittedScope;
+          if (JSON.stringify(thread.scope) === JSON.stringify(submittedScope)) thread.scope = answer.scope || submittedScope;
+        }
         thread.messages = [...messages, { ...answer, role: 'assistant', created: new Date().toISOString() }];
         thread.draft = '';
         thread.draftAttachments = [];
@@ -315,7 +337,9 @@ const ChatThreads = (() => {
     });
     $(`${prefix}-clear`).addEventListener('click', () => {
       if (!box) return;
+      const scope = box.active.scope;
       box.active = blank();
+      if (unified) box.active.scope = structuredClone(scope);
       sync();
       $(`${prefix}-question`).focus();
     });
@@ -340,6 +364,16 @@ const ChatThreads = (() => {
 
     return {
       open, ask, sync,
+      newScope(scope) {
+        if (!box) return;
+        const draft = box.active.draft, draftAttachments = box.active.draftAttachments, agent = box.active.agent;
+        box.active = blank();
+        box.active.agent = agent;
+        box.active.scope = structuredClone(scope);
+        box.active.draft = draft;
+        box.active.draftAttachments = draftAttachments || [];
+        sync();
+      },
       // Save into the chat the conversation belongs to, even after the dialog moved on.
       save: (thread) => save([...boxes.values()].find(b => b.threads.includes(thread)) || box, thread),
       get active() { return box?.active || null; },

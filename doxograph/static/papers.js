@@ -247,8 +247,8 @@ function readingHeader(p, title, reading) {
     <div class="reading-actions" data-paper="${key}">
       <button type="button" class="primary" data-tool="reader" data-paper="${key}" ${p.has_pdf ? '' : 'disabled'}
         ${p.has_pdf ? '' : 'title="Add a PDF to read this paper"'}>Read</button>
-      <button type="button" data-paper-chat="${key}" data-ai-action ${p.has_pdf ? ai : 'disabled'}
-        ${p.has_pdf ? '' : 'title="Add a PDF to ask about this paper"'}>Ask about this paper</button>
+      <button type="button" data-paper-chat="${key}" data-ai-action ${ai}
+        ${p.has_pdf ? '' : 'title="Choose extracted claims when no readable PDF is available"'}>Ask about this paper</button>
       <button type="button" data-tool="${progress ? 'reading' : 'queue-paper'}" data-paper="${key}">${progress ? 'View reading queue' : 'Add to reading queue'}</button>
       <details class="paper-actions" data-paper="${key}" ${open ? 'open' : ''}>
         <summary>Paper actions</summary>
@@ -742,31 +742,10 @@ $('papers').addEventListener('click', (event) => {
   render();   // the editors are closed here, so render redraws the list anyway
 });
 
-// Each paper keeps its saved conversations in its workspace, and each conversation its own agent.
-let paperChatKey = null;
-const paperChats = ChatThreads.create({
-  prefix: 'chat',
-  agents: () => ['api', 'claude_code', 'codex'],
-  render(chat) {
-    $('chat-messages').innerHTML = chat.messages.map((m) =>
-      `<div class="note"><span class="who">${m.role === 'user' ? 'You' : esc(m.assistant || 'Claude')}</span>
-        ${paragraphs(m.content).map((p) => `<p>${esc(p)}</p>`).join('')}
-        <div class="chat-attachments">${ChatThreads.attachmentsHTML(m.attachments || [])}</div></div>`).join('');
-    $('chat-question').value = chat.draft;
-    $('chat-question').disabled = chat.busy;
-    $('chat-status').textContent = chat.busy ? 'Reading the paper…' : chat.error || paperChats.issues.join(' ');
-    syncAnalysisControls();
-  },
-});
-const activeChat = () => paperChats.active;
+// Paper actions open the shared Ask panel with a fresh, explicit scope.
 document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-paper-chat]');
-  if (!button || button.disabled) return;
-  paperChatKey = button.dataset.paperChat;
-  $('chat-paper-title').textContent = (S.papers.find((p) => p.key === paperChatKey) || {}).title || paperChatKey;
-  paperChats.open(workspaceClient.workspaceId, paperChatKey);
-  $('paper-chat').showModal();
-  $('chat-question').focus();
+  if (button && !button.disabled) openAsk({mode: 'paper', papers: [button.dataset.paperChat], focus: []});
 });
 // Chat boxes send on Enter and take Shift+Enter as a new line, like other chat apps.
 // Enter that confirms an IME composition belongs to the composition, not the form;
@@ -779,22 +758,6 @@ function sendOnEnter(field) {
     field.form.requestSubmit();
   });
 }
-sendOnEnter($('chat-question'));
-$('chat-question').addEventListener('input', () => { if (activeChat()) activeChat().draft = $('chat-question').value; });
-$('chat-close').addEventListener('click', () => $('paper-chat').close());
-$('chat-form').addEventListener('submit', (event) => {
-  event.preventDefault();
-  if (S.ai_enabled !== true) return;
-  const key = paperChatKey, workspace = paperChats.workspace;
-  paperChats.ask(async (chat, messages) => {
-    const result = await api(`/api/papers/${encodeURIComponent(key)}/chat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-      body: JSON.stringify({ messages, agent: chat.agent }),
-    });
-    return { content: result.answer, assistant: result.assistant || 'Claude', model: result.model || '' };
-  });
-});
-
 // --- paper context menu --------------------------------------------------
 
 let paperMenuTrigger = null;

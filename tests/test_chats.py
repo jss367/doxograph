@@ -71,12 +71,12 @@ def test_unreadable_conversation_is_reported_without_hiding_the_others(client):
     assert len(listed['issues']) == 1 and 'not valid JSON' in listed['issues'][0]
 
 
-def test_removing_a_paper_removes_its_conversations(client):
+def test_removing_a_paper_preserves_its_conversations(client):
     for chat_id, paper in ((ID, 'study'), ('b' * 32, None)):
         agent = 'api' if paper else 'claude_code'
         client.put(f'/api/chats/{chat_id}', json={'paper': paper, 'agent': agent, 'messages': PAIR, 'revision': 0, 'operation': op()})
     assert client.delete('/api/papers/study').status_code == 200
-    assert sorted(p.stem for p in chats.chats_dir().glob('*.json')) == ['b' * 32]
+    assert sorted(p.stem for p in chats.chats_dir().glob('*.json')) == [ID, 'b' * 32]
 
 
 def test_a_save_whose_response_was_lost_still_counts_as_this_pages_own(client):
@@ -105,7 +105,7 @@ def test_workspace_archive_includes_conversations_of_the_papers_it_holds(client)
         assert json.loads(archive.read(f'data/chats/{ID}.json'))['messages'][0]['content'] == 'How many adults?'
         names = set(json.loads(archive.read('manifest.json'))['files'])
         assert {f'data/chats/{ID}.json', f'data/chats/{library}.json'} <= names
-        assert f'data/chats/{removed}.json' not in names
+        assert f'data/chats/{removed}.json' in names
 
 
 @pytest.mark.parametrize('agent', ['api', 'claude_code', 'codex'])
@@ -176,3 +176,22 @@ def test_conversations_saved_within_one_second_list_newest_first(client, monkeyp
     # Update the first one last; it must now lead whatever its ID.
     client.put(f'/api/chats/{ids[0]}', json={'agent': 'codex', 'messages': PAIR * 2, 'revision': 1, 'operation': op()})
     assert [c['id'] for c in client.get('/api/chats').json()['chats']] == [ids[0], ids[2], ids[1]]
+
+
+def test_legacy_list_distinguishes_library_and_explicit_scopes(client):
+    ids = {}
+    for name, scope, paper in [
+        ('legacy-library', None, None), ('legacy-paper', None, 'study'),
+        ('library', {'mode':'library', 'papers':['study']}, None),
+        ('selected', {'mode':'selected', 'papers':['study']}, None),
+        ('paper', {'mode':'paper', 'papers':['study']}, None),
+    ]:
+        ids[name] = op()
+        response = client.put('/api/chats/' + ids[name], json={'paper':paper, 'scope':scope, 'agent':'codex',
+            'messages':PAIR, 'revision':0, 'operation':op()})
+        assert response.status_code == 200, response.text
+    def listed(path):
+        return {c['id'] for c in client.get(path).json()['chats']}
+    assert listed('/api/chats') == {ids['legacy-library'], ids['library']}
+    assert listed('/api/chats?paper=study') == {ids[name] for name in ('legacy-paper', 'library', 'selected', 'paper')}
+    assert listed('/api/chats?all_scopes=true') == set(ids.values())

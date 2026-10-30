@@ -125,6 +125,7 @@ function claimCard(row, shown, group = '') {
       ${tensionMarker(row.id)}
       ${agreementMarker(row.id)}
       <span class="cact">
+        <button type="button" data-ask-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">Ask about this claim</button>
         <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
         <button type="button" data-act="edit" data-claim="${esc(row.id)}">edit</button>

@@ -37,7 +37,7 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
                     await route.fulfill(content_type='application/json',
                                         body=json.dumps({'answer': 'Twenty adults (p. 1).', 'model': 'test', 'assistant': assistant}))
 
-            await page.route('**/api/papers/study/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.route('**/api/settings/codex/models', lambda route: route.fulfill(
                 content_type='application/json', body='{"models":[]}'))
             await page.goto(url)
@@ -49,10 +49,10 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
             await page.locator('#btn-close-settings').click()
             await page.locator('#papers [data-paper="study"]').click()
             await page.get_by_role('button', name='Ask about this paper', exact=True).click()
-            await page.locator('#chat-question').fill('How many adults?')
-            await page.locator('#chat-question').press('Shift+Enter')
-            assert await page.locator('#chat-question').input_value() == 'How many adults?\n'
-            await page.locator('#chat-question').evaluate('''field => {
+            await page.locator('#agent-question').fill('How many adults?')
+            await page.locator('#agent-question').press('Shift+Enter')
+            assert await page.locator('#agent-question').input_value() == 'How many adults?\n'
+            await page.locator('#agent-question').evaluate('''field => {
                 const enter = (init, keyCode) => {
                     const event = new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true, ...init});
                     if (keyCode) Object.defineProperty(event, 'keyCode', {value: keyCode});
@@ -64,20 +64,20 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
             }''')
             await page.wait_for_timeout(200)
             assert requests == []
-            await page.locator('#chat-question').press('Enter')
+            await page.locator('#agent-question').press('Enter')
             await page.get_by_text('Twenty adults (p. 1).', exact=True).wait_for()
-            assert await page.locator('#chat-messages .who').last.text_content() == assistant
-            await page.locator('#chat-question').fill('Was this a pilot?')
-            await page.locator('#chat-send').click()
+            assert await page.locator('#agent-messages .who').last.text_content() == assistant
+            await page.locator('#agent-question').fill('Was this a pilot?')
+            await page.locator('#agent-send').click()
             await page.get_by_text('Usage limit reached', exact=True).wait_for()
-            assert await page.locator('#chat-question').input_value() == 'Was this a pilot?'
-            await page.locator('#chat-send').click()
-            await page.locator('#chat-question:enabled').wait_for()
+            assert await page.locator('#agent-question').input_value() == 'Was this a pilot?'
+            await page.locator('#agent-send').click()
+            await page.locator('#agent-question:enabled').wait_for()
             assert len(requests[2]) == 3
             assert requests[2][-1]['content'] == 'Was this a pilot?'
-            await page.locator('#chat-clear').click()
-            assert await page.locator('#chat-messages').inner_text() == ''
-            await page.locator('#chat-close').click()
+            await page.locator('#agent-clear').click()
+            assert await page.locator('#agent-messages').inner_text() == ''
+            await page.locator('#agent-close').click()
             await page.locator('#btn-settings').click()
             await page.locator('#ai-enabled').uncheck()
             await page.get_by_text('AI analysis disabled.', exact=True).wait_for()
@@ -114,23 +114,23 @@ def test_long_chat_keeps_draft_and_explains_how_to_start_over(answer, turns):
                 await route.fulfill(content_type='application/json', body=json.dumps({
                     'answer': answer, 'model': 'test', 'assistant': 'Claude'}))
 
-            await page.route('**/api/papers/study/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.goto(url)
             await page.locator('#papers [data-paper="study"]').click()
             await page.get_by_role('button', name='Ask about this paper', exact=True).click()
             for _ in range(turns):
-                await page.locator('#chat-question').fill('Question')
-                await page.locator('#chat-send').click()
-                await page.locator('#chat-question:enabled').wait_for()
-            await page.locator('#chat-question').fill('Keep this question')
-            await page.locator('#chat-send').click()
+                await page.locator('#agent-question').fill('Question')
+                await page.locator('#agent-send').click()
+                await page.locator('#agent-question:enabled').wait_for()
+            await page.locator('#agent-question').fill('Keep this question')
+            await page.locator('#agent-send').click()
             await page.get_by_text('Start a new conversation; this one is too long.', exact=True).wait_for()
             assert len(requests) == turns
-            assert await page.locator('#chat-question').input_value() == 'Keep this question'
-            await page.locator('#chat-clear').click()
-            await page.locator('#chat-question').fill('New question')
-            await page.locator('#chat-send').click()
-            await page.locator('#chat-question:enabled').wait_for()
+            assert await page.locator('#agent-question').input_value() == 'Keep this question'
+            await page.locator('#agent-clear').click()
+            await page.locator('#agent-question').fill('New question')
+            await page.locator('#agent-send').click()
+            await page.locator('#agent-question:enabled').wait_for()
             assert requests[-1] == [{'role': 'user', 'content': 'New question'}]
             await browser.close()
 
@@ -163,52 +163,55 @@ def test_paper_conversations_run_side_by_side_on_their_own_agents_and_survive_re
                                           'assistant': assistant})
 
             async def open_chat():
+                if _saved_chats():
+                    await page.locator('#btn-agent').click()
+                    return
                 await page.locator('#papers [data-paper="study"]').click()
                 await page.get_by_role('button', name='Ask about this paper', exact=True).click()
 
-            await page.route('**/api/papers/study/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.goto(url)
             await open_chat()
-            assert await page.locator('#chat-agent').input_value() == 'claude_code'
-            await page.locator('#chat-question').fill('First question')
-            await page.locator('#chat-send').click()
+            assert await page.locator('#agent-agent').input_value() == 'claude_code'
+            await page.locator('#agent-question').fill('First question')
+            await page.locator('#agent-send').click()
             await asyncio.wait_for(held.wait(), timeout=10)
             # Start another conversation, on another agent, while the first is still answering.
-            await page.locator('#chat-clear').click()
-            await page.locator('#chat-agent').select_option('codex')
-            await page.locator('#chat-question').fill('Second question')
-            await page.locator('#chat-send').click()
+            await page.locator('#agent-clear').click()
+            await page.locator('#agent-agent').select_option('codex')
+            await page.locator('#agent-question').fill('Second question')
+            await page.locator('#agent-send').click()
             await page.get_by_text('ChatGPT answer 2.', exact=True).wait_for()
             release.set()
-            await page.locator('#chat-thread option', has_text='First question').filter(
+            await page.locator('#agent-thread option', has_text='First question').filter(
                 has_not_text='answering').wait_for(state='attached')
             assert requests == [('claude_code', ['First question']), ('codex', ['Second question'])]
 
             await page.reload()
             await open_chat()
             # The most recently answered conversation reopens; the held first answer may have landed last.
-            await page.locator('#chat-thread option').nth(1).wait_for(state='attached')
-            assert sorted(await page.locator('#chat-thread option').all_text_contents()) == ['First question', 'Second question']
-            await page.locator('#chat-thread').select_option(label='Second question')
+            await page.locator('#agent-thread option').nth(1).wait_for(state='attached')
+            assert sorted(await page.locator('#agent-thread option').all_text_contents()) == ['First question', 'Second question']
+            await page.locator('#agent-thread').select_option(label='Second question')
             await page.get_by_text('ChatGPT answer 2.', exact=True).wait_for()
-            assert await page.locator('#chat-agent').input_value() == 'codex'
-            await page.locator('#chat-thread').select_option(label='First question')
-            assert await page.locator('#chat-agent').input_value() == 'claude_code'
+            assert await page.locator('#agent-agent').input_value() == 'codex'
+            await page.locator('#agent-thread').select_option(label='First question')
+            assert await page.locator('#agent-agent').input_value() == 'claude_code'
             await page.get_by_text('Claude answer 2.', exact=True).wait_for()
-            await page.locator('#chat-question').fill('Follow up')
-            await page.locator('#chat-send').click()
+            await page.locator('#agent-question').fill('Follow up')
+            await page.locator('#agent-send').click()
             await page.get_by_text('Claude answer 3.', exact=True).wait_for()
             assert requests[-1] == ('claude_code', ['First question', 'Claude answer 2.', 'Follow up'])
 
-            await page.locator('#chat-thread').select_option(label='Second question')
-            await page.locator('#chat-delete').click()
+            await page.locator('#agent-thread').select_option(label='Second question')
+            await page.locator('#agent-delete').click()
             await _answer(page, 'Delete conversation')
-            await page.locator('#chat-thread option', has_text='Second question').wait_for(state='detached')
-            assert await page.locator('#chat-thread option').all_text_contents() == ['First question']
+            await page.locator('#agent-thread option', has_text='Second question').wait_for(state='detached')
+            assert await page.locator('#agent-thread option').all_text_contents() == ['First question']
             await page.get_by_text('Claude answer 3.', exact=True).wait_for()
             [saved] = store.config.data_dir().joinpath('chats').glob('*.json')
             saved = json.loads(saved.read_text())
-            assert saved['paper'] == 'study' and saved['agent'] == 'claude_code'
+            assert saved['scope']['papers'] == ['study'] and saved['agent'] == 'claude_code'
             assert [m['assistant'] for m in saved['messages'][1::2]] == ['Claude', 'Claude']
             assert not errors
 
@@ -231,7 +234,7 @@ async def _saved_contents(count):
 
 def _their_follow_up(saved):
     """Another window's save of a follow-up to the conversation it last loaded."""
-    return {'paper': 'study', 'agent': saved['agent'], 'revision': saved['revision'], 'operation': 'f' * 32,
+    return {'paper': saved['paper'], 'scope': saved.get('scope'), 'agent': saved['agent'], 'revision': saved['revision'], 'operation': 'f' * 32,
             'messages': saved['messages'] + [{'role': 'user', 'content': 'Theirs'},
                                              {'role': 'assistant', 'content': 'Their answer.'}]}
 
@@ -243,15 +246,18 @@ async def _paper_chat_with_answers(page):
         answers.append(route.request.post_data_json['messages'][-1]['content'])
         await route.fulfill(json={'answer': f'Answer {len(answers)}.', 'model': 'test', 'assistant': 'Claude'})
 
-    await page.route('**/api/papers/study/chat', respond)
+    await page.route('**/api/ask', respond)
 
     async def ask(question):
         expected = f'Answer {len(answers) + 1}.'
-        await page.locator('#chat-question').fill(question)
-        await page.locator('#chat-send').click()
+        await page.locator('#agent-question').fill(question)
+        await page.locator('#agent-send').click()
         await page.get_by_text(expected, exact=True).wait_for()
 
     async def open_chat():
+        if _saved_chats():
+            await page.locator('#btn-agent').click()
+            return
         await page.locator('#papers [data-paper="study"]').click()
         await page.get_by_role('button', name='Ask about this paper', exact=True).click()
 
@@ -289,13 +295,13 @@ def test_unsaved_answer_survives_another_window_saving_the_same_conversation(eng
             # Meanwhile another window saves its own follow-up to the same conversation.
             assert httpx.put(f"{url}/api/chats/{first['id']}", json=_their_follow_up(first)).status_code == 200
             failing = False
-            await page.locator('#chat-close').click()
+            await page.locator('#agent-close').click()
             await open_chat()
             await page.get_by_text('this version was kept as a separate conversation', exact=False).wait_for()
-            await page.locator('#chat-thread option').nth(1).wait_for(state='attached')
+            await page.locator('#agent-thread option').nth(1).wait_for(state='attached')
             assert await _saved_contents(2) == [
                 ['First', 'Answer 1.', 'Mine', 'Answer 2.'], ['First', 'Answer 1.', 'Theirs', 'Their answer.']]
-            await page.locator('#chat-thread').select_option(index=1)
+            await page.locator('#agent-thread').select_option(index=1)
             await page.get_by_text('Their answer.', exact=True).wait_for()
             assert not errors
 
@@ -324,7 +330,7 @@ def test_answer_saved_after_another_window_saved_first_is_kept_separately():
             await page.get_by_text('this version was kept as a separate conversation', exact=False).wait_for()
             assert await _saved_contents(2) == [
                 ['First', 'Answer 1.', 'Mine', 'Answer 2.'], ['First', 'Answer 1.', 'Theirs', 'Their answer.']]
-            assert await page.locator('#chat-thread option').count() == 2
+            assert await page.locator('#agent-thread option').count() == 2
             assert not errors
 
     with _server() as url:
@@ -356,7 +362,7 @@ def test_saves_finished_while_the_conversation_list_loads_are_kept(engine):
                 await release.wait()
                 await route.fulfill(response=response)
 
-            await page.route('**/api/chats?paper=study', held_list)
+            await page.route('**/api/chats?all_scopes=true', held_list)
             await page.goto(url)
             for question, contents in (('First', ['First', 'Answer 1.']),
                                        ('Second', ['First', 'Answer 1.', 'Second', 'Answer 2.'])):
@@ -368,12 +374,12 @@ def test_saves_finished_while_the_conversation_list_loads_are_kept(engine):
                 assert await _saved_contents(1) == [contents]
                 release.set()
                 await page.wait_for_timeout(200)
-                assert await page.locator('#chat-thread option').all_text_contents() == ['First']
-                assert await page.locator('#chat-messages p').all_text_contents() == contents
-                await page.locator('#chat-close').click()
+                assert await page.locator('#agent-thread option').all_text_contents() == ['First']
+                assert await page.locator('#agent-messages .agent-content > p:not(.hint)').all_text_contents() == contents
+                await page.locator('#agent-close').click()
                 taken.clear()
                 release.clear()
-            await page.unroute('**/api/chats?paper=study')
+            await page.unroute('**/api/chats?all_scopes=true')
             await open_chat()
             await ask('Third')
             assert await _saved_contents(1) == [['First', 'Answer 1.', 'Second', 'Answer 2.', 'Third', 'Answer 3.']]
@@ -411,7 +417,7 @@ def test_an_older_conversation_list_arriving_last_is_ignored(engine):
                 await release.wait()
                 await route.fulfill(response=response)
 
-            await page.route('**/api/chats?paper=study', first_list_held)
+            await page.route('**/api/chats?all_scopes=true', first_list_held)
             await page.goto(url)
             await open_chat()
             await asyncio.wait_for(taken.wait(), timeout=10)
@@ -419,17 +425,17 @@ def test_an_older_conversation_list_arriving_last_is_ignored(engine):
             saved = {'paper': 'study', 'agent': 'claude_code', 'revision': 0, 'operation': 'e' * 32,
                      'messages': [{'role': 'user', 'content': 'Theirs'}, {'role': 'assistant', 'content': 'Their answer.'}]}
             assert httpx.put(f"{url}/api/chats/{'d' * 32}", json=saved).status_code == 200
-            await page.locator('#chat-close').click()
+            await page.locator('#agent-close').click()
             await open_chat()
             await page.get_by_text('Their answer.', exact=True).wait_for()
             release.set()
             await page.wait_for_timeout(200)
-            assert await page.locator('#chat-thread option').all_text_contents() == ['Theirs']
-            assert await page.locator('#chat-messages p').all_text_contents() == ['Theirs', 'Their answer.']
+            assert await page.locator('#agent-thread option').all_text_contents() == ['Theirs']
+            assert await page.locator('#agent-messages .agent-content > p:not(.hint)').all_text_contents() == ['Theirs', 'Their answer.']
             # A follow-up continues that conversation rather than forking it.
             await ask('Mine')
             assert await _saved_contents(1) == [['Theirs', 'Their answer.', 'Mine', 'Answer 1.']]
-            assert await page.locator('#chat-thread option').all_text_contents() == ['Theirs']
+            assert await page.locator('#agent-thread option').all_text_contents() == ['Theirs']
             assert not errors
 
     with _server() as url:
@@ -453,7 +459,7 @@ def test_draft_survives_another_window_deleting_its_conversation(engine):
             await open_chat()
             await ask('First')
             [first] = _saved_chats()
-            await page.locator('#chat-close').click()
+            await page.locator('#agent-close').click()
             taken, release = asyncio.Event(), asyncio.Event()
 
             async def held_list(route):
@@ -461,19 +467,19 @@ def test_draft_survives_another_window_deleting_its_conversation(engine):
                 await release.wait()
                 await route.continue_()
 
-            await page.route('**/api/chats?paper=study', held_list)
+            await page.route('**/api/chats?all_scopes=true', held_list)
             await open_chat()
             await asyncio.wait_for(taken.wait(), timeout=10)
-            await page.locator('#chat-question').fill('An unsent follow-up')
+            await page.locator('#agent-question').fill('An unsent follow-up')
             # Another window deletes the conversation before this list is read.
             assert httpx.delete(f"{url}/api/chats/{first['id']}?revision={first['revision']}").status_code == 200
             release.set()
             await page.get_by_text('kept as a separate conversation', exact=False).wait_for()
-            assert await page.locator('#chat-question').input_value() == 'An unsent follow-up'
-            assert await page.locator('#chat-messages p').all_text_contents() == ['First', 'Answer 1.']
+            assert await page.locator('#agent-question').input_value() == 'An unsent follow-up'
+            assert await page.locator('#agent-messages .agent-content > p:not(.hint)').all_text_contents() == ['First', 'Answer 1.']
             assert await _saved_contents(1) == [['First', 'Answer 1.']]
-            await page.unroute('**/api/chats?paper=study')
-            await page.locator('#chat-send').click()
+            await page.unroute('**/api/chats?all_scopes=true')
+            await page.locator('#agent-send').click()
             await page.get_by_text('Answer 2.', exact=True).wait_for()
             assert await _saved_contents(1) == [['First', 'Answer 1.', 'An unsent follow-up', 'Answer 2.']]
             [kept] = _saved_chats()
@@ -500,7 +506,7 @@ def test_conversation_deleted_while_an_older_list_loads_stays_deleted(engine):
             await page.goto(url)
             await open_chat()
             await ask('First')
-            await page.locator('#chat-close').click()
+            await page.locator('#agent-close').click()
             taken, release = asyncio.Event(), asyncio.Event()
 
             async def held_list(route):
@@ -510,16 +516,16 @@ def test_conversation_deleted_while_an_older_list_loads_stays_deleted(engine):
                 await release.wait()
                 await route.fulfill(response=response)
 
-            await page.route('**/api/chats?paper=study', held_list)
+            await page.route('**/api/chats?all_scopes=true', held_list)
             await open_chat()
             await asyncio.wait_for(taken.wait(), timeout=10)
-            await page.locator('#chat-delete').click()
+            await page.locator('#agent-delete').click()
             await _answer(page, 'Delete conversation')
-            await page.locator('#chat-thread option', has_text='First').wait_for(state='detached')
+            await page.locator('#agent-thread option', has_text='First').wait_for(state='detached')
             release.set()
             await page.wait_for_timeout(200)
-            assert await page.locator('#chat-thread option').all_text_contents() == ['New conversation']
-            assert await page.locator('#chat-messages p').count() == 0
+            assert await page.locator('#agent-thread option').all_text_contents() == ['New conversation']
+            assert await page.locator('#agent-messages .agent-content > p:not(.hint)').count() == 0
             assert _saved_chats() == []
             assert not errors
 
@@ -557,15 +563,16 @@ def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
             await ask('Second')
             await page.get_by_text('This conversation is not saved yet', exact=False).wait_for()
             await ask('Third')
-            await page.locator('#chat-status').filter(has_text='not saved').wait_for(state='detached')
+            await page.locator('#agent-status').filter(has_text='not saved').wait_for(state='detached')
             assert saves[2]['revision'] == 1 and saves[2]['unconfirmed'] == [saves[1]['operation']]
             [saved] = _saved_chats()
             assert [m['content'] for m in saved['messages']][::2] == ['First', 'Second', 'Third']
-            assert saved['revision'] == 3
+            assert [m['content'] for m in saves[2]['messages']][::2] == ['First', 'Second']
+            assert saved['revision'] == 4  # The pending history was flushed before the third answer.
             await page.reload()
             await open_chat()
             await page.get_by_text('Answer 3.', exact=True).wait_for()
-            assert await page.locator('#chat-thread option').count() == 1
+            assert await page.locator('#agent-thread option').count() == 1
             assert not errors
 
     with _server() as url:
@@ -590,7 +597,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider,
                 await route.fulfill(content_type='application/json', body=json.dumps({
                     'answer': 'Two papers agree.', 'activity': ['Searched claims steering'], 'assistant': assistant}))
 
-            await page.route('**/api/agent/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
             await page.locator('#agent-question').fill('What agrees on steering?')
@@ -613,7 +620,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider,
 
 
 @pytest.mark.browser
-def test_library_agent_offers_only_subscriptions_when_settings_choose_an_api():
+def test_library_agent_requires_explicit_provider_choice_when_settings_choose_an_api():
     config.set_ai_provider('api')
 
     async def check(url):
@@ -626,11 +633,14 @@ def test_library_agent_offers_only_subscriptions_when_settings_choose_an_api():
                 requests.append(route.request.post_data_json['agent'])
                 await route.fulfill(json={'answer': 'From the library.', 'assistant': 'Claude'})
 
-            await page.route('**/api/agent/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
             assert await page.locator('#agent-agent option').evaluate_all('options => options.map(o => o.value)') \
-                == ['claude_code', 'codex']
+                == ['api', 'claude_code', 'codex']
+            assert await page.locator('#agent-agent').input_value() == 'api'
+            assert await page.locator('#agent-send').is_disabled()
+            await page.locator('#agent-agent').select_option('claude_code')
             await page.locator('#agent-question').fill('Anything?')
             await page.locator('#agent-send').click()
             await page.get_by_text('From the library.', exact=True).wait_for()
@@ -654,7 +664,7 @@ def test_library_agent_switches_agent_without_losing_drafts_or_answer_labels(eng
                 assistant = 'ChatGPT' if route.request.post_data_json['agent'] == 'codex' else 'Claude'
                 await route.fulfill(json={'answer': f'{assistant} answer.', 'assistant': assistant})
 
-            await page.route('**/api/agent/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
             await page.locator('#agent-question').fill('First question')
@@ -696,7 +706,7 @@ def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider)
                 await route.fulfill(content_type='application/json', body=json.dumps({
                     'answer': 'Two papers agree.', 'assistant': 'Claude'}))
 
-            await page.route('**/api/agent/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.goto(url)
             await page.locator('#ai-enabled:enabled').wait_for(state='attached')
             assert await page.locator('#btn-agent').is_enabled()
@@ -715,6 +725,9 @@ def test_library_agent_explains_disabled_ai_and_opens_settings(engine, provider)
             await page.locator('#btn-close-settings').click()
             await page.locator('#btn-agent').click()
             assert await page.locator('#agent-question').input_value() == 'Keep my question'
+            if provider == 'api':
+                assert await page.locator('#agent-send').is_disabled()
+                await page.locator('#agent-agent').select_option('claude_code')
             assert await page.locator('#agent-send').is_enabled()
             assert await page.locator('#agent-settings').is_hidden()
             await page.locator('#agent-send').click()
@@ -763,7 +776,7 @@ def test_library_agent_waits_for_workspace_selection_before_opening(engine, sour
             if source == 'storage':
                 await page.add_init_script("localStorage.setItem('doxograph-workspace', 'missing')")
             await page.route('**/api/workspaces', registry)
-            await page.route('**/api/agent/chat', respond)
+            await page.route('**/api/ask', respond)
             await page.goto(url + ('/#ws=missing' if source == 'url' else ''),
                             wait_until='domcontentloaded')
             await asyncio.wait_for(held.wait(), timeout=10)

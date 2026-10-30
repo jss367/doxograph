@@ -61,7 +61,7 @@ python_version = "3.13"
 files = [
     "doxograph/storage.py", "doxograph/records.py", "doxograph/workspace_metadata.py",
     "doxograph/store.py",
-    "doxograph/analysis_types.py",
+    "doxograph/analysis_types.py", "doxograph/ask_context.py",
     "doxograph/model_errors.py", "doxograph/providers.py",
     "doxograph/claude_code.py", "doxograph/codex_cli.py",
     "doxograph/server.py", "doxograph/origins.py", "doxograph/activity.py",
