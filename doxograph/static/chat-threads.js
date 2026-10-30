@@ -3,6 +3,7 @@
 // Saved conversations for a chat dialog: each paper's, and the library's, per workspace.
 // Each conversation keeps its own agent. The page asks the model, then saves the whole
 // conversation with the revision it last saw. Unsaved answers stay in this tab until a save works.
+// If another window changed or deleted the conversation first, this tab's version becomes its own.
 // Loaded before app.js, which owns `$`, `api`, `esc`, `confirmDialog`, and `S`; these run only after it loads.
 const ChatThreads = (() => {
   const operation = () => Array.from(crypto.getRandomValues(new Uint8Array(16)),
@@ -17,6 +18,8 @@ const ChatThreads = (() => {
     return `${name}${['anthropic', 'openai'].includes(provider) ? ' API' : ''}${model ? ` · ${model}` : ''}`;
   }
 
+  const KEPT = 'This conversation changed in another window, so this version was kept as a separate conversation.';
+
   function title(thread) {
     const question = (thread.messages[0]?.content || thread.pending || '').replace(/\s+/g, ' ').trim();
     if (!question) return 'New conversation';
@@ -29,9 +32,16 @@ const ChatThreads = (() => {
 
     const defaultAgent = () => agents().includes(S.ai_provider) ? S.ai_provider : agents()[0];
     const blank = () => ({ id: operation(), revision: 0, agent: defaultAgent(), messages: [],
-      draft: '', busy: false, error: '', dirty: false });
+      draft: '', busy: false, error: '', dirty: false, unconfirmed: [] });
     const headers = (extra = {}) => ({ 'X-Doxograph-Workspace': box.workspace, ...extra });
     const writing = (thread) => thread.busy || thread.saving || thread.messages.some(m => m.saving);
+    // Whether a dirty thread still extends what is on disk: nothing newer was saved, or the newest
+    // save is one of this tab's whose response was lost.
+    const ahead = (thread, saved) => saved.revision === thread.revision || thread.unconfirmed.includes(saved.operation);
+
+    function fork(thread) {
+      Object.assign(thread, { id: operation(), revision: 0, unconfirmed: [], dirty: true, kept: true, error: KEPT });
+    }
 
     function sync() {
       if (!box) return;
@@ -53,16 +63,32 @@ const ChatThreads = (() => {
       const response = await api(`/api/chats${target.paper ? `?paper=${encodeURIComponent(target.paper)}` : ''}`,
         { headers: { 'X-Doxograph-Workspace': target.workspace } });
       const local = new Map(target.threads.map(t => [t.id, t]));
-      // Keep what this tab is still writing, or could not save for a reason other than
-      // a newer version from another window; take everything else from disk.
-      const threads = response.chats.map(saved => {
-        const thread = local.get(saved.id);
-        if (thread && (writing(thread) || (thread.dirty && thread.revision === saved.revision))) return thread;
-        return Object.assign(thread || { draft: '', busy: false, error: '', dirty: false },
-          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages });
-      });
-      threads.push(...target.threads.filter(t => !threads.includes(t) && (writing(t) || (t.dirty && !t.revision))));
-      target.threads = threads;
+      // Keep what this tab is still writing or has not saved. Take everything else from disk,
+      // and keep an unsaved version that another window replaced or deleted as its own conversation.
+      const threads = [], kept = [];
+      for (const saved of response.chats) {
+        let thread = local.get(saved.id);
+        if (thread && (writing(thread) || (thread.dirty && ahead(thread, saved)))) {
+          threads.push(thread);
+          continue;
+        }
+        if (thread?.dirty) {
+          fork(thread);
+          kept.push(thread);
+          thread = null;
+        }
+        threads.push(Object.assign(thread || { draft: '', busy: false, error: '', dirty: false, unconfirmed: [] },
+          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages }));
+      }
+      for (const thread of target.threads) {
+        if (threads.includes(thread) || kept.includes(thread)) continue;
+        if (thread.dirty && thread.revision && !writing(thread)) {
+          fork(thread);
+          kept.push(thread);
+        } else if (writing(thread) || thread.dirty) threads.push(thread);
+      }
+      target.threads = [...kept, ...threads];
+      kept.forEach(thread => save(target, thread));
       target.issues = response.issues || [];
       // Reopen the latest conversation, unless a question was started while the list loaded.
       if (!target.loaded && !target.active.draft && !target.active.busy) target.active = threads[0] || target.active;
@@ -86,23 +112,41 @@ const ChatThreads = (() => {
     // of a conversation run in order, so each sends the revision the previous one returned.
     function save(target, thread) {
       if (!target.threads.includes(thread)) target.threads.unshift(thread);
-      thread.saves = (thread.saves || Promise.resolve()).then(() => write(target, thread));
+      thread.saves = (thread.saves || Promise.resolve()).then(async () => {
+        const id = thread.id;
+        await write(target, thread);
+        // A conflict kept this version under a new ID; list the other window's version beside it.
+        if (thread.id !== id && !thread.dirty) {
+          try { await refresh(target); } catch (_) { /* the other version appears on the next open */ }
+          if (box === target) sync();
+        }
+      });
       return thread.saves;
     }
 
-    async function write(target, thread) {
+    async function write(target, thread, retried = false) {
+      const id = operation();
       thread.saving = true;
       try {
         const saved = await api(`/api/chats/${thread.id}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': target.workspace },
           body: JSON.stringify({ paper: target.paper, agent: thread.agent, revision: thread.revision,
+            operation: id, unconfirmed: thread.unconfirmed,
             messages: thread.messages.map(({ role, content, assistant, model, activity, created, saved_note }) =>
               ({ role, content, assistant, model, activity, created, saved_note })) }),
         });
         thread.revision = saved.revision;
-        if (thread.dirty) thread.error = '';
-        thread.dirty = false;
+        thread.unconfirmed = [];
+        if (thread.dirty) thread.error = thread.kept ? KEPT : '';
+        thread.dirty = thread.kept = false;
       } catch (error) {
+        if (!retried && (error.status === 409 || (error.status === 404 && thread.revision))) {
+          fork(thread);
+          thread.saving = false;
+          return write(target, thread, true);
+        }
+        // The save may have landed with only its response lost; the next save names it.
+        thread.unconfirmed = [...thread.unconfirmed, id].slice(-20);
         thread.dirty = true;
         thread.error = `This conversation is not saved yet: ${error.message}`;
       } finally {

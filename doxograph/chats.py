@@ -2,6 +2,9 @@
 
 The page asks the model, then saves the whole conversation here with the
 revision it last saw, so a second window cannot silently overwrite a thread.
+Each save carries a fresh operation ID. A save whose response was lost may have
+landed, so the page lists those IDs with its next save: a conversation last
+written by one of them is still this page's own, not another window's.
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ from . import config, storage, store
 
 router = APIRouter(prefix="/api/chats")
 ChatId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
+OperationId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 PaperKey = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,200}$")]
 # Library conversations use the read-only MCP tools, which only the subscriptions run.
 Agent = Literal["api", "claude_code", "codex"]
@@ -49,12 +53,15 @@ class Conversation(BaseModel):
 
 class ConversationUpdate(Conversation):
     revision: int = Field(ge=0)
+    operation: OperationId
+    unconfirmed: list[OperationId] = Field(default_factory=list, max_length=20)
 
 
 class SavedChat(Conversation):
     model_config = ConfigDict(extra="allow", strict=True)
     id: ChatId
     revision: int = Field(ge=1)
+    operation: OperationId
     created: str
     updated: str
 
@@ -104,14 +111,15 @@ def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict:
         saved = _load(chat_id)
         if saved is None and body.revision:
             raise HTTPException(404, "This conversation was deleted. Start a new conversation.")
-        if saved is not None and saved["revision"] != body.revision:
+        if saved is not None and saved["revision"] != body.revision and saved["operation"] not in body.unconfirmed:
             raise HTTPException(409, "This conversation changed in another window. Reopen the chat to load the latest version.")
         if saved is not None and saved["paper"] != body.paper:
             raise HTTPException(409, "This conversation belongs to a different chat.")
         if saved is None and body.paper is not None and not store.paper_path(body.paper).is_file():
             raise HTTPException(404, f"no paper {body.paper}")
         now = store.now()
-        chat = dict(body.model_dump(exclude={"revision"}), id=chat_id, revision=body.revision + 1,
+        chat = dict(body.model_dump(exclude={"revision", "unconfirmed"}), id=chat_id,
+                    revision=(saved["revision"] if saved else 0) + 1,
                     created=saved["created"] if saved else now, updated=now)
         store.write_json(_path(chat_id), chat)
         return _shown(chat)

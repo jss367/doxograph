@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 from playwright.async_api import async_playwright
 
@@ -209,6 +210,166 @@ def test_paper_conversations_run_side_by_side_on_their_own_agents_and_survive_re
             saved = json.loads(saved.read_text())
             assert saved['paper'] == 'study' and saved['agent'] == 'claude_code'
             assert [m['assistant'] for m in saved['messages'][1::2]] == ['Claude', 'Claude']
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+def _saved_chats():
+    return sorted((json.loads(path.read_text()) for path in config.data_dir().joinpath('chats').glob('*.json')),
+                  key=lambda chat: [m['content'] for m in chat['messages']])
+
+
+async def _saved_contents(count):
+    for _ in range(200):
+        if len(chats := _saved_chats()) >= count:
+            return [[m['content'] for m in chat['messages']] for chat in chats]
+        await asyncio.sleep(0.05)
+    raise AssertionError(f'expected {count} saved conversations, found {len(_saved_chats())}')
+
+
+def _their_follow_up(saved):
+    """Another window's save of a follow-up to the conversation it last loaded."""
+    return {'paper': 'study', 'agent': saved['agent'], 'revision': saved['revision'], 'operation': 'f' * 32,
+            'messages': saved['messages'] + [{'role': 'user', 'content': 'Theirs'},
+                                             {'role': 'assistant', 'content': 'Their answer.'}]}
+
+
+async def _paper_chat_with_answers(page):
+    answers = []
+
+    async def respond(route):
+        answers.append(route.request.post_data_json['messages'][-1]['content'])
+        await route.fulfill(json={'answer': f'Answer {len(answers)}.', 'model': 'test', 'assistant': 'Claude'})
+
+    await page.route('**/api/papers/study/chat', respond)
+
+    async def ask(question):
+        expected = f'Answer {len(answers) + 1}.'
+        await page.locator('#chat-question').fill(question)
+        await page.locator('#chat-send').click()
+        await page.get_by_text(expected, exact=True).wait_for()
+
+    async def open_chat():
+        await page.locator('#papers [data-paper="study"]').click()
+        await page.get_by_role('button', name='Ask about this paper', exact=True).click()
+
+    return ask, open_chat
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_unsaved_answer_survives_another_window_saving_the_same_conversation(engine):
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ask, open_chat = await _paper_chat_with_answers(page)
+            await page.goto(url)
+            await open_chat()
+            await ask('First')
+            [first] = _saved_chats()
+            failing = True
+
+            async def disk_full(route):
+                if failing and route.request.method == 'PUT':
+                    await route.fulfill(status=503, json={'detail': 'Disk unavailable.'})
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/chats/*', disk_full)
+            await ask('Mine')
+            await page.get_by_text('This conversation is not saved yet: Disk unavailable.', exact=True).wait_for()
+            # Meanwhile another window saves its own follow-up to the same conversation.
+            assert httpx.put(f"{url}/api/chats/{first['id']}", json=_their_follow_up(first)).status_code == 200
+            failing = False
+            await page.locator('#chat-close').click()
+            await open_chat()
+            await page.get_by_text('this version was kept as a separate conversation', exact=False).wait_for()
+            await page.locator('#chat-thread option').nth(1).wait_for(state='attached')
+            assert await _saved_contents(2) == [
+                ['First', 'Answer 1.', 'Mine', 'Answer 2.'], ['First', 'Answer 1.', 'Theirs', 'Their answer.']]
+            await page.locator('#chat-thread').select_option(index=1)
+            await page.get_by_text('Their answer.', exact=True).wait_for()
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
+def test_answer_saved_after_another_window_saved_first_is_kept_separately():
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session('chromium') as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ask, open_chat = await _paper_chat_with_answers(page)
+            await page.goto(url)
+            await open_chat()
+            await ask('First')
+            [first] = _saved_chats()
+            assert httpx.put(f"{url}/api/chats/{first['id']}", json=_their_follow_up(first)).status_code == 200
+            await ask('Mine')
+            await page.get_by_text('this version was kept as a separate conversation', exact=False).wait_for()
+            assert await _saved_contents(2) == [
+                ['First', 'Answer 1.', 'Mine', 'Answer 2.'], ['First', 'Answer 1.', 'Theirs', 'Their answer.']]
+            assert await page.locator('#chat-thread option').count() == 2
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors, saves = [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ask, open_chat = await _paper_chat_with_answers(page)
+
+            async def lose_second(route):
+                saves.append(route.request.post_data_json)
+                if len(saves) == 2:
+                    # Commit on the test server, then lose only the response.
+                    assert (await route.fetch()).status == 200
+                    await route.abort('failed')
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/chats/*', lose_second)
+            await page.goto(url)
+            await open_chat()
+            await ask('First')
+            await ask('Second')
+            await page.get_by_text('This conversation is not saved yet', exact=False).wait_for()
+            await ask('Third')
+            await page.locator('#chat-status').filter(has_text='not saved').wait_for(state='detached')
+            assert saves[2]['revision'] == 1 and saves[2]['unconfirmed'] == [saves[1]['operation']]
+            [saved] = _saved_chats()
+            assert [m['content'] for m in saved['messages']][::2] == ['First', 'Second', 'Third']
+            assert saved['revision'] == 3
+            await page.reload()
+            await open_chat()
+            await page.get_by_text('Answer 3.', exact=True).wait_for()
+            assert await page.locator('#chat-thread option').count() == 1
             assert not errors
 
     with _server() as url:

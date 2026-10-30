@@ -161,8 +161,10 @@ first, and **Delete** removes the one shown. Each conversation has its own
 **Agent**: the API or local model set in Settings, Claude subscription, or
 ChatGPT subscription. New conversations start with the model access selected in
 Settings, and changing the agent applies to the next question. One conversation
-can keep answering while you ask in another. Failed questions keep their draft
-so you can retry. Chat is disabled when AI analysis is off. Removing a paper
+can keep answering while you ask in another. If another window changed or
+deleted a conversation before this one saved its answer, this window's version
+is kept as a separate conversation. Failed questions keep their draft so you can
+retry. Chat is disabled when AI analysis is off. Removing a paper
 removes its conversations.
 
 ## Ask the library

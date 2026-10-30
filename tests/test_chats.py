@@ -1,6 +1,7 @@
 """Saved conversations stay with their workspace and paper, each on its own agent."""
 import io
 import json
+import uuid
 import zipfile
 
 import pytest
@@ -13,6 +14,10 @@ PAIR = [{'role': 'user', 'content': 'How many adults?'},
 ID = 'a' * 32
 
 
+def op():
+    return uuid.uuid4().hex
+
+
 @pytest.fixture
 def client():
     store.save_paper(store.new_paper('study', title='Memory Study'))
@@ -20,7 +25,7 @@ def client():
 
 
 def test_conversations_save_with_revisions_and_stay_in_their_paper_and_workspace(client):
-    saved = client.put(f'/api/chats/{ID}', json={'paper': 'study', 'agent': 'codex', 'messages': PAIR, 'revision': 0})
+    saved = client.put(f'/api/chats/{ID}', json={'paper': 'study', 'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()})
     assert saved.status_code == 200
     saved_chat = saved.json()
     assert saved_chat['revision'] == 1 and saved_chat['agent'] == 'codex' and saved_chat['title'] == 'How many adults?'
@@ -28,7 +33,7 @@ def test_conversations_save_with_revisions_and_stay_in_their_paper_and_workspace
     assert client.get('/api/chats?paper=study').json() == {'chats': [saved_chat], 'issues': []}
     assert client.get('/api/chats').json()['chats'] == []
     follow_up = PAIR + [{'role': 'user', 'content': 'Which ages?'}, {'role': 'assistant', 'content': '18 to 30.'}]
-    update = {'paper': 'study', 'agent': 'api', 'messages': follow_up, 'revision': 1}
+    update = {'paper': 'study', 'agent': 'api', 'messages': follow_up, 'revision': 1, 'operation': op()}
     assert client.put(f'/api/chats/{ID}', json=update).json()['revision'] == 2
     # A second window that saw revision 1 cannot replace the newer conversation.
     assert client.put(f'/api/chats/{ID}', json=update).status_code == 409
@@ -50,13 +55,13 @@ def test_conversations_save_with_revisions_and_stay_in_their_paper_and_workspace
     {'paper': '../study', 'agent': 'api', 'messages': PAIR},
 ])
 def test_conversations_must_be_answered_and_belong_to_a_real_chat(client, body):
-    response = client.put(f'/api/chats/{ID}', json=body | {'revision': 0})
+    response = client.put(f'/api/chats/{ID}', json=body | {'revision': 0, 'operation': op()})
     assert response.status_code in (404, 422)
     assert not chats.chats_dir().exists()
 
 
 def test_unreadable_conversation_is_reported_without_hiding_the_others(client):
-    client.put(f'/api/chats/{ID}', json={'paper': None, 'agent': 'claude_code', 'messages': PAIR, 'revision': 0})
+    client.put(f'/api/chats/{ID}', json={'paper': None, 'agent': 'claude_code', 'messages': PAIR, 'revision': 0, 'operation': op()})
     (chats.chats_dir() / f'{"b" * 32}.json').write_text('{not json')
     listed = client.get('/api/chats').json()
     assert [c['id'] for c in listed['chats']] == [ID]
@@ -66,17 +71,38 @@ def test_unreadable_conversation_is_reported_without_hiding_the_others(client):
 def test_removing_a_paper_removes_its_conversations(client):
     for chat_id, paper in ((ID, 'study'), ('b' * 32, None)):
         agent = 'api' if paper else 'claude_code'
-        client.put(f'/api/chats/{chat_id}', json={'paper': paper, 'agent': agent, 'messages': PAIR, 'revision': 0})
+        client.put(f'/api/chats/{chat_id}', json={'paper': paper, 'agent': agent, 'messages': PAIR, 'revision': 0, 'operation': op()})
     assert client.delete('/api/papers/study').status_code == 200
     assert sorted(p.stem for p in chats.chats_dir().glob('*.json')) == ['b' * 32]
 
 
-def test_workspace_archive_includes_conversations(client):
-    client.put(f'/api/chats/{ID}', json={'paper': 'study', 'agent': 'api', 'messages': PAIR, 'revision': 0})
+def test_a_save_whose_response_was_lost_still_counts_as_this_pages_own(client):
+    first, second = op(), op()
+    body = {'paper': 'study', 'agent': 'api', 'messages': PAIR, 'revision': 0}
+    assert client.put(f'/api/chats/{ID}', json=body | {'operation': first}).json()['revision'] == 1
+    # The page never saw revision 1, so it saves from revision 0 and names the unconfirmed write.
+    follow_up = body | {'messages': PAIR * 2, 'operation': second, 'unconfirmed': [first]}
+    saved = client.put(f'/api/chats/{ID}', json=follow_up)
+    assert saved.status_code == 200 and saved.json()['revision'] == 2 and len(saved.json()['messages']) == 4
+    # An unconfirmed write that is no longer the newest does not hide another window's save.
+    assert client.put(f'/api/chats/{ID}', json=follow_up | {'operation': op()}).status_code == 409
+    assert client.put(f'/api/chats/{ID}', json=body | {'operation': op()}).status_code == 409
+
+
+def test_workspace_archive_includes_conversations_of_the_papers_it_holds(client):
+    library, removed = 'b' * 32, 'c' * 32
+    client.put(f'/api/chats/{ID}', json={'paper': 'study', 'agent': 'api', 'messages': PAIR, 'revision': 0, 'operation': op()})
+    client.put(f'/api/chats/{library}', json={'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()})
+    store.save_paper(store.new_paper('gone'))
+    client.put(f'/api/chats/{removed}', json={'paper': 'gone', 'agent': 'api', 'messages': PAIR, 'revision': 0, 'operation': op()})
+    # A paper removed while the archive waited, before its conversations were deleted.
+    store.paper_path('gone').unlink()
     download = client.post('/api/workspace/archive').json()['download']
     with zipfile.ZipFile(io.BytesIO(client.get(download).content)) as archive:
         assert json.loads(archive.read(f'data/chats/{ID}.json'))['messages'][0]['content'] == 'How many adults?'
-        assert f'data/chats/{ID}.json' in json.loads(archive.read('manifest.json'))['files']
+        names = set(json.loads(archive.read('manifest.json'))['files'])
+        assert {f'data/chats/{ID}.json', f'data/chats/{library}.json'} <= names
+        assert f'data/chats/{removed}.json' not in names
 
 
 @pytest.mark.parametrize('agent', ['api', 'claude_code', 'codex'])
