@@ -412,35 +412,44 @@ async function saveNote(key) {
   }
 }
 
+const titleEdits = new Set();
 async function editPaperTitle(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper) return;
   const workspace = workspaceClient.workspaceId;
-  let value = paper.title || '', note = '';
-  while (workspace === workspaceClient.workspaceId) {
-    const answer = await askDialog({
-      title: 'Edit paper title', note, input: { value }, ok: 'Save',
-    });
-    if (answer === null || workspace !== workspaceClient.workspaceId) return;
-    value = answer.trim();
-    if (!value) {
-      note = 'Enter a title for this paper.';
-      continue;
-    }
-    if (value === paper.title) return;
-    try {
-      await api(`/api/papers/${encodeURIComponent(key)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-        body: JSON.stringify({ title: value }),
-      });
-    } catch (error) {
-      // Keep the correction available for another attempt or for copying.
-      note = `Could not save the title: ${error.message}`;
-      continue;
-    }
-    await refreshAllShowingError();
+  const identity = JSON.stringify([workspace, key]);
+  if (titleEdits.has(identity)) {
+    toast('Finish the current title edit before editing this paper again.');
     return;
+  }
+  titleEdits.add(identity);
+  let pendingSave = null;
+  try {
+    const answer = await askDialog({
+      title: 'Edit paper title', input: { value: paper.title || '' }, ok: 'Save',
+      async onSubmit(answer) {
+        if (workspace !== workspaceClient.workspaceId) return null;
+        const title = answer.trim();
+        if (!title) return 'Enter a title for this paper.';
+        if (title === paper.title) return null;
+        try {
+          pendingSave = api(`/api/papers/${encodeURIComponent(key)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+            body: JSON.stringify({ title }),
+          });
+          await pendingSave;
+          return null;
+        } catch (error) {
+          return `Could not save the title: ${error.message}`;
+        }
+      },
+    });
+    if (answer !== null && workspace === workspaceClient.workspaceId) await refreshAllShowingError();
+  } finally {
+    // Forced navigation can close the prompt before its request finishes.
+    if (pendingSave) await pendingSave.catch(() => {});
+    titleEdits.delete(identity);
   }
 }
 
@@ -845,7 +854,9 @@ $('ctxmenu').addEventListener('click', async (event) => {
     } finally {
       // A save replaces the restored button. Recover focus only if it fell
       // back to the document, preserving any new focus chosen during the save.
-      if (document.activeElement === document.body) restorePaperMenuFocus(trigger);
+      if (document.activeElement === document.body || (!$('ask').open && $('ask').contains(document.activeElement))) {
+        restorePaperMenuFocus(trigger);
+      }
     }
   }
   // The paper stays in the list until its DELETE comes back, so the menu can

@@ -49,9 +49,15 @@ function toast(message, { actions = [], timeout = 6000, tone = '', onExpire = nu
 }
 
 let askResolve = null;
+let askSubmit = null;
+let askBusy = false;
 
-function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK', cancel = 'Cancel' }) {
+function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK', cancel = 'Cancel', onSubmit = null }) {
+  // A replacement prompt cancels the previous caller rather than stranding it.
+  if (askResolve) settleAsk(null);
   const dialog = $('ask');
+  askSubmit = onSubmit;
+  dialog.removeAttribute('aria-busy');
   $('ask-title').textContent = title;
   $('ask-note').textContent = note;
   $('ask-note').hidden = !note;
@@ -59,6 +65,7 @@ function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK
   field.hidden = input === null;
   field.value = input ? (input.value || '') : '';
   field.placeholder = input ? (input.placeholder || '') : '';
+  field.disabled = false;
   const choices = $('ask-label-choices');
   choices.hidden = labelChoices.length === 0;
   choices.innerHTML = labelChoices.map((name) => `<button type="button" class="label label-choice"
@@ -66,6 +73,8 @@ function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK
   syncAskLabels();
   $('ask-ok').textContent = ok;
   $('ask-cancel').textContent = cancel;
+  $('ask-ok').disabled = false;
+  $('ask-cancel').disabled = false;
   dialog.showModal();
   if (input) { field.focus(); field.select(); } else $('ask-ok').focus();
   return new Promise((resolve) => { askResolve = resolve; });
@@ -76,16 +85,55 @@ function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK
 function settleAsk(value) {
   const resolve = askResolve;
   askResolve = null;
+  askSubmit = null;
+  askBusy = false;
+  $('ask').removeAttribute('aria-busy');
   if ($('ask').open) $('ask').close();
   if (resolve) resolve(value);
 }
 
-$('ask-form').addEventListener('submit', (event) => {
+$('ask-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  settleAsk($('ask-input').hidden ? true : $('ask-input').value);
+  if (askBusy) return;
+  const value = $('ask-input').hidden ? true : $('ask-input').value;
+  if (!askSubmit) { settleAsk(value); return; }
+  const owner = askResolve;
+  const label = $('ask-ok').textContent;
+  askBusy = true;
+  $('ask').setAttribute('aria-busy', 'true');
+  $('ask-input').disabled = true;
+  $('ask-ok').disabled = true;
+  $('ask-cancel').disabled = true;
+  $('ask-ok').textContent = 'Saving…';
+  try {
+    // Validation or save failures stay in this dialog with its draft intact.
+    const error = await askSubmit(value);
+    if (askResolve !== owner) return;
+    if (!error) { settleAsk(value); return; }
+    $('ask-note').textContent = error;
+    $('ask-note').hidden = false;
+  } catch (error) {
+    if (askResolve !== owner) return;
+    $('ask-note').textContent = error.message;
+    $('ask-note').hidden = false;
+  } finally {
+    // A navigation or replacement prompt may have retired this submission.
+    if (askResolve === owner) {
+      askBusy = false;
+      $('ask').removeAttribute('aria-busy');
+      $('ask-input').disabled = false;
+      $('ask-ok').disabled = false;
+      $('ask-cancel').disabled = false;
+      $('ask-ok').textContent = label;
+      $('ask-input').focus();
+    }
+  }
 });
 $('ask-cancel').addEventListener('click', () => settleAsk(null));
-$('ask').addEventListener('cancel', () => settleAsk(null));   // Escape
+$('ask').addEventListener('cancel', (event) => {
+  event.preventDefault();
+  if (!askBusy) settleAsk(null);   // Escape
+});
 $('ask').addEventListener('close', () => {
   // close() queues this event. An answer can open the next question before
   // it arrives, so only cancel a question whose dialog is still closed.

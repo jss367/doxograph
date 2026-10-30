@@ -1213,7 +1213,15 @@ $('panes').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'edit-title') {
-      await editPaperTitle(paper);
+      const workspace = workspaceClient.workspaceId;
+      try {
+        await editPaperTitle(paper);
+      } finally {
+        if (workspace === workspaceClient.workspaceId && (document.activeElement === document.body
+            || (!$('ask').open && $('ask').contains(document.activeElement)))) {
+          restorePaperActionCursor({paper, selector: 'summary'});
+        }
+      }
       return;
     }
     if (act === 'labels') {
