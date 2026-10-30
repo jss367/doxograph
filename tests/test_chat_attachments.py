@@ -58,6 +58,19 @@ def test_rejects_invalid_unsafe_or_oversized_files(file):
         Attachment.model_validate(file)
 
 
+def test_multi_picture_jpeg_is_accepted_without_weakening_format_validation():
+    raw = io.BytesIO()
+    first = Image.new('RGB', (4, 3), 'red')
+    second = Image.new('RGB', (4, 3), 'blue')
+    first.save(raw, format='MPO', save_all=True, append_images=[second])
+    with Image.open(io.BytesIO(raw.getvalue())) as decoded:
+        assert decoded.format == 'MPO'
+    file = attachment('photo.jpg', raw.getvalue(), 'image/jpeg')
+    assert Attachment.model_validate(file).media_type == 'image/jpeg'
+    with pytest.raises(ValidationError, match='format does not match'):
+        Attachment.model_validate(file | {'media_type': 'image/png'})
+
+
 def test_message_and_conversation_limits_apply_on_send_and_save():
     file = attachment()
     for messages in ([{'role': 'user', 'content': '', 'attachments': [file] * 6}],

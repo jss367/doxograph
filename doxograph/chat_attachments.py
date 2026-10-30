@@ -33,7 +33,8 @@ class Attachment(BaseModel):
         if self.media_type.startswith("image/"):
             try:
                 with Image.open(io.BytesIO(raw)) as image:
-                    if Image.MIME.get(image.format or "") != self.media_type:
+                    detected_format = "JPEG" if image.format == "MPO" else image.format or ""
+                    if Image.MIME.get(detected_format) != self.media_type:
                         raise ValueError("The image format does not match its file type.")
                     if image.width > 8000 or image.height > 8000 or image.width * image.height > 25_000_000:
                         raise ValueError("Images must be at most 8000 pixels per side and 25 megapixels.")
