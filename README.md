@@ -154,18 +154,27 @@ and other papers are not included; the ChatGPT option also includes your global
 Codex instructions as described above. Answers can be wrong; check them against
 the source.
 
-Conversations are separate for each paper and workspace, and last until the
-page reloads. **New conversation** clears the current paper's conversation.
-Failed questions keep their draft so you can retry. Chat uses the model access
-selected in Settings and is disabled when AI analysis is off.
+Conversations are saved in the workspace, separately for each paper, so you can
+close the app and pick one up another day. A paper can have several. **New
+conversation** starts another, **Conversation** switches between them, newest
+first, and **Delete** removes the one shown. Each conversation has its own
+**Agent**: the API or local model set in Settings, Claude subscription, or
+ChatGPT subscription. New conversations start with the model access selected in
+Settings, and changing the agent applies to the next question. One conversation
+can keep answering while you ask in another. If another window changed or
+deleted a conversation before this one saved its answer, this window's version
+is kept as a separate conversation. Failed questions keep their draft so you can
+retry. Chat is disabled when AI analysis is off. Removing a paper
+removes its conversations.
 
 ## Ask the library
 
 **Ask the library** in the header opens a chat that answers across every paper in
-the workspace, where paper chat reads one PDF. It needs AI analysis enabled and
-**Claude subscription (Claude Code)** or **ChatGPT subscription (Codex)** selected
-in Settings → Model access. It uses the model selected for that provider. If
-either is missing, the dialog explains what to change and offers **Open Settings**.
+the workspace, where paper chat reads one PDF. Its conversations are saved and
+switched like paper chat's, and each runs on **Claude subscription (Claude Code)**
+or **ChatGPT subscription (Codex)**, using the model selected for that provider.
+It needs AI analysis enabled; when it is off, the dialog says so and offers
+**Open Settings**.
 The selected assistant looks things up
 through the [MCP server](#query-doxograph-from-agents) below, started with
 `--without-notes`: it can search papers, claims, and PDF text, read a paper,
@@ -174,8 +183,8 @@ below an answer to see what it looked up. Answers render Markdown headings, list
 links, code, and equations. **Save as research note** keeps an answer in this
 workspace's **Research notes**, along with its question, assistant, timestamp,
 and source lookups. **Open saved note** lets you rename, edit, or export it as
-Markdown. Saved notes survive reloads and new conversations; unsaved chat stays
-only for this page session. Both assistants reach the library through the
+Markdown. A saved note stays separate from its conversation, so you can edit it
+or delete either one. Both assistants reach the library through the
 app that is serving the page, over a loopback address (the default; `--host 0.0.0.0`
 also works). If the app is bound only to another address, the chat says so
 instead of failing partway through an answer.
@@ -713,6 +722,7 @@ context.md           what your research is about, given to the extractor
 research-notes.json  your long-form Markdown notes, with per-note revisions
 research-note-revisions.json  revision counters retained across note deletion and restoration
 note-images/        local images embedded in workspace and research notes
+chats/<id>.json     saved paper and library conversations, one file each
 backups/            previous versions captured before document edits
 .jobs/              background job journals and retained retry references
 export/              generated HTML

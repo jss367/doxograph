@@ -29,7 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import (__version__, agent, bib, chat, cites, codex_cli, config, export, extract, fingerprint, ingest, pairs,
+from . import (__version__, agent, bib, chat, chats, cites, codex_cli, config, export, extract, fingerprint, ingest, pairs,
                search, store, notebook, records, research_notes, storage, providers, query, job_journal,
                backups, workspace_archive)
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError
@@ -71,6 +71,7 @@ async def _lifespan(_: FastAPI):
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.include_router(research_notes.router)
+app.include_router(chats.router)
 app.include_router(query.router)
 app.include_router(backups.router)
 app.include_router(workspace_archive.router)
@@ -912,6 +913,8 @@ class ChatMessage(BaseModel):
 
 class ChatBody(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
+    # A saved conversation keeps its own agent; without one, Settings decides.
+    agent: Literal["api", "claude_code", "codex"] | None = None
 
     @field_validator("messages")
     @classmethod
@@ -1190,6 +1193,11 @@ def research_notes_css() -> FileResponse:
 @app.get("/agent-chat.js")
 def agent_chat_js():
     return _frontend_response("agent-chat.js", "text/javascript")
+
+
+@app.get("/chat-threads.js")
+def chat_threads_js():
+    return _frontend_response("chat-threads.js", "text/javascript")
 
 
 @app.get("/focused-review.js")
@@ -1720,6 +1728,7 @@ def remove_paper(key: str) -> dict:
         raise HTTPException(404, "No such paper.")
     try:
         extract.delete_paper(key)
+        chats.delete_paper_chats(key)
     except ModelSetupError as exc:
         raise HTTPException(502, str(exc)[:500])
     except (anthropic.APIError, httpx.HTTPError):
@@ -1776,10 +1785,14 @@ def _chat_errors(label: str):
         raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.")
 
 
+def _chat_agent(agent: str | None):
+    return config.use_ai_provider(agent) if agent else contextlib.nullcontext()
+
+
 @app.post("/api/papers/{key}/chat")
 def paper_chat(key: str, body: ChatBody) -> dict:
     _require_analysis()
-    with _chat_errors("Paper chat"):
+    with _chat_errors("Paper chat"), _chat_agent(body.agent):
         try:
             return chat.answer(key, [message.model_dump() for message in body.messages])
         except KeyError:
@@ -1825,7 +1838,7 @@ class AgentBody(ChatBody):
 @app.post("/api/agent/chat")
 def agent_chat(body: AgentBody, request: Request) -> dict:
     _require_analysis()
-    with _chat_errors("Library agent"):
+    with _chat_errors("Library agent"), _chat_agent(body.agent):
         return agent.answer([message.model_dump() for message in body.messages],
                             lambda: _callback_url(request), body.paper)
 

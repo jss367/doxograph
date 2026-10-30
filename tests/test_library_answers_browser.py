@@ -119,9 +119,11 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 exported = Path(await (await download.value).path()).read_text()
                 assert exported.startswith('# Recovery across the project\n\n')
                 assert ANSWER in exported
+                # The conversation, and the note it was saved to, survive the reload.
                 await page.get_by_role('button', name='Close research notes', exact=True).click()
                 await page.locator('#btn-agent').click()
-                assert await page.locator('#agent-messages').inner_text() == ''
+                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
+                assert await page.locator('#agent-thread option').all_text_contents() == [QUESTION]
                 assert not errors and not external
 
     run_browser(scenario())
@@ -176,6 +178,10 @@ def test_committed_save_with_lost_response_retries_once_and_deleted_note_can_be_
                 [first] = httpx.get(url + '/api/research-notes', headers=headers).json()['notes']
                 assert first['id'] == operations[0][0]
                 assert ANSWER in first['body']
+                # Reopening reloads saved conversations; the retry must keep the same key.
+                await page.locator('#agent-close').click()
+                await page.locator('#btn-agent').click()
+                await page.locator('#agent-messages .note-prose h2').wait_for()
                 assert await page.locator('#agent-question').input_value() == 'Keep this follow-up'
                 await page.get_by_role('button', name='Save as research note', exact=True).click()
                 await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
@@ -267,7 +273,7 @@ def test_library_answer_safe_rendering_and_failed_save_retry(engine):
                 await asyncio.wait_for(held.wait(), timeout=10)
                 try:
                     assert await page.get_by_role('button', name='Saving…', exact=True).is_disabled()
-                    assert await page.locator('#agent-clear').is_disabled()
+                    assert await page.locator('#agent-delete').is_disabled()
                     await page.locator('#agent-close').click()
                 finally:
                     release.set()
@@ -283,5 +289,66 @@ def test_library_answer_safe_rendering_and_failed_save_retry(engine):
                 assert unsafe in await page.locator('#note-body').input_value()
                 assert await page.locator('#note-preview script, #note-preview img').count() == 0
                 assert not errors and not external
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_note_save_with_lost_response_keeps_its_key_across_a_reload(engine):
+    config.set_ai_provider('claude_code')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors, keys, puts = [], [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            async def conversation(route):
+                if route.request.method != 'PUT':
+                    await route.continue_()
+                    return
+                puts.append(route.request.post_data_json)
+                if len(puts) == 2:
+                    # The save that should hold the note key before the note is posted.
+                    await route.fulfill(status=503, json={'detail': 'Disk unavailable.'})
+                else:
+                    await route.continue_()
+
+            async def save(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                keys.append(route.request.headers['idempotency-key'])
+                if len(keys) == 1:
+                    # Commit on the test server, then lose only the response.
+                    assert (await route.fetch()).status == 201
+                    await route.abort('failed')
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/agent/chat', lambda route: route.fulfill(json={'answer': ANSWER, 'assistant': 'Claude'}))
+            await page.route('**/api/research-notes', save)
+            await page.route('**/api/chats/*', conversation)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill(QUESTION)
+                await page.locator('#agent-send').click()
+                await page.locator('#agent-messages .note-prose h2').wait_for()
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('alert').filter(has_text='the conversation could not be saved first').wait_for()
+                # No note is posted until its key is on disk.
+                assert keys == [] and httpx.get(url + '/api/research-notes').json()['notes'] == []
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('alert').filter(has_text='Could not save this answer', has_not_text='saved first').wait_for()
+                assert puts[2]['messages'][1]['note_operation'] == keys[0]
+                await page.reload()
+                await page.locator('#btn-agent:enabled').click()
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
+                notes = httpx.get(url + '/api/research-notes').json()['notes']
+                assert len(keys) == 2 and keys[0] == keys[1] == notes[0]['id'] and len(notes) == 1
+                assert not errors
 
     run_browser(scenario())
