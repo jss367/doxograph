@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import job_queue, storage, store
 
@@ -23,6 +23,28 @@ class RenameBody(BaseModel):
 
 class RetagBody(BaseModel):
     keys: list[str] | None = None
+
+
+class FacetBody(BaseModel):
+    name: str = Field(max_length=60)
+    description: str = Field(default="", max_length=2000)
+
+
+class FacetDescriptionBody(BaseModel):
+    description: str = Field(max_length=2000)
+
+
+class FacetValuesBody(BaseModel):
+    """Rename or merge values into `into`, or remove them with an empty one."""
+
+    values: list[str] = Field(min_length=1, max_length=200)
+    into: str = Field(default="", max_length=200)
+
+
+class FillFacetsBody(BaseModel):
+    keys: list[str] | None = None
+    # Ask about every facet on every paper, stale or not.
+    force: bool = False
 
 
 class TensionsBody(BaseModel):
@@ -101,6 +123,57 @@ def patch_tag(name: str, body: RenameBody) -> dict[str, Any]:
 def remove_tag(name: str) -> dict[str, Any]:
     store.delete_tag(name)
     return {"tags": store.load_tags()}
+
+
+@router.post("/api/facets")
+def create_facet(body: FacetBody) -> dict[str, Any]:
+    try:
+        return {"facets": store.add_facet(body.name, body.description)}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.patch("/api/facets/{name}")
+def patch_facet(name: str, body: FacetDescriptionBody) -> dict[str, Any]:
+    try:
+        return {"facets": store.describe_facet(name, body.description)}
+    except KeyError:
+        raise HTTPException(404, f"no facet {name}") from None
+
+
+@router.delete("/api/facets/{name}")
+def remove_facet(name: str) -> dict[str, Any]:
+    try:
+        return {"facets": store.delete_facet(name)}
+    except KeyError:
+        raise HTTPException(404, f"no facet {name}") from None
+
+
+@router.post("/api/facets/{name}/values")
+def rewrite_facet_values(name: str, body: FacetValuesBody) -> dict[str, Any]:
+    """Also answers with the value the claims now carry: `into` resolved
+    through the aliases, so a merge into a spelling an earlier rename
+    replaced names what it became, and "" for a removal."""
+    try:
+        facets = store.rewrite_facet_values(name, body.values, body.into)
+    except KeyError:
+        raise HTTPException(404, f"no facet {name}") from None
+    facet = next(facet for facet in facets if facet["name"] == name)
+    value = store.resolve_facet_value(store.facet_value_text(body.into), store.facet_aliases(facet))
+    return {"facets": facets, "value": value}
+
+
+@router.post("/api/facets/fill")
+def fill_facets(body: FillFacetsBody) -> dict[str, Any]:
+    job_queue._require_analysis()
+    facets = store.load_facets()
+    keys = body.keys or [p["key"] for p in store.all_papers()
+                         if p.get("claims") and (body.force or store.stale_facets(p, facets))]
+    if not facets or not keys:
+        return {"queued": 0}
+    job = job_queue._new_job(f"fill facets on {len(keys)} papers")
+    job_queue._submit_job(job_queue._run_fill_facets, job, keys, body.force)
+    return {"queued": len(keys)}
 
 
 @router.post("/api/tensions")

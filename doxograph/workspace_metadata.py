@@ -1,5 +1,6 @@
 """Contracts for hand-edited workspace metadata and retired paper identities."""
 
+import re
 from typing import Self
 
 from pydantic import ConfigDict, Field, JsonValue, RootModel, field_validator, model_validator
@@ -37,6 +38,39 @@ class Vocabulary(Metadata):
             raise ValueError("topic names must be unique")
         if any(not name.strip() for name in self.retired_topics):
             raise ValueError("retired topic names must not be blank")
+        return self
+
+
+class FacetDefinition(Metadata):
+    name: str
+    description: str = ""
+    # A spelling's key, as `store.facet_value_key` makes it, mapped to the
+    # value it stands for. An empty value drops the spelling wherever it
+    # turns up, so a value removed by hand does not come back on the next
+    # read of a paper.
+    aliases: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def slug_name(cls, value: str) -> str:
+        # The form `store.slugify` gives a name. The page writes a facet
+        # filter as `name:value` and splits it at the first colon, so a name
+        # written by hand with a colon, a space, or a capital would filter on
+        # some other name.
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+            raise ValueError("facet names must be lowercase letters and digits joined by hyphens, "
+                             "such as model or training-method")
+        return value
+
+
+class Facets(Metadata):
+    facets: list[FacetDefinition] | None = None
+
+    @model_validator(mode="after")
+    def unique_names(self) -> Self:
+        names = [facet.name for facet in self.facets or []]
+        if len(names) != len(set(names)):
+            raise ValueError("facet names must be unique")
         return self
 
 

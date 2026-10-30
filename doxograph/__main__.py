@@ -108,6 +108,18 @@ def cmd_retag(args) -> int:
     return 1 if failures else 0
 
 
+def cmd_fill_facets(args) -> int:
+    facets = store.load_facets()
+    if not facets:
+        print("no facets defined; add one with `doxograph facet NAME DESCRIPTION`", file=sys.stderr)
+        return 1
+    keys = args.keys or [p["key"] for p in store.all_papers()
+                         if p.get("claims") and (args.force or store.stale_facets(p, facets))]
+    failures = _run_pass(keys, lambda key: extract.fill_facets(key, force=args.force),
+                         lambda key, _paper: print(f"filled {key}"))
+    return 1 if failures else 0
+
+
 def cmd_verify(args) -> int:
     """Check every claim's quote against its paper's PDF."""
     keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
@@ -331,6 +343,50 @@ def cmd_label(args) -> int:
     return 0
 
 
+def cmd_facet(args) -> int:
+    """List the facets, show one facet's values, or define one.
+
+    As `label`, one command asked at three depths: what facets there are,
+    what values one holds, and make it ask this. Giving a description to a
+    facet that exists changes what it asks, which stales its values.
+    """
+    facets = store.load_facets()
+    if not args.name:
+        stale = store.stale_facet_papers(store.all_papers(), facets)
+        for facet in facets:
+            note = f"  ({stale[facet['name']]} papers to fill)" if stale[facet["name"]] else ""
+            print(f"{facet['name']}: {facet.get('description', '')}{note}")
+        if not facets:
+            print("no facets yet", file=sys.stderr)
+        return 0
+    name = store.slugify(args.name)
+    exists = any(facet["name"] == name for facet in facets)
+    try:
+        if args.remove:
+            store.delete_facet(name)
+            print(f"removed {name}")
+            return 0
+        if args.description is not None:
+            if exists:
+                store.describe_facet(name, args.description)
+            else:
+                store.add_facet(name, args.description)
+            print(f"{name}: {' '.join(args.description.split())}")
+            return 0
+    except (KeyError, ValueError) as exc:
+        print(f"no facet {name}" if isinstance(exc, KeyError) else str(exc), file=sys.stderr)
+        return 1
+    if not exists:
+        print(f"no facet {name}", file=sys.stderr)
+        return 1
+    counts = store.facet_counts(store.claim_rows(), facets)[name]
+    for value, count in counts.items():
+        print(f"{count:>4} {value}")
+    if not counts:
+        print("no values yet", file=sys.stderr)
+    return 0
+
+
 def cmd_export(args) -> int:
     path = export.write(Path(args.out).expanduser() if args.out else None, title=args.title)
     print(path)
@@ -435,6 +491,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("keys", nargs="*")
     p.set_defaults(func=cmd_retag)
 
+    p = sub.add_parser("fill-facets", help="give claims values for facets added or redescribed since they were read")
+    p.add_argument("keys", nargs="*", help="paper keys; default is every paper with a facet to fill")
+    p.add_argument("--force", action="store_true", help="ask about every facet, filled or not")
+    p.set_defaults(func=cmd_fill_facets)
+
     p = sub.add_parser("verify", help="check that each claim's quote is in its paper's PDF")
     p.add_argument("keys", nargs="*", help="paper keys; default is every paper with claims")
     p.set_defaults(func=cmd_verify)
@@ -481,6 +542,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("labels", nargs="*", help="the labels it should carry, replacing the ones it has; quote labels containing spaces")
     p.add_argument("--clear", action="store_true", help="take every label off the paper")
     p.set_defaults(func=cmd_label)
+
+    p = sub.add_parser("facet", help="list facets, show one facet's values, or define one")
+    p.add_argument("name", nargs="?", help="the facet to show or define")
+    p.add_argument("description", nargs="?", help="what the facet asks of each claim; creates or redescribes it")
+    p.add_argument("--remove", action="store_true", help="delete the facet and its values from every claim")
+    p.set_defaults(func=cmd_facet)
 
     p = sub.add_parser("export", help="write the self-contained HTML view")
     p.add_argument("--out")

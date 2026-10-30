@@ -84,7 +84,7 @@ $('continue-reading').addEventListener('click', (event) => {
   parkSynthEditor();
   parkNoteEditor();
   showView('claims');
-  V.paper = key; V.tag = null; V.label = null;
+  V.paper = key; V.tag = null; V.label = null; V.facet = null;
   V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false; V.editing = null;
   $('q').value = ''; $('kind').value = '';
   $('only-unreviewed').checked = false; $('only-unverified').checked = false;
@@ -503,8 +503,9 @@ function openPaper(paper) {
   captureOpenEditor();
   closeEditorsNotBelongingTo(paper);
   showView('claims');
-  // Papers opened from another view may be outside the current label filter.
+  // Papers opened from another view may be outside the current label or facet filter.
   keepLabelFor(paper);
+  keepFacetFor(paper);
   V.paper = paper; V.tag = null; V.selectedId = null;
   syncHash(true);
   renderAll();

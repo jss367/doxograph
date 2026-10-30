@@ -442,6 +442,31 @@ def _run_retag(job: dict[str, Any], keys: list[str]) -> None:
         _prune_jobs()
 
 
+@_workspace_job
+def _run_fill_facets(job: dict[str, Any], keys: list[str], force: bool = False) -> None:
+    try:
+        failed = done = 0
+        last_failure = ""
+        _set(job, state="reading", detail=f"0 of {len(keys)}")
+        for key, _result, exc in extract.run_concurrently(keys, lambda key: extract.fill_facets(key, force=force)):
+            done += 1
+            if exc is not None:
+                failed += 1
+                last_failure = f"{key}: {type(exc).__name__}: {exc}"
+                traceback.print_exception(exc)
+            _set(job, key=key, detail=f"{done} of {len(keys)}")
+        if failed:
+            _set(job, state="error",
+                 detail=f"{failed} of {len(keys)} papers failed; {last_failure}")
+        else:
+            _set(job, state="done", detail=f"{len(keys)} papers")
+    except Exception as exc:
+        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+    finally:
+        _prune_jobs()
+
+
 ACTIVE_JOB_STATES = ("queued", "fetching", "reading")
 
 

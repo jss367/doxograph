@@ -465,6 +465,22 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .tcard .stale { color: var(--warn); font-size: .82rem; margin: .4rem 0 0; }
 @media (max-width: 70rem) { .tcard .tpair { grid-template-columns: 1fr; } }
 .tag { color: var(--accent); font-size: .8rem; cursor: pointer; }
+.facet-value { font-size: .78rem; cursor: pointer; padding: 0 .35rem; border: 1px solid var(--line);
+  border-radius: 999px; white-space: nowrap; }
+.facet-value:hover { background: var(--panel); }
+.facet-value .facet-name { color: var(--muted); }
+.facet { margin: .1rem 0 .3rem; }
+.facet > summary { display: flex; align-items: center; gap: .3rem; cursor: pointer; font-size: .85rem; padding: .18rem .3rem; }
+.facet > summary { list-style: none; }
+.facet > summary::-webkit-details-marker { display: none; }
+.facet > summary::before { content: '▸'; color: var(--muted); width: .8rem; }
+.facet[open] > summary::before { content: '▾'; }
+.facet > summary .n { color: var(--muted); font-size: .78rem; margin-left: auto; }
+.facet > .hint { margin: .1rem .3rem .3rem; font-size: .78rem; }
+.facet-actions { flex-wrap: wrap; gap: .3rem; margin: .3rem .3rem .5rem; }
+.facet-actions button { font-size: .74rem; }
+.graph-legend.graph-colors[hidden] { display: none; }
+.graph-legend.graph-colors i { width: .65rem; height: .65rem; border: 0; border-radius: 50%; vertical-align: middle; margin-right: .3rem; }
 .link { font-size: .8rem; color: var(--muted); }
 .link .rel { text-transform: uppercase; font-size: .72rem; letter-spacing: .03em;
   color: var(--accent); margin-right: .3rem; }

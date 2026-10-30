@@ -349,6 +349,7 @@ def _build_state() -> dict[str, Any]:
     agreements: list[dict[str, Any]] = _state_section(lambda: store.agreement_rows(rows), [], issues)
     syntheses: list[dict[str, Any]] = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
     tags: list[dict[str, Any]] = _state_section(store.load_tags, [], issues)
+    facets: list[dict[str, Any]] = _state_section(store.load_facets, [], issues)
     ledger: list[dict[str, Any]] = _state_section(store.load_ledger, [], issues)
     context = _state_section(store.load_context, "", issues)
     _state_section(store.retired_keys, set[str](), issues)
@@ -367,6 +368,11 @@ def _build_state() -> dict[str, Any]:
         "tag_counts": store.tag_counts(rows),
         "label_counts": store.label_counts(papers),
         "label_keys": store.label_keys(papers),
+        "facets": facets,
+        "facet_counts": (facet_counts := store.facet_counts(rows, facets)),
+        "facet_value_keys": store.facet_value_keys(facet_counts),
+        "facets_stale": store.stale_facet_papers(papers, facets),
+        "facet_papers_to_fill": sum(1 for p in papers if store.stale_facets(p, facets)),
         "ledger": ledger,
         "context": context,
         "tensions": tensions,
@@ -398,10 +404,12 @@ def state(request: Request) -> Response:
     """
     workspace = config.workspace_id()
     recovery_error = None
+    recovery_path = store.tag_change_path()
     try:
         store.recover_storage()
     except store.StorageRecoveryError as exc:
         recovery_error = str(exc)
+        recovery_path = exc.path
     # Credentials and installation settings live outside the corpus, but
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
@@ -423,7 +431,7 @@ def state(request: Request) -> Response:
         payload["ai_enabled"] = ai_enabled
         payload["workspace"] = workspace_record
         if recovery_error is not None:
-            payload["storage_issues"].append({"path": str(store.tag_change_path()), "detail": recovery_error})
+            payload["storage_issues"].append({"path": str(recovery_path), "detail": recovery_error})
         else:
             with _state_cache_lock:
                 _state_cache[workspace] = (signature, payload)

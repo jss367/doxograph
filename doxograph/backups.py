@@ -16,7 +16,7 @@ from . import config, notebook, records, research_notes, store
 
 router = APIRouter(prefix='/api/workspace/backups')
 KEEP_VERSIONS = 20
-DOCUMENTS = {'notebook.json', 'research-notes.json', 'tags.yaml', 'ledger.yaml',
+DOCUMENTS = {'notebook.json', 'research-notes.json', 'tags.yaml', 'facets.yaml', 'ledger.yaml',
              'context.md', 'agreements.json', 'tensions.json', 'syntheses.json', 'retired-keys.json'}
 
 
@@ -132,7 +132,8 @@ def restore(identifier: str, body: Restore) -> dict:
     target = config.data_dir() / relative
     lock = store.paper_lock(target.stem) if relative.startswith('papers/') else store.document_lock(target.stem)
     extraction = store.extraction_lock(target.stem) if relative.startswith('papers/') else contextlib.nullcontext()
-    with extraction, store.vocab_lock(), lock:
+    # Facets before vocabulary before the paper, as in every facet rewrite.
+    with extraction, store.facets_lock(), store.vocab_lock(), lock:
         if (not local(target)
                 or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != body.expected):
             raise HTTPException(409, 'This document changed or was removed. Reload the backup list before restoring.')
@@ -154,7 +155,12 @@ def restore(identifier: str, body: Restore) -> dict:
                 for field in ('pdf_file', 'pdf_upload', 'extraction', 'source', 'error'):
                     if field in previous:
                         restored[field] = previous[field]
+                # Facets can have changed too. Their values are reconciled
+                # rather than refused: a deleted facet's values are dropped and
+                # merges since the backup apply, as they would on a fresh read.
+                facets = store.load_facets()
                 for claim in restored.get('claims', []):
+                    store.reconcile_claim_facets(claim, facets)
                     store.check_quote(target.stem, claim)
                 store.refresh_status(restored)
                 store.save_paper(restored)
