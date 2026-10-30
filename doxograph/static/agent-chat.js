@@ -52,7 +52,7 @@ function renderAgentChat(chat) {
   syncAgentChatControls();
 }
 
-function libraryAnswerNote(chat, index) {
+function libraryAnswerNote(chat, index, workspace) {
   const message = chat.messages[index];
   const question = chat.messages[index - 1]?.content || chat.messages[index - 1]?.attachments?.[0]?.name || 'Library synthesis';
   const title = Array.from(question.replace(/\s+/g, ' ').trim()).slice(0, 160).join('');
@@ -61,11 +61,11 @@ function libraryAnswerNote(chat, index) {
   const evidence = (message.evidence || []).map(e => `- ${e.title || e.paper} · ${e.kind}${e.page ? ` · PDF page ${e.page}` : ''}${e.carried ? ` · from turn ${e.turn}` : ''}${e.stale ? ' · stale analysis' : ''}${e.status ? ` · ${e.status}` : ''}\n\n${e.text || e.quote || ''}`).join('\n\n');
   const scope = message.scope || chat.messages[index - 1]?.scope;
   const members = scope ? `\n\nAvailable papers at submission:\n${scope.papers.map(key => `- ${message.evidence?.find(e => e.paper === key)?.title || key} (${key})`).join('\n')}` : '';
-  const provenance = `\n\n## Sources\n\n${scope ? scopeLabel(scope) : 'Evidence details unavailable for this older answer'}${members}\n\n${evidence}\n\nModel: ${message.model || 'Not recorded'}`;
+  const provenance = `\n\n## Sources\n\n${scope ? scopeLabel(scope, workspace) : 'Evidence details unavailable for this older answer'}${members}\n\n${evidence}\n\nModel: ${message.model || 'Not recorded'}`;
   let answer = answerMarkdown(message);
   for (const c of message.citations || []) {
     const e = (message.evidence || []).find(e => e.ref === c.ref);
-    const url = c.valid ? citationUrl(c, agentChats.workspace) : '';
+    const url = c.valid ? citationUrl(c, workspace) : '';
     answer = answer.replaceAll(c.token, c.valid ? `[${e?.title || c.paper}${c.page ? `, PDF page ${c.page}` : ''}](${url})` : `${c.token} (unverified reference)`);
   }
   return {title, body: `## Question\n\n${question}\n\n## Answer\n\n${answer}\n\n---\n\nSaved from Ask the library · ${message.assistant || 'Assistant'} · ${message.created || new Date().toISOString()}${lookups}${provenance}`};
@@ -114,11 +114,12 @@ $('agent-messages').addEventListener('click', async (event) => {
     // the conversation holding it is on disk, so a retry after a reload also returns the committed note.
     message.note_operation ||= Array.from(crypto.getRandomValues(new Uint8Array(16)),
       byte => byte.toString(16).padStart(2, '0')).join('');
+    const noteBody = libraryAnswerNote(chat, index, workspace);
     if (!await agentChats.save(chat)) throw new Error('the conversation could not be saved first. Try again.');
     const note = await api('/api/research-notes', {
       method: 'POST', headers: {'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace,
         'Idempotency-Key': message.note_operation},
-      body: JSON.stringify(libraryAnswerNote(chat, index)),
+      body: JSON.stringify(noteBody),
     });
     message.saved_note = note.id;
     await agentChats.save(chat);
@@ -173,15 +174,16 @@ $('agent-form').addEventListener('submit', (event) => {
 // workspace is now open behind the dialog. Never include personal note fields.
 const askCatalogs = new Map();
 let picker = null;
-function catalog() {
-  if (agentChats.workspace === workspaceClient.workspaceId) return S;
-  return askCatalogs.get(agentChats.workspace) || {papers: [], claims: []};
+function catalog(workspace = agentChats.workspace) {
+  if (workspace === workspaceClient.workspaceId) return S;
+  return askCatalogs.get(workspace) || {papers: [], claims: []};
 }
-function scopeLabel(scope) {
-  const focus = (scope.focus || []).filter(f => f.claim).map(f => f.text || catalog().claims.find(c => c.id === f.claim && c.paper === f.paper)?.text || f.claim).join('; ');
+function scopeLabel(scope, workspace = agentChats.workspace) {
+  const sources = catalog(workspace);
+  const focus = (scope.focus || []).filter(f => f.claim).map(f => f.text || sources.claims.find(c => c.id === f.claim && c.paper === f.paper)?.text || f.claim).join('; ');
   const about = focus ? ` · About: ${focus}` : '';
   if (scope.mode === 'library') return `Search: entire library · ${scope.papers.length} papers${about}`;
-  const titles = scope.papers.map(key => catalog().papers.find(p => p.key === key)?.title || key);
+  const titles = scope.papers.map(key => sources.papers.find(p => p.key === key)?.title || key);
   return `${scope.mode === 'paper' ? 'Paper' : 'Sources'}: ${titles.join(', ') || 'No sources selected'}${about}`;
 }
 function claimsFallback(chat) {

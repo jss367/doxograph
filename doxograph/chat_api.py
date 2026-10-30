@@ -156,8 +156,8 @@ def ask(body: AskBody, request: Request) -> dict[str, Any]:
         prior: list[dict[str, Any]] = []
         saved = chats._load(body.conversation_id) if body.conversation_id else None
         if len(body.messages) > 1:
-            if not saved or [(m["role"], m["content"]) for m in saved["messages"]] != [
-                    (m.role, m.content) for m in body.messages[:-1]]:
+            if not saved or [(m["role"], m["content"], m.get("attachments", [])) for m in saved["messages"]] != [
+                    (m.role, m.content, [a.model_dump() for a in m.attachments]) for m in body.messages[:-1]]:
                 raise HTTPException(409, "Save or reopen this conversation before asking a follow-up.")
             previous = saved["messages"][-2].get("scope") or saved.get("scope") or {"mode": "paper" if saved["paper"] else "library",
                                               "papers": [saved["paper"]] if saved["paper"] else scope.papers}

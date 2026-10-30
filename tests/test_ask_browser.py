@@ -51,6 +51,8 @@ def seed():
 
 
 def model_stub(monkeypatch):
+    from doxograph import chat
+    monkeypatch.setattr(chat, 'answer', lambda *a, **kw: pytest.fail('Unexpected direct-paper provider call'))
     calls = []
 
     def answer(messages, callback):
@@ -249,4 +251,89 @@ def test_scope_edits_during_a_request_apply_only_to_the_next_question(engine):
                 await page.locator('[data-remove-source="c"]').click()
                 await page.get_by_role('button', name='Start new conversation', exact=True).click()
                 await expect(page.locator('#agent-agent')).to_have_value('codex')
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_followup_flushes_failed_save_before_calling_model(engine, monkeypatch):
+    seed()
+    calls = model_stub(monkeypatch)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
+            writes = []
+            async def fail_save(route):
+                if route.request.method == 'PUT':
+                    writes.append(route.request.post_data_json)
+                    await route.fulfill(status=503, json={'detail': 'Storage temporarily unavailable'})
+                else:
+                    await route.continue_()
+            with _server() as url:
+                await page.goto(url)
+                await page.route('**/api/chats/*', fail_save)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill('First question')
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-status')).to_contain_text('not saved yet')
+                assert len(calls) == 1 and len(writes) == 1
+                await page.locator('#agent-question').fill('Follow-up question')
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-question')).to_be_enabled()
+                assert len(calls) == 1 and len(writes) == 2
+                await expect(page.locator('#agent-question')).to_have_value('Follow-up question')
+                await page.unroute('**/api/chats/*', fail_save)
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-question')).to_be_empty()
+                await expect(page.locator('#agent-messages .agent-answer')).to_have_count(2)
+                assert len(calls) == 2
+                saved = httpx.get(url + '/api/chats').json()['chats']
+                assert len(saved) == 1 and len(saved[0]['messages']) == 4
+                assert saved[0]['messages'][0]['content'] == 'First question'
+                assert saved[0]['messages'][2]['content'] == 'Follow-up question'
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_note_keeps_originating_workspace_while_conversation_save_waits(engine, monkeypatch):
+    seed()
+    model_stub(monkeypatch)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
+            started, release = asyncio.Event(), asyncio.Event()
+            async def delay_save(route):
+                if route.request.method == 'PUT':
+                    started.set()
+                    await release.wait()
+                await route.continue_()
+            with _server() as url:
+                other = httpx.post(url + '/api/workspaces', json={'name': 'Other workspace'}).json()['workspace']['id']
+                await page.goto(url)
+                await page.locator('[data-select-paper="a"]').first.check()
+                await page.locator('[data-select-paper="b"]').first.check()
+                await page.locator('#ask-selection').click()
+                await page.locator('#agent-question').fill('Explain the evidence')
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-question')).to_be_empty()
+                await page.route('**/api/chats/*', delay_save)
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await asyncio.wait_for(started.wait(), 5)
+                await page.locator('#agent-close').click()
+                await page.evaluate('workspace => switchWorkspace(workspace)', other)
+                await page.locator('#btn-agent:enabled').click()
+                release.set()
+                for _ in range(100):
+                    notes = httpx.get(url + '/api/research-notes', headers={'X-Doxograph-Workspace':'default'}).json()['notes']
+                    if notes:
+                        break
+                    await asyncio.sleep(.05)
+                assert len(notes) == 1
+                body = notes[0]['body']
+                assert 'ws=default' in body and f'ws={other}' not in body
+                assert 'Sources: Memory and recovery' in body
+                assert httpx.get(url + '/api/research-notes', headers={'X-Doxograph-Workspace':other}).json()['notes'] == []
     run_browser(scenario())

@@ -210,6 +210,12 @@ const ChatThreads = (() => {
       if (!target.threads.includes(thread)) target.threads.unshift(thread);
       sync();
       try {
+        // Follow-ups are checked against durable history by /api/ask. Finish queued
+        // writes and retry a failed save before asking the model for another turn.
+        if (unified && thread.messages.length) {
+          if (thread.saves) await thread.saves;
+          if ((thread.dirty || !thread.revision) && !await save(target, thread)) return;
+        }
         const answer = await request(thread, messages.map(({ role, content, attachments }) => ({ role, content, ...(attachments?.length ? { attachments } : {}) })), submittedScope);
         if (unified) {
           messages[messages.length - 1].scope = answer.scope || submittedScope;
