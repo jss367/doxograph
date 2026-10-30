@@ -689,6 +689,7 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
         )
         if facets:
             claim["facets"] = store.clean_claim_facets(raw.get("facets"), facets, known_values)
+            store.mark_facets_filled(claim, facets)
         if not claim["text"]:
             continue
         # The prompt asks for a verbatim quote; this is where that is checked.
@@ -702,9 +703,6 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
     paper["claim_seq"] = working.get("claim_seq", paper.get("claim_seq", 0))
     paper["summary"] = (payload.get("summary") or paper.get("summary") or "").strip()
     paper["relevance"] = (payload.get("relevance") or paper.get("relevance") or "").strip()
-    if facets:
-        paper["facet_basis"] = {**(paper.get("facet_basis") or {}),
-                                **{facet["name"]: store.facet_basis(facet) for facet in facets}}
 
     used_tags = {t for claim in paper["claims"] for t in claim["tags"]}
     proposed = {}
@@ -841,7 +839,11 @@ def fill_facets(key: str, force: bool = False) -> dict:
     facets = store.load_facets()
     stale = set(store.stale_facets(paper, facets))
     wanted = [facet for facet in facets if force or facet["name"] in stale]
-    claims = paper.get("claims", [])
+    # Only the claims a facet is wanted on: the ones already filled under the
+    # current descriptions would be asked the same question again.
+    claims = [c for c in paper.get("claims", [])
+              if any(facet["name"] not in (c.get("facets_hand") or [])
+                     and (force or store.claim_needs_facet(c, facet)) for facet in wanted)]
     if not wanted or not claims:
         return paper
     known = store.facet_spellings(store.claim_rows(), wanted)
@@ -855,7 +857,8 @@ def fill_facets(key: str, force: bool = False) -> dict:
     def state_of(claim: dict) -> str:
         # What the answer was drawn from, and the values it would replace.
         return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("quote", ""),
-                           claim.get("facets") or {}, claim.get("facets_hand") or []], sort_keys=True)
+                           claim.get("facets") or {}, claim.get("facets_hand") or [],
+                           claim.get("facet_basis") or {}], sort_keys=True)
 
     claims_before = {c["id"]: state_of(c) for c in claims}
     api = client()
@@ -878,7 +881,8 @@ def fill_facets(key: str, force: bool = False) -> dict:
     by_id = {a["id"]: a for a in payload.get("assignments", []) if isinstance(a, dict) and "id" in a}
 
     # As retag: reload under the locks, and apply only to claims nobody
-    # touched while the model was thinking.
+    # touched while the model was thinking. A claim left alone, or one the
+    # answer leaves out, is not marked filled, so the next pass reaches it.
     with store.facets_lock(), store.paper_lock(key):
         current = {facet["name"]: facet for facet in store.load_facets()}
         usable = [current[facet["name"]] for facet in _unchanged_facets(wanted)]
@@ -889,18 +893,14 @@ def fill_facets(key: str, force: bool = False) -> dict:
                 continue
             answered = store.clean_claim_facets(assignment.get("facets"), usable, known)
             values = dict(claim.get("facets") or {})
-            for facet in usable:
-                name = facet["name"]
-                if name in (claim.get("facets_hand") or []):
-                    continue
-                if answered.get(name):
-                    values[name] = answered[name]
+            filled = [facet for facet in usable if facet["name"] not in (claim.get("facets_hand") or [])]
+            for facet in filled:
+                if answered.get(facet["name"]):
+                    values[facet["name"]] = answered[facet["name"]]
                 else:
-                    values.pop(name, None)
+                    values.pop(facet["name"], None)
             claim["facets"] = values
-        if usable:
-            paper["facet_basis"] = {**(paper.get("facet_basis") or {}),
-                                    **{facet["name"]: store.facet_basis(facet) for facet in usable}}
+            store.mark_facets_filled(claim, filled)
         store.save_paper(paper)
     return paper
 

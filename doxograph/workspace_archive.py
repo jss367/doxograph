@@ -63,7 +63,7 @@ def _snapshot_locks():
     while True:
         locks = contextlib.ExitStack()
         try:
-            for name in ('vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
+            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
                          'agreements', 'tensions', 'syntheses', 'retired-keys'):
                 locks.enter_context(store.document_lock(name, blocking=False))
             keys = store.paper_keys()

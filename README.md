@@ -822,9 +822,10 @@ prompt, so every paper read afterwards comes back with values for it on each
 claim.
 
 Papers read before a facet existed, or before its description last changed,
-are counted under the facet as not yet filled in. **Fill in** sends their
-claims, evidence, and quotes to the model, one call per paper, without the
-PDFs. `doxograph fill-facets` does the same from the shell. Values you set by
+are counted under the facet as not yet filled in. So is a paper with a claim
+a pass left alone: one a re-read kept, or one edited while the model was
+answering. **Fill in** sends the claims still missing values, with their
+evidence and quotes, to the model, one call per paper, without the PDFs. `doxograph fill-facets` does the same from the shell. Values you set by
 hand in a claim's editor are yours: neither the fill nor a re-read replaces
 them, and a re-read keeps the claim.
 

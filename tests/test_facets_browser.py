@@ -18,7 +18,7 @@ def _corpus() -> None:
     store.add_facet("model", "The language models a result was measured on")
     store.update_claim("one", "one-c1", {"facets": {"model": ["GPT-4"]}})
     paper = store.load_paper("one")
-    paper["facet_basis"] = {"model": store.facet_basis(store.load_facets()[0])}
+    store.mark_facets_filled(paper["claims"][0], store.load_facets())
     store.save_paper(paper)
     paper = store.load_paper("two")
     paper["claims"][0]["facets"] = {"model": ["Llama 3 8B"]}

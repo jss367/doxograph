@@ -34,6 +34,9 @@ class Claim(Document):
     facets: dict[str, list[str]] = Field(default_factory=dict)
     # The facets a person set on this claim, which no pass overwrites.
     facets_hand: list[str] = Field(default_factory=list)
+    # Each facet's definition, by `store.facet_basis`, as it was when a pass
+    # last gave this claim values for it.
+    facet_basis: dict[str, str] = Field(default_factory=dict)
     evidence: str = ""
     quote: str = ""
     locator: str = ""
@@ -103,9 +106,6 @@ class Paper(Document):
     extraction: Extraction | None = None
     proposed_tags: list["Topic"] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
-    # Each facet's definition as it was when this paper's claims were last
-    # given values for it, by `store.facet_basis`.
-    facet_basis: dict[str, str] = Field(default_factory=dict)
     claims: list[Claim] = Field(default_factory=list)
     history: list[HistoryEntry] = Field(default_factory=list)
     claim_seq: int = Field(default=0, ge=0)

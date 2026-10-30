@@ -1386,14 +1386,46 @@ def set_claim_facets_by_hand(claim: dict, raw: Any) -> None:
         claim.pop("facets_hand")
 
 
+def claim_needs_facet(claim: dict, facet: dict) -> bool:
+    """Whether no pass has given this claim values for `facet` under its
+    current description, and no person has set them."""
+    if facet["name"] in (claim.get("facets_hand") or []):
+        return False
+    return (claim.get("facet_basis") or {}).get(facet["name"]) != facet_basis(facet)
+
+
+def mark_facets_filled(claim: dict, facets: list[dict]) -> None:
+    """Record that a pass gave this claim values for `facets` as they are."""
+    claim["facet_basis"] = {**(claim.get("facet_basis") or {}),
+                            **{facet["name"]: facet_basis(facet) for facet in facets}}
+
+
 def stale_facets(paper: dict, facets: list[dict]) -> list[str]:
-    """The facets this paper's claims have not been given values for under
-    the facet's current description. A paper with no claims has nothing to
-    fill, so nothing is stale on it."""
-    if not paper.get("claims"):
-        return []
-    basis = paper.get("facet_basis") or {}
-    return [facet["name"] for facet in facets if basis.get(facet["name"]) != facet_basis(facet)]
+    """The facets some claim on this paper still needs values for. Tracked
+    claim by claim rather than for the paper: a claim a pass left alone, such
+    as one edited while the model ran or one a re-read kept, stays stale
+    until a pass reaches it."""
+    claims = paper.get("claims", [])
+    return [facet["name"] for facet in facets if any(claim_needs_facet(c, facet) for c in claims)]
+
+
+def reconcile_claim_facets(claim: dict, facets: list[dict]) -> None:
+    """Bring facet data from an older copy of a claim, from history or a
+    backup, into line with the facets as they are now: values for a deleted
+    facet are dropped, aliases and removals made since are applied, and
+    ownership and fill records are kept only for facets still defined."""
+    defined = {facet["name"] for facet in facets}
+    claim["facets"] = clean_claim_facets(claim.get("facets"), facets)
+    hand = [name for name in claim.get("facets_hand") or [] if name in defined]
+    if hand:
+        claim["facets_hand"] = sorted(set(hand))
+    else:
+        claim.pop("facets_hand", None)
+    basis = {name: value for name, value in (claim.get("facet_basis") or {}).items() if name in defined}
+    if basis:
+        claim["facet_basis"] = basis
+    else:
+        claim.pop("facet_basis", None)
 
 
 def facet_counts(rows: list[dict], facets: list[dict]) -> dict[str, dict[str, int]]:
@@ -1472,9 +1504,10 @@ def delete_facet(name: str) -> list[dict]:
             raise KeyError(name)
 
         def strip(paper: dict) -> bool:
-            changed = (paper.get("facet_basis") or {}).pop(name, None) is not None
+            changed = False
             for claim in paper.get("claims", []):
                 changed |= (claim.get("facets") or {}).pop(name, None) is not None
+                changed |= (claim.get("facet_basis") or {}).pop(name, None) is not None
                 hand = claim.get("facets_hand") or []
                 if name in hand:
                     claim["facets_hand"] = [n for n in hand if n != name]

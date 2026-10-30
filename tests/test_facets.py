@@ -77,9 +77,10 @@ def test_adding_a_facet_makes_it_stale_on_every_paper_with_claims(corpus):
 
 
 def test_changing_a_description_stales_the_facet_again(monkeypatch, corpus):
-    first, _ = corpus
+    first, second = corpus
     store.add_facet("model", "models")
-    use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}}]})
+    use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}},
+                                            {"id": second, "facets": {"model": []}}]})
     extract.fill_facets("doe2026study")
     assert store.stale_facets(store.load_paper("doe2026study"), store.load_facets()) == []
 
@@ -104,7 +105,7 @@ def test_deleting_a_facet_removes_its_values_from_every_claim(monkeypatch, corpu
     assert [f["name"] for f in store.load_facets()] == ["dataset"]
     assert {c["id"]: c.get("facets") for c in paper["claims"]} == {first: {"dataset": ["MMLU"]}, second: {}}
     assert "facets_hand" not in claims()[second] or claims()[second]["facets_hand"] == []
-    assert "model" not in paper["facet_basis"]
+    assert all("model" not in (c.get("facet_basis") or {}) for c in paper["claims"])
 
 
 # --- the fill pass ----------------------------------------------------------
@@ -129,9 +130,10 @@ def test_fill_sends_claims_and_records_values(monkeypatch, corpus):
 
 
 def test_fill_skips_a_paper_with_nothing_stale(monkeypatch, corpus):
-    first, _ = corpus
+    first, second = corpus
     store.add_facet("model", "models")
-    use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}}]})
+    use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}},
+                                            {"id": second, "facets": {"model": []}}]})
     extract.fill_facets("doe2026study")
 
     fake = use_model(monkeypatch, {"assignments": []})
@@ -169,6 +171,24 @@ def test_fill_does_not_overwrite_a_claim_edited_during_the_call(monkeypatch, cor
 
     assert claims()[first]["facets"] == {"model": ["GPT-4"]}
     assert not claims()[second].get("facets")
+    # The skipped claim keeps the paper stale, and a normal retry reaches it
+    # alone: the claim already filled is not asked about again.
+    assert store.stale_facets(store.load_paper("doe2026study"), store.load_facets()) == ["model"]
+    retry = use_model(monkeypatch, {"assignments": [{"id": second, "facets": {"model": ["Llama 3 70B"]}}]})
+    extract.fill_facets("doe2026study")
+    assert claims()[second]["facets"] == {"model": ["Llama 3 70B"]}
+    assert first not in retry.messages.calls[0]["messages"][0]["content"]
+    assert store.stale_facets(store.load_paper("doe2026study"), store.load_facets()) == []
+
+
+def test_a_claim_the_answer_leaves_out_stays_to_be_filled(monkeypatch, corpus):
+    first, second = corpus
+    store.add_facet("model", "models")
+    use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}}]})
+    extract.fill_facets("doe2026study")
+    paper = store.load_paper("doe2026study")
+    assert store.stale_facets(paper, store.load_facets()) == ["model"]
+    assert store.stale_facet_papers([paper], store.load_facets()) == {"model": 1}
 
 
 def test_fill_drops_answers_for_a_facet_redescribed_during_the_call(monkeypatch, corpus):
@@ -244,7 +264,31 @@ def test_extraction_drops_a_facet_deleted_during_the_call():
     paper = extract.merge_extraction("doe2026study", payload, prompt_facets=facets, known_values={})
 
     assert not paper["claims"][0].get("facets")
-    assert "model" not in (paper.get("facet_basis") or {})
+    assert "model" not in (paper["claims"][0].get("facet_basis") or {})
+
+
+def test_a_reread_leaves_kept_claims_to_be_filled(monkeypatch, corpus):
+    """A re-read gives values only to the claims it writes. A reviewed claim
+    it keeps was never asked about the new facet, so the paper stays stale
+    and a normal fill reaches that claim."""
+    first, second = corpus
+    store.update_claim("doe2026study", first, {"reviewed": True})
+    store.add_facet("model", "models")
+    payload = {"summary": "s", "relevance": "r", "proposed_tags": [], "claims": [{
+        "text": "A fresh claim on Llama.", "kind": "finding", "strength": "headline", "tags": [],
+        "evidence": "", "quote": "", "locator": "", "ledger_links": [], "facets": {"model": ["Llama"]},
+    }]}
+    paper = extract.merge_extraction("doe2026study", payload, prompt_facets=store.load_facets(), known_values={})
+    fresh = next(c["id"] for c in paper["claims"] if c["id"] != first)
+    assert store.stale_facets(paper, store.load_facets()) == ["model"]
+
+    fake = use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}}]})
+    extract.fill_facets("doe2026study")
+    content = fake.messages.calls[0]["messages"][0]["content"]
+    assert first in content and fresh not in content
+    assert claims()[first]["facets"] == {"model": ["GPT-4"]}
+    assert claims()[fresh]["facets"] == {"model": ["Llama"]}
+    assert store.stale_facets(store.load_paper("doe2026study"), store.load_facets()) == []
 
 
 def test_a_reread_keeps_a_claim_whose_facets_were_corrected(corpus):
@@ -357,3 +401,113 @@ def test_the_fill_route_queues_only_stale_papers(api, monkeypatch, corpus):
     monkeypatch.setattr(server, "_submit_job", lambda function, job, *args: submitted.append(args))
     assert api.post("/api/facets/fill", json={}).json() == {"queued": 1}
     assert submitted == [(["doe2026study"], False)]
+
+
+# --- history, backups, archives ---------------------------------------------------
+
+def test_a_restored_claim_keeps_its_hand_set_facets_through_a_later_fill(api, monkeypatch, corpus):
+    first, _ = corpus
+    store.add_facet("model", "models")
+    store.update_claim("doe2026study", first, {"facets": {"model": ["GPT-4 (March)"]}})
+    store.delete_claim("doe2026study", first)
+    history = api.get("/api/notebook/history/doe2026study").json()
+    entry = next(e for e in history["entries"] if e["claim"] == first and e["fields"] is not None)
+    restored = api.post("/api/notebook/history/doe2026study/restore",
+                        json={"revision": entry["id"], "expected": history["expected"]})
+    assert restored.status_code == 200, restored.text
+    assert claims()[first]["facets_hand"] == ["model"]
+
+    store.describe_facet("model", "the models a result was measured on")
+    use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}}]})
+    extract.fill_facets("doe2026study", force=True)
+    assert claims()[first]["facets"] == {"model": ["GPT-4 (March)"]}
+
+
+def test_restoring_history_reconciles_facets_changed_since(api, corpus):
+    first, _ = corpus
+    store.add_facet("model", "models")
+    store.add_facet("dataset", "datasets")
+    store.update_claim("doe2026study", first, {"facets": {"model": ["gpt4"], "dataset": ["MMLU"]}})
+    store.update_claim("doe2026study", first, {"facets": {}})
+    store.rewrite_facet_values("model", ["gpt4"], "GPT-4")
+    store.delete_facet("dataset")
+    history = api.get("/api/notebook/history/doe2026study").json()
+    entry = next(e for e in history["entries"]
+                 if e["claim"] == first and (e["fields"] or {}).get("facets", {}).get("dataset"))
+    api.post("/api/notebook/history/doe2026study/restore",
+             json={"revision": entry["id"], "expected": history["expected"]}).raise_for_status()
+    claim = claims()[first]
+    assert claim["facets"] == {"model": ["GPT-4"]}
+    assert claim["facets_hand"] == ["model"]
+
+
+def test_restoring_a_paper_backup_reconciles_its_facets(api, corpus):
+    first, _ = corpus
+    store.add_facet("model", "models")
+    store.add_facet("dataset", "datasets")
+    store.update_claim("doe2026study", first, {"facets": {"model": ["gpt4", "none"], "dataset": ["MMLU"]}})
+    store.update_claim("doe2026study", first, {"text": "Edited after the backup."})
+    store.rewrite_facet_values("model", ["gpt4"], "GPT-4")
+    store.rewrite_facet_values("model", ["none"], "")
+    store.delete_facet("dataset")
+    versions = [v for v in api.get("/api/workspace/backups").json()["versions"]
+                if v["path"] == "papers/doe2026study.json"]
+    def claim_in(version: dict) -> dict:
+        saved = json.loads(api.get(f"/api/workspace/backups/{version['id']}").content)
+        # The earliest backups predate the claim.
+        return next((c for c in saved["claims"] if c["id"] == first), {})
+
+    version = next(v for v in versions if claim_in(v).get("text") == "Steering recovers on GPT-4."
+                   and "dataset" in claim_in(v).get("facets", {}))
+    response = api.post(f"/api/workspace/backups/{version['id']}/restore", json={"expected": version["expected"]})
+    assert response.status_code == 200, response.text
+    claim = claims()[first]
+    assert claim["text"] == "Steering recovers on GPT-4."
+    assert claim["facets"] == {"model": ["GPT-4"]}
+    assert claim["facets_hand"] == ["model"]
+
+
+def test_an_archive_waits_out_a_facet_rewrite_instead_of_capturing_half_of_it(monkeypatch, corpus):
+    import threading
+    import zipfile
+
+    from doxograph import workspace_archive
+
+    first, _ = corpus
+    store.save_paper(store.new_paper("li2025other", title="Other"))
+    store.add_facet("model", "models")
+    other = store.add_claim("li2025other", {"text": "y", "facets": {"model": ["gpt4"]}})["id"]
+    store.update_claim("doe2026study", first, {"facets": {"model": ["gpt4"]}})
+
+    halfway, release = threading.Event(), threading.Event()
+    original = store.save_paper
+
+    def pause_after_the_first_paper(paper):
+        original(paper)
+        if not halfway.is_set():
+            halfway.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(store, "save_paper", pause_after_the_first_paper)
+    rewrite = threading.Thread(target=store.rewrite_facet_values, args=("model", ["gpt4"], "GPT-4"))
+    rewrite.start()
+    assert halfway.wait(5)
+    built: list = []
+    archive = threading.Thread(target=lambda: built.append(workspace_archive.build()))
+    archive.start()
+    archive.join(0.3)
+    assert archive.is_alive(), "the archive did not wait for the facet rewrite"
+    release.set()
+    rewrite.join(5)
+    archive.join(10)
+    monkeypatch.setattr(store, "save_paper", original)
+    path = built[0]
+    try:
+        with zipfile.ZipFile(path) as zipped:
+            facets = yaml.safe_load(zipped.read("data/facets.yaml"))
+            assert facets["facets"][0]["aliases"] == {"gpt4": "GPT-4"}
+            for key, claim_id in (("doe2026study", first), ("li2025other", other)):
+                paper = json.loads(zipped.read(f"data/papers/{key}.json"))
+                assert next(c for c in paper["claims"] if c["id"] == claim_id)["facets"] == {"model": ["GPT-4"]}
+    finally:
+        path.unlink()
