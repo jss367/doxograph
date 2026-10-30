@@ -51,6 +51,17 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
             await page.locator('#chat-question').fill('How many adults?')
             await page.locator('#chat-question').press('Shift+Enter')
             assert await page.locator('#chat-question').input_value() == 'How many adults?\n'
+            await page.locator('#chat-question').evaluate('''field => {
+                const enter = (init, keyCode) => {
+                    const event = new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true, ...init});
+                    if (keyCode) Object.defineProperty(event, 'keyCode', {value: keyCode});
+                    field.dispatchEvent(event);
+                };
+                enter({isComposing: true});
+                enter({}, 229);
+                enter({repeat: true});
+            }''')
+            await page.wait_for_timeout(200)
             assert requests == []
             await page.locator('#chat-question').press('Enter')
             await page.get_by_text('Twenty adults (p. 1).', exact=True).wait_for()
