@@ -333,6 +333,59 @@ def test_answer_saved_after_another_window_saved_first_is_kept_separately():
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_saves_finished_while_the_conversation_list_loads_are_kept(engine):
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ask, open_chat = await _paper_chat_with_answers(page)
+            taken, release = asyncio.Event(), asyncio.Event()
+
+            async def held_list(route):
+                if route.request.method != 'GET':
+                    await route.continue_()
+                    return
+                # Take the snapshot now and deliver it only after the page's save finished.
+                response = await route.fetch()
+                taken.set()
+                await release.wait()
+                await route.fulfill(response=response)
+
+            await page.route('**/api/chats?paper=study', held_list)
+            await page.goto(url)
+            for question, contents in (('First', ['First', 'Answer 1.']),
+                                       ('Second', ['First', 'Answer 1.', 'Second', 'Answer 2.'])):
+                await open_chat()
+                await asyncio.wait_for(taken.wait(), timeout=10)
+                if question == 'Second':
+                    await page.get_by_text('Answer 1.', exact=True).wait_for()
+                await ask(question)
+                assert await _saved_contents(1) == [contents]
+                release.set()
+                await page.wait_for_timeout(200)
+                assert await page.locator('#chat-thread option').all_text_contents() == ['First']
+                assert await page.locator('#chat-messages p').all_text_contents() == contents
+                await page.locator('#chat-close').click()
+                taken.clear()
+                release.clear()
+            await page.unroute('**/api/chats?paper=study')
+            await open_chat()
+            await ask('Third')
+            assert await _saved_contents(1) == [['First', 'Answer 1.', 'Second', 'Answer 2.', 'Third', 'Answer 3.']]
+            assert not await page.get_by_text('kept as a separate conversation', exact=False).count()
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
     config.set_ai_provider('claude_code')
     store.save_paper(store.new_paper('study', title='Memory Study'))

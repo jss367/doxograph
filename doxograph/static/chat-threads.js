@@ -29,6 +29,8 @@ const ChatThreads = (() => {
   function create({ prefix, agents, render }) {
     const boxes = new Map();
     let box = null;
+    // Orders list requests against finished saves: a list can only include saves finished before it began.
+    let clock = 0;
 
     const defaultAgent = () => agents().includes(S.ai_provider) ? S.ai_provider : agents()[0];
     const blank = () => ({ id: operation(), revision: 0, agent: defaultAgent(), messages: [],
@@ -60,6 +62,7 @@ const ChatThreads = (() => {
     }
 
     async function refresh(target) {
+      const started = ++clock;
       const response = await api(`/api/chats${target.paper ? `?paper=${encodeURIComponent(target.paper)}` : ''}`,
         { headers: { 'X-Doxograph-Workspace': target.workspace } });
       const local = new Map(target.threads.map(t => [t.id, t]));
@@ -88,7 +91,9 @@ const ChatThreads = (() => {
       }
       for (const thread of target.threads) {
         if (threads.includes(thread) || kept.includes(thread)) continue;
-        if (thread.dirty && thread.revision && !writing(thread)) {
+        // Saved after this list began, so it is new rather than deleted in another window.
+        if (thread.savedAt > started) threads.unshift(thread);
+        else if (thread.dirty && thread.revision && !writing(thread)) {
           fork(thread);
           kept.push(thread);
         } else if (writing(thread) || thread.dirty) threads.push(thread);
@@ -97,7 +102,7 @@ const ChatThreads = (() => {
       kept.forEach(thread => save(target, thread));
       target.issues = response.issues || [];
       // Reopen the latest conversation, unless a question was started while the list loaded.
-      if (!target.loaded && !target.active.draft && !target.active.busy) target.active = threads[0] || target.active;
+      if (!target.loaded && !target.active.draft && !target.active.busy && !target.active.messages.length) target.active = threads[0] || target.active;
       else if (!threads.includes(target.active) && target.active.revision) target.active = blank();
       target.loaded = true;
     }
@@ -142,6 +147,7 @@ const ChatThreads = (() => {
               ({ role, content, assistant, model, activity, created, saved_note })) }),
         });
         thread.revision = saved.revision;
+        thread.savedAt = ++clock;
         thread.unconfirmed = [];
         if (thread.dirty) thread.error = thread.kept ? KEPT : '';
         thread.dirty = thread.kept = false;
