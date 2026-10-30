@@ -64,7 +64,7 @@ const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', u
             drafts: {}, error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
-            graph: { xAxis: 'connections', color: 'topic', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
+            graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
 // Whether the paper's PDF is kept out of the claims view. A preference of this
@@ -1469,7 +1469,7 @@ function resetWorkspaceView() {
     error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
-    graph: { xAxis: 'connections', color: 'topic', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
+    graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();

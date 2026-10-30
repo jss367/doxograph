@@ -86,6 +86,17 @@ def test_facets_filter_edit_and_color_the_map(engine):
                 await expect(legend).to_contain_text("Llama 3 8B")
                 nodes = {n["key"]: n for n in await page.evaluate("doxographGraph().nodes")}
                 assert nodes["two"]["dimmed"] and not nodes["one"]["dimmed"]
+                # A facet named like the built-in topic coloring is still selectable.
+                store.add_facet("topic", "The research area")
+                await _poll(page)
+                color = page.locator("[data-graph-opt='color']")
+                await expect(color.locator("option[value='topic']")).to_have_count(1)
+                await color.select_option("topic")
+                await expect(legend).to_contain_text("no topic")
+                await color.select_option("")
+                await expect(legend).to_be_hidden()
+                await color.select_option("model")
+                store.delete_facet("topic")
                 if engine == "chromium":
                     await page.screenshot(path=".context/facets-map.png")
 

@@ -383,11 +383,12 @@ function topicColor(topic, dark) {
   return dark ? `hsl(${hue} 50% 62%)` : `hsl(${hue} 55% 46%)`;
 }
 
-// The facet the map is colored by, or null for topics. A facet deleted while
-// it was chosen puts the map back on topics.
+// The facet the map is colored by, or null for topics. Topics are the empty
+// value, which no facet name can be, so a facet named "topic" is a facet. A
+// facet deleted while it was chosen puts the map back on topics.
 function graphColorFacet() {
   const name = V.graph.color;
-  return name && name !== 'topic' && (mapClient.state.facets || []).some((f) => f.name === name) ? name : null;
+  return name && (mapClient.state.facets || []).some((f) => f.name === name) ? name : null;
 }
 
 // The value of `facet` that most of a paper's claims carry, by its key; ties
@@ -875,7 +876,7 @@ function graphHeader() {
         <option value="year" ${opts.xAxis === 'year' ? 'selected' : ''}>Publication year</option>
       </select></label>
       <label>Color by <select aria-label="Color by" data-graph-opt="color">
-        <option value="topic">Topic</option>
+        <option value="">Topic</option>
         ${(mapClient.state.facets || []).map((f) => `<option value="${esc(f.name)}" ${graphColorFacet() === f.name ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}
       </select></label>
       <label><input type="checkbox" data-graph-opt="topics" ${opts.topics ? 'checked' : ''}> shared topics</label>
@@ -937,11 +938,11 @@ function graphColorLegend() {
   const facet = graphColorFacet();
   const select = $('content').querySelector('[data-graph-opt="color"]');
   if (select) {
-    const options = ['topic', ...(mapClient.state.facets || []).map((f) => f.name)];
+    const options = ['', ...(mapClient.state.facets || []).map((f) => f.name)];
     if ([...select.options].map((o) => o.value).join('\n') !== options.join('\n')) {
-      select.innerHTML = options.map((name) => `<option value="${esc(name)}">${esc(name === 'topic' ? 'Topic' : name)}</option>`).join('');
+      select.innerHTML = options.map((name) => `<option value="${esc(name)}">${esc(name || 'Topic')}</option>`).join('');
     }
-    select.value = facet || 'topic';
+    select.value = facet || '';
   }
   if (!facet) { legend.hidden = true; return; }
   const shown = new Set([...GRAPH.nodes.values()].map((n) => n.color).filter(Boolean));
