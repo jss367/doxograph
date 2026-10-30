@@ -692,3 +692,51 @@ def test_a_hand_edit_leaves_the_facets_it_does_not_name(monkeypatch, corpus):
     assert claim["facets_hand"] == ["dataset"]
     store.update_claim("doe2026study", first, {"facets": {"dataset": []}})
     assert claims()[first]["facets"] == {"model": ["GPT-4"]}
+
+
+def test_a_fill_landing_during_a_reread_does_not_duplicate_claims(monkeypatch, corpus):
+    first, second = corpus
+    store.add_facet("model", "models")
+    store.pdf_path("doe2026study").write_bytes(b"%PDF-1.4")
+    fill = FakeClient({"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}},
+                                       {"id": second, "facets": {"model": ["Llama"]}}]})
+
+    def fill_meanwhile():
+        monkeypatch.setattr(extract, "client", lambda: fill)
+        extract.fill_facets("doe2026study")
+
+    reread = FakeClient({"summary": "s", "relevance": "r", "proposed_tags": [], "claims": [{
+        "text": "A fresh claim.", "kind": "finding", "strength": "headline", "tags": [],
+        "evidence": "", "quote": "", "locator": "", "ledger_links": [], "facets": {"model": ["GPT-4"]},
+    }]}, fill_meanwhile)
+    monkeypatch.setattr(extract, "client", lambda: reread)
+    monkeypatch.setattr(extract, "paper_document", lambda key, api: {"type": "text", "text": "paper"})
+
+    paper = extract.extract_paper("doe2026study")
+
+    assert [c["text"] for c in paper["claims"]] == ["A fresh claim."]
+
+
+def test_restoring_one_facet_keeps_the_others_filled(api, monkeypatch, corpus):
+    first, second = corpus
+    store.add_facet("model", "models")
+    store.add_facet("dataset", "datasets")
+    use_model(monkeypatch, {"assignments": [
+        {"id": first, "facets": {"model": ["GPT-4"], "dataset": ["MMLU"]}},
+        {"id": second, "facets": {"model": [], "dataset": []}}]})
+    extract.fill_facets("doe2026study")
+    use_model(monkeypatch, {"assignments": [
+        {"id": first, "facets": {"dataset": ["GSM8K"]}}, {"id": second, "facets": {"dataset": []}}]})
+    store.describe_facet("dataset", "the benchmarks used")
+    extract.fill_facets("doe2026study")
+    history = api.get("/api/notebook/history/doe2026study").json()
+    entry = next(e for e in history["entries"]
+                 if e["claim"] == first and (e["fields"] or {}).get("facets", {}).get("dataset") == ["MMLU"])
+    api.post("/api/notebook/history/doe2026study/restore",
+             json={"revision": entry["id"], "expected": history["expected"]}).raise_for_status()
+
+    claim = claims()[first]
+    assert claim["facets"] == {"dataset": ["MMLU"], "model": ["GPT-4"]}
+    model, dataset = store.load_facets()
+    assert not store.claim_needs_facet(claim, model)
+    assert store.claim_needs_facet(claim, dataset)

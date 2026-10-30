@@ -389,8 +389,14 @@ def restore(key: str, body: Restore) -> dict:
             # person set them, which the restored `facets_hand` says.
             # An entry from before facets has none to restore, and leaves the
             # present values as they are.
-            if "facets" in fields and fields["facets"] != (claim.get("facets") or {}):
-                claim.pop("facet_basis", None)
+            if "facets" in fields:
+                present = claim.get("facets") or {}
+                basis = {name: value for name, value in (claim.get("facet_basis") or {}).items()
+                         if fields["facets"].get(name, []) == present.get(name, [])}
+                if basis:
+                    claim["facet_basis"] = basis
+                else:
+                    claim.pop("facet_basis", None)
             claim.update(fields)
             store.reconcile_claim_facets(claim, store.load_facets())
             store.check_quote(key, claim)

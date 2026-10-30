@@ -253,7 +253,7 @@ const ResearchNotes = (() => {
       if (!await discard()) return;
       // Mirror ordinary paper navigation, preserving any library editor draft.
       captureOpenEditor(); parkNewClaimForNavigation(id);
-      V.paper = id; V.view = 'claims'; V.tag = null; V.label = null; V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false; V.selectedId = null;
+      V.paper = id; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false; V.selectedId = null;
       el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
       draft = saved = null; updateURL(null); el('research-notes').close();
       scheduleTextSearch(); renderAll(); syncHash(true);

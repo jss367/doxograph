@@ -542,7 +542,11 @@ Extract its claims."""
 # Fields the machine fills in. A quote check running against a claim while a
 # re-read is in flight must not look like somebody editing it, or the merge
 # keeps the "edited" claim and appends the freshly extracted one beside it.
-DERIVED_CLAIM_FIELDS = frozenset({"id", "quote_verified", "quote_page"})
+#
+# Facet values and fill records are the fill pass's, which can land while a
+# re-read waits on the model. A person's facet edit still counts: it records
+# the facet in `facets_hand`, which is compared, and keeps the claim anyway.
+DERIVED_CLAIM_FIELDS = frozenset({"id", "quote_verified", "quote_page", "facets", "facet_basis"})
 
 
 def claim_state(claim: dict) -> str:
