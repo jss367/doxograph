@@ -1366,6 +1366,7 @@ def _build_state() -> dict:
         "tags": tags,
         "tag_counts": store.tag_counts(rows),
         "label_counts": store.label_counts(papers),
+        "label_keys": store.label_keys(papers),
         "ledger": ledger,
         "context": context,
         "tensions": tensions,

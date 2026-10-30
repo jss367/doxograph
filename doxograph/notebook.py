@@ -242,6 +242,16 @@ class Bulk(Model):
     values: list[str]
 
 
+def labels_after(old: list[str], values: list[str], mode: str) -> list[str]:
+    """A paper's labels after a bulk edit, matching labels without regard to
+    case. Adding a label the paper has in another case respells it."""
+    if mode == "replace":
+        return values
+    keys = {store.label_key(value) for value in values}
+    kept = [label for label in old if store.label_key(label) not in keys]
+    return store.normalize_labels(kept + values if mode == "add" else kept)
+
+
 @router.post("/bulk")
 def bulk(body: Bulk) -> dict:
     try:
@@ -272,6 +282,13 @@ def bulk(body: Bulk) -> dict:
             targets = [paper] if body.field == "labels" else [
                 c for c in paper.get("claims", []) if key in body.papers or {"paper": key, "claim": c["id"]} in refs]
             for target in targets:
+                if body.field == "labels":
+                    old = target.get("labels") or []
+                    new = labels_after(old, values, body.mode)
+                    if old != new:
+                        target["labels"] = new
+                        changed += 1
+                    continue
                 old = set(target.get(body.field) or [])
                 new = set(values) if body.mode == "replace" else old | set(values) if body.mode == "add" else old - set(values)
                 if old != new:

@@ -146,7 +146,7 @@ function graphData() {
     nodes.push({
       id: `p:${p.key}`, type: 'paper', key: p.key, label: p.title || p.key, cite: graphCite(p),
       n: p.n_claims || 0, topic: ranked.length ? ranked[0][0] : null, tags: new Set(counts.keys()),
-      labels: new Set(p.labels || []),
+      labels: new Set((p.labels || []).map(labelKey)),
       year: Number.isInteger(p.year) && p.year > 0 ? p.year : null,
       r: 6 + 3 * Math.sqrt(p.n_claims || 0),
     });
@@ -445,6 +445,15 @@ function graphAutofit(w, h) {
   GRAPH.ty = -((y0 + y1) / 2) * GRAPH.zoom - axisHeight / 2;
 }
 
+// A filter greys the papers it leaves out rather than removing them, so the
+// shape of the corpus stays visible behind the ones picked out. A label dims
+// the same way a topic does, in any case it is spelled; a claim node carries
+// neither and is left alone by both.
+function graphDimmed(n) {
+  return n.type === 'paper'
+    && ((V.tag && !n.tags.has(V.tag)) || (V.label && !(n.labels || new Set()).has(labelKey(V.label))));
+}
+
 function graphDraw() {
   const { canvas, ctx } = GRAPH;
   if (!canvas || !ctx) return;
@@ -462,12 +471,7 @@ function graphDraw() {
   }
   ctx.translate(w / 2 + GRAPH.tx, h / 2 + GRAPH.ty);
   ctx.scale(GRAPH.zoom, GRAPH.zoom);
-  // A filter greys the papers it leaves out rather than removing them, so the
-  // shape of the corpus stays visible behind the ones picked out. A label
-  // dims the same way a topic does; a claim node carries neither and is left
-  // alone by both.
-  const dim = (n) => n.type === 'paper'
-    && ((V.tag && !n.tags.has(V.tag)) || (V.label && !(n.labels || new Set()).has(V.label)));
+  const dim = graphDimmed;
   const hover = GRAPH.hover;
   const hoverEdge = GRAPH.hoverEdge;
   const linked = new Set();
@@ -914,7 +918,7 @@ document.getElementById('graph-nav').addEventListener('click', (event) => {
 
 // For the browser tests and anyone poking at the console: where things are.
 window.doxographGraph = () => ({
-  nodes: [...GRAPH.nodes.values()].map((n) => ({ id: n.id, type: n.type, key: n.key, x: n.x, y: n.y, r: n.r, topic: n.topic, year: n.year })),
+  nodes: [...GRAPH.nodes.values()].map((n) => ({ id: n.id, type: n.type, key: n.key, x: n.x, y: n.y, r: n.r, topic: n.topic, year: n.year, dimmed: graphDimmed(n) })),
   edges: GRAPH.edges.map((e) => ({ type: e.type, a: e.a, b: e.b, w: e.w, n: e.n, relation: e.relation })),
   zoom: GRAPH.zoom, tx: GRAPH.tx, ty: GRAPH.ty, alpha: GRAPH.alpha,
   xAxis: V.graph.xAxis, timeline: GRAPH.timeline,

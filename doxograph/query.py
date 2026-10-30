@@ -48,7 +48,7 @@ def papers(q: QueryText = "", topic: str = "", label: str = "",
     saved, issues = papers_and_issues()
     rows = [{key: value for key, value in store.summarize(p).items() if key != "notes"} for p in saved
             if (not topic or any(topic in c.get("tags", []) for c in p.get("claims", [])))
-            and (not label or label in p.get("labels", []))
+            and (not label or store.has_label(p, label))
             and matches(q, p["key"], p.get("title"), p.get("authors"), p.get("year"),
                         p.get("summary"), p.get("abstract"), p.get("labels"))]
     return page(rows, limit, offset, storage_issues=issues)
