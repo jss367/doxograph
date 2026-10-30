@@ -69,7 +69,7 @@ def answer(key: str, messages: list[dict]) -> dict:
             if raw:
                 pages = raw.split(quotes.PAGE_BREAK)
                 for citation in ask_context.citations(payload["answer"], capture.direct, capture.scope):
-                    if citation["valid"] and citation["page"]:
+                    if citation["valid"] and citation["page"] and citation["page"] <= len(pages) and capture.remaining() > 0:
                         page = citation["page"]
                         capture.direct.append(ask_context.entry(kind="passage", paper=key, page=page,
                             text=pages[page - 1][:12000], format="page excerpt from supplied text"))

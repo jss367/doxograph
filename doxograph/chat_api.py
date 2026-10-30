@@ -182,6 +182,8 @@ def ask(body: AskBody, request: Request) -> dict[str, Any]:
                     paper = store.load_paper(focus.paper)
                     claim = next(c for c in paper["claims"] if c["id"] == focus.claim)
                     capture.direct.extend(ask_context.collect({"items": [{**claim, "paper": focus.paper}]}))
+            if capture.remaining() < (1 if scope.mode == "paper" else 0):
+                raise HTTPException(413, "Too much evidence for another answer. Start a new conversation or narrow the sources.")
             token = ask_context.active.set(capture)
             try:
                 messages = [message.model_dump() for message in body.messages]

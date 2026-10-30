@@ -55,7 +55,8 @@ def library_server(url: str, workspace: str) -> codex_cli.MCPServer:
     if capture:
         snapshot = capture.log.with_name("papers.json")
         snapshot.write_text(json.dumps(capture.scope.papers), encoding="utf-8")
-        extra = ["--papers-file", str(snapshot), "--evidence-log", str(capture.log)]
+        extra = ["--papers-file", str(snapshot), "--evidence-log", str(capture.log),
+                 "--evidence-limit", str(capture.remaining())]
         if capture.scope.mode == "library":
             extra.append("--library-snapshot")
         else:

@@ -176,6 +176,9 @@ class Capture:
     prior: list[dict[str, Any]] = field(default_factory=list)
     direct: list[dict[str, Any]] = field(default_factory=list)
 
+    def remaining(self) -> int:
+        return 500 - len({e["ref"] for e in self.prior + self.direct})
+
     def prompt(self) -> str:
         scope = self.scope.model_dump()
         # The MCP connection enforces exact membership. Listing thousands of keys

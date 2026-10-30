@@ -46,9 +46,11 @@ def local_url(value: str) -> str:
 def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTransport | None = None,
                   without_notes: bool = False, workspace: str | None = None,
                   papers: list[str] | None = None, evidence_log: str | None = None,
-                  library_snapshot: bool = False) -> MCPServer:
+                  library_snapshot: bool = False, evidence_limit: int = 500) -> MCPServer:
     base_url = local_url(base_url)
     bound_workspace = workspace
+    if not 0 <= evidence_limit <= 500:
+        raise ValueError("Evidence limit must be between 0 and 500")
     if papers is not None:
         if not papers or len(papers) > 10000 or any(not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", key) for key in papers):
             raise ValueError("--papers requires 1 to 10000 valid paper keys")
@@ -126,6 +128,8 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
         if evidence_log:
             entries = ask_context.collect(data)
             log = Path(evidence_log)
+            if len({e["ref"] for e in ask_context.read_log(log) + entries}) > evidence_limit:
+                raise ToolError("Evidence limit reached. Answer from the evidence already retrieved, or request fewer results.")
             encoded = json.dumps(entries, ensure_ascii=False) + "\n"
             if (log.stat().st_size if log.exists() else 0) + len(encoded.encode()) > 2_000_000:
                 raise ToolError("Evidence limit reached. Answer from the evidence already retrieved.")
@@ -237,7 +241,7 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
 
 def run(base_url: str = DEFAULT_URL, *, without_notes: bool = False, workspace: str | None = None,
         papers: list[str] | None = None, papers_file: str | None = None,
-        evidence_log: str | None = None, library_snapshot: bool = False) -> None:
+        evidence_log: str | None = None, library_snapshot: bool = False, evidence_limit: int = 500) -> None:
     if papers_file is not None:
         if papers is not None:
             raise ValueError("Use either --papers or --papers-file")
@@ -253,4 +257,4 @@ def run(base_url: str = DEFAULT_URL, *, without_notes: bool = False, workspace: 
             raise ValueError("Source snapshot must contain paper keys")
         papers = snapshot
     create_server(base_url, without_notes=without_notes, workspace=workspace,
-                  papers=papers, evidence_log=evidence_log, library_snapshot=library_snapshot).run(transport="stdio")
+                  papers=papers, evidence_log=evidence_log, library_snapshot=library_snapshot, evidence_limit=evidence_limit).run(transport="stdio")

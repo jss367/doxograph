@@ -40,7 +40,8 @@ class Message(BaseModel):
     created: str = Field(default="", max_length=40)
     scope: Scope | None = None
     evidence: list[Evidence] | None = Field(default=None, max_length=500)
-    citations: list[dict] = Field(default_factory=list, max_length=500)
+    # A 200,000-character answer can contain at most this many distinct [[e:x]] tokens.
+    citations: list[dict] = Field(default_factory=list, max_length=200_000 // 7)
     saved_note: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
     # The research note's idempotency key, saved before the note is posted.
     note_operation: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None

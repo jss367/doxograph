@@ -86,7 +86,7 @@ def test_scoped_agent_command_binds_evidence_and_never_enables_topics(tmp_path):
     try:
         command = agent.command("claude", "http://127.0.0.1:8765", "default", None)
         settings = json.loads(command[command.index("--mcp-config") + 1])["mcpServers"]["doxograph"]
-        assert settings["args"][-4:] == ["--papers-file", str(tmp_path / "papers.json"), "--evidence-log", str(capture.log)]
+        assert settings["args"][-6:] == ["--papers-file", str(tmp_path / "papers.json"), "--evidence-log", str(capture.log), "--evidence-limit", "500"]
         assert json.loads((tmp_path / "papers.json").read_text()) == ["a", "b"]
         assert "list_topics" not in command[command.index("--allowedTools") + 1]
         assert "[[e:REFERENCE]]" in command[command.index("--system-prompt") + 1]
@@ -164,7 +164,8 @@ def test_document_citations_require_supplied_pages_and_never_invent_claims():
     assert ask_context.citations(f"[[e:{ref}:1]]", [document], ask_context.Scope(mode='paper', papers=['b']))[0]['valid'] is False
 
 
-def test_full_paper_records_the_document_and_cited_text_before_it_changes(monkeypatch):
+@pytest.mark.parametrize("short_text", [False, True])
+def test_full_paper_records_the_document_and_cited_text_before_it_changes(monkeypatch, short_text):
     from doxograph import extract
     from doxograph.providers import ModelResponse
     from pdfs import minimal_pdf
@@ -179,13 +180,15 @@ def test_full_paper_records_the_document_and_cited_text_before_it_changes(monkey
         assert '[[e:REFERENCE]]' in kwargs['messages'][0]['content'][1]['text']
         return ModelResponse.from_text(json.dumps({'answer': f"Second page [[e:{document['ref']}:2]]."}))
     monkeypatch.setattr(extract, '_create', respond)
+    if short_text:
+        monkeypatch.setattr(search, 'paper_text', lambda key: 'Only first page text is available.')
     with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
         result = client.post('/api/ask', json={'scope':{'mode':'paper', 'papers':['a']},
             'messages':[{'role':'user', 'content':'What does the second page say?'}], 'agent':'api'})
     assert result.status_code == 200, result.text
     evidence = result.json()['evidence']
     assert evidence[0]['kind'] == 'document' and evidence[0]['format'] == 'extracted text'
-    assert any(e['kind'] == 'passage' and 'Original second page.' in e['text'] for e in evidence)
+    assert any(e['kind'] == 'passage' and 'Original second page.' in e['text'] for e in evidence) is not short_text
     assert result.json()['citations'][0]['valid'] is True
 
 
@@ -331,3 +334,47 @@ def test_large_scope_uses_http_bodies_on_the_real_server(monkeypatch):
         assert call(mcp, 'read_evidence', kind='syntheses')['items'] == []
         with pytest.raises(ToolError, match='outside'):
             call(mcp, 'get_paper', key='outside')
+
+
+def test_tool_evidence_budget_preserves_the_completed_answer(monkeypatch):
+    focused = seed('a')
+    paper = store.load_paper('a')
+    for i in range(500):
+        paper['claims'].append(store.new_claim(paper, text=f'Finding {i}'))
+    store.save_paper(paper)
+    config.set_ai_provider('codex')
+    def answer(messages, callback):
+        capture = ask_context.active.get()
+        assert capture.remaining() == 499
+        mcp = mcp_server.create_server(workspace='default', papers=['a'], evidence_log=str(capture.log),
+            evidence_limit=capture.remaining(), transport=httpx.ASGITransport(app=server.app))
+        for offset in range(0, 400, 100):
+            call(mcp, 'search_claims', limit=100, offset=offset)
+        call(mcp, 'search_claims', limit=100, offset=0)  # Repeated entries do not consume the budget twice.
+        data = call(mcp, 'search_claims', limit=99, offset=400)
+        with pytest.raises(ToolError, match='Evidence limit reached'):
+            call(mcp, 'search_claims', limit=1, offset=499)
+        return {'answer': f"Answer from recorded evidence [[e:{data['evidence'][0]['ref']}]]"}
+    monkeypatch.setattr(agent, 'answer', answer)
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.post('/api/ask', json={'scope': {'mode':'selected', 'papers':['a'],
+            'focus':[{'paper':'a', 'claim':focused['id']}]}, 'messages':[{'role':'user', 'content':'Explain'}]})
+        assert response.status_code == 200, response.text
+        assert len(response.json()['evidence']) == 500
+        assert response.json()['citations'][0]['valid']
+
+
+def test_more_than_500_citation_tokens_can_be_saved(monkeypatch):
+    seed('a')
+    config.set_ai_provider('codex')
+    monkeypatch.setattr(agent, 'answer', lambda *a: {'answer': ' '.join(f'[[e:invalid-{i}]]' for i in range(501))})
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        result = client.post('/api/ask', json={'scope':{'mode':'library'},
+            'messages':[{'role':'user', 'content':'Explain'}]}).json()
+        assert len(result['citations']) == 501 and not any(c['valid'] for c in result['citations'])
+        response = client.put('/api/chats/' + uuid.uuid4().hex, json={'agent':'codex', 'scope':result['scope'],
+            'revision':0, 'operation':uuid.uuid4().hex,
+            'messages':[{'role':'user', 'content':'Explain'}, {'role':'assistant', 'content':result['answer'],
+                'evidence':result['evidence'], 'citations':result['citations']}]})
+        assert response.status_code == 200, response.text
+        assert len(response.json()['messages'][1]['citations']) == 501

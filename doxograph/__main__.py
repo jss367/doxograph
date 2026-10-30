@@ -416,7 +416,7 @@ def cmd_mcp(args) -> int:
 
     try:
         run(args.url, without_notes=args.without_notes, workspace=args.workspace,
-            papers=args.papers, papers_file=args.papers_file, evidence_log=args.evidence_log, library_snapshot=args.library_snapshot)
+            papers=args.papers, papers_file=args.papers_file, evidence_log=args.evidence_log, library_snapshot=args.library_snapshot, evidence_limit=args.evidence_limit)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -469,6 +469,7 @@ def build_parser() -> argparse.ArgumentParser:
     source_scope.add_argument("--papers", nargs="+", help="restrict reads to these paper keys (requires --workspace)")
     source_scope.add_argument("--papers-file", help=argparse.SUPPRESS)
     p.add_argument("--evidence-log", help=argparse.SUPPRESS)
+    p.add_argument("--evidence-limit", type=int, default=500, help=argparse.SUPPRESS)
     p.add_argument("--library-snapshot", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_mcp)
 
