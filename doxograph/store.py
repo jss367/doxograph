@@ -1464,11 +1464,19 @@ def clean_claim_facets(raw: Any, facets: list[dict],
 
 
 def set_claim_facets_by_hand(claim: dict, raw: Any) -> None:
-    """Apply a person's facet values to a claim. A facet whose values they
-    changed is recorded as theirs, and no later pass overwrites it."""
+    """Apply a person's facet values to a claim. Only the facets named in
+    `raw` are set, and an empty list clears one; the rest keep what they
+    hold, which may be newer than anything the person was shown. A facet
+    whose values they changed is recorded as theirs, and no later pass
+    overwrites it."""
     facets = load_facets()
+    raw = raw if isinstance(raw, dict) else {}
     before = claim.get("facets") or {}
-    after = clean_claim_facets(raw, facets)
+    given = clean_claim_facets(raw, facets)
+    after = {name: values for name, values in before.items()
+             if name not in raw and any(facet["name"] == name for facet in facets)}
+    after.update(given)
+    after = {facet["name"]: after[facet["name"]] for facet in facets if facet["name"] in after}
     hand = set(claim.get("facets_hand") or [])
     for facet in facets:
         name = facet["name"]

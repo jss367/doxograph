@@ -1060,7 +1060,8 @@ class ClaimPatch(BaseModel):
     kind: str | None = None
     strength: str | None = None
     tags: list[str] | None = None
-    # Values for each facet, by facet name. Values for a facet the workspace
+    # Values for the facets named, by facet name; an empty list clears one,
+    # and a facet left out keeps its values. Values for a facet the workspace
     # does not define are dropped by the store.
     facets: dict[str, list[str]] | None = None
     evidence: str | None = None

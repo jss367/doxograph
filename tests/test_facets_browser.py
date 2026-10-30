@@ -65,6 +65,20 @@ def test_facets_filter_edit_and_color_the_map(engine):
                 await card.locator("[data-act='edit']").click()
                 field = page.locator("form[data-form='one-c1'] [data-facet-input='model']")
                 await expect(field).to_have_value("GPT-4")
+                # A fill lands while the form is open; an unrelated edit keeps it.
+                await page.locator("form[data-form='one-c1'] textarea[name='note']").fill("Checked.")
+                store.add_facet("dataset", "The benchmarks used")
+                paper = store.load_paper("one")
+                paper["claims"][0]["facets"]["dataset"] = ["MMLU"]
+                store.save_paper(paper)
+                await page.locator("form[data-form='one-c1'] button[type='submit']").click()
+                await expect(card.locator(".facet-value")).to_have_count(2)
+                claim = store.load_paper("one")["claims"][0]
+                assert claim["facets"] == {"dataset": ["MMLU"], "model": ["GPT-4"]}
+                assert claim["note"] == "Checked."
+                store.delete_facet("dataset")
+                await _poll(page)
+                await card.locator("[data-act='edit']").click()
                 await field.fill("GPT-4, Claude 3 Opus")
                 await page.locator("form[data-form='one-c1'] button[type='submit']").click()
                 await expect(card.locator(".facet-value")).to_have_count(2)

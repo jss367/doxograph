@@ -3152,6 +3152,7 @@ function editForm(row, tagListId = 'taglist') {
       ${(S.facets || []).length ? `<div class="pair facet-fields">${S.facets.map((facet, i) => `
         <div><label title="${esc(facet.description || '')}">${esc(facet.name)} (comma separated)</label>
           <input data-facet-input="${esc(facet.name)}" value="${esc(((row.facets || {})[facet.name] || []).join(', '))}"
+            data-facet-base="${esc(JSON.stringify(((row.facetsBase || row.facets || {})[facet.name]) || []))}"
             list="${esc(`${tagListId}-facet-${i}`)}" size="28"></div>`).join('')}</div>` : ''}
       <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
       <details class="evidence-assessment" ${row.conditions || row.limitations || row.evidence_origin || (row.evidence_relationship && row.evidence_relationship !== 'unassessed') ? 'open' : ''}><summary>Your evidence assessment</summary>
@@ -3971,15 +3972,35 @@ async function patchClaim(paper, claim, patch) {
 // The facet inputs, as the `facets` a claim stores: a facet with no values is
 // left out, as the store leaves it out. Nothing when no facet is defined, so
 // a form without the inputs does not clear values it never showed.
+//
+// `facetsBase` is what each field showed when the editor opened, kept on the
+// draft so a redraw does not move it. A save sends only the facets that
+// differ from it: a fill landing while the form is open is newer than the
+// values the form was drawn with, and an unrelated edit must not undo it.
 function facetFields(form) {
   const inputs = [...form.querySelectorAll('[data-facet-input]')];
   if (!inputs.length) return {};
-  const facets = {};
+  const facets = {}, facetsBase = {};
   for (const input of inputs) {
     const values = input.value.split(',').map((v) => v.trim()).filter(Boolean);
     if (values.length) facets[input.dataset.facetInput] = values;
+    const base = JSON.parse(input.dataset.facetBase || '[]');
+    if (base.length) facetsBase[input.dataset.facetInput] = base;
   }
-  return { facets };
+  return { facets, facetsBase };
+}
+
+// A form's patch as the server takes it: the facets narrowed to the ones the
+// person changed, an emptied one sent as an empty list to clear it.
+function claimRequestBody(patch) {
+  const { facets, facetsBase, ...body } = patch;
+  if (!facets) return body;
+  const changed = {};
+  for (const facet of S.facets || []) {
+    const now = facets[facet.name] || [], base = (facetsBase || {})[facet.name] || [];
+    if (JSON.stringify(now) !== JSON.stringify(base)) changed[facet.name] = now;
+  }
+  return Object.keys(changed).length ? { ...body, facets: changed } : body;
 }
 
 function readForm(form) {
@@ -4040,7 +4061,7 @@ async function saveClaim(wrap, patch) {
     if (!patch.text) { V.editing = null; V.newClaim = null; renderContent(); return; }
     try {
       await api(`/api/papers/${encodeURIComponent(paper)}/claims`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(claimRequestBody(patch)),
       });
     } catch (error) {
       // As on the success path: an existing claim's editor may have been
@@ -4076,7 +4097,7 @@ async function saveClaim(wrap, patch) {
 
   V.editing = null;
   try {
-    await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
+    await patchClaim(wrap.dataset.paper, wrap.dataset.claim, claimRequestBody(patch));
     delete V.drafts[wrap.dataset.claim];
     // `render` leaves the content alone while another editor is open — a
     // synthesis, a note — so the saved claim's form would stay on screen with

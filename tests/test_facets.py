@@ -428,7 +428,7 @@ def test_restoring_history_reconciles_facets_changed_since(api, corpus):
     store.add_facet("model", "models")
     store.add_facet("dataset", "datasets")
     store.update_claim("doe2026study", first, {"facets": {"model": ["gpt4"], "dataset": ["MMLU"]}})
-    store.update_claim("doe2026study", first, {"facets": {}})
+    store.update_claim("doe2026study", first, {"facets": {"model": [], "dataset": []}})
     store.rewrite_facet_values("model", ["gpt4"], "GPT-4")
     store.delete_facet("dataset")
     history = api.get("/api/notebook/history/doe2026study").json()
@@ -672,3 +672,23 @@ def test_a_comma_inside_a_value_survives_an_unrelated_edit(corpus):
     assert "facets_hand" not in claims()[first]
     store.rewrite_facet_values("model", ["Llama 2 7B"], "Llama 2, 13B")
     assert claims()[first]["facets"] == {"model": ["GPT-4", "Llama 2 13B"]}
+
+
+def test_a_hand_edit_leaves_the_facets_it_does_not_name(monkeypatch, corpus):
+    """A form drawn before a fill landed sends only the facet the person
+    changed; the fill's values for the others stand and stay the pass's."""
+    first, second = corpus
+    store.add_facet("model", "models")
+    store.add_facet("dataset", "datasets")
+    use_model(monkeypatch, {"assignments": [
+        {"id": first, "facets": {"model": ["GPT-4"], "dataset": ["MMLU"]}},
+        {"id": second, "facets": {"model": [], "dataset": []}}]})
+    extract.fill_facets("doe2026study")
+
+    store.update_claim("doe2026study", first, {"text": "Reworded.", "facets": {"dataset": ["GSM8K"]}})
+
+    claim = claims()[first]
+    assert claim["facets"] == {"dataset": ["GSM8K"], "model": ["GPT-4"]}
+    assert claim["facets_hand"] == ["dataset"]
+    store.update_claim("doe2026study", first, {"facets": {"dataset": []}})
+    assert claims()[first]["facets"] == {"model": ["GPT-4"]}
