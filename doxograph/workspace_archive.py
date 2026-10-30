@@ -72,7 +72,7 @@ def _snapshot_locks():
         except BlockingIOError:
             locks.close()
             if time.monotonic() >= deadline:
-                raise HTTPException(409, 'The workspace is busy. Try the archive again after current edits finish.')
+                raise HTTPException(409, 'The workspace is busy. Try the archive again after current edits finish.') from None
             time.sleep(0.01)
             continue
         except BaseException:

@@ -804,7 +804,7 @@ def test_refused_pruning_lease_preserves_notifications_journals_and_retry_inputs
     server._prune_jobs()
     assert set(server._jobs) == {job["id"] for job in jobs}
     assert all(path.exists() for path in inputs + journals)
-    assert all(job["_import"]["staged"] == path for job, path in zip(jobs, inputs))
+    assert all(job["_import"]["staged"] == path for job, path in zip(jobs, inputs, strict=True))
 
     busy = False
     server._prune_jobs()

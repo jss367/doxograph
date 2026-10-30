@@ -1,4 +1,5 @@
 import contextlib
+import itertools
 import ssl
 import threading
 import time
@@ -216,7 +217,7 @@ def test_a_refusal_waits_longer_each_time(quick_arxiv):
         FakeArxivResponse(406), FakeArxivResponse(406),
         FakeArxivResponse(406), FakeArxivResponse(200, FEED))
     ingest.fetch_arxiv("2607.07916", client)
-    gaps = [b - a for a, b in zip(client.asked_at, client.asked_at[1:])]
+    gaps = [b - a for a, b in itertools.pairwise(client.asked_at)]
     assert gaps[1] > gaps[0] and gaps[2] > gaps[1]
 
 

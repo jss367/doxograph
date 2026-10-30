@@ -311,10 +311,10 @@ def test_provider_and_endpoint_are_in_topic_pass_signatures():
     first = (extract._pass_extra("recovery", "", ""), store.synthesis_prompt_basis("recovery"))
     select("ollama", config.MODEL)
     second = (extract._pass_extra("recovery", "", ""), store.synthesis_prompt_basis("recovery"))
-    assert all(a != b for a, b in zip(first, second))
+    assert all(a != b for a, b in zip(first, second, strict=True))
     select("ollama", config.MODEL, "http://localhost:11435")
     third = (extract._pass_extra("recovery", "", ""), store.synthesis_prompt_basis("recovery"))
-    assert all(a != b for a, b in zip(second, third))
+    assert all(a != b for a, b in zip(second, third, strict=True))
 
 
 @pytest.mark.parametrize("provider", ["ollama", "openai", "openai-compatible"])

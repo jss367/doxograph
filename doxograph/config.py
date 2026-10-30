@@ -132,7 +132,7 @@ def _validated_base_url(base_url: str) -> str:
         valid = (parsed.scheme in ("http", "https") and parsed.hostname
                  and parsed.username is None and parsed.password is None
                  and not parsed.query and not parsed.fragment)
-        parsed.port  # Reject malformed ports with the same secret-free message.
+        _ = parsed.port  # Reject malformed ports with the same secret-free message.
     except ValueError:
         raise ValueError(message) from None
     if not valid:
@@ -403,7 +403,7 @@ def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool 
             # registry contents as a missing workspace when no directory exists.
             _read_workspace_records()
             if not missing_ok:
-                raise KeyError(value)
+                raise KeyError(value) from None
             # Only registry retirement is permitted without a corpus lease.
             # A restored directory must not be removed through this fallback.
             descriptor = os.open(base_data_dir(), os.O_RDONLY)

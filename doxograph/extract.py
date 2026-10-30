@@ -776,7 +776,7 @@ def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
     for row in rows:
         by_paper.setdefault(row["paper"], []).append(row)
     blocks = []
-    for key, claims in by_paper.items():
+    for claims in by_paper.values():
         lines = [f"## {store.cite_head(claims[0])}"]
         for claim in claims:
             line = f"- {claim['id']} [{claim.get('kind', 'finding')}]: {claim.get('text', '')}"

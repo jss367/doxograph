@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import anthropic
 import httpx
-from fastapi import Body, FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
@@ -123,9 +123,9 @@ def _using_workspace(value: str):
             try:
                 leases.enter_context(config.workspace_activity(value))
             except BlockingIOError:
-                raise HTTPException(409, "This workspace is busy or being deleted")
+                raise HTTPException(409, "This workspace is busy or being deleted") from None
             except KeyError:
-                raise HTTPException(404, f"no workspace {value}")
+                raise HTTPException(404, f"no workspace {value}") from None
             if config.get_workspace(value) is None:
                 raise HTTPException(404, f"no workspace {value}")
             _workspace_activity[identity] = _workspace_activity.get(identity, 0) + 1
@@ -1444,21 +1444,21 @@ def retry_import(job_id: int) -> dict:
         try:
             job.update(state="queued", detail="", explanation="", started=store.now(), ai_provider=config.ai_provider(), interrupted=False)
             job_journal.save(job)
-        except OSError:
+        except OSError as exc:
             job.clear()
             job.update(previous)
-            raise HTTPException(503, "The retry could not be saved. Check that the data directory is writable.")
+            raise HTTPException(503, "The retry could not be saved. Check that the data directory is writable.") from exc
     try:
         if "ref" in source:
             _submit_job(_run_ingest, job, source["ref"], source["extract"])
         else:
             _submit_job(_run_upload, job, source["staged"], source["filename"], source["extract"])
-    except Exception:
+    except Exception as exc:
         with _jobs_lock:
             job.clear()
             job.update(previous)
             job_journal.save(job)
-        raise HTTPException(503, "The retry could not start. Please try again.")
+        raise HTTPException(503, "The retry could not start. Please try again.") from exc
     return {"id": job_id}
 
 
@@ -1482,7 +1482,7 @@ def workspaces() -> dict:
     try:
         return {"workspaces": config.list_workspaces()}
     except ValueError as exc:
-        raise HTTPException(500, _broken_registry(exc))
+        raise HTTPException(500, _broken_registry(exc)) from exc
 
 
 @app.post("/api/workspaces", status_code=201)
@@ -1490,7 +1490,7 @@ def create_workspace(body: WorkspaceBody) -> dict:
     try:
         workspace = config.create_workspace(body.name)
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     return {"workspace": workspace, "workspaces": config.list_workspaces()}
 
 
@@ -1499,9 +1499,9 @@ def rename_workspace(workspace_id: str, body: WorkspaceBody) -> dict:
     try:
         workspace = config.rename_workspace(workspace_id, body.name)
     except KeyError:
-        raise HTTPException(404, f"no workspace {workspace_id}")
+        raise HTTPException(404, f"no workspace {workspace_id}") from None
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     return {"workspace": workspace, "workspaces": config.list_workspaces()}
 
 
@@ -1523,11 +1523,11 @@ def delete_workspace(workspace_id: str) -> dict:
         try:
             cleanup_allowed = config.delete_workspace(workspace_id)
         except KeyError:
-            raise HTTPException(404, f"no workspace {workspace_id}")
+            raise HTTPException(404, f"no workspace {workspace_id}") from None
         except ValueError as exc:
-            raise HTTPException(422, str(exc))
+            raise HTTPException(422, str(exc)) from None
         except BlockingIOError:
-            raise HTTPException(409, "This workspace is busy in another server. Close that server or wait for its activity to finish, then try again.")
+            raise HTTPException(409, "This workspace is busy in another server. Close that server or wait for its activity to finish, then try again.") from None
         except OSError as exc:
             raise HTTPException(503, "The workspace could not be deleted. Check that its data directory is writable.") from exc
         with _jobs_lock:
@@ -1625,7 +1625,7 @@ def get_paper(key: str) -> dict:
     try:
         return store.load_paper(key)
     except KeyError:
-        raise HTTPException(404, f"no paper {key}")
+        raise HTTPException(404, f"no paper {key}") from None
 
 
 @app.patch("/api/papers/{key}")
@@ -1637,7 +1637,7 @@ def patch_paper(key: str, patch: PaperPatch) -> dict:
         try:
             paper = store.load_paper(key)
         except KeyError:
-            raise HTTPException(404, f"no paper {key}")
+            raise HTTPException(404, f"no paper {key}") from None
         paper.update(fields)
         store.save_paper(paper)
     return paper
@@ -1654,11 +1654,11 @@ def remove_paper(key: str) -> dict:
         extract.delete_paper(key)
         chats.delete_paper_chats(key)
     except ModelSetupError as exc:
-        raise HTTPException(502, str(exc)[:500])
-    except (anthropic.APIError, httpx.HTTPError):
+        raise HTTPException(502, str(exc)[:500]) from exc
+    except (anthropic.APIError, httpx.HTTPError) as exc:
         logger.exception("Removing a paper's uploads failed")
         raise HTTPException(502, "Anthropic could not be reached to delete this paper's uploaded PDF. "
-                                 "Check your connection, then remove the paper again.")
+                                 "Check your connection, then remove the paper again.") from exc
     return {"deleted": key}
 
 
@@ -1679,19 +1679,19 @@ def _chat_errors(label: str):
         yield
     except providers.ProviderResponseError as exc:
         logger.exception(f"{label} received an invalid provider response")
-        raise HTTPException(502, str(exc)[:500])
+        raise HTTPException(502, str(exc)[:500]) from exc
     except InputTooLargeError as exc:
-        raise HTTPException(413, str(exc)[:500])
+        raise HTTPException(413, str(exc)[:500]) from None
     except FileNotFoundError:
-        raise HTTPException(400, "This paper's PDF is unavailable. Import it again before chatting.")
+        raise HTTPException(400, "This paper's PDF is unavailable. Import it again before chatting.") from None
     except ModelInputError as exc:
-        raise HTTPException(400, str(exc)[:500])
-    except ValueError:
+        raise HTTPException(400, str(exc)[:500]) from None
+    except ValueError as exc:
         logger.exception(f"{label} encountered invalid saved data or configuration")
-        raise HTTPException(500, f"{label} could not read the saved paper or model configuration. Check your library and provider settings.")
+        raise HTTPException(500, f"{label} could not read the saved paper or model configuration. Check your library and provider settings.") from exc
     except ModelSetupError as exc:
         logger.exception(f"{label} model setup failed")
-        raise HTTPException(502, str(exc)[:500])
+        raise HTTPException(502, str(exc)[:500]) from exc
     except (anthropic.APIError, httpx.HTTPError) as exc:
         logger.exception(f"{label} provider request failed")
         status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
@@ -1703,10 +1703,10 @@ def _chat_errors(label: str):
             detail = "The model service timed out. Try again."
         else:
             detail = "The model service could not be reached or is unavailable. Check your connection and provider settings, then retry."
-        raise HTTPException(502, detail)
-    except RuntimeError:
+        raise HTTPException(502, detail) from exc
+    except RuntimeError as exc:
         logger.exception(f"{label} model request failed")
-        raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.")
+        raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.") from exc
 
 
 def _chat_agent(agent: str | None):
@@ -1720,7 +1720,7 @@ def paper_chat(key: str, body: ChatBody) -> dict:
         try:
             return chat.answer(key, [message.model_dump() for message in body.messages])
         except KeyError:
-            raise HTTPException(404, f"no paper {key}")
+            raise HTTPException(404, f"no paper {key}") from None
 
 
 def _reachable(url: str) -> bool:
@@ -1778,7 +1778,7 @@ def review_paper_claims(key: str, body: ReviewBody) -> dict:
     try:
         changed = store.review_claims(key, body.reviewed, body.claims)
     except KeyError:
-        raise HTTPException(404, f"no paper {key}")
+        raise HTTPException(404, f"no paper {key}") from None
     return {"key": key, "reviewed": body.reviewed, "changed": changed}
 
 
@@ -1789,7 +1789,7 @@ def verify_quotes(key: str) -> dict:
     try:
         paper = store.verify_quotes(key)
     except KeyError:
-        raise HTTPException(404, f"no paper {key}")
+        raise HTTPException(404, f"no paper {key}") from None
     return {"key": key, "n_unverified": store.summarize(paper)["n_unverified"]}
 
 
@@ -1868,7 +1868,7 @@ def quote_context(key: str, claim_id: str) -> dict:
     try:
         return store.quote_context(key, claim_id)
     except KeyError:
-        raise HTTPException(404, f"no claim {claim_id} on {key}")
+        raise HTTPException(404, f"no claim {claim_id} on {key}") from None
 
 
 @app.post("/api/retag")
@@ -1883,11 +1883,11 @@ def retag(body: RetagBody) -> dict:
 
 
 @app.post("/api/papers/{key}/claims")
-def create_claim(key: str, patch: ClaimPatch = Body(default=ClaimPatch())) -> dict:
+def create_claim(key: str, patch: ClaimPatch | None = None) -> dict:
     try:
-        return store.add_claim(key, patch.fields())
+        return store.add_claim(key, (patch or ClaimPatch()).fields())
     except KeyError:
-        raise HTTPException(404, f"no paper {key}")
+        raise HTTPException(404, f"no paper {key}") from None
 
 
 @app.patch("/api/papers/{key}/claims/{claim_id}")
@@ -1895,7 +1895,7 @@ def patch_claim(key: str, claim_id: str, patch: ClaimPatch) -> dict:
     try:
         return store.update_claim(key, claim_id, patch.fields())
     except KeyError:
-        raise HTTPException(404, f"no claim {claim_id} on {key}")
+        raise HTTPException(404, f"no claim {claim_id} on {key}") from None
 
 
 @app.delete("/api/papers/{key}/claims/{claim_id}")
@@ -1903,7 +1903,7 @@ def remove_claim(key: str, claim_id: str) -> dict:
     try:
         store.delete_claim(key, claim_id)
     except KeyError:
-        raise HTTPException(404, f"no claim {claim_id} on {key}")
+        raise HTTPException(404, f"no claim {claim_id} on {key}") from None
     return {"deleted": claim_id}
 
 
@@ -1920,7 +1920,7 @@ def resolve_proposed_tags(key: str, body: ProposedTagsBody) -> dict:
         try:
             paper = store.load_paper(key)
         except KeyError:
-            raise HTTPException(404, f"no paper {key}")
+            raise HTTPException(404, f"no paper {key}") from None
         proposed = {t["name"]: t.get("description", "") for t in paper.get("proposed_tags", [])}
         accepted = [name for name in body.accept if name in proposed]
         for name in accepted:
@@ -1949,7 +1949,7 @@ def patch_tag(name: str, body: RenameBody) -> dict:
     except store.PaperReadError:
         raise
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     return {"tags": store.load_tags()}
 
 
@@ -1984,9 +1984,9 @@ def patch_tension(tension_id: str, body: TensionStatusBody) -> dict:
     except storage.StorageReadError:
         raise
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     except KeyError:
-        raise HTTPException(404, f"no tension {tension_id}")
+        raise HTTPException(404, f"no tension {tension_id}") from None
 
 
 @app.delete("/api/tensions/{tension_id}")
@@ -1994,7 +1994,7 @@ def remove_tension(tension_id: str) -> dict:
     try:
         store.delete_tension(tension_id)
     except KeyError:
-        raise HTTPException(404, f"no tension {tension_id}")
+        raise HTTPException(404, f"no tension {tension_id}") from None
     return {"deleted": tension_id}
 
 
@@ -2019,9 +2019,9 @@ def patch_agreement(agreement_id: str, body: AgreementStatusBody) -> dict:
     except storage.StorageReadError:
         raise
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     except KeyError:
-        raise HTTPException(404, f"no agreement {agreement_id}")
+        raise HTTPException(404, f"no agreement {agreement_id}") from None
 
 
 @app.delete("/api/agreements/{agreement_id}")
@@ -2029,7 +2029,7 @@ def remove_agreement(agreement_id: str) -> dict:
     try:
         store.delete_agreement(agreement_id)
     except KeyError:
-        raise HTTPException(404, f"no agreement {agreement_id}")
+        raise HTTPException(404, f"no agreement {agreement_id}") from None
     return {"deleted": agreement_id}
 
 
@@ -2061,9 +2061,9 @@ def patch_synthesis(topic: str, body: SynthesisTextBody) -> dict:
     except storage.StorageReadError:
         raise
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
+        raise HTTPException(422, str(exc)) from None
     except KeyError:
-        raise HTTPException(404, f"no synthesis for {topic}")
+        raise HTTPException(404, f"no synthesis for {topic}") from None
 
 
 @app.delete("/api/syntheses/{topic}")
@@ -2071,7 +2071,7 @@ def remove_synthesis(topic: str) -> dict:
     try:
         store.delete_synthesis(topic)
     except KeyError:
-        raise HTTPException(404, f"no synthesis for {topic}")
+        raise HTTPException(404, f"no synthesis for {topic}") from None
     return {"deleted": topic}
 
 
