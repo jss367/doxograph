@@ -239,12 +239,12 @@ def test_bulk_validates_all_sources_before_writing_and_records_history(client):
     body.update(claims=[one], values=['undeclared-topic'])
     assert client.post('/api/notebook/bulk', json=body).status_code == 422
     assert client.post('/api/notebook/bulk', json={'papers':['one','two'],'field':'labels','values':['Read Next']}).status_code == 200
-    assert store.load_paper('one')['labels'] == ['read next']
+    assert store.load_paper('one')['labels'] == ['Read Next']
     assert client.post('/api/notebook/bulk', json={'papers':['one'],'field':'labels','mode':'remove','values':['Read  Next']}).json() == {'changed':1}
     assert store.load_paper('one')['labels'] == []
-    assert store.load_paper('two')['labels'] == ['read next']
+    assert store.load_paper('two')['labels'] == ['Read Next']
     assert client.post('/api/notebook/bulk', json={'papers':['one'],'field':'labels','mode':'replace','values':['Reading List']}).status_code == 200
-    assert store.load_paper('one')['labels'] == ['reading list']
+    assert store.load_paper('one')['labels'] == ['Reading List']
     assert client.post('/api/notebook/bulk', json={'papers':['one'],'field':'labels','mode':'replace','values':[]}).status_code == 200
     assert store.load_paper('one')['labels'] == []
 

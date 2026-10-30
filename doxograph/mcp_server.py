@@ -116,8 +116,8 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
                             limit: Limit = 20, offset: Offset = 0) -> dict[str, Any]:
         """Find papers by title, authors, year, summary, or abstract. Empty q lists papers.
 
-        Every query word must occur (case/accent insensitive). Topic and label are exact
-        slugs. For matches in PDF passages, use search_paper_text instead.
+        Every query word must occur (case/accent insensitive). Topic is an exact
+        slug; label ignores case. For matches in PDF passages, use search_paper_text instead.
         """
         return await get("/api/query/papers", workspace, q=q, topic=topic, label=label, limit=limit, offset=offset)
 

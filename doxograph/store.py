@@ -1188,16 +1188,30 @@ def claim_rows(papers: list[dict] | None = None) -> list[dict]:
     return rows
 
 
-def normalize_labels(values: list[str]) -> list[str]:
-    """Lowercase labels with spaces preserved and whitespace normalized.
+def label_key(label: str) -> str:
+    """What makes two labels one: "RLHF" and "rlhf" are the same label written
+    two ways, so they share a count, a filter, and a color."""
+    return label.lower()
 
-    Each value is one label. Existing hyphenated labels keep their names;
-    deduplication lets the sidebar count a label once per paper. Commas are
-    reserved for separating labels in the editor.
+
+def has_label(paper: dict, label: str) -> bool:
+    return label_key(label) in {label_key(name) for name in paper.get("labels") or []}
+
+
+def normalize_labels(values: list[str]) -> list[str]:
+    """Labels as written, with whitespace normalized and spaces preserved.
+
+    Each value is one label. Case is kept for display; deduplication ignores
+    it and keeps the first spelling, so the sidebar counts a label once per
+    paper. Commas are reserved for separating labels in the editor.
     """
     if any("," in value for value in values):
         raise ValueError("Labels cannot contain commas. Provide each label separately.")
-    return sorted({label for value in values if (label := " ".join(value.lower().split()))})
+    labels: dict[str, str] = {}
+    for value in values:
+        if label := " ".join(value.split()):
+            labels.setdefault(label_key(label), label)
+    return sorted(labels.values(), key=lambda label: (label_key(label), label))
 
 
 def set_labels(key: str, labels: list[str]) -> dict:
@@ -1214,13 +1228,21 @@ def label_counts(papers: list[dict]) -> dict[str, int]:
 
     The same shape and order as `tag_counts`, which counts claims: the two
     lists sit next to each other in the sidebar and should not be read
-    differently.
+    differently. Spellings that differ only in case count as one label, shown
+    as the spelling most papers use, capitals first on a tie.
     """
-    counts: dict[str, int] = {}
+    spellings: dict[str, dict[str, int]] = {}
     for paper in papers:
+        # One spelling per paper, the first, as `normalize_labels` keeps.
+        mine: dict[str, str] = {}
         for label in paper.get("labels") or []:
-            counts[label] = counts.get(label, 0) + 1
-    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+            mine.setdefault(label_key(label), label)
+        for key, label in mine.items():
+            seen = spellings.setdefault(key, {})
+            seen[label] = seen.get(label, 0) + 1
+    counts = {min(seen, key=lambda name: (-seen[name], name)): sum(seen.values())
+              for seen in spellings.values()}
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], label_key(kv[0]), kv[0])))
 
 
 def tag_counts(rows: list[dict]) -> dict[str, int]:

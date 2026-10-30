@@ -601,17 +601,37 @@ const askText = (title, { note = '', placeholder = '', value = '', labelChoices 
 function normalizeLabel(name) {
   // Match Python str.split(): U+FEFF is preserved; U+001C–001F and U+0085
   // are separators. JavaScript's \s and trim() use a different set.
-  return name.toLowerCase().replace(/[\p{White_Space}\u001c-\u001f]+/gu, ' ').replace(/^ | $/g, '');
+  return name.replace(/[\p{White_Space}\u001c-\u001f]+/gu, ' ').replace(/^ | $/g, '');
+}
+
+// Labels keep the case they were typed in but are one label in any case, as
+// `store.label_key` decides on the server.
+function labelKey(name) {
+  return normalizeLabel(name).toLowerCase();
+}
+
+function compareText(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// The spelling `labels` uses for `name`, or undefined when it has no such label.
+function findLabel(labels, name) {
+  const key = labelKey(name);
+  return (labels || []).find((label) => labelKey(label) === key);
 }
 
 function parseLabels(value) {
-  return [...new Set(value.split(',').map(normalizeLabel).filter(Boolean))];
+  const labels = new Map();
+  for (const label of value.split(',').map(normalizeLabel).filter(Boolean)) {
+    if (!labels.has(labelKey(label))) labels.set(labelKey(label), label);
+  }
+  return [...labels.values()];
 }
 
 function syncAskLabels() {
-  const selected = new Set(parseLabels($('ask-input').value));
+  const selected = new Set(parseLabels($('ask-input').value).map(labelKey));
   $('ask-label-choices').querySelectorAll('button').forEach((button) => {
-    button.setAttribute('aria-pressed', String(selected.has(button.dataset.label)));
+    button.setAttribute('aria-pressed', String(selected.has(labelKey(button.dataset.label))));
   });
 }
 
@@ -621,7 +641,8 @@ $('ask-label-choices').addEventListener('click', (event) => {
   if (!button) return;
   const labels = parseLabels($('ask-input').value);
   const name = button.dataset.label;
-  $('ask-input').value = (labels.includes(name) ? labels.filter((label) => label !== name) : [...labels, name]).join(', ');
+  $('ask-input').value = (findLabel(labels, name) !== undefined
+    ? labels.filter((label) => labelKey(label) !== labelKey(name)) : [...labels, name]).join(', ');
   syncAskLabels();
 });
 
@@ -1191,7 +1212,8 @@ function dropMissingFilters() {
   // carrying it can be removed, or renamed out from under a bookmark, and the
   // sidebar hides the section entirely when no label is in use — which would
   // leave a filter on with nothing on screen to turn it off.
-  if (V.label && !Object.hasOwn(S.label_counts || {}, V.label)) V.label = null;
+  // The filter follows the label to the spelling the sidebar shows now.
+  if (V.label) V.label = findLabel(Object.keys(S.label_counts || {}), V.label) || null;
   if (V.kind && !(S.kinds || []).includes(V.kind)) {
     V.kind = '';
     $('kind').value = '';
@@ -1806,7 +1828,7 @@ function visiblePapers() {
     && (!V.unverified || row.quote_verified === false)).map(row => row.paper)) : null;
   const matched = new Set(matchingPapers().map(p => p.key));
   return sortedPapers(S.papers.filter(p =>
-    (!V.label || (p.labels || []).includes(V.label))
+    (!V.label || findLabel(p.labels, V.label) !== undefined)
     && (!owners || owners.has(p.key))
     && matched.has(p.key)), V.paperSort);
 }
@@ -1870,7 +1892,7 @@ function renderLibrary() {
 // does — the filter says which papers are in view, and this one now is.
 function keepLabelFor(key) {
   const paper = key && S.papers.find((p) => p.key === key);
-  if (V.label && paper && !(paper.labels || []).includes(V.label)) V.label = null;
+  if (V.label && paper && findLabel(paper.labels, V.label) === undefined) V.label = null;
 }
 
 // The keys the label filter allows, or null when no label is chosen. A label
@@ -1878,7 +1900,7 @@ function keepLabelFor(key) {
 // carry it rather than by anything on the claim itself.
 function labelledPapers() {
   if (!V.label) return null;
-  return new Set(S.papers.filter((p) => (p.labels || []).includes(V.label)).map((p) => p.key));
+  return new Set(S.papers.filter((p) => findLabel(p.labels, V.label) !== undefined).map((p) => p.key));
 }
 
 function visibleClaims() {
@@ -2060,7 +2082,7 @@ function renderPapers() {
         ${p.year ? esc(p.year) : ''} · ${p.n_claims} claims · ${esc(paperReadiness(p))}${p.n_unreviewed ? `, ${p.n_unreviewed} new` : ''}${byAdded ? ` · ${addedLabel(p)}` : ''}</span>
       ${(p.labels || []).length ? `<span class="labels" aria-label="Paper labels">${p.labels.map((label) => `
         <button type="button" class="label" data-label="${esc(label)}" style="${labelStyle(label)}"
-          aria-pressed="${V.label === label}" title="Filter by label: ${esc(label)}">${esc(label)}</button>`).join('')}</span>` : ''}
+          aria-pressed="${Boolean(V.label) && labelKey(V.label) === labelKey(label)}" title="Filter by label: ${esc(label)}">${esc(label)}</button>`).join('')}</span>` : ''}
       <button type="button" class="pmenu" data-menu="${esc(p.key)}"
         aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
@@ -2118,7 +2140,7 @@ function tensionsFor(claimId) {
 // across papers, reloads, and changes to the corpus, without extra metadata.
 function labelStyle(name) {
   let hash = 2166136261;
-  for (const char of normalizeLabel(name)) {
+  for (const char of labelKey(name)) {
     hash = Math.imul(hash ^ char.codePointAt(0), 16777619);
   }
   return `--label-hue:${(hash >>> 0) % 360}`;
@@ -2133,7 +2155,7 @@ function renderLabels() {
   const entries = Object.entries(S.label_counts || {});
   $('labels-sec').hidden = entries.length === 0;
   $('labels').innerHTML = entries.map(([name, count]) => `
-    <li class="${V.label === name ? 'active' : ''}" data-label="${esc(name)}" style="${labelStyle(name)}">
+    <li class="${V.label && labelKey(V.label) === labelKey(name) ? 'active' : ''}" data-label="${esc(name)}" style="${labelStyle(name)}">
       <span class="label-dot" aria-hidden="true"></span>
       <span>${esc(name)}</span>
       <span class="n">${count}</span>
@@ -2343,7 +2365,10 @@ async function saveNote(key) {
 async function editLabels(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper) return;
-  const inUse = [...new Set([...Object.keys(S.label_counts || {}), ...(paper.labels || [])])].sort();
+  // The paper's own spelling of a label wins over the sidebar's.
+  const inUse = [...(paper.labels || []), ...Object.keys(S.label_counts || {})
+    .filter((name) => findLabel(paper.labels, name) === undefined)]
+    .sort((a, b) => compareText(labelKey(a), labelKey(b)) || compareText(a, b));
   const answer = await askText(`Labels for ${paper.title || key}`, {
     note: (inUse.length ? 'Click a label to add or remove it. ' : '')
       + 'Type new labels separated by commas. Spaces are allowed within a label.',
@@ -5166,9 +5191,11 @@ window.addEventListener('resize', () => closePaperMenu({ restoreFocus: true }));
 // than sitting there unchanged while the list behind it narrows to papers the
 // reader cannot see.
 function chooseLabel(name) {
-  const next = V.label === name ? null : name;
+  // A chip spelled differently on its paper filters by the sidebar's spelling.
+  const next = V.label && labelKey(V.label) === labelKey(name) ? null
+    : findLabel(Object.keys(S.label_counts || {}), name) || name;
   const open = V.paper && S.papers.find((p) => p.key === V.paper);
-  if (next && open && !(open.labels || []).includes(next)) {
+  if (next && open && findLabel(open.labels, next) === undefined) {
     captureOpenEditor();
     parkNewClaimForNavigation(null);
     parkSynthEditor();

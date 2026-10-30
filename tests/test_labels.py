@@ -44,9 +44,15 @@ def test_a_paper_written_before_labels_existed_reads_as_unlabelled():
     assert store.label_counts(store.all_papers()) == {}
 
 
-def test_labels_preserve_spaces_and_deduplicate_normalized_whitespace():
+def test_labels_preserve_spaces_and_case_and_deduplicate_normalized_whitespace():
     assert store.normalize_labels(["Open Source", " open  source\t", "open-source", "  ", "Hugging Face"]) == [
-        "hugging face", "open source", "open-source",
+        "Hugging Face", "Open Source", "open-source",
+    ]
+
+
+def test_labels_sort_without_regard_to_case_and_keep_the_first_spelling():
+    assert store.normalize_labels(["rlhf", "Anthropic", "RLHF", "benchmarks"]) == [
+        "Anthropic", "benchmarks", "rlhf",
     ]
 
 
@@ -70,6 +76,15 @@ def test_label_counts_count_papers_commonest_first():
     _paper("b", labels=["open-source"])
     _paper("c")
     assert store.label_counts(store.all_papers()) == {"open-source": 2, "huggingface": 1}
+
+
+def test_label_counts_count_a_label_once_whatever_its_case():
+    _paper("a", labels=["rlhf"])
+    _paper("b", labels=["RLHF"])
+    _paper("c", labels=["RLHF", "reading list"])
+    _paper("d", labels=["Reading List"])
+    # The spelling most papers use names it; on a tie the capitals win.
+    assert store.label_counts(store.all_papers()) == {"RLHF": 3, "Reading List": 2}
 
 
 def test_claims_carry_their_papers_labels_for_the_search():
@@ -106,8 +121,8 @@ def test_patching_a_paper_sets_its_labels():
     with client() as c:
         response = c.patch("/api/papers/doe2026study", json={"labels": ["Open Source", " open  source ", "open-source"]})
         assert response.status_code == 200
-        assert response.json()["labels"] == ["open source", "open-source"]
-    assert store.load_paper("doe2026study")["labels"] == ["open source", "open-source"]
+        assert response.json()["labels"] == ["Open Source", "open-source"]
+    assert store.load_paper("doe2026study")["labels"] == ["Open Source", "open-source"]
 
 
 def test_query_filters_and_searches_multiword_labels():
@@ -116,6 +131,7 @@ def test_query_filters_and_searches_multiword_labels():
     store.set_labels("one", ["Open Source"])
     with client() as c:
         for params, expected in (({"label": "open source"}, ["one"]),
+                                 ({"label": "OPEN SOURCE"}, ["one"]),
                                  ({"q": "open source"}, ["one", "two"])):
             response = c.get("/api/query/papers", params=params)
             assert response.status_code == 200
@@ -135,6 +151,24 @@ def test_api_rejects_comma_in_label_without_writing_any_labels(bulk):
     assert "Labels cannot contain commas" in response.text
     assert store.load_paper("one")["labels"] == ["reading list"]
     assert store.load_paper("two")["labels"] == ["read later"]
+
+
+def test_bulk_label_edits_match_labels_without_regard_to_case():
+    _paper("one", labels=["rlhf", "reading list"])
+    _paper("two", labels=["Reading List"])
+    with client() as c:
+        added = c.post("/api/notebook/bulk", json={
+            "papers": ["one", "two"], "field": "labels", "values": ["RLHF"],
+        })
+        assert added.json() == {"changed": 2}
+        assert store.load_paper("one")["labels"] == ["reading list", "RLHF"]
+        assert store.load_paper("two")["labels"] == ["Reading List", "RLHF"]
+        removed = c.post("/api/notebook/bulk", json={
+            "papers": ["one", "two"], "field": "labels", "mode": "remove", "values": ["reading list"],
+        })
+        assert removed.json() == {"changed": 2}
+    assert store.load_paper("one")["labels"] == ["RLHF"]
+    assert store.load_paper("two")["labels"] == ["RLHF"]
 
 
 def test_a_null_clears_the_labels_rather_than_writing_one():
@@ -171,15 +205,15 @@ def test_label_command_sets_reads_and_lists(capsys):
 
     args = parser.parse_args(["label", "doe2026study", "Open Source", "huggingface"])
     assert args.func(args) == 0
-    assert capsys.readouterr().out.strip() == "huggingface, open source"
+    assert capsys.readouterr().out.strip() == "huggingface, Open Source"
 
     args = parser.parse_args(["label", "doe2026study"])
     assert args.func(args) == 0
-    assert capsys.readouterr().out.strip() == "huggingface, open source"
+    assert capsys.readouterr().out.strip() == "huggingface, Open Source"
 
     args = parser.parse_args(["label"])
     assert args.func(args) == 0
-    assert capsys.readouterr().out.splitlines() == ["   1 huggingface", "   1 open source"]
+    assert capsys.readouterr().out.splitlines() == ["   1 huggingface", "   1 Open Source"]
 
     args = parser.parse_args(["label", "doe2026study", "--clear"])
     assert args.func(args) == 0
@@ -252,7 +286,7 @@ def test_label_choices_preserve_server_unicode_normalization(engine):
                 await _answer(page, "OK")
                 await expect(page.locator('.paper-overview .label')).to_have_count(5)
                 assert store.load_paper("target")["labels"] == store.normalize_labels(
-                    original + ['not-apollo', 'new label']
+                    original + ['not-apollo', 'NEW LABEL']
                 )
 
     run_browser(scenario())
@@ -350,18 +384,21 @@ def test_label_choices_toggle_the_draft_and_keep_their_colors(engine):
                 await expect(page.locator('#ask-input')).to_have_value('not-apollo, reading list')
                 assert store.load_paper("target")["labels"] == ["apollo"]
 
-                # Typing and clicking share one normalized, deduplicated draft.
+                # Typing and clicking share one normalized, deduplicated draft,
+                # which keeps the first spelling typed.
                 await page.locator('#ask-input').fill(' Apollo , APOLLO, New  Label')
                 await expect(apollo).to_have_attribute("aria-pressed", "true")
                 await expect(other).to_have_attribute("aria-pressed", "false")
                 await other.click()
-                await expect(page.locator('#ask-input')).to_have_value('apollo, new label, not-apollo')
+                await expect(page.locator('#ask-input')).to_have_value('Apollo, New Label, not-apollo')
                 await _answer(page, "OK")
-                await expect(page.locator('.paper-overview .label')).to_have_text(['apollo', 'new label', 'not-apollo'])
-                assert store.load_paper("target")["labels"] == ['apollo', 'new label', 'not-apollo']
+                await expect(page.locator('.paper-overview .label')).to_have_text(['Apollo', 'New Label', 'not-apollo'])
+                assert store.load_paper("target")["labels"] == ['Apollo', 'New Label', 'not-apollo']
 
                 await page.reload()
-                chip = page.locator('.paper-overview .label[data-label="apollo"]')
+                # The editor now offers the paper's spelling, in the same color.
+                apollo = choices.get_by_role("button", name="Apollo", exact=True)
+                chip = page.locator('.paper-overview .label[data-label="Apollo"]')
                 await chip.wait_for()
                 assert await chip.evaluate("el => el.style.getPropertyValue('--label-hue')") == hue
                 await page.evaluate("applyThemeSettings({appearance: 'dark', colors: 'slate'})")
@@ -373,7 +410,7 @@ def test_label_choices_toggle_the_draft_and_keep_their_colors(engine):
                 await page.keyboard.press("Escape")
                 await expect(page.locator('#ask')).to_be_hidden()
                 await expect(chip).to_be_visible()
-                assert store.load_paper("target")["labels"] == ['apollo', 'new label', 'not-apollo']
+                assert store.load_paper("target")["labels"] == ['Apollo', 'New Label', 'not-apollo']
                 await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels", exact=True).click()
                 await expect(apollo).to_have_attribute("aria-pressed", "true")
@@ -408,7 +445,7 @@ def test_sidebar_labels_can_be_edited_without_opening_the_paper(engine):
                 await page.goto(f"{url}#paper=closed2026model")
                 target = page.locator('#papers li[data-paper="open2026model"]')
                 menu = page.locator("#ctxmenu")
-                chip = target.get_by_role("button", name="read-next", exact=True)
+                chip = target.get_by_role("button", name="Read-Next", exact=True)
 
                 await target.click(button="right")
                 await menu.get_by_role("button", name="Add labels…").click()
@@ -419,29 +456,29 @@ def test_sidebar_labels_can_be_edited_without_opening_the_paper(engine):
                 assert store.load_paper("closed2026model")["labels"] == ["keep"]
                 hue = await chip.evaluate("el => el.style.getPropertyValue('--label-hue')")
                 assert hue
-                assert await page.locator('#labels [data-label="read-next"]').evaluate(
+                assert await page.locator('#labels [data-label="Read-Next"]').evaluate(
                     "el => el.style.getPropertyValue('--label-hue')"
                 ) == hue
 
                 # The ellipsis opens the same editor and preserves existing labels.
                 await target.locator(".pmenu").click()
                 await menu.get_by_role("button", name="Edit labels…").click()
-                await expect(page.locator("#ask-input")).to_have_value("open-source, read-next")
+                await expect(page.locator("#ask-input")).to_have_value("open-source, Read-Next")
                 choices = page.get_by_role("group", name="Existing labels")
                 await expect(choices.locator('[aria-pressed="true"]')).to_have_count(2)
-                assert await choices.get_by_role("button", name="read-next", exact=True).evaluate(
+                assert await choices.get_by_role("button", name="Read-Next", exact=True).evaluate(
                     "el => el.style.getPropertyValue('--label-hue')"
                 ) == hue
                 await _answer(page, "Cancel", "discard-me")
                 await expect(chip).to_be_visible()
-                assert store.load_paper("open2026model")["labels"] == ["open-source", "read-next"]
+                assert store.load_paper("open2026model")["labels"] == ["open-source", "Read-Next"]
 
                 # Filtering by a chip leaves an excluded paper and does not open
                 # the chip's paper. Keyboard activation toggles the filter off.
                 await chip.click()
                 await expect(chip).to_have_attribute("aria-pressed", "true")
                 await expect(page.locator('#papers li[data-paper="closed2026model"]')).to_have_count(0)
-                assert "label=read-next" in page.url and "paper=" not in page.url
+                assert "label=Read-Next" in page.url and "paper=" not in page.url
                 await chip.focus()
                 await page.keyboard.press("Enter")
                 await expect(chip).to_have_attribute("aria-pressed", "false")
@@ -453,7 +490,7 @@ def test_sidebar_labels_can_be_edited_without_opening_the_paper(engine):
                 await menu.get_by_role("button", name="Edit labels…").click()
                 await _answer(page, "OK", "")
                 await expect(target.locator(".labels")).to_have_count(0)
-                await expect(page.locator('#labels [data-label="read-next"]')).to_have_count(0)
+                await expect(page.locator('#labels [data-label="Read-Next"]')).to_have_count(0)
                 assert store.load_paper("open2026model")["labels"] == []
                 assert not errors
 
@@ -635,26 +672,78 @@ def test_labelling_a_paper_filters_the_corpus_and_survives_a_reload():
                 await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Labels").click()
                 await page.locator('#ask').wait_for(state="visible")
-                assert await page.locator('#ask-input').input_value() == 'huggingface, open source, reading-list'
+                assert await page.locator('#ask-input').input_value() == 'huggingface, Open Source, reading-list'
                 await _answer(page, "OK")
-                await page.locator('.paper-overview .label', has_text="open source").wait_for()
+                await page.locator('.paper-overview .label', has_text="Open Source").wait_for()
                 assert await page.locator('.paper-overview .label').all_text_contents() == [
-                    'huggingface', 'open source', 'reading-list',
+                    'huggingface', 'Open Source', 'reading-list',
                 ]
 
                 # The sidebar arrives with the first label and filters on click.
-                await page.locator('#labels [data-label="open source"]').click()
+                await page.locator('#labels [data-label="Open Source"]').click()
                 await page.locator('#papers [data-paper="closed2026model"]').wait_for(state="detached")
-                assert parse_qs(urlparse(page.url).fragment)["label"] == ["open source"]
+                assert parse_qs(urlparse(page.url).fragment)["label"] == ["Open Source"]
 
                 await page.reload()
                 await page.wait_for_function("typeof S !== 'undefined' && S.workspace")
-                await page.locator('#labels [data-label="open source"].active').wait_for()
+                await page.locator('#labels [data-label="Open Source"].active').wait_for()
                 assert await page.locator('#papers [data-paper="closed2026model"]').count() == 0
 
                 # Clicking it again is the way back out.
-                await page.locator('#labels [data-label="open source"]').click()
+                await page.locator('#labels [data-label="Open Source"]').click()
                 await page.locator('#papers [data-paper="closed2026model"]').wait_for()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+def test_labels_spelled_in_different_cases_are_one_label_in_the_page():
+    from playwright.async_api import expect
+    from test_browser import _answer, _paper as _browser_paper, _server
+
+    _browser_paper("upper2026", "An Upper Paper", "steering")
+    _browser_paper("lower2026", "A Lower Paper", "steering")
+    _browser_paper("none2026", "An Unlabeled Paper", "steering")
+    _browser_paper("third2026", "A Third Paper", "steering")
+    store.set_labels("upper2026", ["RLHF"])
+    store.set_labels("third2026", ["RLHF"])
+    store.set_labels("lower2026", ["rlhf"])
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                labels = page.locator('#labels li')
+                await expect(labels).to_have_count(1)
+                await expect(labels).to_have_attribute("data-label", "RLHF")
+                await expect(labels.locator('.n')).to_have_text("3")
+                assert await page.evaluate("labelStyle('RLHF') === labelStyle('rlhf')")
+
+                # A bookmark in the other case lands on the sidebar's spelling.
+                await page.goto(f"{url}#label=rlhf")
+                await page.reload()
+                await page.locator('#labels [data-label="RLHF"].active').wait_for()
+                await page.locator('#papers [data-paper="none2026"]').wait_for(state="detached")
+                await page.locator('#papers [data-paper="lower2026"]').wait_for()
+
+                # The paper's own chip turns the same filter off.
+                await page.locator('#papers [data-paper="lower2026"] .label').click()
+                await page.locator('#papers [data-paper="none2026"]').wait_for()
+
+                # The editor offers the label once, in the paper's spelling,
+                # and saving another spelling respells it on this paper only.
+                await page.locator('#papers [data-paper="lower2026"]').click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Labels", exact=True).click()
+                choices = page.get_by_role("group", name="Existing labels")
+                await expect(choices.locator('button')).to_have_count(1)
+                await expect(choices.locator('[aria-pressed="true"]')).to_have_text("rlhf")
+                await page.locator('#ask-input').fill("RLHF")
+                await expect(choices.locator('[aria-pressed="true"]')).to_have_count(1)
+                await _answer(page, "OK")
+                await page.locator('.paper-overview .label', has_text="RLHF").wait_for()
+                assert store.load_paper("lower2026")["labels"] == ["RLHF"]
 
     run_browser(scenario())
 
