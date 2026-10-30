@@ -126,7 +126,10 @@ def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None, all_s
             except storage.StorageReadError as exc:
                 issues.append(str(exc))
                 continue
-            if all_scopes or chat["paper"] == paper or (paper and paper in (chat.get("scope") or {}).get("papers", [])):
+            scope = chat.get("scope")
+            matches = (scope["mode"] == "library" if scope else chat["paper"] is None) if paper is None else (
+                chat["paper"] == paper or paper in (scope or {}).get("papers", []))
+            if all_scopes or matches:
                 chats.append(_shown(chat))
     chats.sort(key=lambda c: (c["updated"], c["id"]), reverse=True)
     return {"chats": chats, "issues": issues}

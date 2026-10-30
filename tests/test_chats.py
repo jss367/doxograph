@@ -176,3 +176,22 @@ def test_conversations_saved_within_one_second_list_newest_first(client, monkeyp
     # Update the first one last; it must now lead whatever its ID.
     client.put(f'/api/chats/{ids[0]}', json={'agent': 'codex', 'messages': PAIR * 2, 'revision': 1, 'operation': op()})
     assert [c['id'] for c in client.get('/api/chats').json()['chats']] == [ids[0], ids[2], ids[1]]
+
+
+def test_legacy_list_distinguishes_library_and_explicit_scopes(client):
+    ids = {}
+    for name, scope, paper in [
+        ('legacy-library', None, None), ('legacy-paper', None, 'study'),
+        ('library', {'mode':'library', 'papers':['study']}, None),
+        ('selected', {'mode':'selected', 'papers':['study']}, None),
+        ('paper', {'mode':'paper', 'papers':['study']}, None),
+    ]:
+        ids[name] = op()
+        response = client.put('/api/chats/' + ids[name], json={'paper':paper, 'scope':scope, 'agent':'codex',
+            'messages':PAIR, 'revision':0, 'operation':op()})
+        assert response.status_code == 200, response.text
+    def listed(path):
+        return {c['id'] for c in client.get(path).json()['chats']}
+    assert listed('/api/chats') == {ids['legacy-library'], ids['library']}
+    assert listed('/api/chats?paper=study') == {ids[name] for name in ('legacy-paper', 'library', 'selected', 'paper')}
+    assert listed('/api/chats?all_scopes=true') == set(ids.values())
