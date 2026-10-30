@@ -27,6 +27,7 @@ function renderAgentChat(chat) {
     const content = message.querySelector('.agent-content');
     if (assistant) content.replaceChildren(NoteWriting.render(m.content, agentChats.workspace));
     else content.innerHTML = paragraphs(m.content).map(p => `<p>${esc(p)}</p>`).join('');
+    content.insertAdjacentHTML('beforeend', `<div class="chat-attachments">${ChatThreads.attachmentsHTML(m.attachments || [])}</div>`);
     return message;
   });
   $('agent-messages').replaceChildren(...messages);
@@ -37,7 +38,7 @@ function renderAgentChat(chat) {
 
 function libraryAnswerNote(chat, index) {
   const message = chat.messages[index];
-  const question = chat.messages[index - 1]?.content || 'Library synthesis';
+  const question = chat.messages[index - 1]?.content || chat.messages[index - 1]?.attachments?.[0]?.name || 'Library synthesis';
   const title = Array.from(question.replace(/\s+/g, ' ').trim()).slice(0, 160).join('');
   const lookups = (message.activity || []).length
     ? `\n\n## Library lookups\n\n${message.activity.map(a => `- ${a}`).join('\n')}` : '';
@@ -107,10 +108,10 @@ function syncAgentChatControls() {
   if (!chat) return;
   const enabled = S.ai_enabled === true;
   const setup = enabled ? '' : 'Enable AI analysis in Settings.';
-  $('agent-send').disabled = chat.busy || !enabled;
+  $('agent-send').disabled = chat.busy || chat.reading || !enabled;
   $('agent-settings').hidden = !setup;
   $('agent-codex-guidance').hidden = chat.agent !== 'codex';
-  $('agent-status').textContent = chat.busy ? 'Looking through the library…' : setup || chat.error || agentChats.issues.join(' ');
+  $('agent-status').textContent = chat.busy ? 'Looking through the library…' : chat.reading ? 'Reading attachments…' : setup || chat.error || agentChats.issues.join(' ');
 }
 
 $('btn-agent').addEventListener('click', () => {

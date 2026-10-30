@@ -25,14 +25,14 @@ function syncAnalysisControls() {
   const providerHelp = {
     api: 'Uses the API or local provider configured below.',
     claude_code: 'Uses your signed-in Claude Code account and its plan limits or credits. Run claude auth login in Terminal first. API billing is never used as a fallback.',
-    codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Includes your global Codex instructions along with extracted PDF text; figures and scanned pages are unavailable. API billing is never used as a fallback.',
+    codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Includes your global Codex instructions along with extracted PDF text. Figures and scanned pages inside PDFs are unavailable; images attached to chats are sent directly. API billing is never used as a fallback.',
   };
   $('ai-access-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
   const chatAgent = activeChat()?.agent || S.ai_provider;
   $('chat-access-help').textContent = chatAgent === 'codex'
-    ? 'ChatGPT receives page-labeled PDF text and your global Codex instructions. Choose Claude to omit that global guidance. Figures and scanned pages are unavailable.'
+    ? 'ChatGPT receives page-labeled PDF text and your global Codex instructions. Choose Claude to omit that global guidance. PDF figures and scanned pages are unavailable; attached images are included.'
     : chatAgent === 'api' && S.provider !== 'anthropic'
-      ? 'The selected API or local model receives page-labeled PDF text; images are unavailable.'
+      ? 'The selected API or local model receives page-labeled PDF text and attached images. Use a model that supports images; PDF figures and scanned pages are unavailable.'
       : 'Claude receives the PDF, including its page images.';
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
   $('codex-model-form').hidden = S.ai_provider !== 'codex';
@@ -41,7 +41,7 @@ function syncAnalysisControls() {
   $('codex-model-save').disabled = savingCodexModel || savingProviderSetting;
   $('codex-model-refresh').disabled = loadingCodexModels;
   $('codex-current-model').textContent = `Current model: ${S.codex_model || 'Codex default (automatic)'}`;
-  $('chat-send').disabled = !enabled || Boolean(activeChat()?.busy);
+  $('chat-send').disabled = !enabled || Boolean(activeChat()?.busy || activeChat()?.reading);
   $('ai-action-status').hidden = enabled;
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;

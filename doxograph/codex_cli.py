@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import shutil
@@ -11,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Unpack
+
+from PIL import Image
 
 from . import config
 from .analysis_types import ModelResponse, ProviderRequest
@@ -122,11 +126,20 @@ class Client:
                 raise ModelSetupError("Sign in with ChatGPT using `codex login` in Terminal. "
                                    "Doxograph will not fall back to API billing.")
             prompt = []
+            images: list[Path] = []
             for message in kwargs["messages"]:
                 blocks = message["content"]
                 if isinstance(blocks, str):
                     blocks = [{"type": "text", "text": blocks}]
                 for block in blocks:
+                    if block.get("type") == "image":
+                        # Normalize GIF/WebP too, using generated paths rather than user filenames.
+                        path = Path(cwd) / f"image-{len(images) + 1}.png"
+                        with Image.open(io.BytesIO(base64.b64decode(block["source"]["data"]))) as image:
+                            image.convert("RGB").save(path)
+                        images.append(path)
+                        prompt.append(f"[Attached image {len(images)}]")
+                        continue
                     if block.get("type") != "text":
                         raise ModelInputError("Codex requires extracted paper text. Choose Claude for PDF images.")
                     prompt.append(block["text"])
@@ -163,6 +176,8 @@ class Client:
                 args.extend(["--output-schema", str(schema_path)])
             if self.mcp_server is not None:
                 args.extend(self.mcp_server().config_args())
+            for image_path in images:
+                args.extend(["--image", str(image_path)])
             args.append("-")
             config.require_ai_enabled()
             result = _run(args, env=env, cwd=cwd, input=stdin)

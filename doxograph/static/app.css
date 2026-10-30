@@ -718,3 +718,14 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4p
 .storage-warning li + li { margin-top: .6rem; }
 .storage-warning details { margin-top: .3rem; }
 .storage-warning summary { cursor: pointer; }
+
+/* Files travel with both paper and library conversations. */
+.chat-attachment-picker { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin-top: .5rem; }
+.chat-attachments { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
+.chat-attachments:empty { display: none; }
+.chat-attachment { display: flex; align-items: center; gap: .5rem; padding: .4rem .6rem; border: 1px solid var(--line); border-radius: 8px; max-width: 100%; min-width: 0; }
+.chat-attachment img { width: 56px; height: 56px; object-fit: contain; border-radius: 4px; }
+.chat-attachment a { overflow-wrap: anywhere; min-width: 0; }
+.chat-attachment button { padding: .1rem .4rem; flex-shrink: 0; }
+.chat-file-icon { font-size: 1.6rem; opacity: .65; }
+.paper-chat.chat-file-drag { outline: 3px solid var(--accent); outline-offset: -5px; }
