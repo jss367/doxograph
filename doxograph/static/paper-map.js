@@ -406,7 +406,7 @@ function graphDominantValue(counts, facet) {
 
 // The spelling the sidebar shows for each value key of `facet`, commonest first.
 function graphFacetValues(facet) {
-  return Object.entries((mapClient.state.facet_counts || {})[facet] || {})
+  return Object.entries(facetEntry(mapClient.state.facet_counts, facet) || {})
     .map(([value, n]) => ({ key: facetValueKey(value), value, n }));
 }
 

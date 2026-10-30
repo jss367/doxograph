@@ -1229,7 +1229,7 @@ function dropMissingFilters() {
   // follows a value to the spelling the sidebar shows.
   if (V.facet) {
     const filter = facetFilter();
-    const values = filter ? Object.keys((S.facet_counts || {})[filter.name] || {}) : [];
+    const values = filter ? Object.keys(facetEntry(S.facet_counts, filter.name) || {}) : [];
     const value = filter && values.find((v) => facetValueKey(v) === facetValueKey(filter.value));
     V.facet = value ? `${filter.name}:${value}` : null;
   }
@@ -1243,6 +1243,7 @@ function dropMissingFilters() {
   // and from a hand-written address naming both. The paper wins, as it does on
   // every other path that opens one.
   keepLabelFor(V.paper);
+  keepFacetFor(V.paper);
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -1943,23 +1944,39 @@ function facetValueKey(value) {
   return foldLabel(String(value).replace(/,/g, ' ').split(/\s+/).filter(Boolean).join(' '));
 }
 
+// A facet's entry in a dictionary keyed by facet name. Own properties only: a
+// facet may be named "constructor", which every object inherits.
+function facetEntry(dict, name) {
+  return dict && Object.hasOwn(dict, name) ? dict[name] : undefined;
+}
+
 function hasFacetFilter(row) {
   const filter = facetFilter();
   if (!filter) return true;
   const key = facetValueKey(filter.value);
-  return ((row.facets || {})[filter.name] || []).some((value) => facetValueKey(value) === key);
+  return (facetEntry(row.facets, filter.name) || []).some((value) => facetValueKey(value) === key);
 }
 
 // The defined facets' values on a claim, in the order the facets are defined.
 function claimFacetValues(row) {
   return (S.facets || []).flatMap((facet) =>
-    ((row.facets || {})[facet.name] || []).map((value) => [facet.name, value]));
+    (facetEntry(row.facets, facet.name) || []).map((value) => [facet.name, value]));
 }
 
+// As `chooseLabel`: a paper open on screen with no claim carrying the value is
+// left, rather than standing there with every claim filtered away.
 function chooseFacet(name, value) {
-  const next = `${name}:${value}`;
   const filter = facetFilter();
-  V.facet = filter && filter.name === name && facetValueKey(filter.value) === facetValueKey(value) ? null : next;
+  V.facet = filter && filter.name === name && facetValueKey(filter.value) === facetValueKey(value)
+    ? null : `${name}:${value}`;
+  if (V.facet && V.paper && !S.claims.some((row) => row.paper === V.paper && hasFacetFilter(row))) {
+    captureOpenEditor();
+    parkNewClaimForNavigation(null);
+    parkSynthEditor();
+    V.paper = null;
+    V.selectedId = null;
+    V.editing = null;
+  }
   syncHash(true);
   renderAll();
 }
@@ -2234,8 +2251,8 @@ function renderFacets() {
   const facets = S.facets || [];
   const filter = facetFilter();
   const html = facets.length ? facets.map((facet) => {
-    const counts = Object.entries((S.facet_counts || {})[facet.name] || {});
-    const stale = (S.facets_stale || {})[facet.name] || 0;
+    const counts = Object.entries(facetEntry(S.facet_counts, facet.name) || {});
+    const stale = facetEntry(S.facets_stale, facet.name) || 0;
     const active = (value) => filter && filter.name === facet.name
       && facetValueKey(filter.value) === facetValueKey(value);
     return `<details class="facet" data-facet="${esc(facet.name)}" ${openFacets.has(facet.name) || (filter && filter.name === facet.name) ? 'open' : ''}>
@@ -3157,8 +3174,8 @@ function editForm(row, tagListId = 'taglist') {
       </div>
       ${(S.facets || []).length ? `<div class="pair facet-fields">${S.facets.map((facet, i) => `
         <div><label title="${esc(facet.description || '')}">${esc(facet.name)} (comma separated)</label>
-          <input data-facet-input="${esc(facet.name)}" value="${esc(((row.facets || {})[facet.name] || []).join(', '))}"
-            data-facet-base="${esc(JSON.stringify(((row.facetsBase || row.facets || {})[facet.name]) || []))}"
+          <input data-facet-input="${esc(facet.name)}" value="${esc((facetEntry(row.facets, facet.name) || []).join(', '))}"
+            data-facet-base="${esc(JSON.stringify(facetEntry(row.facetsBase || row.facets, facet.name) || []))}"
             list="${esc(`${tagListId}-facet-${i}`)}" size="28"></div>`).join('')}</div>` : ''}
       <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
       <details class="evidence-assessment" ${row.conditions || row.limitations || row.evidence_origin || (row.evidence_relationship && row.evidence_relationship !== 'unassessed') ? 'open' : ''}><summary>Your evidence assessment</summary>
@@ -3181,7 +3198,7 @@ function editForm(row, tagListId = 'taglist') {
       </div>
     </form>
     <datalist id="${esc(tagListId)}">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
-    ${(S.facets || []).map((facet, i) => `<datalist id="${esc(`${tagListId}-facet-${i}`)}">${Object.keys((S.facet_counts || {})[facet.name] || {})
+    ${(S.facets || []).map((facet, i) => `<datalist id="${esc(`${tagListId}-facet-${i}`)}">${Object.keys(facetEntry(S.facet_counts, facet.name) || {})
       .map((value) => `<option value="${esc(value)}">`).join('')}</datalist>`).join('')}
   </div>`;
 }
@@ -4004,7 +4021,7 @@ function claimRequestBody(patch) {
   if (!facets) return body;
   const changed = {};
   for (const facet of S.facets || []) {
-    const now = facets[facet.name] || [], base = (facetsBase || {})[facet.name] || [];
+    const now = facetEntry(facets, facet.name) || [], base = facetEntry(facetsBase, facet.name) || [];
     if (JSON.stringify(now) !== JSON.stringify(base)) changed[facet.name] = now;
   }
   return Object.keys(changed).length ? { ...body, facets: changed } : body;
@@ -5388,7 +5405,7 @@ $('facets').addEventListener('click', async (event) => {
     if (description === null || description.trim() === (facet.description || '')) return;
     await facetRequest(path, 'PATCH', { description }, 'Could not save the description');
   } else if (act === 'values') {
-    const values = Object.keys((S.facet_counts || {})[name] || {});
+    const values = Object.keys(facetEntry(S.facet_counts, name) || {});
     const chosen = await askDialog({
       title: `Which ${name} values?`,
       note: 'Click the values to rename, merge, or remove.',
@@ -5418,7 +5435,7 @@ $('facets').addEventListener('click', async (event) => {
       }
     }
   } else if (act === 'delete') {
-    const counts = Object.values((S.facet_counts || {})[name] || {}).reduce((a, b) => a + b, 0);
+    const counts = Object.values(facetEntry(S.facet_counts, name) || {}).reduce((a, b) => a + b, 0);
     if (!await confirmDialog(`Delete the facet “${name}”?`, {
       note: counts ? `Its values come off ${counts} ${counts === 1 ? 'claim' : 'claims'}, including any you set by hand.` : '',
       ok: 'Delete facet',

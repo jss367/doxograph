@@ -160,3 +160,45 @@ def test_facets_filter_edit_and_color_the_map(engine):
                 assert errors == []
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_the_facet_filter_follows_the_open_paper(engine):
+    """A refresh that takes the filtered value off the open paper drops the
+    filter there; choosing a value the open paper lacks leaves the paper. A
+    facet named like an inherited object property is an ordinary facet."""
+    config.set_ai_enabled(False)
+    _paper("one", "Steering study", "steering")
+    _paper("two", "Probing study", "probing")
+    store.add_tag("steering")
+    store.add_tag("probing")
+    store.add_facet("model", "models")
+    store.add_facet("constructor", "who built the system")
+    store.update_claim("one", "one-c1", {"facets": {"model": ["GPT-4"]}})
+    store.update_claim("two", "two-c1", {"facets": {"model": ["GPT-4", "Llama"]}})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1280, "height": 900})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(f"{url}/#view=claims&paper=one&facet=model%3AGPT-4")
+                await expect(page.locator(".claim[data-claim='one-c1']")).to_be_visible()
+                await expect(page.locator("#facets details[data-facet='constructor']")).to_have_count(1)
+
+                store.update_claim("one", "one-c1", {"facets": {"model": []}})
+                await _poll(page)
+                await expect(page.locator(".claim[data-claim='one-c1']")).to_be_visible()
+                assert "facet=" not in page.url
+
+                # Open since the filter was on, and kept open once the filter went.
+                await expect(page.locator("#facets details[data-facet='model'][open]")).to_have_count(1)
+                await page.locator("#facets details[data-facet='model'] [data-facet-value='Llama']").click()
+                await expect(page.locator(".claim[data-claim='two-c1']")).to_be_visible()
+                await expect(page.locator(".claim[data-claim='one-c1']")).to_have_count(0)
+                assert "paper=" not in page.url and "facet=model%3ALlama" in page.url
+                assert errors == []
+
+    run_browser(scenario())
