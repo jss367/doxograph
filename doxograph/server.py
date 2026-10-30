@@ -1140,94 +1140,18 @@ def index() -> HTMLResponse:
     return HTMLResponse(source, headers={"Cache-Control": "no-store"})
 
 
-@app.get("/app.css", response_class=PlainTextResponse)
-def app_css() -> FileResponse:
-    return _frontend_response("app.css", "text/css")
+def _serve_frontend_asset(asset: Path) -> None:
+    media_type = "text/css" if asset.suffix == ".css" else "text/javascript"
+
+    def serve() -> FileResponse:
+        return _frontend_response(asset.name, media_type)
+
+    app.add_api_route(f"/{asset.name}", serve, methods=["GET"], include_in_schema=False)
 
 
-@app.get("/app.js", response_class=PlainTextResponse)
-def app_js() -> FileResponse:
-    return _frontend_response("app.js", "application/javascript")
-
-
-@app.get("/startup.js")
-def startup_js() -> FileResponse:
-    return _frontend_response("startup.js", "text/javascript")
-
-
-@app.get("/workspace-recovery.js")
-def workspace_recovery_js() -> FileResponse:
-    return _frontend_response("workspace-recovery.js", "text/javascript")
-
-
-@app.get("/research-tools.js")
-def research_tools_js() -> FileResponse:
-    return _frontend_response("research-tools.js", "text/javascript")
-
-
-@app.get("/workspace-notes.js")
-def workspace_notes_js() -> FileResponse:
-    return _frontend_response("workspace-notes.js", "text/javascript")
-
-
-@app.get("/research-tools.css")
-def research_tools_css() -> FileResponse:
-    return _frontend_response("research-tools.css", "text/css")
-
-
-@app.get("/note-writing.js")
-def note_writing_js() -> FileResponse:
-    return _frontend_response("note-writing.js", "text/javascript")
-
-
-@app.get("/research-notes.js")
-def research_notes_js() -> FileResponse:
-    return _frontend_response("research-notes.js", "text/javascript")
-
-
-@app.get("/research-notes.css")
-def research_notes_css() -> FileResponse:
-    return _frontend_response("research-notes.css", "text/css")
-
-
-@app.get("/agent-chat.js")
-def agent_chat_js():
-    return _frontend_response("agent-chat.js", "text/javascript")
-
-
-@app.get("/chat-threads.js")
-def chat_threads_js():
-    return _frontend_response("chat-threads.js", "text/javascript")
-
-
-@app.get("/focused-review.js")
-def focused_review_js() -> FileResponse:
-    return _frontend_response("focused-review.js", "text/javascript")
-
-
-@app.get("/appearance.js")
-def appearance_js() -> FileResponse:
-    return _frontend_response("appearance.js", "text/javascript")
-
-
-@app.get("/paper-map.js")
-def paper_map_js() -> FileResponse:
-    return _frontend_response("paper-map.js", "text/javascript")
-
-
-@app.get("/workspace-client.js")
-def workspace_client_js() -> FileResponse:
-    return _frontend_response("workspace-client.js", "text/javascript")
-
-
-@app.get("/workspace-controller.js")
-def workspace_controller_js() -> FileResponse:
-    return _frontend_response("workspace-controller.js", "text/javascript")
-
-
-@app.get("/poller.js")
-def poller_js() -> FileResponse:
-    return _frontend_response("poller.js", "text/javascript")
+# Every script and stylesheet the shell loads, so a new one needs no route.
+for _asset in sorted([*STATIC.glob("*.js"), *STATIC.glob("*.css")]):
+    _serve_frontend_asset(_asset)
 
 
 @app.get("/favicon.png")
