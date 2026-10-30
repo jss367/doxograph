@@ -605,9 +605,11 @@ function normalizeLabel(name) {
 }
 
 // Labels keep the case they were typed in but are one label in any case, as
-// `store.label_key` decides on the server.
+// `store.label_key` decides on the server, by the same steps: JavaScript has no
+// case folding, and lowering, raising, and lowering again makes Σ, σ, and ς
+// one key, and ß, ẞ, and SS another.
 function labelKey(name) {
-  return normalizeLabel(name).toLowerCase();
+  return normalizeLabel(name).toLowerCase().toUpperCase().toLowerCase();
 }
 
 function compareText(a, b) {

@@ -1190,8 +1190,13 @@ def claim_rows(papers: list[dict] | None = None) -> list[dict]:
 
 def label_key(label: str) -> str:
     """What makes two labels one: "RLHF" and "rlhf" are the same label written
-    two ways, so they share a count, a filter, and a color."""
-    return label.lower()
+    two ways, so they share a count, a filter, and a color.
+
+    Lowering, raising, and lowering again makes Σ, σ, and ς one key, and ß, ẞ,
+    and SS another, as `casefold` would. It is spelled out because the browser
+    has no `casefold` and has to reach the same key by the same steps.
+    """
+    return label.lower().upper().lower()
 
 
 def has_label(paper: dict, label: str) -> bool:

@@ -87,6 +87,34 @@ def test_label_counts_count_a_label_once_whatever_its_case():
     assert store.label_counts(store.all_papers()) == {"RLHF": 3, "Reading List": 2}
 
 
+# Pairs that `lower` alone would keep apart but full case folding joins.
+UNICODE_CASE_PAIRS = [("ΟΔΟΣ", "οδοσ"), ("Σ", "ς"), ("Straße", "STRASSE"), ("ẞ", "ss"), ("ﬁle", "FILE")]
+
+
+@pytest.mark.parametrize("written, other", UNICODE_CASE_PAIRS)
+def test_labels_are_one_label_under_full_unicode_case_folding(written, other):
+    assert store.label_key(written) == store.label_key(other)
+    assert store.normalize_labels([written, other]) == [written]
+    _paper("a", labels=[written])
+    _paper("b", labels=[other])
+    assert list(store.label_counts(store.all_papers()).values()) == [2]
+    assert store.has_label(store.load_paper("a"), other)
+    with client() as c:
+        found = c.get("/api/query/papers", params={"label": other}).json()["items"]
+        assert [paper["key"] for paper in found] == ["a", "b"]
+        assert c.post("/api/notebook/bulk", json={
+            "papers": ["a", "b"], "field": "labels", "mode": "remove", "values": [other],
+        }).json() == {"changed": 2}
+        assert store.load_paper("a")["labels"] == store.load_paper("b")["labels"] == []
+        assert c.post("/api/notebook/bulk", json={
+            "papers": ["a"], "field": "labels", "values": [written],
+        }).json() == {"changed": 1}
+        assert c.post("/api/notebook/bulk", json={
+            "papers": ["a"], "field": "labels", "values": [other],
+        }).json() == {"changed": 1}
+    assert store.load_paper("a")["labels"] == [other]
+
+
 def test_claims_carry_their_papers_labels_for_the_search():
     _paper("doe2026study", labels=["open-source"])
     store.add_claim("doe2026study", {"text": "A holds."})
@@ -719,6 +747,12 @@ def test_labels_spelled_in_different_cases_are_one_label_in_the_page():
                 await expect(labels).to_have_attribute("data-label", "RLHF")
                 await expect(labels.locator('.n')).to_have_text("3")
                 assert await page.evaluate("labelStyle('RLHF') === labelStyle('rlhf')")
+                # The page reaches the server's key, so the two agree on which
+                # spellings are one label.
+                samples = [label for pair in UNICODE_CASE_PAIRS for label in pair] + ["İ", "i\u0307", "ǅ", "Ꭰ", "ꭰ"]
+                assert await page.evaluate("values => values.map(labelKey)", samples) == [
+                    store.label_key(value) for value in samples
+                ]
 
                 # A bookmark in the other case lands on the sidebar's spelling.
                 await page.goto(f"{url}#label=rlhf")
@@ -726,6 +760,16 @@ def test_labels_spelled_in_different_cases_are_one_label_in_the_page():
                 await page.locator('#labels [data-label="RLHF"].active').wait_for()
                 await page.locator('#papers [data-paper="none2026"]').wait_for(state="detached")
                 await page.locator('#papers [data-paper="lower2026"]').wait_for()
+
+                # The map greys only the paper without it, whatever the case.
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.wait_for_function("window.doxographGraph().nodes.length === 4")
+                dimmed = await page.evaluate(
+                    "Object.fromEntries(window.doxographGraph().nodes.map(n => [n.key, n.dimmed]))")
+                assert dimmed == {"upper2026": False, "third2026": False, "lower2026": False, "none2026": True}
+                await page.goto(f"{url}#view=claims&label=RLHF")
+                await page.reload()
+                await page.locator('#labels [data-label="RLHF"].active').wait_for()
 
                 # The paper's own chip turns the same filter off.
                 await page.locator('#papers [data-paper="lower2026"] .label').click()
