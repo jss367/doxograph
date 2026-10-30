@@ -607,9 +607,11 @@ function normalizeLabel(name) {
 // Labels keep the case they were typed in but are one label in any case, as
 // `store.label_key` decides on the server, by the same steps: JavaScript has no
 // case folding, and lowering, raising, and lowering again makes Σ, σ, and ς
-// one key, and ß, ẞ, and SS another.
+// one key, and ß, ẞ, and SS another. Dotless ı skips the round trip, which
+// would join it to i.
 function labelKey(name) {
-  return normalizeLabel(name).toLowerCase().toUpperCase().toLowerCase();
+  return normalizeLabel(name).toLowerCase().split('ı')
+    .map((part) => part.toUpperCase().toLowerCase()).join('ı');
 }
 
 function compareText(a, b) {

@@ -115,6 +115,19 @@ def test_labels_are_one_label_under_full_unicode_case_folding(written, other):
     assert store.load_paper("a")["labels"] == [other]
 
 
+def test_label_keys_join_the_same_letters_as_casefold():
+    groups: dict[str, set[str]] = {}
+    folds: dict[str, set[str]] = {}
+    letters = [chr(code) for code in range(0x110000)]
+    for letter in letters:
+        groups.setdefault(store.label_key(letter), set()).add(letter)
+        folds.setdefault(letter.casefold(), set()).add(letter)
+    assert [c for c in letters if groups[store.label_key(c)] != folds[c.casefold()]] == []
+    # Dotless ı stays apart from I and i, as casefold keeps it.
+    assert store.normalize_labels(["I", "ı", "i"]) == ["I", "ı"]
+    assert store.label_key("ıΣ") == store.label_key("ıς") != store.label_key("IΣ")
+
+
 def test_claims_carry_their_papers_labels_for_the_search():
     _paper("doe2026study", labels=["open-source"])
     store.add_claim("doe2026study", {"text": "A holds."})
@@ -749,7 +762,7 @@ def test_labels_spelled_in_different_cases_are_one_label_in_the_page():
                 assert await page.evaluate("labelStyle('RLHF') === labelStyle('rlhf')")
                 # The page reaches the server's key, so the two agree on which
                 # spellings are one label.
-                samples = [label for pair in UNICODE_CASE_PAIRS for label in pair] + ["İ", "i\u0307", "ǅ", "Ꭰ", "ꭰ"]
+                samples = [label for pair in UNICODE_CASE_PAIRS for label in pair] + ["İ", "i\u0307", "ǅ", "Ꭰ", "ꭰ", "I", "ı", "i", "ΑıΣ", "αıς"]
                 assert await page.evaluate("values => values.map(labelKey)", samples) == [
                     store.label_key(value) for value in samples
                 ]

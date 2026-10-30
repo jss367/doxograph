@@ -1194,9 +1194,11 @@ def label_key(label: str) -> str:
 
     Lowering, raising, and lowering again makes Σ, σ, and ς one key, and ß, ẞ,
     and SS another, as `casefold` would. It is spelled out because the browser
-    has no `casefold` and has to reach the same key by the same steps.
+    has no `casefold` and has to reach the same key by the same steps. Dotless
+    ı is left out of the round trip: raising it gives I, which would join it
+    to i, and `casefold` keeps the two apart. No other letter differs.
     """
-    return label.lower().upper().lower()
+    return "ı".join(part.upper().lower() for part in label.lower().split("ı"))
 
 
 def has_label(paper: dict, label: str) -> bool:
