@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import anthropic
 import httpx
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
-from . import chats, cites, config, extract, ingest, job_journal, job_queue, pairs, search, store
+from . import cites, config, extract, ingest, job_journal, job_queue, pairs, query, search, store
 from .model_errors import ModelSetupError
 
 logger = logging.getLogger(__name__)
@@ -245,7 +245,6 @@ def remove_paper(key: str) -> dict[str, Any]:
         raise HTTPException(404, "No such paper.")
     try:
         extract.delete_paper(key)
-        chats.delete_paper_chats(key)
     except ModelSetupError as exc:
         raise HTTPException(502, str(exc)[:500]) from exc
     except (anthropic.APIError, httpx.HTTPError) as exc:
@@ -303,7 +302,8 @@ def citations() -> dict[str, Any]:
 
 
 @router.get("/api/search")
-def search_text(q: str = "", limit: int = 20, offset: int = 0) -> dict[str, Any]:
+def search_text(q: str = "", limit: int = 20, offset: int = 0,
+                paper_keys: Annotated[list[str] | None, Query(max_length=10000)] = None) -> dict[str, Any]:
     """The papers whose own text holds every word of the query.
 
     The claims are searched in the page, which needs no server at all. This is
@@ -312,8 +312,8 @@ def search_text(q: str = "", limit: int = 20, offset: int = 0) -> dict[str, Any]
     """
     page_size = max(1, min(limit, 100))
     start = max(0, offset)
-    hits = search.search_papers(q, limit=page_size + 1, offset=start)
-    known = {paper["key"]: paper for paper in store.all_papers()}
+    known = {paper["key"]: paper for paper in query.papers_and_issues(paper_keys)[0]}
+    hits = search.search_papers(q, limit=page_size + 1, offset=start, paper_keys=paper_keys)
     return {
         "q": q,
         "terms": search.terms(q),

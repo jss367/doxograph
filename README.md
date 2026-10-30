@@ -146,57 +146,65 @@ Extraction, quote checks, and **Add claim by hand** are under **Paper actions**.
 
 ## Chat about a paper
 
-Open a paper with a stored PDF and select **Ask about this paper**. Ask a question
-and continue with follow-ups. The model receives that paper's PDF (or its
-page-labeled text for ChatGPT) and the
-conversation, and is asked to cite PDF page numbers. Personal Doxograph notes
-and other papers are not included; the ChatGPT option also includes your global
-Codex instructions as described above. Answers can be wrong; check them against
-the source.
+**Ask about this paper**, **Ask about this claim**, and **Ask about selection**
+open the same Ask panel with the relevant sources already selected. A claim
+stays in focus while its originating paper supplies evidence. Use the existing
+paper and claim checkboxes to prepare a comparison of up to 200 papers; filters alone do not select
+sources. Contextual actions start a fresh conversation, and **Conversation**
+lets you return to earlier ones in this workspace.
 
-Conversations are saved in the workspace, separately for each paper, so you can
-close the app and pick one up another day. A paper can have several. **New
-conversation** starts another, **Conversation** switches between them, newest
-first, and **Delete** removes the one shown. Each conversation has its own
-**Agent**: the API or local model set in Settings, Claude subscription, or
-ChatGPT subscription. New conversations start with the model access selected in
-Settings, and changing the agent applies to the next question. One conversation
-can keep answering while you ask in another. If another window changed or
-deleted a conversation before this one saved its answer, this window's version
-is kept as a separate conversation. Failed questions keep their draft so you can
-retry. Chat is disabled when AI analysis is off. Removing a paper
-removes its conversations.
+Single-paper chat sends the PDF or extracted page-numbered text to the selected
+API, local, Claude subscription, or ChatGPT subscription provider. Native Claude
+PDF inputs include page images; text inputs cannot inspect figures or unreadable
+scans. If a paper has extracted claims but no readable PDF, **Use extracted claims
+only** offers retrieval through a subscription. Personal Doxograph notes are
+excluded from both paths. The ChatGPT option includes global Codex instructions,
+as disclosed in the panel.
+
+Source chips above the question show the evidence available to the next answer.
+**Add sources** searches titles, authors, claim text, and assigned topics. Adding
+papers or choosing **Search the rest of the library** expands the next question's
+scope. Removing sources starts a new conversation, carrying the draft but leaving
+prior answers and evidence behind. Each submitted question keeps its own scope,
+including when the selection changes while an answer is running.
+
+Every answer can be saved as a research note. **Evidence used** distinguishes
+retrieved claims and passages, supplied documents, and evidence carried forward
+from previous turns. Structured citations open preserved evidence and a link to
+the current claim or PDF page. Unknown references and invalid page references
+are marked as unverified. A valid citation establishes traceability, not that the
+paper supports the answer. Older conversations without evidence records are
+labeled accordingly.
+
+Conversations keep their provider choice and can run side by side. A conflict
+with another window preserves the local answer as a separate conversation.
+Failed requests keep the draft for an explicit retry. Removing a paper preserves
+its conversations and saved evidence; repair unavailable sources before another
+question. Saved notes remain independent of their conversations.
 
 ## Ask the library
 
-**Ask the library** in the header opens a chat that answers across every paper in
-the workspace, where paper chat reads one PDF. Its conversations are saved and
-switched like paper chat's, and each runs on **Claude subscription (Claude Code)**
-or **ChatGPT subscription (Codex)**, using the model selected for that provider.
-It needs AI analysis enabled; when it is off, the dialog says so and offers
-**Open Settings**.
-The selected assistant looks things up
-through the [MCP server](#query-doxograph-from-agents) below, started with
-`--without-notes`: it can search papers, claims, and PDF text, read a paper,
-list topics, and read agreements, tensions, and syntheses. Expand **Library lookups**
-below an answer to see what it looked up. Answers render Markdown headings, lists, tables,
-links, code, and equations. **Save as research note** keeps an answer in this
-workspace's **Research notes**, along with its question, assistant, timestamp,
-and source lookups. **Open saved note** lets you rename, edit, or export it as
-Markdown. A saved note stays separate from its conversation, so you can edit it
-or delete either one. Both assistants reach the library through the
-app that is serving the page, over a loopback address (the default; `--host 0.0.0.0`
-also works). If the app is bound only to another address, the chat says so
-instead of failing partway through an answer.
+**Ask the library** opens the shared panel and resumes its current conversation.
+Choose **Search the rest of the library** to expand an existing selection, or use
+**New conversation** to start another thread with the displayed scope. Library
+and multiple-paper retrieval require **Claude subscription (Claude Code)** or
+**ChatGPT subscription (Codex)**. An unsupported provider remains selected until
+you explicitly choose a supported one; Doxograph never switches billing modes
+for you. All Ask requests require AI analysis to be enabled.
 
-It has no file, shell, web, or write access, and it does not receive the PDFs.
-The Codex option includes your global Codex instructions, as disclosed in the dialog.
-`--without-notes` leaves out your paper and workspace notes, your claim notes, and
-the links from claims to your own claims, and a search cannot match text inside
-them. Your research context is not exposed by any tool. Ask the library is
-restricted to the workspace captured when you send a question, even
-if the model requests another workspace. Answers can be wrong; check them
-against the papers.
+The assistant searches through the read-only [MCP server](#query-doxograph-from-agents),
+with no shell, file, web, or write tools. It can retrieve metadata, claims,
+PDF passages, and existing analyses. A selected-paper connection enforces its
+paper list before ranking, counts, and pagination; it omits library-wide topics
+and syntheses and excludes agreements or tensions with outside dependencies.
+Whole-library requests retain topic and synthesis access within their captured
+paper membership. Searching the library does not mean reading every paper.
+
+Retrieval captures the workspace and available papers when you send the question.
+Answers return to that conversation even if you switch workspaces. Both subscription
+assistants reach the running app over loopback (the default; `--host 0.0.0.0` also
+works); an unreachable callback produces setup guidance. Personal paper, claim,
+workspace, and research notes remain excluded. Check answers against the sources.
 
 ## Use
 

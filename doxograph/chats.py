@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import config, storage, store
+from .ask_context import Evidence, Scope
 
 router = APIRouter(prefix="/api/chats")
 ChatId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
@@ -35,6 +36,9 @@ class Message(BaseModel):
     model: str = Field(default="", max_length=200)
     activity: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=500)
     created: str = Field(default="", max_length=40)
+    scope: Scope | None = None
+    evidence: list[Evidence] | None = Field(default=None, max_length=500)
+    citations: list[dict] = Field(default_factory=list, max_length=500)
     saved_note: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
     # The research note's idempotency key, saved before the note is posted.
     note_operation: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
@@ -44,6 +48,7 @@ class Conversation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     paper: PaperKey | None = None
     agent: Agent
+    scope: Scope | None = None
     messages: list[Message] = Field(min_length=2, max_length=200)
 
     @field_validator("messages")
@@ -105,7 +110,7 @@ def _shown(chat: dict) -> dict:
 
 
 @router.get("")
-def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None) -> dict:
+def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None, all_scopes: bool = False) -> dict:
     """A paper's conversations, or the library's when no paper is given, newest first."""
     chats, issues = [], []
     # Deletion holds this lock, so no file listed here vanishes before it is read.
@@ -116,7 +121,7 @@ def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None) -> di
             except storage.StorageReadError as exc:
                 issues.append(str(exc))
                 continue
-            if chat["paper"] == paper:
+            if all_scopes or chat["paper"] == paper or (paper and paper in (chat.get("scope") or {}).get("papers", [])):
                 chats.append(_shown(chat))
     chats.sort(key=lambda c: (c["updated"], c["id"]), reverse=True)
     return {"chats": chats, "issues": issues}
@@ -125,7 +130,7 @@ def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None) -> di
 @router.put("/{chat_id}")
 def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict:
     """Create a conversation at revision 0, or replace the revision the page last saw."""
-    if body.paper is None and body.agent not in LIBRARY_AGENTS:
+    if body.scope is None and body.paper is None and body.agent not in LIBRARY_AGENTS:
         raise HTTPException(422, "Ask the library needs Claude subscription or ChatGPT subscription.")
     with store.document_lock("chats"):
         saved = _load(chat_id)
@@ -133,9 +138,9 @@ def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict:
             raise HTTPException(404, "This conversation was deleted. Start a new conversation.")
         if saved is not None and saved["revision"] != body.revision and saved["operation"] not in body.unconfirmed:
             raise HTTPException(409, "This conversation changed in another window. Reopen the chat to load the latest version.")
-        if saved is not None and saved["paper"] != body.paper:
+        if saved is not None and saved["paper"] != body.paper and body.scope is None:
             raise HTTPException(409, "This conversation belongs to a different chat.")
-        if saved is None and body.paper is not None and not store.paper_path(body.paper).is_file():
+        if saved is None and body.scope is None and body.paper is not None and not store.paper_path(body.paper).is_file():
             raise HTTPException(404, f"no paper {body.paper}")
         now = _now()
         chat = dict(body.model_dump(exclude={"revision", "unconfirmed"}), id=chat_id,
@@ -155,15 +160,3 @@ def delete_chat(chat_id: ChatId, revision: Annotated[int, Query(ge=1)]) -> dict:
             raise HTTPException(409, "This conversation changed in another window. Reopen the chat to load the latest version.")
         _path(chat_id).unlink()
         return {"deleted": chat_id}
-
-
-def delete_paper_chats(key: str) -> None:
-    """A removed paper takes its conversations with it."""
-    with store.document_lock("chats"):
-        for path in files():
-            try:
-                paper = storage.read_model(path, SavedChat).paper
-            except storage.StorageReadError:
-                continue
-            if paper == key:
-                path.unlink(missing_ok=True)

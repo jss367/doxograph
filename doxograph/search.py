@@ -288,7 +288,7 @@ def _pattern(term: str) -> re.Pattern:
     return re.compile(rf"(?<!{_IN_WORD})({folded}{_IN_WORD}*)", re.UNICODE)
 
 
-def search_papers(query: str, limit: int = 20, offset: int = 0) -> list[dict]:
+def search_papers(query: str, limit: int = 20, offset: int = 0, paper_keys: list[str] | None = None) -> list[dict]:
     """The papers whose text holds every term, best first.
 
     Each hit carries where the terms are: a couple of passages with the page
@@ -310,7 +310,7 @@ def search_papers(query: str, limit: int = 20, offset: int = 0) -> list[dict]:
     seen = [0] * len(wanted)
     total = 0
     corpus = 0
-    for key in store.paper_keys():
+    for key in (store.paper_keys() if paper_keys is None else sorted(set(paper_keys))):
         text = folded_text(key)
         if not text:
             continue

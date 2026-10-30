@@ -182,7 +182,8 @@ def test_focused_review_ignores_late_passages_and_failed_review_stays_put(engine
 
                 await page.route(f'**/api/papers/a/claims/{first["id"]}/quote-context', delay)
                 await page.goto(f"{url}/#view=claims")
-                await page.locator(f'#content .claim[data-claim="{first["id"]}"]').click()
+                # Select the claim text, not an action that happens to occupy the card center.
+                await page.locator(f'#content .claim[data-claim="{first["id"]}"] .ctext').click()
                 await page.locator('#btn-focus-review').click()
                 await asyncio.wait_for(started.wait(), timeout=10)
                 dialog = page.locator('#focused-review')

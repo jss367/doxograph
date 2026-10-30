@@ -3,8 +3,9 @@
 import json
 
 import anthropic
+from pypdf import PdfReader
 
-from . import codex_cli, config, extract, providers, store
+from . import ask_context, codex_cli, config, extract, providers, quotes, search, store
 
 SYSTEM = """Answer questions about the attached research paper. Use the paper as
 your source and cite PDF page numbers for specific claims. Distinguish what the
@@ -27,7 +28,14 @@ def answer(key: str, messages: list[dict]) -> dict:
         paper = store.load_paper(key)
         api = extract.client()
         document = extract.paper_document(key, api)
-        prompt = f"Paper: {paper.get('title') or key}\n\nConversation:\n{json.dumps(messages, ensure_ascii=False)}"
+        capture = ask_context.active.get()
+        context = ""
+        if capture:
+            count = len(PdfReader(store.pdf_path(key)).pages)
+            capture.direct.append(ask_context.entry(kind="document", paper=key, title=(paper.get("title") or key)[:2000],
+                page_count=count, format="extracted text" if document.get("type") == "text" else "PDF with page images"))
+            context = capture.prompt()
+        prompt = context + f"\nPaper: {paper.get('title') or key}\n\nConversation:\n{json.dumps(messages, ensure_ascii=False)}"
 
         def ask(document):
             return extract._create(api, model=config.model(), max_tokens=6000, system=SYSTEM,
@@ -52,4 +60,14 @@ def answer(key: str, messages: list[dict]) -> dict:
         assistant = "ChatGPT" if isinstance(api, codex_cli.Client) else "Claude"
         if isinstance(api, providers.TextClient):
             assistant = config.PROVIDERS[api.selected.provider]["label"]
+        if capture and document.get("type") == "text":
+            # Capture cited pages while still holding the paper lock, never from a later PDF.
+            raw = search.paper_text(key)
+            if raw:
+                pages = raw.split(quotes.PAGE_BREAK)
+                for citation in ask_context.citations(payload["answer"], capture.direct, capture.scope):
+                    if citation["valid"] and citation["page"]:
+                        page = citation["page"]
+                        capture.direct.append(ask_context.entry(kind="passage", paper=key, page=page,
+                            text=pages[page - 1][:12000], format="page excerpt from supplied text"))
         return {"answer": payload["answer"], "model": config.model(), "assistant": assistant}

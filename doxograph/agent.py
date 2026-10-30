@@ -13,13 +13,13 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from . import claude_code, codex_cli, config
+from . import ask_context, claude_code, codex_cli, config
 from .model_errors import ModelSetupError
 
 SERVER = "doxograph"
 # The notes tools are not registered under --without-notes; listing only these
 # keeps the permission list matching what the agent can see.
-TOOLS = ("search_papers", "search_claims", "search_paper_text", "get_paper", "list_topics", "read_evidence")
+TOOLS = ("search_papers", "search_claims", "search_paper_text", "get_paper", "list_topics", "read_evidence", "read_passage")
 SYSTEM = """You are the research assistant inside Doxograph, a library of papers broken into claims.
 Answer from the library, using the tools to look things up. Always pass workspace={workspace!r}.
 Cite papers by key and claims by ID, with the paper's quote and locator. Check reviewed, quote_verified,
@@ -33,28 +33,40 @@ The conversation is provided as labeled messages. Answer only the last question.
 TIMEOUT = 600
 _VERBS = {"search_papers": "Searched papers", "search_claims": "Searched claims",
           "search_paper_text": "Searched paper text", "get_paper": "Read paper",
-          "list_topics": "Listed topics", "read_evidence": "Read"}
+          "list_topics": "Listed topics", "read_evidence": "Read", "read_passage": "Read passage"}
 
 
 def instructions(workspace: str, focus: str | None) -> str:
     system = SYSTEM.format(workspace=workspace)
     if focus:
         system += f"\nThe user is looking at the paper with key {focus!r}; assume questions are about it unless they say otherwise."
+    capture = ask_context.active.get()
+    if capture:
+        system += "\n" + capture.prompt()
     return system
 
 
 def library_server(url: str, workspace: str) -> codex_cli.MCPServer:
     # Run the same code as this server, not whichever `doxograph` the environment finds first.
+    capture = ask_context.active.get()
+    extra = []
+    enabled = TOOLS
+    if capture:
+        extra = ["--papers", *capture.scope.papers, "--evidence-log", str(capture.log)]
+        if capture.scope.mode == "library":
+            extra.append("--library-snapshot")
+        else:
+            enabled = tuple(t for t in TOOLS if t != "list_topics")
     return codex_cli.MCPServer(
         name=SERVER, command=sys.executable,
-        args=["-m", "doxograph", "mcp", "--url", url, "--without-notes", "--workspace", workspace],
-        env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}, enabled_tools=TOOLS)
+        args=["-m", "doxograph", "mcp", "--url", url, "--without-notes", "--workspace", workspace, *extra],
+        env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}, enabled_tools=enabled)
 
 
 def command(binary: str, url: str, workspace: str, focus: str | None) -> list[str]:
     entry = library_server(url, workspace)
     server = {"command": entry.command, "args": entry.args, "env": entry.env}
-    allowed = ",".join(f"mcp__{SERVER}__{name}" for name in TOOLS)
+    allowed = ",".join(f"mcp__{SERVER}__{name}" for name in entry.enabled_tools)
     return [binary, "--setting-sources", "", "-p", "--output-format", "stream-json", "--verbose",
             "--model", config.model(), "--system-prompt", instructions(workspace, focus),
             "--tools", "", "--allowedTools", allowed, "--permission-mode", "dontAsk",

@@ -85,7 +85,7 @@ def test_bound_connection_rejects_other_workspaces_before_http(without_notes):
         assert "list_workspaces" not in tools
         calls = [("search_papers", {}), ("search_claims", {}),
                  ("search_paper_text", {"q": "recovery"}), ("get_paper", {"key": "example"}),
-                 ("list_topics", {}), ("read_evidence", {"kind": "tensions"})]
+                 ("list_topics", {}), ("read_evidence", {"kind": "tensions"}), ("read_passage", {"key": "example"})]
         if not without_notes:
             calls += [("list_notes", {}), ("read_note", {"note_id": "workspace"})]
         assert tools == {name for name, _ in calls}
@@ -173,11 +173,11 @@ def test_mcp_command_does_not_initialize_or_recover_a_local_corpus(monkeypatch):
     monkeypatch.setattr(config, "ensure_dirs", lambda: pytest.fail("adapter initialized local corpus"))
     monkeypatch.setattr(store, "recover_storage", lambda: pytest.fail("adapter recovered local corpus"))
     assert __main__.main(["mcp", "--url", "http://localhost:8766"]) == 0
-    assert urls == [("http://localhost:8766", {"without_notes": False, "workspace": None})]
+    assert urls == [("http://localhost:8766", {"without_notes": False, "workspace": None, "papers": None, "evidence_log": None, "library_snapshot": False})]
     assert __main__.main(["mcp", "--without-notes"]) == 0
-    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": None})
+    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": None, "papers": None, "evidence_log": None, "library_snapshot": False})
     assert __main__.main(["mcp", "--without-notes", "--workspace", "selected"]) == 0
-    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": "selected"})
+    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": "selected", "papers": None, "evidence_log": None, "library_snapshot": False})
 
 
 @pytest.mark.parametrize("workspace", [None, "default"])

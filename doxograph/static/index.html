@@ -371,6 +371,7 @@
       <div id="selection-tools" class="selection-tools">
         <span id="selection-count">Select claims or papers to work with them</span>
         <button type="button" data-tool="select-visible">Select visible claims</button>
+        <button type="button" id="ask-selection" data-needs-selection hidden>Ask about selection</button>
         <button type="button" data-tool="compare" data-needs-selection hidden>Compare & organize</button>
         <button type="button" data-tool="save-search">Save this search</button>
         <button type="button" id="btn-focus-review" title="Review the claims matching your current filters beside their source PDFs">Focused review</button>
@@ -447,34 +448,12 @@
   </form>
 </dialog>
 
-<dialog id="paper-chat" class="sheet paper-chat" aria-labelledby="paper-chat-title">
-  <div class="row"><h2 id="paper-chat-title">Chat about this paper</h2>
-    <button type="button" id="chat-close" style="margin-left:auto" aria-label="Close paper chat">×</button></div>
-  <p class="hint" id="chat-paper-title"></p>
-  <p class="hint" id="chat-access-help"></p>
-  <p class="hint">Sends this paper and conversation to the chosen agent. Your Doxograph notes stay private.
-    Conversations are saved in this workspace. Check answers against the paper.</p>
-  <div class="row chat-threads">
-    <label>Conversation <select id="chat-thread"></select></label>
-    <label>Agent <select id="chat-agent"></select></label>
-    <button type="button" id="chat-delete" hidden>Delete</button>
-  </div>
-  <div id="chat-messages" role="log" aria-live="polite"></div>
-  <form id="chat-form">
-    <label for="chat-question">Question about the paper</label>
-    <textarea id="chat-question" rows="3" maxlength="8000" required></textarea>
-    <p class="hint" id="chat-status" role="status"></p>
-    <div class="row right"><button type="button" id="chat-clear">New conversation</button>
-      <button type="submit" class="primary" id="chat-send">Send</button></div>
-  </form>
-</dialog>
-
 <dialog id="library-agent" class="sheet paper-chat" aria-labelledby="library-agent-title">
   <div class="row"><h2 id="library-agent-title">Ask the library</h2>
     <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
-  <p class="hint">Uses your Claude or ChatGPT subscription to look through this workspace's papers, claims,
-    topics, agreements, and tensions. It cannot change anything. Your Doxograph notes stay private.
-    Conversations are saved in this workspace; save an answer as a research note to edit it. Check answers against the papers.</p>
+  <p class="hint">Ask about papers and claims in this workspace. Your Doxograph notes stay private.
+    Conversations are saved; you can save any answer as a research note. Check answers against the papers.</p>
+  <p class="hint" id="agent-input-format"></p>
   <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
   <div class="row chat-threads">
     <label>Conversation <select id="agent-thread"></select></label>
@@ -483,13 +462,32 @@
   </div>
   <div id="agent-messages" role="log" aria-live="polite"></div>
   <form id="agent-form">
-    <label for="agent-question">Question about the library</label>
+    <div id="agent-scope" aria-label="Conversation sources"></div>
+    <div class="row"><button type="button" id="agent-add">Add sources</button>
+      <button type="button" id="agent-expand">Search the rest of the library</button>
+      <button type="button" id="agent-claims-only">Use extracted claims only</button></div>
+    <div id="agent-starters" class="row"></div>
+    <label for="agent-question">Question</label>
     <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
     <p class="hint" id="agent-status" role="status"></p>
     <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
       <button type="button" id="agent-clear">New conversation</button>
       <button type="submit" class="primary" id="agent-send">Send</button></div>
   </form>
+</dialog>
+
+<dialog id="source-picker" class="sheet" aria-labelledby="source-picker-title">
+  <h2 id="source-picker-title">Choose sources</h2>
+  <label for="source-search">Search titles, authors, claims, or topics</label>
+  <input type="search" id="source-search">
+  <p id="source-selection-count" role="status"></p>
+  <div id="source-results"></div>
+  <div class="row right"><button type="button" id="source-cancel">Cancel</button>
+    <button type="button" id="source-apply" class="primary">Apply sources</button></div>
+</dialog>
+<dialog id="citation-detail" class="sheet" aria-labelledby="citation-title">
+  <h2 id="citation-title">Source evidence</h2><div id="citation-body"></div>
+  <button type="button" id="citation-close">Back to conversation</button>
 </dialog>
 
 <dialog id="research-tools" class="research-sheet" aria-labelledby="research-tools-title">

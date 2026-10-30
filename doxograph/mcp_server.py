@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ipaddress
+import json
+from pathlib import Path
 import re
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -13,7 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__
+from . import __version__, ask_context
 
 DEFAULT_URL = "http://127.0.0.1:8765"
 Workspace = Annotated[str, Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9-]*$")]
@@ -42,9 +44,18 @@ def local_url(value: str) -> str:
 
 
 def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTransport | None = None,
-                  without_notes: bool = False, workspace: str | None = None) -> MCPServer:
+                  without_notes: bool = False, workspace: str | None = None,
+                  papers: list[str] | None = None, evidence_log: str | None = None,
+                  library_snapshot: bool = False) -> MCPServer:
     base_url = local_url(base_url)
     bound_workspace = workspace
+    if papers is not None:
+        if not papers or len(papers) > 10000 or any(not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", key) for key in papers):
+            raise ValueError("--papers requires 1 to 10000 valid paper keys")
+        if not workspace:
+            raise ValueError("--papers requires --workspace")
+        without_notes = True
+    bound_papers = list(dict.fromkeys(papers)) if papers is not None else None
     if bound_workspace is not None and not re.fullmatch(r"[a-z0-9][a-z0-9-]*", bound_workspace):
         raise ValueError("Use a valid workspace ID for --workspace")
     server = MCPServer(
@@ -65,6 +76,18 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
     async def get(path: str, workspace: str | None = None, **params) -> dict[str, Any]:
         if bound_workspace is not None and workspace != bound_workspace:
             raise ToolError(f"This connection is restricted to workspace {bound_workspace!r}.")
+        if bound_papers is not None:
+            if path.startswith(("/api/query/papers/", "/api/query/passage/")):
+                if path.rsplit("/", 1)[-1] not in bound_papers:
+                    raise ToolError("This paper is outside the selected sources.")
+            elif path in ("/api/query/papers", "/api/query/claims", "/api/query/evidence", "/api/search") or (library_snapshot and path == "/api/query/topics"):
+                if params.get("paper") and params["paper"] not in bound_papers:
+                    raise ToolError("This paper is outside the selected sources.")
+                params["paper_keys"] = bound_papers
+                if path == "/api/query/evidence" and library_snapshot:
+                    params["library_snapshot"] = True
+            else:
+                raise ToolError("This tool is unavailable for selected sources.")
         headers = {"X-Doxograph-Workspace": workspace} if workspace is not None else {}
         if without_notes and path.startswith("/api/query/"):
             params = {**params, "omit_notes": True}
@@ -99,6 +122,15 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
             raise ToolError("Doxograph returned an unexpected response. Check --url.")
         if workspace is not None:
             data.setdefault("workspace", workspace)
+        if evidence_log:
+            entries = ask_context.collect(data)
+            log = Path(evidence_log)
+            encoded = json.dumps(entries, ensure_ascii=False) + "\n"
+            if (log.stat().st_size if log.exists() else 0) + len(encoded.encode()) > 2_000_000:
+                raise ToolError("Evidence limit reached. Answer from the evidence already retrieved.")
+            with log.open("a", encoding="utf-8") as stream:
+                stream.write(encoded)
+            data["evidence"] = entries
         return data
 
     if bound_workspace is None:
@@ -134,13 +166,13 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
                          reviewed=reviewed, limit=limit, offset=offset)
 
     @server.tool(annotations=READ_ONLY)
-    async def search_paper_text(workspace: Workspace, q: QueryText, limit: Limit = 20) -> dict[str, Any]:
+    async def search_paper_text(workspace: Workspace, q: QueryText, limit: Limit = 20, offset: Offset = 0) -> dict[str, Any]:
         """Search local PDF text, returning ranked papers and passages with page numbers.
 
         Every query term must occur in the paper, at the start of a word. This also
         searches papers without extracted claims. Returns at most limit papers.
         """
-        return await get("/api/search", workspace, q=q, limit=limit)
+        return await get("/api/search", workspace, q=q, limit=limit, offset=offset)
 
     @server.tool(annotations=READ_ONLY)
     async def get_paper(workspace: Workspace, key: PaperKey) -> dict[str, Any]:
@@ -151,10 +183,11 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
         """
         return await get(f"/api/query/papers/{key}", workspace)
 
-    @server.tool(annotations=READ_ONLY)
-    async def list_topics(workspace: Workspace, q: QueryText = "", limit: Limit = 20, offset: Offset = 0) -> dict[str, Any]:
-        """Find topic slugs, descriptions, and claim counts. Empty q lists topics."""
-        return await get("/api/query/topics", workspace, q=q, limit=limit, offset=offset)
+    if bound_papers is None or library_snapshot:
+        @server.tool(annotations=READ_ONLY)
+        async def list_topics(workspace: Workspace, q: QueryText = "", limit: Limit = 20, offset: Offset = 0) -> dict[str, Any]:
+            """Find topic slugs, descriptions, and claim counts. Empty q lists topics."""
+            return await get("/api/query/topics", workspace, q=q, limit=limit, offset=offset)
 
     @server.tool(annotations=READ_ONLY)
     async def read_evidence(workspace: Workspace, kind: Literal["agreements", "tensions", "syntheses"],
@@ -168,6 +201,13 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
         Dismissed and stale results remain labeled and must not be treated as confirmed.
         """
         return await get("/api/query/evidence", workspace, kind=kind, topic=topic, limit=limit, offset=offset)
+
+    @server.tool(annotations=READ_ONLY)
+    async def read_passage(workspace: Workspace, key: PaperKey,
+                           page_number: Annotated[int, Field(ge=1)] = 1, offset: Offset = 0,
+                           limit: Annotated[int, Field(ge=1, le=12000)] = 6000) -> dict[str, Any]:
+        """Read a bounded part of a PDF page. Follow next_offset for the rest of that page."""
+        return await get(f"/api/query/passage/{key}", workspace, page_number=page_number, offset=offset, limit=limit)
 
     if without_notes:
         return server
@@ -194,5 +234,7 @@ def create_server(base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTran
     return server
 
 
-def run(base_url: str = DEFAULT_URL, *, without_notes: bool = False, workspace: str | None = None) -> None:
-    create_server(base_url, without_notes=without_notes, workspace=workspace).run(transport="stdio")
+def run(base_url: str = DEFAULT_URL, *, without_notes: bool = False, workspace: str | None = None,
+        papers: list[str] | None = None, evidence_log: str | None = None, library_snapshot: bool = False) -> None:
+    create_server(base_url, without_notes=without_notes, workspace=workspace,
+                  papers=papers, evidence_log=evidence_log, library_snapshot=library_snapshot).run(transport="stdio")

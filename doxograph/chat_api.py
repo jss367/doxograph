@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import logging
+import tempfile
+from pathlib import Path
 from collections.abc import Iterator
 from typing import Any, Literal
 
@@ -13,7 +15,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from . import agent, chat, config, fingerprint, job_queue
+from . import agent, ask_context, chat, chats, config, fingerprint, job_queue, store
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError, ProviderResponseError
 
 logger = logging.getLogger(__name__)
@@ -135,3 +137,61 @@ def agent_chat(body: AgentBody, request: Request) -> dict[str, Any]:
     with _chat_errors("Library agent"), _chat_agent(body.agent):
         return agent.answer([message.model_dump() for message in body.messages],
                             lambda: _callback_url(request), body.paper)
+
+
+class AskBody(ChatBody):
+    scope: ask_context.Scope
+    conversation_id: chats.ChatId | None = None
+
+
+@router.post("/api/ask")
+def ask(body: AskBody, request: Request) -> dict[str, Any]:
+    """One Ask interface, with scope fixed before either evidence path runs."""
+    job_queue._require_analysis()
+    with _chat_errors("Ask"), _chat_agent(body.agent), config.use_model_access():
+        scope = ask_context.resolve_scope(body.scope)
+        prior: list[dict[str, Any]] = []
+        saved = chats._load(body.conversation_id) if body.conversation_id else None
+        if len(body.messages) > 1:
+            if not saved or [(m["role"], m["content"]) for m in saved["messages"]] != [
+                    (m.role, m.content) for m in body.messages[:-1]]:
+                raise HTTPException(409, "Save or reopen this conversation before asking a follow-up.")
+            previous = saved["messages"][-2].get("scope") or saved.get("scope") or {"mode": "paper" if saved["paper"] else "library",
+                                              "papers": [saved["paper"]] if saved["paper"] else scope.papers}
+            if ((previous["mode"] == "library" and scope.mode != "library")
+                    or not set(previous["papers"]) <= set(scope.papers)):
+                raise HTTPException(409, "Start a new conversation when removing sources.")
+            unique = {}
+            for message in saved["messages"]:
+                for item in message.get("evidence") or []:
+                    if item["paper"] in scope.papers and set(item.get("sources", [])) <= set(scope.papers) and item.get("text"):
+                        unique[item["ref"]] = {**item, "carried": True}
+            prior = list(unique.values())
+            # Never silently drop historical evidence to squeeze it into the prompt.
+            if len(str(prior)) > 100_000:
+                raise HTTPException(413, "This conversation has too much evidence. Start a new conversation.")
+        if scope.mode != "paper" and config.ai_provider() not in ("claude_code", "codex"):
+            raise HTTPException(422, "Selected-source and library retrieval require Claude or ChatGPT subscription. Choose a supported agent.")
+        with tempfile.TemporaryDirectory(prefix="doxograph-evidence-") as directory:
+            capture = ask_context.Capture(scope, Path(directory) / "evidence.jsonl", prior)
+            for focus in scope.focus:
+                if focus.claim:
+                    paper = store.load_paper(focus.paper)
+                    claim = next(c for c in paper["claims"] if c["id"] == focus.claim)
+                    capture.direct.extend(ask_context.collect({"items": [{**claim, "paper": focus.paper}]}))
+            token = ask_context.active.set(capture)
+            try:
+                messages = [message.model_dump() for message in body.messages]
+                result = (chat.answer(scope.papers[0], messages) if scope.mode == "paper"
+                          else agent.answer(messages, lambda: _callback_url(request)))
+                current = capture.direct + ask_context.read_log(capture.log)
+            finally:
+                ask_context.active.reset(token)
+        turn = (len(body.messages) + 1) // 2
+        evidence = {e["ref"]: e for e in prior}
+        evidence.update({e["ref"]: {**e, "turn": turn, "carried": False} for e in current})
+        if len(evidence) > 500:
+            raise HTTPException(413, "Too much evidence for one answer. Narrow the sources or question.")
+        entries = list(evidence.values())
+        return {**result, "scope": scope.model_dump(), "evidence": entries,
+                "citations": ask_context.citations(result["answer"], entries, scope)}
