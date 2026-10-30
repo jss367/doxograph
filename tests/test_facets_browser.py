@@ -114,6 +114,23 @@ def test_facets_filter_edit_and_color_the_map(engine):
                 if engine == "chromium":
                     await page.screenshot(path=".context/facets-map.png")
 
+                # A paper the filter dims opens onto its claims: the filter gives
+                # way, and Back returns to the filtered map.
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                node = next(n for n in graph["nodes"] if n["id"] == "p:two")
+                canvas = page.locator(".graph-wrap canvas")
+                await canvas.scroll_into_view_if_needed()
+                box = await canvas.bounding_box()
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                await page.mouse.click(sx, sy)
+                await expect(page.locator(".claim[data-claim='two-c1']")).to_be_visible()
+                assert "facet=" not in page.url
+                await page.go_back()
+                await expect(chips.get_by_role("button", name="Remove filter: model: GPT-4", exact=True)).to_be_visible()
+                await expect(page.locator("[data-graph-opt='color']")).to_be_visible()
+
                 # Renaming a value rewrites it on every claim and follows the filter.
                 await chips.get_by_role("button", name="Clear all", exact=True).click()
                 await page.locator("#facets details[data-facet='model'] [data-facet-value='Llama 3 8B']").click()

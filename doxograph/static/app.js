@@ -1917,6 +1917,12 @@ function keepLabelFor(key) {
   if (V.label && paper && findLabel(paper.labels, V.label) === undefined) V.label = null;
 }
 
+// The same for a facet filter: a paper none of whose claims carries the value
+// would open with every claim filtered away, so the filter gives way to it.
+function keepFacetFor(key) {
+  if (V.facet && key && !S.claims.some((row) => row.paper === key && hasFacetFilter(row))) V.facet = null;
+}
+
 // The keys the label filter allows, or null when no label is chosen. A label
 // belongs to the paper, so it narrows the claims by way of the papers that
 // carry it rather than by anything on the claim itself.
@@ -3542,8 +3548,9 @@ function openPaper(paper) {
   captureOpenEditor();
   closeEditorsNotBelongingTo(paper);
   showView('claims');
-  // Papers opened from another view may be outside the current label filter.
+  // Papers opened from another view may be outside the current label or facet filter.
   keepLabelFor(paper);
+  keepFacetFor(paper);
   V.paper = paper; V.tag = null; V.selectedId = null;
   syncHash(true);
   renderAll();

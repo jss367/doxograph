@@ -741,8 +741,10 @@ function graphOpenPaper(key) {
   closeEditorsNotBelongingTo(key);
   showView('claims');
   // The map leaves the papers a filter excludes on screen and clickable, so
-  // the label has to give way here for a dimmed one to open onto anything.
+  // the label or facet filter has to give way here for a dimmed one to open
+  // onto anything.
   keepLabelFor(key);
+  keepFacetFor(key);
   V.paper = key; V.tag = null; V.selectedId = null;
   syncHash(true);   // leaving the map is navigation: Back returns to it
   renderAll();
