@@ -846,7 +846,9 @@ paper by the value most of its claims carry, with a legend for the values on
 screen.
 
 Values are open, so a new model name needs no approval. Spellings that differ
-only in case or spacing are one value, written as most claims write it.
+only in case or spacing are one value, written as most claims write it. Commas
+separate values in the claim editor, so a value cannot contain one; a comma in
+a value read from a paper is kept as a space.
 **Rename or merge values** rewrites the values you pick on every claim, and
 remembers the old spellings, so a later read that writes `gpt-4-0613` records
 it as the `GPT-4` you merged it into. Leaving the new name empty removes the

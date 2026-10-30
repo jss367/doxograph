@@ -1413,7 +1413,7 @@ def facet_basis(facet: dict) -> str:
 
 def facet_value_key(value: str) -> str:
     """What makes two values one: case and spacing, as for labels."""
-    return label_key(" ".join(value.split()))
+    return label_key(facet_value_text(value))
 
 
 def facet_spellings(rows: list[dict], facets: list[dict]) -> dict[str, dict[str, str]]:
@@ -1424,13 +1424,21 @@ def facet_spellings(rows: list[dict], facets: list[dict]) -> dict[str, dict[str,
     return {name: {facet_value_key(value): value for value in values} for name, values in counts.items()}
 
 
+def facet_value_text(value: str) -> str:
+    """A value as it is stored. Commas separate values in the editor, as they
+    separate labels, so a value cannot hold one: a comma inside a value read
+    from a paper becomes a space, and "Llama 2, 7B" is kept as one value
+    rather than split into two by the next save."""
+    return " ".join(value.replace(",", " ").split())
+
+
 def clean_facet_values(values: Any, facet: dict, known: dict[str, str] | None = None) -> list[str]:
-    """A facet's values as they are stored: whitespace collapsed, aliases
-    applied, one spelling per value, sorted."""
+    """A facet's values as they are stored: commas and whitespace collapsed,
+    aliases applied, one spelling per value, sorted."""
     aliases = facet.get("aliases") or {}
     cleaned: dict[str, str] = {}
     for value in values if isinstance(values, list) else []:
-        if not isinstance(value, str) or not (value := " ".join(value.split())):
+        if not isinstance(value, str) or not (value := facet_value_text(value)):
             continue
         key = facet_value_key(value)
         if key in aliases:
@@ -1627,7 +1635,7 @@ def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict]:
     """Rename one value, merge several into one, or with an empty `new`
     remove them, on every claim. The old spellings become aliases, so a later
     read writes the new value in their place, or drops them."""
-    new = " ".join(new.split())
+    new = facet_value_text(new)
     with facets_lock():
         facets = load_facets()
         facet = next((facet for facet in facets if facet["name"] == name), None)

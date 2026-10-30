@@ -322,7 +322,7 @@ def facets_block(facets: list[dict], known: dict[str, dict[str, str]]) -> str:
         return ""
     lines = [
         "Facets to record on every claim, under `facets`. List each value that applies to "
-        "the claim, one name per entry, as specific as the paper is. Leave a list empty "
+        "the claim, one name per entry and without commas, as specific as the paper is. Leave a list empty "
         "when nothing applies. When a value is one already in use, write it as it is "
         "written here."
     ]

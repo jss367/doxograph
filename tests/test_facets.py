@@ -647,3 +647,28 @@ def test_restoring_an_entry_from_before_facets_keeps_the_claim_filled(api, monke
     assert claims()[first]["text"] == "An older wording."
     assert claims()[first]["facets"] == {"model": ["GPT-4"]}
     assert store.stale_facets(store.load_paper("doe2026study"), store.load_facets()) == []
+
+
+def test_a_comma_inside_a_value_survives_an_unrelated_edit(corpus):
+    """The editor splits on commas, so no stored value holds one: a value read
+    as "Llama 2, 7B" is stored as one value and comes back from the editor's
+    comma-separated field unchanged."""
+    first, _ = corpus
+    store.add_facet("model", "models")
+    facet = store.load_facets()[0]
+    assert store.clean_facet_values(["Llama 2, 7B", "llama 2 7b"], facet) == ["Llama 2 7B"]
+    paper = store.load_paper("doe2026study")
+    claim = next(c for c in paper["claims"] if c["id"] == first)
+    claim["facets"] = store.clean_claim_facets({"model": ["Llama 2, 7B", "GPT-4"]}, [facet])
+    store.save_paper(paper)
+
+    # What the editor sends back for an untouched field: the values joined
+    # with ", " and split on commas again.
+    shown = ", ".join(claims()[first]["facets"]["model"])
+    sent = [v.strip() for v in shown.split(",") if v.strip()]
+    store.update_claim("doe2026study", first, {"text": "Reworded.", "facets": {"model": sent}})
+
+    assert claims()[first]["facets"] == {"model": ["GPT-4", "Llama 2 7B"]}
+    assert "facets_hand" not in claims()[first]
+    store.rewrite_facet_values("model", ["Llama 2 7B"], "Llama 2, 13B")
+    assert claims()[first]["facets"] == {"model": ["GPT-4", "Llama 2 13B"]}

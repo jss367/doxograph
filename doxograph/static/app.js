@@ -1934,7 +1934,7 @@ function facetFilter() {
 
 // Values are one value in any case or spacing, as `store.facet_value_key` decides.
 function facetValueKey(value) {
-  return foldLabel(String(value).split(/\s+/).filter(Boolean).join(' '));
+  return foldLabel(String(value).replace(/,/g, ' ').split(/\s+/).filter(Boolean).join(' '));
 }
 
 function hasFacetFilter(row) {
