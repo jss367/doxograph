@@ -73,6 +73,8 @@ class SavedSearch(Model):
     paper: str | None = None
     tag: str | None = None
     label: str | None = None
+    # One facet value, as `name:value`.
+    facet: str | None = Field(default=None, max_length=500)
     kind: str = ""
     unreviewed: bool = False
     unverified: bool = False
@@ -302,7 +304,7 @@ def bulk(body: Bulk) -> dict:
 # Only editable fields are captured; uploads, credentials and analysis caches
 # have no place in the reader's history.
 def claim_fields(claim: dict) -> dict:
-    defaults = {"text": "", "kind": "finding", "strength": "supporting", "tags": [],
+    defaults = {"text": "", "kind": "finding", "strength": "supporting", "tags": [], "facets": {}, "facets_hand": [],
                 "evidence": "", "quote": "", "locator": "", "ledger_links": [],
                 "note": "", "reviewed": False, "conditions": "", "limitations": "",
                 "evidence_origin": "", "evidence_relationship": "unassessed"}
@@ -354,8 +356,8 @@ class Restore(Model):
 
 @router.post("/history/{key}/restore")
 def restore(key: str, body: Restore) -> dict:
-    # Vocabulary precedes the paper lock, as it does during topic renames.
-    with store.vocab_lock(), store.paper_lock(key):
+    # Facets, then vocabulary, then the paper, as during facet and topic rewrites.
+    with store.facets_lock(), store.vocab_lock(), store.paper_lock(key):
         try:
             paper = store.load_paper(key)
             entry = next(e for e in paper.get("history", []) if e["id"] == body.revision)
@@ -382,7 +384,21 @@ def restore(key: str, body: Restore) -> dict:
             fields["tags"] = sorted(set(fields.get("tags", [])) & vocabulary)
             if current_review is not None:
                 fields["reviewed"] = current_review
+            # Values that differ from the claim's present ones were not filled
+            # under the present descriptions; a pass may refill them, unless a
+            # person set them, which the restored `facets_hand` says.
+            # An entry from before facets has none to restore, and leaves the
+            # present values as they are.
+            if "facets" in fields:
+                present = claim.get("facets") or {}
+                basis = {name: value for name, value in (claim.get("facet_basis") or {}).items()
+                         if fields["facets"].get(name, []) == present.get(name, [])}
+                if basis:
+                    claim["facet_basis"] = basis
+                else:
+                    claim.pop("facet_basis", None)
             claim.update(fields)
+            store.reconcile_claim_facets(claim, store.load_facets())
             store.check_quote(key, claim)
             claim["updated"] = store.now()
             store.refresh_status(paper)

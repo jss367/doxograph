@@ -31,6 +31,12 @@ class Claim(Document):
     kind: str = "finding"
     strength: str = "supporting"
     tags: list[str] = Field(default_factory=list)
+    facets: dict[str, list[str]] = Field(default_factory=dict)
+    # The facets a person set on this claim, which no pass overwrites.
+    facets_hand: list[str] = Field(default_factory=list)
+    # Each facet's definition, by `store.facet_basis`, as it was when a pass
+    # last gave this claim values for it.
+    facet_basis: dict[str, str] = Field(default_factory=dict)
     evidence: str = ""
     quote: str = ""
     locator: str = ""

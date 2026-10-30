@@ -105,8 +105,9 @@ save Claude Code sessions. Removing a paper while using a subscription still req
 if that paper has older Anthropic uploads to delete.
 
 The ChatGPT route sends extracted PDF text with page numbers, up to 600,000
-characters including the conversation. Figures and scanned pages are unavailable;
-a paper without readable text requires one of the Claude options. Codex runs in
+characters including the conversation. Figures and scanned pages in PDFs are
+unavailable; attached images are sent directly to Codex. A paper without readable
+text requires one of the Claude options. Codex runs in
 a temporary directory with shell commands, browsing, hooks, plugins, apps, and
 delegation disabled. User `config.toml` settings and project instructions are
 excluded, and the run is ephemeral. **Codex still loads global instructions**
@@ -182,6 +183,23 @@ Failed requests keep the draft for an explicit retry. Removing a paper preserves
 its conversations and saved evidence; repair unavailable sources before another
 question. Saved notes remain independent of their conversations.
 
+Use **Attach files…**, drop files into the chat, or paste an image into the
+question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files
+(including Markdown, CSV, JSON, and source code) are supported. You can send files
+with or without a typed question, preview images, remove files before sending,
+and download them from saved messages. Up to five files per message, 4 MB per
+file, and 6 MB total across a conversation are allowed. PDFs must be unencrypted
+and have at most 100 pages. Files are sent to the selected agent on each follow-up
+and saved inside the workspace conversation, including in workspace exports;
+they are not imported as library papers. Unsent files stay in the current tab,
+including after a failed request, and are lost on reload.
+
+Claude receives images and PDFs directly. Codex receives images and extracted,
+page-numbered PDF text. API and local providers receive images using their vision
+input format and extracted PDF text; choose a model that supports images. Scanned
+PDF attachments require Claude or OCR first. Combined provider input limits still
+apply, including the original paper in paper chat.
+
 ## Ask the library
 
 **Ask the library** opens the shared panel and resumes its current conversation.
@@ -230,6 +248,11 @@ doxograph tags                        # topics and their use counts
 doxograph label                       # labels in use, and how many papers carry each
 doxograph label <key> open-source     # label one paper, replacing the labels it has
 doxograph label <key> "open source" "reading list"  # quote labels containing spaces
+doxograph facet                       # facets defined, and how many papers each has left to fill
+doxograph facet model "The language models a result was measured on"  # define a facet, or change what it asks
+doxograph facet model                 # a facet's values, and how many claims carry each
+doxograph facet model --remove        # delete a facet and its values
+doxograph fill-facets                 # fill in facets added or redescribed since papers were read
 doxograph export --out notes.html     # one self-contained HTML file
 doxograph bibtex --out refs.bib
 ```
@@ -722,7 +745,9 @@ text/<key>.txt       its text, extracted once and reused (pages split by \f)
 locks/               lock files, so two processes do not write at once
 retired-keys.json    keys of removed papers, never issued again
 pending-topic-change.json  unfinished topic rename or deletion, when recovery is needed
+pending-facet-change.json  unfinished facet deletion or value rename, when recovery is needed
 tags.yaml            the topic vocabulary
+facets.yaml          the facets you defined, and the value aliases from merges
 tensions.json        where papers disagree, and what you decided about each
 syntheses.json       what the papers hold on each topic
 ledger.yaml          your own claims, for linking against
@@ -822,6 +847,41 @@ Labels are searched along with everything else, so `huggingface` in the search
 box finds the papers carrying it and their claims. `doxograph label` reads and
 sets them from the shell. They live on the paper in `papers/<key>.json`,
 under `labels`.
+
+### Facets on claims
+
+A facet is a question you ask of every claim whose answer is a short list of
+names: which models a result was measured on, which datasets, which
+intervention. Facets are yours to define, and a workspace has none until you
+add one. **New facet** under **Facets** in the sidebar asks for a short name
+and one line saying what to record. That line goes into the extraction
+prompt, so every paper read afterwards comes back with values for it on each
+claim.
+
+Papers read before a facet existed, or before its description last changed,
+are counted under the facet as not yet filled in. So is a paper with a claim
+a pass left alone: one a re-read kept, or one edited while the model was
+answering. **Fill in** sends the claims still missing values, with their
+evidence and quotes, to the model, one call per paper, without the PDFs. `doxograph fill-facets` does the same from the shell. Values you set by
+hand in a claim's editor are yours: neither the fill nor a re-read replaces
+them, and a re-read keeps the claim.
+
+Each value in the sidebar filters the claims and papers to those carrying it,
+and the map dims the papers without it. **Color by** above the map colors each
+paper by the value most of its claims carry, with a legend for the values on
+screen.
+
+Values are open, so a new model name needs no approval. Spellings that differ
+only in case or spacing are one value, written as most claims write it. Commas
+separate values in the claim editor, so a value cannot contain one; a comma in
+a value read from a paper is kept as a space.
+**Rename or merge values** rewrites the values you pick on every claim, and
+remembers the old spellings, so a later read that writes `gpt-4-0613` records
+it as the `GPT-4` you merged it into. Leaving the new name empty removes the
+values and keeps later reads from writing them. Changing a facet's description
+marks its values on every paper as needing to be filled in again. Deleting a
+facet removes its values from every claim. Facets live in `facets.yaml`, and
+values on each claim in `papers/<key>.json` under `facets`.
 
 ### ledger.yaml
 

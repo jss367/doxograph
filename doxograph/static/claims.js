@@ -20,7 +20,7 @@ function startClaimFromPassage(paper, passage) {
 function blankClaim(paper) {
   return {
     id: NEW_CLAIM_ID, paper, text: '', kind: S.kinds[0] || 'finding',
-    strength: 'supporting', tags: [], evidence: '', quote: '', locator: '',
+    strength: 'supporting', tags: [], facets: {}, evidence: '', quote: '', locator: '',
     ledger_links: [], note: '', conditions: '', limitations: '', evidence_origin: '', evidence_relationship: 'unassessed', reviewed: true, paper_title: '', paper_authors: [], paper_year: null,
   };
 }
@@ -28,7 +28,7 @@ function blankClaim(paper) {
 function newClaimHasEdits(draft) {
   if (!draft) return false;
   const blank = blankClaim(draft.paper);
-  return ['text', 'kind', 'strength', 'tags', 'evidence', 'quote', 'locator',
+  return ['text', 'kind', 'strength', 'tags', 'facets', 'evidence', 'quote', 'locator',
     'ledger_links', 'note', 'reviewed', 'conditions', 'limitations', 'evidence_origin', 'evidence_relationship'].some((field) =>
     JSON.stringify(draft[field]) !== JSON.stringify(blank[field]));
 }
@@ -104,6 +104,8 @@ function claimCard(row, shown, group = '') {
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
   const tags = (row.tags || []).map((t) => `<span class="tag" data-tag="${esc(t)}">#${esc(t)}</span>`).join(' ');
+  const facetChips = claimFacetValues(row).map(([name, value]) => `<span class="facet-value"
+    data-facet="${esc(name)}" data-facet-value="${esc(value)}" title="Filter by ${esc(name)}: ${esc(value)}"><span class="facet-name">${esc(name)}</span> ${esc(value)}</span>`).join(' ');
   const links = (row.ledger_links || []).map((l) => {
     const own = S.ledger.find((c) => c.id === l.claim);
     return `<div class="link"><span class="rel">${esc(l.relation)}</span>
@@ -115,6 +117,7 @@ function claimCard(row, shown, group = '') {
     <p class="ctext"><span class="kind ${esc(row.kind)}">${esc(row.kind)}</span> ${esc(row.text)}</p>
     <div class="cmeta">
       ${tags}
+      ${facetChips}
       <span data-act="open-paper" data-paper="${esc(row.paper)}" style="cursor:pointer"
         title="${esc(row.paper_title || row.paper)}">${esc(cite)}</span>
       ${row.locator ? '· ' + esc(row.locator) : ''}
@@ -302,6 +305,11 @@ function editForm(row, tagListId = 'taglist') {
         <div><label>Topics (space separated)</label>
           <input name="tags" value="${esc((row.tags || []).join(' '))}" list="${esc(tagListId)}" size="34"></div>
       </div>
+      ${(S.facets || []).length ? `<div class="pair facet-fields">${S.facets.map((facet, i) => `
+        <div><label title="${esc(facet.description || '')}">${esc(facet.name)} (comma separated)</label>
+          <input data-facet-input="${esc(facet.name)}" value="${esc((facetEntry(row.facets, facet.name) || []).join(', '))}"
+            data-facet-base="${esc(JSON.stringify(facetEntry(row.facetsBase || row.facets, facet.name) || []))}"
+            list="${esc(`${tagListId}-facet-${i}`)}" size="28"></div>`).join('')}</div>` : ''}
       <div><label>Evidence</label><textarea name="evidence" rows="2">${esc(row.evidence || '')}</textarea></div>
       <details class="evidence-assessment" ${row.conditions || row.limitations || row.evidence_origin || (row.evidence_relationship && row.evidence_relationship !== 'unassessed') ? 'open' : ''}><summary>Your evidence assessment</summary>
         <p class="hint">Your assessment is kept locally and preserved when the paper is re-read.</p>
@@ -323,6 +331,8 @@ function editForm(row, tagListId = 'taglist') {
       </div>
     </form>
     <datalist id="${esc(tagListId)}">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join('')}</datalist>
+    ${(S.facets || []).map((facet, i) => `<datalist id="${esc(`${tagListId}-facet-${i}`)}">${Object.keys(facetEntry(S.facet_counts, facet.name) || {})
+      .map((value) => `<option value="${esc(value)}">`).join('')}</datalist>`).join('')}
   </div>`;
 }
 
@@ -639,6 +649,40 @@ async function patchClaim(paper, claim, patch) {
   }
 }
 
+// The facet inputs, as the `facets` a claim stores: a facet with no values is
+// left out, as the store leaves it out. Nothing when no facet is defined, so
+// a form without the inputs does not clear values it never showed.
+//
+// `facetsBase` is what each field showed when the editor opened, kept on the
+// draft so a redraw does not move it. A save sends only the facets that
+// differ from it: a fill landing while the form is open is newer than the
+// values the form was drawn with, and an unrelated edit must not undo it.
+function facetFields(form) {
+  const inputs = [...form.querySelectorAll('[data-facet-input]')];
+  if (!inputs.length) return {};
+  const facets = {}, facetsBase = {};
+  for (const input of inputs) {
+    const values = input.value.split(',').map((v) => v.trim()).filter(Boolean);
+    if (values.length) facets[input.dataset.facetInput] = values;
+    const base = JSON.parse(input.dataset.facetBase || '[]');
+    if (base.length) facetsBase[input.dataset.facetInput] = base;
+  }
+  return { facets, facetsBase };
+}
+
+// A form's patch as the server takes it: the facets narrowed to the ones the
+// person changed, an emptied one sent as an empty list to clear it.
+function claimRequestBody(patch) {
+  const { facets, facetsBase, ...body } = patch;
+  if (!facets) return body;
+  const changed = {};
+  for (const facet of S.facets || []) {
+    const now = facetEntry(facets, facet.name) || [], base = facetEntry(facetsBase, facet.name) || [];
+    if (JSON.stringify(now) !== JSON.stringify(base)) changed[facet.name] = now;
+  }
+  return Object.keys(changed).length ? { ...body, facets: changed } : body;
+}
+
 function readForm(form) {
   const value = (name) => (form.querySelector(`[name="${name}"]`) || {}).value || '';
   const links = [...form.querySelectorAll('.linkrow')].map((rowEl) => ({
@@ -656,6 +700,7 @@ function readForm(form) {
     conditions: value('conditions').trim(), limitations: value('limitations').trim(),
     evidence_origin: value('evidence_origin').trim(), evidence_relationship: value('evidence_relationship') || 'unassessed',
     tags: value('tags').split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean),
+    ...facetFields(form),
     ledger_links: links,
     // `[name="note"]` is the claim's own; a link's is `link-note`, read above.
     note: value('note').trim(),
@@ -696,7 +741,7 @@ async function saveClaim(wrap, patch) {
     if (!patch.text) { V.editing = null; V.newClaim = null; renderContent(); return; }
     try {
       await api(`/api/papers/${encodeURIComponent(paper)}/claims`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(claimRequestBody(patch)),
       });
     } catch (error) {
       // As on the success path: an existing claim's editor may have been
@@ -732,7 +777,7 @@ async function saveClaim(wrap, patch) {
 
   V.editing = null;
   try {
-    await patchClaim(wrap.dataset.paper, wrap.dataset.claim, patch);
+    await patchClaim(wrap.dataset.paper, wrap.dataset.claim, claimRequestBody(patch));
     delete V.drafts[wrap.dataset.claim];
     // `render` leaves the content alone while another editor is open — a
     // synthesis, a note — so the saved claim's form would stay on screen with

@@ -8,12 +8,15 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     ledger: [], context: '', tensions: [], agreements: [], syntheses: [], kinds: [],
     strengths: [], relations: [], jobs: [], has_key: true });
   let state = emptyState(), workspaces = [], etag = null, epoch = 0;
-  let pendingMutations = 0, pullsAsked = 0, pullSettled = 0;
+  // `pullsInFlight` counts reads not yet answered, from the poller or from a
+  // refresh after an action alike, for anything that must wait them out.
+  let pendingMutations = 0, pullsAsked = 0, pullSettled = 0, pullsInFlight = 0;
 
   async function checkResponse(response) {
     if (!response.ok) {
       let detail = response.statusText;
       try { detail = (await response.json()).detail || detail; } catch (_) { /* keep statusText */ }
+      if (Array.isArray(detail)) detail = [...new Set(detail.map(issue => issue.msg || 'Invalid input.'))].join(' ');
       throw Object.assign(new Error(detail), { status: response.status });
     }
     return response;
@@ -55,6 +58,11 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
   }
 
   async function pull() {
+    pullsInFlight += 1;
+    try { return await readState(); } finally { pullsInFlight -= 1; }
+  }
+
+  async function readState() {
     const requestedEpoch = epoch, asked = ++pullsAsked;
     const headers = new Headers({ 'X-Doxograph-Workspace': workspaceId });
     if (etag) headers.set('If-None-Match', etag);
@@ -117,6 +125,7 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
     get workspaceId() { return workspaceId; },
     get workspaces() { return workspaces; },
     get pendingMutations() { return pendingMutations; },
+    get pullsInFlight() { return pullsInFlight; },
     request, response, pull, select, loadWorkspaces, currentWorkspace,
     setWorkspaces(value) { workspaces = value; },
     invalidateState() { etag = null; },

@@ -84,10 +84,13 @@ def test_paper_overview_keeps_context_notes_and_reading_position(engine, width):
                 await overview.locator('[data-act="save-note"]').click()
                 await ready(page)
                 await expect(overview.locator('.note')).to_contain_text('An unfinished thought about these conditions.')
-                # Reloading cancels a background poll still in flight, which Linux WebKit
-                # reports as an access-control page error. Let polling settle first.
+                # Reloading cancels a library read still in flight, which Linux WebKit
+                # reports as an access-control page error. Reads come from the poller
+                # and also from the refresh after an action such as saving the note
+                # or turning the page, so stop the poller and wait out every read.
                 await page.evaluate('poller.stop()')
-                await page.evaluate('async () => { if (poller.running) await poller.once().catch(() => {}); }')
+                await page.wait_for_function(
+                    'workspaceClient.pullsInFlight === 0 && workspaceClient.pendingMutations === 0')
                 await page.reload()
                 await expect(page.locator('#reader-page')).to_have_value('3')
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('Reading · Page 3')

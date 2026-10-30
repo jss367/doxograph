@@ -13,7 +13,7 @@ function focusClaimSearch() {
 
 // --- filtering ------------------------------------------------------------
 
-const FILTER_DEFAULTS = { paper: null, tag: null, label: null, q: '', kind: '',
+const FILTER_DEFAULTS = { paper: null, tag: null, label: null, facet: null, q: '', kind: '',
   unreviewed: false, unverified: false, tensionStatus: '', agreementStatus: '',
   tensionFocus: null, agreementFocus: null };
 let activeFiltersHTML = null;
@@ -24,6 +24,7 @@ function renderActiveFilters() {
   add('paper', `Paper: ${S.papers.find((p) => p.key === V.paper)?.title || V.paper}`);
   add('tag', `Topic: ${V.tag}`);
   add('label', `Label: ${V.label}`);
+  if (facetFilter()) add('facet', `${facetFilter().name}: ${facetFilter().value}`);
   if (V.q.trim()) add('q', `Search: ${V.q.trim()}`);
   add('kind', `Kind: ${V.kind}`);
   add('unreviewed', 'Unreviewed');
@@ -172,7 +173,7 @@ function haystack(row) {
   return [row.text, row.evidence, row.quote, row.note, row.paper, row.paper_title,
           row.paper_year, (row.paper_authors || []).join(' '),
           paperSearchTextFor(row.paper), (row.tags || []).join(' '),
-          (row.paper_labels || []).join(' ')]
+          (row.paper_labels || []).join(' '), Object.values(row.facets || {}).flat().join(' ')]
     .join(' ').toLowerCase();
 }
 
@@ -314,9 +315,10 @@ function matchingPapers() {
 // A paper appears once, even when several of its claims match. Papers without
 // extracted claims still belong in the library and can match their metadata.
 function visiblePapers() {
-  const claimFilters = V.tag || V.kind || V.unreviewed || V.unverified;
+  const claimFilters = V.tag || V.facet || V.kind || V.unreviewed || V.unverified;
   const owners = claimFilters ? new Set(S.claims.filter(row =>
     (!V.tag || (row.tags || []).includes(V.tag))
+    && hasFacetFilter(row)
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)).map(row => row.paper)) : null;
@@ -337,12 +339,75 @@ function keepLabelFor(key) {
   if (V.label && paper && findLabel(paper.labels, V.label) === undefined) V.label = null;
 }
 
+// The same for a facet filter: a paper none of whose claims carries the value
+// would open with every claim filtered away, so the filter gives way to it.
+function keepFacetFor(key) {
+  if (V.facet && key && !S.claims.some((row) => row.paper === key && hasFacetFilter(row))) V.facet = null;
+}
+
 // The keys the label filter allows, or null when no label is chosen. A label
 // belongs to the paper, so it narrows the claims by way of the papers that
 // carry it rather than by anything on the claim itself.
 function labelledPapers() {
   if (!V.label) return null;
   return new Set(S.papers.filter((p) => findLabel(p.labels, V.label) !== undefined).map((p) => p.key));
+}
+
+// A facet filter is one value of one facet, held as `name:value`. Facet names
+// are slugs, so the first colon is the one between them.
+function facetFilter() {
+  const at = (V.facet || '').indexOf(':');
+  return at > 0 ? { name: V.facet.slice(0, at), value: V.facet.slice(at + 1) } : null;
+}
+
+// Values are one value in any case or spacing, as `store.facet_value_key` decides.
+// A value on file takes the server's key, as a label does, so the page never
+// joins two values the server keeps apart. The separators are the server's
+// `FACET_SPACE`: the browser's whitespace, Python's, and commas.
+function facetValueKey(value) {
+  const text = String(value);
+  if (Object.hasOwn(S.facet_value_keys || {}, text)) return S.facet_value_keys[text];
+  return foldLabel(text.replace(/[\s\x1c-\x1f\x85,]+/g, ' ').replace(/^ +| +$/g, ''));
+}
+
+// A facet's entry in a dictionary keyed by facet name. Own properties only: a
+// facet may be named "constructor", which every object inherits.
+function facetEntry(dict, name) {
+  return dict && Object.hasOwn(dict, name) ? dict[name] : undefined;
+}
+
+function hasFacetFilter(row) {
+  const filter = facetFilter();
+  if (!filter) return true;
+  const key = facetValueKey(filter.value);
+  return (facetEntry(row.facets, filter.name) || []).some((value) => facetValueKey(value) === key);
+}
+
+// The defined facets' values on a claim, in the order the facets are defined.
+function claimFacetValues(row) {
+  return (S.facets || []).flatMap((facet) =>
+    (facetEntry(row.facets, facet.name) || []).map((value) => [facet.name, value]));
+}
+
+// As `chooseLabel`: a paper open on screen with no claim carrying the value is
+// left, rather than standing there with every claim filtered away.
+function chooseFacet(name, value) {
+  const filter = facetFilter();
+  V.facet = filter && filter.name === name && facetValueKey(filter.value) === facetValueKey(value)
+    ? null : `${name}:${value}`;
+  if (V.facet && V.paper && !S.claims.some((row) => row.paper === V.paper && hasFacetFilter(row))) {
+    captureOpenEditor();
+    parkNewClaimForNavigation(null);
+    parkSynthEditor();
+    // The paper's note editor holds the content pane; parked, its draft is
+    // kept and the claims under the new filter can be drawn.
+    parkNoteEditor();
+    V.paper = null;
+    V.selectedId = null;
+    V.editing = null;
+  }
+  syncHash(true);
+  renderAll();
 }
 
 function visibleClaims() {
@@ -352,6 +417,7 @@ function visibleClaims() {
     (!V.paper || row.paper === V.paper)
     && (!labelled || labelled.has(row.paper))
     && (!V.tag || (row.tags || []).includes(V.tag))
+    && hasFacetFilter(row)
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)
@@ -382,6 +448,44 @@ function renderLabels() {
       <span>${esc(name)}</span>
       <span class="n">${count}</span>
     </li>`).join('');
+}
+
+// Which facets are open in the sidebar, by name, so a redraw keeps them so.
+const openFacets = new Set();
+let facetsHTML = null;
+
+function renderFacets() {
+  const facets = S.facets || [];
+  const filter = facetFilter();
+  const html = facets.length ? facets.map((facet) => {
+    const counts = Object.entries(facetEntry(S.facet_counts, facet.name) || {});
+    const stale = facetEntry(S.facets_stale, facet.name) || 0;
+    const active = (value) => filter && filter.name === facet.name
+      && facetValueKey(filter.value) === facetValueKey(value);
+    return `<details class="facet" data-facet="${esc(facet.name)}" ${openFacets.has(facet.name) || (filter && filter.name === facet.name) ? 'open' : ''}>
+      <summary title="${esc(facet.description || '')}"><span>${esc(facet.name)}</span>
+        <span class="n">${counts.length} ${counts.length === 1 ? 'value' : 'values'}</span></summary>
+      ${facet.description ? `<p class="hint">${esc(facet.description)}</p>` : ''}
+      ${stale ? `<p class="hint">Not yet filled in on ${stale} ${stale === 1 ? 'paper' : 'papers'}.</p>` : ''}
+      <ul class="taglist">${counts.length ? counts.map(([value, n]) => `
+        <li class="${active(value) ? 'active' : ''}" data-facet-value="${esc(value)}">
+          <span>${esc(value)}</span><span class="n">${n}</span></li>`).join('')
+        : '<li class="hint">No values yet.</li>'}</ul>
+      <div class="row facet-actions">
+        <button type="button" class="mini" data-facet-act="describe">Edit description</button>
+        <button type="button" class="mini" data-facet-act="values" ${counts.length ? '' : 'disabled'}>Rename or merge values</button>
+        <button type="button" class="mini" data-facet-act="delete">Delete</button>
+      </div>
+    </details>`;
+  }).join('') : '<p class="hint">A facet records something about every claim, such as the models or datasets behind it.</p>';
+  // Polls should leave a focused value or an open disclosure where it is.
+  if (facetsHTML !== html) {
+    $('facets').innerHTML = html;
+    facetsHTML = html;
+  }
+  const toFill = S.facet_papers_to_fill || 0;
+  $('btn-fill-facets').hidden = !toFill;
+  $('btn-fill-facets').textContent = `Fill in ${toFill} ${toFill === 1 ? 'paper' : 'papers'}`;
 }
 
 function renderTags() {
@@ -471,6 +575,129 @@ $('labels').addEventListener('click', (event) => {
   const li = event.target.closest('[data-label]');
   if (!li) return;
   chooseLabel(li.dataset.label);
+});
+
+// `toggle` does not bubble, so it is caught on the way down.
+$('facets').addEventListener('toggle', (event) => {
+  const details = event.target.closest?.('details[data-facet]');
+  if (!details) return;
+  if (details.open) openFacets.add(details.dataset.facet);
+  else openFacets.delete(details.dataset.facet);
+}, true);
+
+// The server's answer to a facet change, or null when the change failed.
+async function facetRequest(path, method, body, failure) {
+  let answer;
+  try {
+    answer = await api(path, { method, headers: { 'Content-Type': 'application/json' },
+                               body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch (error) {
+    toast(`${failure}: ${error.message}`, { tone: 'warn' });
+    return null;
+  }
+  // The change is saved; a read failing after it is a sync problem, which the
+  // sync notice reports and the poll retries, not a failed change.
+  await refreshShowingError();
+  return answer || {};
+}
+
+$('facets').addEventListener('click', async (event) => {
+  const details = event.target.closest('details[data-facet]');
+  if (!details) return;
+  const name = details.dataset.facet;
+  const path = `/api/facets/${encodeURIComponent(name)}`;
+  const value = event.target.closest('[data-facet-value]');
+  if (value) {
+    chooseFacet(name, value.dataset.facetValue);
+    return;
+  }
+  const act = event.target.closest('[data-facet-act]')?.dataset.facetAct;
+  const facet = (S.facets || []).find((f) => f.name === name);
+  if (!act || !facet) return;
+  if (act === 'describe') {
+    const description = await askText(`What should “${name}” record?`, {
+      note: 'This goes into the prompt for every claim. Changing it marks the values on every paper to be filled in again.',
+      value: facet.description || '',
+    });
+    if (description === null || description.trim() === (facet.description || '')) return;
+    await facetRequest(path, 'PATCH', { description }, 'Could not save the description');
+  } else if (act === 'values') {
+    const values = Object.keys(facetEntry(S.facet_counts, name) || {});
+    const chosen = await askDialog({
+      title: `Which ${name} values?`,
+      note: 'Click the values to rename, merge, or remove.',
+      input: { placeholder: 'values, separated by commas', value: '' },
+      labelChoices: values, ok: 'Next',
+    });
+    if (chosen === null) return;
+    const picked = parseLabels(chosen);
+    if (!picked.length) return;
+    const into = await askText(picked.length === 1 ? `Rename “${picked[0]}” to` : `Merge ${picked.length} values into`, {
+      note: 'Every claim carrying them gets this value instead, and later reads write it too. Leave it empty to remove them.',
+      placeholder: 'leave empty to remove',
+      value: picked.length === 1 ? picked[0] : '',
+    });
+    if (into === null) return;
+    if (!into.trim() && !await confirmDialog(`Remove ${picked.length === 1 ? `“${picked[0]}”` : `${picked.length} values`} from every claim?`, {
+      note: 'Later reads will leave them out too.', ok: 'Remove',
+    })) return;
+    // Read before the request: its refresh drops a filter on a value that is
+    // gone, and the filter should follow the value to its new name instead.
+    const filter = facetFilter();
+    const answer = await facetRequest(`${path}/values`, 'POST', { values: picked, into }, 'Could not change the values');
+    if (answer) {
+      if (filter && filter.name === name && picked.some((v) => facetValueKey(v) === facetValueKey(filter.value))) {
+        // The value the claims carry now, which the server resolved through
+        // the aliases: a merge into an old spelling lands on what it became.
+        const value = typeof answer.value === 'string' ? answer.value : into.trim();
+        V.facet = value ? `${name}:${value}` : null;
+        syncHash();
+        renderAll();
+      }
+    }
+  } else if (act === 'delete') {
+    const counts = Object.values(facetEntry(S.facet_counts, name) || {}).reduce((a, b) => a + b, 0);
+    if (!await confirmDialog(`Delete the facet “${name}”?`, {
+      note: counts ? `Its values come off ${counts} ${counts === 1 ? 'claim' : 'claims'}, including any you set by hand.` : '',
+      ok: 'Delete facet',
+    })) return;
+    await facetRequest(path, 'DELETE', undefined, 'Could not delete the facet');
+  }
+});
+
+$('btn-facet').addEventListener('click', async () => {
+  const name = await askText('New facet', {
+    note: 'A short name for what to record about each claim, such as model, dataset, or intervention.',
+    placeholder: 'model',
+  });
+  if (!name || !name.trim()) return;
+  const description = await askText(`What should “${name.trim()}” record?`, {
+    note: 'One line telling the model what to list for each claim. It goes into the extraction prompt.',
+    placeholder: 'The specific language models a result was measured on',
+  });
+  if (description === null) return;
+  await facetRequest('/api/facets', 'POST', { name, description }, 'Could not add the facet');
+});
+
+$('btn-fill-facets').addEventListener('click', async () => {
+  const n = S.facet_papers_to_fill || 0;
+  const go = await confirmDialog(`Fill in facets on ${n} ${n === 1 ? 'paper' : 'papers'}?`, {
+    note: 'Each paper’s claims, evidence, and quotes are sent to the model, one call per paper. '
+      + 'The PDFs are not sent. Values you set by hand are left alone.',
+    ok: 'Fill in',
+  });
+  if (!go) return;
+  const workspace = await settleDeletes();
+  if (!workspace) return;
+  try {
+    await api('/api/facets/fill', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...workspace }, body: '{}',
+    });
+  } catch (error) {
+    toast(`Could not fill in the facets: ${error.message}`, { tone: 'warn' });
+    return;
+  }
+  await refreshShowingError();
 });
 
 $('tags').addEventListener('click', (event) => {

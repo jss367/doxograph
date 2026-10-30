@@ -239,6 +239,15 @@
         <h3>Labels</h3>
         <ul class="taglist" id="labels"></ul>
       </div>
+      <div class="sec" id="facets-sec">
+        <h3>Facets</h3>
+        <div id="facets"></div>
+        <div class="row">
+          <button type="button" id="btn-facet">New facet</button>
+          <button type="button" id="btn-fill-facets" data-ai-action disabled hidden style="margin-left:auto"
+            title="Ask the model for the facet values on papers read before a facet was added or redescribed">Fill in</button>
+        </div>
+      </div>
       <div class="sec">
         <h3>Map</h3>
         <ul class="plist" id="graph-nav"></ul>
@@ -452,7 +461,7 @@
   <div class="row"><h2 id="library-agent-title">Ask the library</h2>
     <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
   <p class="hint">Ask about papers and claims in this workspace. Your Doxograph notes stay private.
-    Conversations are saved; you can save any answer as a research note. Check answers against the papers.</p>
+    Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>
   <p class="hint" id="agent-input-format"></p>
   <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
   <div class="row chat-threads">
@@ -469,6 +478,12 @@
     <div id="agent-starters" class="row"></div>
     <label for="agent-question">Question</label>
     <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
+    <div id="agent-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
+    <div class="chat-attachment-picker">
+      <button type="button" id="agent-attach">Attach files…</button>
+      <input type="file" id="agent-files" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.tsv,.json,.jsonl,.log,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.toml,.tex,.rst">
+      <span class="hint">Drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.</span>
+    </div>
     <p class="hint" id="agent-status" role="status"></p>
     <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
       <button type="button" id="agent-clear">New conversation</button>

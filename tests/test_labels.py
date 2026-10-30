@@ -584,6 +584,8 @@ def test_paper_menu_keyboard_focus_survives_dismissal_and_label_saves(engine):
                 await expect(action).to_be_focused()
                 selected_claim = await page.evaluate("V.selectedId")
                 await page.keyboard.press("ArrowDown")
+                await expect(menu.get_by_role("button", name="Edit title…")).to_be_focused()
+                await page.keyboard.press("ArrowDown")
                 await expect(menu.get_by_role("button", name="Remove paper")).to_be_focused()
                 await page.keyboard.press("Home")
                 await expect(action).to_be_focused()

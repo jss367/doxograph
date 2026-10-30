@@ -42,6 +42,7 @@ function renderAgentChat(chat) {
         content.prepend(label);
       }
     }
+    content.insertAdjacentHTML('beforeend', `<div class="chat-attachments">${ChatThreads.attachmentsHTML(m.attachments || [])}</div>`);
     return message;
   });
   $('agent-messages').replaceChildren(...messages);
@@ -53,7 +54,7 @@ function renderAgentChat(chat) {
 
 function libraryAnswerNote(chat, index) {
   const message = chat.messages[index];
-  const question = chat.messages[index - 1]?.content || 'Library synthesis';
+  const question = chat.messages[index - 1]?.content || chat.messages[index - 1]?.attachments?.[0]?.name || 'Library synthesis';
   const title = Array.from(question.replace(/\s+/g, ' ').trim()).slice(0, 160).join('');
   const lookups = (message.activity || []).length
     ? `\n\n## Library lookups\n\n${message.activity.map(a => `- ${a}`).join('\n')}` : '';
@@ -134,12 +135,12 @@ function syncAgentChatControls() {
   const enabled = S.ai_enabled === true;
   const setup = enabled ? '' : 'Enable AI analysis in Settings.';
   const problem = scopeProblem(chat);
-  $('agent-send').disabled = chat.busy || !enabled || Boolean(problem);
+  $('agent-send').disabled = chat.busy || chat.reading || !enabled || Boolean(problem);
   // Polls refresh availability without replacing focused scope controls.
   $('agent-claims-only').hidden = !claimsFallback(chat);
   $('agent-settings').hidden = !setup;
   $('agent-codex-guidance').hidden = chat.agent !== 'codex';
-  $('agent-status').textContent = chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : setup || chat.error || problem || agentChats.issues.join(' ');
+  $('agent-status').textContent = chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
 }
 
 $('btn-agent').addEventListener('click', () => {

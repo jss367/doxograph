@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import anthropic
@@ -61,16 +61,26 @@ class TextClient:
     def create(self, *, max_tokens: int, system: str, messages: list[Message],
                schema: JSONSchema) -> ModelResponse:
         prompt = system + "\n\nReturn only JSON matching this schema:\n" + json.dumps(schema)
-        chat = [{"role": "system", "content": prompt}]
+        chat: list[dict[str, Any]] = [{"role": "system", "content": prompt}]
+        ollama = self.selected.provider == "ollama"
         for message in messages:
             content = message["content"]
+            item: dict[str, Any] = {"role": message["role"], "content": content}
             if isinstance(content, list):
-                if any(block.get("type") != "text" for block in content):
+                if any(block.get("type") not in ("text", "image") for block in content):
                     raise ModelInputError("This provider accepts extracted paper text only")
-                content = "\n\n".join(block["text"] for block in content)
-            chat.append({"role": message["role"], "content": content})
+                images = [block for block in content if block.get("type") == "image"]
+                if not images or ollama:
+                    item["content"] = "\n\n".join(block["text"] for block in content if block.get("type") == "text")
+                    if images:
+                        item["images"] = [block["source"]["data"] for block in images]
+                else:
+                    item["content"] = [
+                        {"type": "image_url", "image_url": {"url":
+                            f"data:{block['source']['media_type']};base64,{block['source']['data']}"}}
+                        if block.get("type") == "image" else block for block in content]
+            chat.append(item)
         body: dict[str, object] = {"model": self.selected.model, "messages": chat, "stream": False}
-        ollama = self.selected.provider == "ollama"
         if ollama:
             # A byte is a conservative token bound for the supplied text.
             # Reserve space for the answer and chat framing; Ollama otherwise

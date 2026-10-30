@@ -59,12 +59,12 @@ const NEW_CLAIM_ID = '__new__';
 // but the reader's, so unlike a synthesis it is saved without flushing the
 // held deletes: no claim is read to write one.
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
-const V = { paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
-            graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
+            graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
 // Whether the paper's PDF is kept out of the claims view. A preference of this
@@ -155,6 +155,7 @@ function currentHash() {
   if (V.paper) params.set('paper', V.paper);
   if (V.tag) params.set('tag', V.tag);
   if (V.label) params.set('label', V.label);
+  if (V.facet) params.set('facet', V.facet);
   if (V.q.trim()) params.set('q', V.q);
   if (V.kind) params.set('kind', V.kind);
   if (V.unreviewed) params.set('unreviewed', '1');
@@ -178,7 +179,7 @@ let restoringHistory = false;
 // the final paper/view. Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
 function navigationVersion() {
-  const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label,
+  const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden]);
   if (route !== navigationRoute) { navigationRoute = route; navigationSeq++; }
   return navigationSeq;
@@ -224,6 +225,14 @@ function dropMissingFilters() {
   // leave a filter on with nothing on screen to turn it off.
   // The filter follows the label to the spelling the sidebar shows now.
   if (V.label) V.label = findLabel(Object.keys(S.label_counts || {}), V.label) || null;
+  // A facet value the corpus no longer holds is dropped the same way, and
+  // follows a value to the spelling the sidebar shows.
+  if (V.facet) {
+    const filter = facetFilter();
+    const values = filter ? Object.keys(facetEntry(S.facet_counts, filter.name) || {}) : [];
+    const value = filter && values.find((v) => facetValueKey(v) === facetValueKey(filter.value));
+    V.facet = value ? `${filter.name}:${value}` : null;
+  }
   if (V.kind && !(S.kinds || []).includes(V.kind)) {
     V.kind = '';
     $('kind').value = '';
@@ -234,6 +243,7 @@ function dropMissingFilters() {
   // and from a hand-written address naming both. The paper wins, as it does on
   // every other path that opens one.
   keepLabelFor(V.paper);
+  keepFacetFor(V.paper);
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -248,6 +258,7 @@ function applyHash() {
   V.paper = V.view === 'library' ? null : params.get('paper') || null;
   V.tag = params.get('tag') || null;
   V.label = params.get('label') || null;
+  V.facet = params.get('facet') || null;
   V.q = params.get('q') || '';
   V.kind = params.get('kind') || '';
   V.unreviewed = params.get('unreviewed') === '1';
@@ -454,12 +465,12 @@ function resetWorkspaceView() {
   S = workspaceClient.state;
   $('sync-status').hidden = true;
   Object.assign(V, {
-    paper: null, tag: null, label: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+    paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
-    graph: { xAxis: 'connections', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
+    graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
@@ -540,6 +551,7 @@ function render() {
   renderGraphNav();
   renderTags();
   renderLabels();
+  renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   renderJobs();
@@ -571,6 +583,7 @@ function renderAll() {
   renderGraphNav();
   renderTags();
   renderLabels();
+  renderFacets();
   renderContent();
   renderJobs();
   syncAnalysisControls();
@@ -1114,6 +1127,7 @@ $('panes').addEventListener('click', async (event) => {
       if (row && !visibleClaims().some((c) => c.id === claim)) {
         if (V.paper && row.paper !== V.paper) V.paper = null;
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
+        if (!hasFacetFilter(row)) V.facet = null;
         keepLabelFor(row.paper);
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
@@ -1212,6 +1226,18 @@ $('panes').addEventListener('click', async (event) => {
       renderContent();
       return;
     }
+    if (act === 'edit-title') {
+      const workspace = workspaceClient.workspaceId;
+      try {
+        await editPaperTitle(paper);
+      } finally {
+        if (workspace === workspaceClient.workspaceId && (document.activeElement === document.body
+            || (!$('ask').open && $('ask').contains(document.activeElement)))) {
+          restorePaperActionCursor({paper, selector: 'summary'});
+        }
+      }
+      return;
+    }
     if (act === 'labels') {
       // Nothing to guard against a removal in flight: the dialog is modal, and
       // a PATCH landing on a paper that has gone comes back 404 and says so.
@@ -1265,6 +1291,11 @@ $('panes').addEventListener('click', async (event) => {
     chooseLabel(labelEl.dataset.label);
     return;
   }
+  const facetEl = event.target.closest('.facet-value[data-facet]');
+  if (facetEl) {
+    chooseFacet(facetEl.dataset.facet, facetEl.dataset.facetValue);
+    return;
+  }
   const card = event.target.closest('.claim[data-claim]');
   if (card && card.dataset.claim !== V.selectedId) {
     // Selecting another claim redraws the list, which would rebuild an open
@@ -1298,6 +1329,8 @@ function graphOption(field) {
   if (name === 'xAxis') {
     V.graph.xAxis = field.value;
     GRAPH.autofit = true;
+  } else if (name === 'color') {
+    V.graph.color = field.value;
   } else if (name === 'minShared') {
     V.graph.minShared = Math.max(1, parseInt(field.value, 10) || 1);
     const label = $('content').querySelector('[data-graph-min]');
@@ -1334,7 +1367,7 @@ async function updateFromPoll() {
   // not anything in the corpus has moved.
   if (citationsFailed && V.view === 'graph') loadCitations();
   renderStats();
-  renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels();
+  renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels(); renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   syncHash();

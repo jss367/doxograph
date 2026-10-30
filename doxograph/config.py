@@ -692,6 +692,10 @@ def ledger_path() -> Path:
     return data_dir() / "ledger.yaml"
 
 
+def facets_path() -> Path:
+    return data_dir() / "facets.yaml"
+
+
 def text_dir() -> Path:
     """Text extracted from the PDFs, one file per paper."""
     return data_dir() / "text"

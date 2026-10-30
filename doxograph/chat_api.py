@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from . import agent, ask_context, chat, chats, config, fingerprint, job_queue, store
+from .chat_attachments import Attachment, check_attachments
 from .model_errors import InputTooLargeError, ModelInputError, ModelSetupError, ProviderResponseError
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ router = APIRouter()
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=32000)
+    content: str = Field(default="", max_length=32000)
+    attachments: list[Attachment] = Field(default_factory=list, max_length=5)
 
 
 class ChatBody(BaseModel):
@@ -36,7 +38,8 @@ class ChatBody(BaseModel):
     @field_validator("messages")
     @classmethod
     def conversation(cls, messages: list[ChatMessage]) -> list[ChatMessage]:
-        if any(m.role != ("user" if i % 2 == 0 else "assistant") or not m.content.strip()
+        check_attachments(messages)
+        if any(m.role != ("user" if i % 2 == 0 else "assistant")
                for i, m in enumerate(messages)) or messages[-1].role != "user":
             raise ValueError("Send alternating user and assistant messages, ending with a question.")
         if sum(len(m.content) for m in messages) > 80000:
@@ -90,7 +93,7 @@ def paper_chat(key: str, body: ChatBody) -> dict[str, Any]:
     job_queue._require_analysis()
     with _chat_errors("Paper chat"), _chat_agent(body.agent):
         try:
-            return chat.answer(key, [message.model_dump() for message in body.messages])
+            return chat.answer(key, [message.model_dump(exclude={"attachments"} if not message.attachments else set()) for message in body.messages])
         except KeyError:
             raise HTTPException(404, f"no paper {key}") from None
 
@@ -135,7 +138,7 @@ class AgentBody(ChatBody):
 def agent_chat(body: AgentBody, request: Request) -> dict[str, Any]:
     job_queue._require_analysis()
     with _chat_errors("Library agent"), _chat_agent(body.agent):
-        return agent.answer([message.model_dump() for message in body.messages],
+        return agent.answer([message.model_dump(exclude={"attachments"} if not message.attachments else set()) for message in body.messages],
                             lambda: _callback_url(request), body.paper)
 
 

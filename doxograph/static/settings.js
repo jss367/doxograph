@@ -25,7 +25,7 @@ function syncAnalysisControls() {
   const providerHelp = {
     api: 'Uses the API or local provider configured below.',
     claude_code: 'Uses your signed-in Claude Code account and its plan limits or credits. Run claude auth login in Terminal first. API billing is never used as a fallback.',
-    codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Includes your global Codex instructions along with extracted PDF text; figures and scanned pages are unavailable. API billing is never used as a fallback.',
+    codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Includes your global Codex instructions along with extracted PDF text. Figures and scanned pages inside PDFs are unavailable; images attached to chats are sent directly. API billing is never used as a fallback.',
   };
   $('ai-access-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
   $('ai-provider-form').hidden = S.ai_provider !== 'api';

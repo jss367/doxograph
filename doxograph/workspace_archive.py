@@ -63,7 +63,7 @@ def _snapshot_locks():
     while True:
         locks = contextlib.ExitStack()
         try:
-            for name in ('vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
+            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
                          'agreements', 'tensions', 'syntheses', 'retired-keys', 'chats'):
                 locks.enter_context(store.document_lock(name, blocking=False))
             keys = store.paper_keys()
@@ -84,6 +84,8 @@ def _snapshot_locks():
         # Leave that work to normal storage recovery, never start it mid-export.
         if store.tag_change_path().exists():
             raise HTTPException(409, 'A topic change needs recovery. Reload the library before exporting.')
+        if store.facet_change_path().exists():
+            raise HTTPException(409, 'A facet change needs recovery. Reload the library before exporting.')
         yield keys
 
 
