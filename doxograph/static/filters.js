@@ -361,8 +361,13 @@ function facetFilter() {
 }
 
 // Values are one value in any case or spacing, as `store.facet_value_key` decides.
+// A value on file takes the server's key, as a label does, so the page never
+// joins two values the server keeps apart. The separators are the server's
+// `FACET_SPACE`: the browser's whitespace, Python's, and commas.
 function facetValueKey(value) {
-  return foldLabel(String(value).replace(/,/g, ' ').split(/\s+/).filter(Boolean).join(' '));
+  const text = String(value);
+  if (Object.hasOwn(S.facet_value_keys || {}, text)) return S.facet_value_keys[text];
+  return foldLabel(text.replace(/[\s\x1c-\x1f\x85,]+/g, ' ').replace(/^ +| +$/g, ''));
 }
 
 // A facet's entry in a dictionary keyed by facet name. Own properties only: a

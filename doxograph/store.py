@@ -1426,12 +1426,27 @@ def facet_spellings(rows: list[dict[str, Any]], facets: list[dict[str, Any]]) ->
     return {name: {facet_value_key(value): value for value in values} for name, values in counts.items()}
 
 
+#: What separates the words of a facet value: Python's whitespace and the
+#: browser's together, so the page and the store make the same key. The
+#: browser counts U+FEFF as whitespace and Python does not; Python counts
+#: U+001C to U+001F and U+0085 and the browser does not. The page's
+#: `facetValueKey` uses the same set, and commas, which separate values.
+FACET_SPACE = re.compile(r"[\s\ufeff,]+")
+
+
 def facet_value_text(value: str) -> str:
     """A value as it is stored. Commas separate values in the editor, as they
     separate labels, so a value cannot hold one: a comma inside a value read
     from a paper becomes a space, and "Llama 2, 7B" is kept as one value
     rather than split into two by the next save."""
-    return " ".join(value.replace(",", " ").split())
+    return FACET_SPACE.sub(" ", value).strip(" ")
+
+
+def facet_value_keys(counts: dict[str, dict[str, int]]) -> dict[str, str]:
+    """Each value on file's key, for the page to use in place of its own, as
+    `label_keys` does: its case folding follows the browser's Unicode tables,
+    which need not be Python's."""
+    return {value: facet_value_key(value) for values in counts.values() for value in values}
 
 
 def facet_aliases(facet: dict[str, Any]) -> dict[str, str]:

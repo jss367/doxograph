@@ -808,3 +808,16 @@ def test_the_values_route_answers_with_the_value_written(api, corpus):
     assert api.post("/api/facets/model/values", json={"values": ["A"], "into": "B"}).json()["value"] == "B"
     assert api.post("/api/facets/model/values", json={"values": ["C"], "into": "A"}).json()["value"] == "B"
     assert api.post("/api/facets/model/values", json={"values": ["B"], "into": ""}).json()["value"] == ""
+
+
+@pytest.mark.parametrize("raw", ["\ufeffGPT", "GPT\x85", "\x1cGPT", "\u3000GPT\u00a0", " GPT, "])
+def test_values_split_on_the_whitespace_both_sides_know(raw):
+    assert store.facet_value_text(raw) == "GPT"
+    assert store.facet_value_key(raw) == "gpt"
+
+
+def test_state_carries_each_values_key(api, corpus):
+    first, _ = corpus
+    store.add_facet("model", "models")
+    store.update_claim("doe2026study", first, {"facets": {"model": ["GPT-4"]}})
+    assert api.get("/api/state").json()["facet_value_keys"] == {"GPT-4": "gpt-4"}

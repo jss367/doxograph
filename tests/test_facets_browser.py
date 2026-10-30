@@ -187,6 +187,11 @@ def test_the_facet_filter_follows_the_open_paper(engine):
                 await page.goto(f"{url}/#view=claims&paper=one&facet=model%3AGPT-4")
                 await expect(page.locator(".claim[data-claim='one-c1']")).to_be_visible()
                 await expect(page.locator("#facets details[data-facet='constructor']")).to_have_count(1)
+                # The page reaches the store's key for values the two sides could
+                # split differently, whether or not the value is on file.
+                samples = ["\ufeffGPT", "GPT\x85", "\x1cGPT", "\u3000GPT\u00a0", " GPT, ", "GPT-4", "Llama 2,7B"]
+                assert await page.evaluate("values => values.map(facetValueKey)", samples) == [
+                    store.facet_value_key(value) for value in samples]
 
                 store.update_claim("one", "one-c1", {"facets": {"model": []}})
                 await _poll(page)
