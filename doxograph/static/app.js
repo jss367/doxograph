@@ -5379,8 +5379,10 @@ $('facets').addEventListener('click', async (event) => {
     if (!into.trim() && !await confirmDialog(`Remove ${picked.length === 1 ? `“${picked[0]}”` : `${picked.length} values`} from every claim?`, {
       note: 'Later reads will leave them out too.', ok: 'Remove',
     })) return;
+    // Read before the request: its refresh drops a filter on a value that is
+    // gone, and the filter should follow the value to its new name instead.
+    const filter = facetFilter();
     if (await facetRequest(`${path}/values`, 'POST', { values: picked, into }, 'Could not change the values')) {
-      const filter = facetFilter();
       if (filter && filter.name === name && picked.some((v) => facetValueKey(v) === facetValueKey(filter.value))) {
         V.facet = into.trim() ? `${name}:${into.trim()}` : null;
         syncHash();

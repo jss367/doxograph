@@ -387,7 +387,9 @@ def restore(key: str, body: Restore) -> dict:
             # Values that differ from the claim's present ones were not filled
             # under the present descriptions; a pass may refill them, unless a
             # person set them, which the restored `facets_hand` says.
-            if fields.get("facets", {}) != (claim.get("facets") or {}):
+            # An entry from before facets has none to restore, and leaves the
+            # present values as they are.
+            if "facets" in fields and fields["facets"] != (claim.get("facets") or {}):
                 claim.pop("facet_basis", None)
             claim.update(fields)
             store.reconcile_claim_facets(claim, store.load_facets())

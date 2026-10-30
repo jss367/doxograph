@@ -893,7 +893,12 @@ def fill_facets(key: str, force: bool = False) -> dict:
                 continue
             answered = store.clean_claim_facets(assignment.get("facets"), usable, known)
             values = dict(claim.get("facets") or {})
-            filled = [facet for facet in usable if facet["name"] not in (claim.get("facets_hand") or [])]
+            # Only the facets this claim needs: one already filled under its
+            # current description keeps its values, though the claim was sent
+            # for another. The claim is unchanged since it was chosen, so this
+            # asks the same question the choice did.
+            filled = [facet for facet in usable if facet["name"] not in (claim.get("facets_hand") or [])
+                      and (force or store.claim_needs_facet(claim, facet))]
             for facet in filled:
                 if answered.get(facet["name"]):
                     values[facet["name"]] = answered[facet["name"]]

@@ -597,3 +597,53 @@ def test_a_recovery_that_cannot_finish_is_reported_with_its_intent_file(monkeypa
     store.write_json(store.facet_change_path(), {"version": 1, "kind": "bogus"})
     state = api.get("/api/state").json()
     assert any(issue["path"] == str(store.facet_change_path()) for issue in state["storage_issues"])
+
+
+def test_a_fill_leaves_a_claims_current_facets_alone(monkeypatch, corpus):
+    """Claim one needs `model`, claim two needs `dataset`: both are sent, and
+    each takes only the facet it needed from the answer."""
+    first, second = corpus
+    store.add_facet("model", "models")
+    store.add_facet("dataset", "datasets")
+    paper = store.load_paper("doe2026study")
+    model, dataset = store.load_facets()
+    for claim in paper["claims"]:
+        if claim["id"] == first:
+            claim["facets"] = {"dataset": ["MMLU"]}
+            store.mark_facets_filled(claim, [dataset])
+        else:
+            claim["facets"] = {"model": ["Llama 3 8B"]}
+            store.mark_facets_filled(claim, [model])
+    store.save_paper(paper)
+    use_model(monkeypatch, {"assignments": [
+        {"id": first, "facets": {"model": ["GPT-4"], "dataset": []}},
+        {"id": second, "facets": {"model": [], "dataset": ["GSM8K"]}},
+    ]})
+
+    extract.fill_facets("doe2026study")
+
+    assert claims()[first]["facets"] == {"dataset": ["MMLU"], "model": ["GPT-4"]}
+    assert claims()[second]["facets"] == {"dataset": ["GSM8K"], "model": ["Llama 3 8B"]}
+    assert store.stale_facets(store.load_paper("doe2026study"), store.load_facets()) == []
+
+
+def test_restoring_an_entry_from_before_facets_keeps_the_claim_filled(api, monkeypatch, corpus):
+    first, second = corpus
+    store.add_facet("model", "models")
+    use_model(monkeypatch, {"assignments": [{"id": first, "facets": {"model": ["GPT-4"]}},
+                                            {"id": second, "facets": {"model": []}}]})
+    extract.fill_facets("doe2026study")
+    paper = store.load_paper("doe2026study")
+    paper["history"] = [*paper.get("history", []), {
+        "id": "legacy", "at": store.now(), "claim": first,
+        "fields": {"text": "An older wording.", "kind": "finding", "strength": "supporting", "tags": [],
+                   "evidence": "", "quote": "", "locator": "", "ledger_links": [], "note": "",
+                   "reviewed": False}}]
+    store.write_json(store.paper_path("doe2026study"), paper)
+    history = api.get("/api/notebook/history/doe2026study").json()
+    api.post("/api/notebook/history/doe2026study/restore",
+             json={"revision": "legacy", "expected": history["expected"]}).raise_for_status()
+
+    assert claims()[first]["text"] == "An older wording."
+    assert claims()[first]["facets"] == {"model": ["GPT-4"]}
+    assert store.stale_facets(store.load_paper("doe2026study"), store.load_facets()) == []

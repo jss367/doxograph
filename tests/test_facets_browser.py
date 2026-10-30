@@ -91,6 +91,8 @@ def test_facets_filter_edit_and_color_the_map(engine):
 
                 # Renaming a value rewrites it on every claim and follows the filter.
                 await chips.get_by_role("button", name="Clear all", exact=True).click()
+                await page.locator("#facets details[data-facet='model'] [data-facet-value='Llama 3 8B']").click()
+                await expect(chips.get_by_role("button", name="Remove filter: model: Llama 3 8B", exact=True)).to_be_visible()
                 await page.locator("#facets details[data-facet='model'] [data-facet-act='values']").click()
                 await page.locator("#ask-label-choices [data-label='Llama 3 8B']").click()
                 await expect(page.locator("#ask-input")).to_have_value("Llama 3 8B")
@@ -100,6 +102,9 @@ def test_facets_filter_edit_and_color_the_map(engine):
                 await page.locator("#ask-ok").click()
                 await expect(page.locator("#facets [data-facet-value='Llama-3-8B-Instruct']")).to_have_count(1)
                 assert store.load_paper("two")["claims"][0]["facets"] == {"model": ["Llama-3-8B-Instruct"]}
+                await expect(chips.get_by_role("button", name="Remove filter: model: Llama-3-8B-Instruct", exact=True)).to_be_visible()
+                assert "facet=model%3ALlama-3-8B-Instruct" in page.url
+                await chips.get_by_role("button", name="Clear all", exact=True).click()
 
                 # A new facet is defined from the sidebar.
                 await page.locator("#btn-facet").click()
