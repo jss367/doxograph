@@ -1201,6 +1201,16 @@ def label_key(label: str) -> str:
     return "ı".join(part.upper().lower() for part in label.lower().split("ı"))
 
 
+def label_keys(papers: list[dict]) -> dict[str, str]:
+    """Each stored spelling's key, for the browser to use in place of its own.
+
+    The browser folds case with its own Unicode tables, which can be newer or
+    older than Python's. A label the server holds apart must stay apart in the
+    page, or saving the label editor unchanged could merge two labels into one.
+    """
+    return {label: label_key(label) for paper in papers for label in paper.get("labels") or []}
+
+
 def has_label(paper: dict, label: str) -> bool:
     return label_key(label) in {label_key(name) for name in paper.get("labels") or []}
 

@@ -605,13 +605,19 @@ function normalizeLabel(name) {
 }
 
 // Labels keep the case they were typed in but are one label in any case, as
-// `store.label_key` decides on the server, by the same steps: JavaScript has no
-// case folding, and lowering, raising, and lowering again makes Σ, σ, and ς
-// one key, and ß, ẞ, and SS another. Dotless ı skips the round trip, which
-// would join it to i.
+// `store.label_key` decides on the server. A spelling already on a paper takes
+// the server's key, so the page never joins two labels the server keeps apart;
+// only a new spelling is folded here.
 function labelKey(name) {
-  return normalizeLabel(name).toLowerCase().split('ı')
-    .map((part) => part.toUpperCase().toLowerCase()).join('ı');
+  const label = normalizeLabel(name);
+  return Object.hasOwn(S.label_keys || {}, label) ? S.label_keys[label] : foldLabel(label);
+}
+
+// The server's steps, since JavaScript has no case folding: lowering, raising,
+// and lowering again makes Σ, σ, and ς one key, and ß, ẞ, and SS another.
+// Dotless ı skips the round trip, which would join it to i.
+function foldLabel(label) {
+  return label.toLowerCase().split('ı').map((part) => part.toUpperCase().toLowerCase()).join('ı');
 }
 
 function compareText(a, b) {

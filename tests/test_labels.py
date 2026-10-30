@@ -243,11 +243,14 @@ def test_patching_another_field_leaves_the_labels_where_they_were():
 def test_state_carries_the_labels_and_their_counts():
     _paper("a", labels=["open-source"])
     _paper("b", labels=["open-source", "huggingface"])
+    _paper("c", labels=["Straße"])
     with client() as c:
         state = c.get("/api/state").json()
-    assert state["label_counts"] == {"open-source": 2, "huggingface": 1}
+    assert state["label_counts"] == {"open-source": 2, "huggingface": 1, "Straße": 1}
+    # The page compares stored labels by the server's keys, not its own.
+    assert state["label_keys"] == {"open-source": "open-source", "huggingface": "huggingface", "Straße": "strasse"}
     assert {p["key"]: p["labels"] for p in state["papers"]} == {
-        "a": ["open-source"], "b": ["open-source", "huggingface"],
+        "a": ["open-source"], "b": ["open-source", "huggingface"], "c": ["Straße"],
     }
 
 
@@ -814,6 +817,47 @@ def test_labels_spelled_in_different_cases_are_one_label_in_the_page():
                 await _answer(page, "OK")
                 await page.locator('.paper-overview .label', has_text="RLHF").wait_for()
                 assert store.load_paper("lower2026")["labels"] == ["RLHF"]
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+def test_the_page_keeps_apart_labels_the_server_keeps_apart():
+    # A browser whose Unicode tables are newer or older than Python's can fold
+    # two spellings together that the server holds apart. Folding everything
+    # into one key stands in for that: the stored labels must still be told
+    # apart, so an unchanged save keeps both and a filter picks out one.
+    from playwright.async_api import expect
+    from test_browser import _answer, _paper as _browser_paper, _server
+
+    _browser_paper("both2026", "A Paper With Both", "steering")
+    _browser_paper("beta2026", "A Beta Paper", "steering")
+    store.set_labels("both2026", ["Alpha", "Beta"])
+    store.set_labels("beta2026", ["Beta"])
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#labels [data-label="Alpha"]').wait_for()
+                await page.evaluate("foldLabel = () => 'one key'")
+                assert await page.evaluate("labelKey('Gamma') === labelKey('Delta')")
+                assert await page.evaluate("labelKey('Alpha') !== labelKey('Beta')")
+
+                await page.locator('#labels [data-label="Alpha"]').click()
+                await page.locator('#papers [data-paper="beta2026"]').wait_for(state="detached")
+                await page.locator('#papers [data-paper="both2026"]').wait_for()
+
+                await page.locator('#papers [data-paper="both2026"]').click()
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Labels", exact=True).click()
+                await expect(page.locator('#ask-input')).to_have_value("Alpha, Beta")
+                choices = page.get_by_role("group", name="Existing labels")
+                await expect(choices.locator('[aria-pressed="true"]')).to_have_count(2)
+                await _answer(page, "OK")
+                await expect(page.locator('.paper-overview .label')).to_have_text(["Alpha", "Beta"])
+                assert store.load_paper("both2026")["labels"] == ["Alpha", "Beta"]
 
     run_browser(scenario())
 

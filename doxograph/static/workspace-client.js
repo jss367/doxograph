@@ -4,7 +4,7 @@
 // the UI; features receive this interface instead of reading app.js globals.
 function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalThis.fetch,
   rememberWorkspace = () => {}, onWorkspaceChange = () => {}, readTimeout = 15000 } = {}) {
-  const emptyState = () => ({ papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {},
+  const emptyState = () => ({ papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {}, label_keys: {},
     ledger: [], context: '', tensions: [], agreements: [], syntheses: [], kinds: [],
     strengths: [], relations: [], jobs: [], has_key: true });
   let state = emptyState(), workspaces = [], etag = null, epoch = 0;
