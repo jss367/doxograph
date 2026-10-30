@@ -4889,6 +4889,18 @@ document.addEventListener('click', (event) => {
   $('paper-chat').showModal();
   $('chat-question').focus();
 });
+// Chat boxes send on Enter and take Shift+Enter as a new line, like other chat apps.
+// Enter that confirms an IME composition belongs to the composition, not the form;
+// WebKit reports that Enter with isComposing false and keyCode 229. A held key sends once.
+function sendOnEnter(field) {
+  field.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.repeat) return;
+    if (event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    field.form.requestSubmit();
+  });
+}
+sendOnEnter($('chat-question'));
 $('chat-question').addEventListener('input', () => { if (activeChat) activeChat.draft = $('chat-question').value; });
 $('chat-close').addEventListener('click', () => $('paper-chat').close());
 $('chat-clear').addEventListener('click', () => {

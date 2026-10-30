@@ -49,7 +49,21 @@ def test_subscription_selection_and_paper_chat_keep_followups_and_failed_drafts(
             await page.locator('#papers [data-paper="study"]').click()
             await page.get_by_role('button', name='Ask about this paper', exact=True).click()
             await page.locator('#chat-question').fill('How many adults?')
-            await page.locator('#chat-send').click()
+            await page.locator('#chat-question').press('Shift+Enter')
+            assert await page.locator('#chat-question').input_value() == 'How many adults?\n'
+            await page.locator('#chat-question').evaluate('''field => {
+                const enter = (init, keyCode) => {
+                    const event = new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true, ...init});
+                    if (keyCode) Object.defineProperty(event, 'keyCode', {value: keyCode});
+                    field.dispatchEvent(event);
+                };
+                enter({isComposing: true});
+                enter({}, 229);
+                enter({repeat: true});
+            }''')
+            await page.wait_for_timeout(200)
+            assert requests == []
+            await page.locator('#chat-question').press('Enter')
             await page.get_by_text('Twenty adults (p. 1).', exact=True).wait_for()
             assert await page.locator('#chat-messages .who').last.text_content() == assistant
             await page.locator('#chat-question').fill('Was this a pilot?')
@@ -151,7 +165,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider,
             assert await page.locator('#agent-messages .who').all_text_contents() == ['You', assistant]
             assert await page.locator('#agent-codex-guidance').is_visible() == (provider == 'codex')
             await page.locator('#agent-question').fill('And disagrees?')
-            await page.locator('#agent-send').click()
+            await page.locator('#agent-question').press('Enter')
             await page.locator('#agent-question:enabled').wait_for()
             assert [m['content'] for m in requests[1]] == ['What agrees on steering?', 'Two papers agree.', 'And disagrees?']
             await page.locator('#agent-clear').click()
