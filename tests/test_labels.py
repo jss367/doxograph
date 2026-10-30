@@ -87,6 +87,19 @@ def test_label_counts_count_a_label_once_whatever_its_case():
     assert store.label_counts(store.all_papers()) == {"RLHF": 3, "Reading List": 2}
 
 
+def test_label_counts_prefer_capitals_on_a_tie_in_any_script():
+    # Georgian lowercase ა (U+10D0) sorts before capital Ა (U+1C90), so code
+    # point order alone would pick the lowercase spelling.
+    _paper("a", labels=["ანი"])
+    _paper("b", labels=["ᲐᲜᲘ"])
+    _paper("c", labels=["Ანი"])
+    _paper("d", labels=["rlhf"])
+    _paper("e", labels=["Rlhf"])
+    _paper("f", labels=["RLHF"])
+    _paper("g", labels=["rlhf"])
+    assert store.label_counts(store.all_papers()) == {"rlhf": 4, "ᲐᲜᲘ": 3}
+
+
 # Pairs that `lower` alone would keep apart but full case folding joins.
 UNICODE_CASE_PAIRS = [("ΟΔΟΣ", "οδοσ"), ("Σ", "ς"), ("Straße", "STRASSE"), ("ẞ", "ss"), ("ﬁle", "FILE")]
 

@@ -1236,7 +1236,7 @@ def label_counts(papers: list[dict]) -> dict[str, int]:
     The same shape and order as `tag_counts`, which counts claims: the two
     lists sit next to each other in the sidebar and should not be read
     differently. Spellings that differ only in case count as one label, shown
-    as the spelling most papers use, capitals first on a tie.
+    as the spelling most papers use, the one with more capitals on a tie.
     """
     spellings: dict[str, dict[str, int]] = {}
     for paper in papers:
@@ -1247,8 +1247,9 @@ def label_counts(papers: list[dict]) -> dict[str, int]:
         for key, label in mine.items():
             seen = spellings.setdefault(key, {})
             seen[label] = seen.get(label, 0) + 1
-    counts = {min(seen, key=lambda name: (-seen[name], name)): sum(seen.values())
-              for seen in spellings.values()}
+    # On a tie, the spelling with more capitals in any script, then code points.
+    counts = {min(seen, key=lambda name: (-seen[name], -sum(c.isupper() for c in name), name)):
+              sum(seen.values()) for seen in spellings.values()}
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], label_key(kv[0]), kv[0])))
 
 
