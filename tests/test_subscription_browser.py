@@ -386,6 +386,54 @@ def test_saves_finished_while_the_conversation_list_loads_are_kept(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_an_older_conversation_list_arriving_last_is_ignored(engine):
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ask, open_chat = await _paper_chat_with_answers(page)
+            taken, release = asyncio.Event(), asyncio.Event()
+            lists = 0
+
+            async def first_list_held(route):
+                nonlocal lists
+                lists += 1
+                if lists > 1:
+                    await route.continue_()
+                    return
+                response = await route.fetch()
+                taken.set()
+                await release.wait()
+                await route.fulfill(response=response)
+
+            await page.route('**/api/chats?paper=study', first_list_held)
+            await page.goto(url)
+            await open_chat()
+            await asyncio.wait_for(taken.wait(), timeout=10)
+            # Another window saves a conversation; reopening lists it while the first, empty list is held.
+            saved = {'paper': 'study', 'agent': 'claude_code', 'revision': 0, 'operation': 'e' * 32,
+                     'messages': [{'role': 'user', 'content': 'Theirs'}, {'role': 'assistant', 'content': 'Their answer.'}]}
+            assert httpx.put(f"{url}/api/chats/{'d' * 32}", json=saved).status_code == 200
+            await page.locator('#chat-close').click()
+            await open_chat()
+            await page.get_by_text('Their answer.', exact=True).wait_for()
+            release.set()
+            await page.wait_for_timeout(200)
+            assert await page.locator('#chat-thread option').all_text_contents() == ['Theirs']
+            assert await page.locator('#chat-messages p').all_text_contents() == ['Theirs', 'Their answer.']
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
     config.set_ai_provider('claude_code')
     store.save_paper(store.new_paper('study', title='Memory Study'))

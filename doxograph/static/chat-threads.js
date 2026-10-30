@@ -63,8 +63,11 @@ const ChatThreads = (() => {
 
     async function refresh(target) {
       const started = ++clock;
+      target.listing = started;
       const response = await api(`/api/chats${target.paper ? `?paper=${encodeURIComponent(target.paper)}` : ''}`,
         { headers: { 'X-Doxograph-Workspace': target.workspace } });
+      // A later list already answered or will answer; this one may predate what it loaded.
+      if (target.listing !== started) return;
       const local = new Map(target.threads.map(t => [t.id, t]));
       // Keep what this tab is still writing, has not saved, or holds as new as disk (a list that
       // began loading before a save finished is older). Take newer versions from disk, and keep an
