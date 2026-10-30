@@ -240,7 +240,7 @@ const ChatThreads = (() => {
             reader.readAsDataURL(file);
           });
           const existing = [...thread.messages.flatMap(m => m.attachments || []), ...thread.draftAttachments];
-          if (existing.reduce((sum, a) => sum + a.data.length, data.length) > 8 * 1024 * 1024) throw new Error('Attachments in a conversation may total at most 6 MB. Start a new conversation.');
+          if (existing.reduce((sum, a) => sum + Math.floor(a.data.replace(/=+$/, '').length * 3 / 4), file.size) > 6 * 1024 * 1024) throw new Error('Attachments in a conversation may total at most 6 MB. Start a new conversation.');
           thread.draftAttachments.push({ name: file.name, media_type: media, data });
         }
       } catch (error) { thread.error = error.message; }

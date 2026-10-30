@@ -152,3 +152,31 @@ def test_invalid_files_show_readable_errors_and_drafts_stay_with_their_chat(engi
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_composer_accepts_exact_decoded_byte_limit_and_rejects_one_more(engine):
+    config.set_ai_provider('codex')
+    config.set_ai_enabled(True)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1000, 'height': 900})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-files').set_input_files([
+                    {'name': 'first.txt', 'mimeType': 'text/plain', 'buffer': b'a' * (4 * 1024 * 1024)},
+                    {'name': 'second.txt', 'mimeType': 'text/plain', 'buffer': b'b' * (2 * 1024 * 1024 - 1)}])
+                await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(2)
+                await expect(page.locator('#agent-attach')).to_be_enabled()
+                await expect(page.locator('#agent-status')).not_to_contain_text('at most 6 MB')
+                await page.locator('#agent-files').set_input_files({'name': 'last-byte.txt', 'mimeType': 'text/plain', 'buffer': b'c'})
+                await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(3)
+                await expect(page.locator('#agent-attach')).to_be_enabled()
+                await page.locator('#agent-files').set_input_files({'name': 'over-limit.txt', 'mimeType': 'text/plain', 'buffer': b'd'})
+                await expect(page.locator('#agent-status')).to_contain_text('at most 6 MB')
+                await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(3)
+
+    run_browser(scenario())

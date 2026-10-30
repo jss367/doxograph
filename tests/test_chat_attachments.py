@@ -83,6 +83,22 @@ def test_message_and_conversation_limits_apply_on_send_and_save():
             chats.Conversation(agent='codex', messages=[*messages, {'role': 'assistant', 'content': 'Answer'}])
 
 
+@pytest.mark.parametrize('delta', [-1, 0, 1])
+def test_conversation_attachment_limit_counts_decoded_bytes(delta):
+    files = [attachment('first.txt', raw=b'a' * (4 * 1024 * 1024)),
+             attachment('second.txt', raw=b'b' * (2 * 1024 * 1024 + delta))]
+    messages = [{'role': 'user', 'content': 'Compare', 'attachments': files}]
+    saved_messages = [*messages, {'role': 'assistant', 'content': 'Answer'}]
+    if delta <= 0:
+        assert chat_api.ChatBody(messages=messages)
+        assert chats.Conversation(agent='codex', messages=saved_messages)
+    else:
+        with pytest.raises(ValidationError, match='at most 6 MB'):
+            chat_api.ChatBody(messages=messages)
+        with pytest.raises(ValidationError, match='at most 6 MB'):
+            chats.Conversation(agent='codex', messages=saved_messages)
+
+
 def test_labels_files_by_turn_and_extracts_pdf_pages_without_base64_text():
     files = [attachment(), image_attachment(), attachment('study.pdf', minimal_pdf(['First page.', 'Second page.']), 'application/pdf')]
     messages = [{'role': 'user', 'content': 'Compare these.', 'attachments': files},

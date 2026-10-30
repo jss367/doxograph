@@ -61,7 +61,7 @@ class Attachment(BaseModel):
 def check_attachments(messages: list[Any]) -> None:
     if any(m.attachments and m.role != "user" for m in messages):
         raise ValueError("Only user messages may have attachments.")
-    if sum(len(a.data) for m in messages for a in m.attachments) > 4 * (CONVERSATION_LIMIT // 3):
+    if sum(len(base64.b64decode(a.data)) for m in messages for a in m.attachments) > CONVERSATION_LIMIT:
         raise ValueError("Attachments in a conversation may total at most 6 MB. Start a new conversation.")
     if any(not m.content.strip() and not m.attachments for m in messages):
         raise ValueError("Each message needs text or an attachment.")
