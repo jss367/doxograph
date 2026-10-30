@@ -567,7 +567,8 @@ def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
             assert saves[2]['revision'] == 1 and saves[2]['unconfirmed'] == [saves[1]['operation']]
             [saved] = _saved_chats()
             assert [m['content'] for m in saved['messages']][::2] == ['First', 'Second', 'Third']
-            assert saved['revision'] == 3
+            assert [m['content'] for m in saves[2]['messages']][::2] == ['First', 'Second']
+            assert saved['revision'] == 4  # The pending history was flushed before the third answer.
             await page.reload()
             await open_chat()
             await page.get_by_text('Answer 3.', exact=True).wait_for()

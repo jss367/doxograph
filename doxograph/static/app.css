@@ -762,7 +762,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4p
 }
 
 @media (min-width:561px) and (max-width:800px) and (min-height:701px) {
-  #agent-messages:not(:empty) { min-height:6rem; }
+  #agent-messages:not(:empty) { min-height:0; }
   #library-agent > .hint { font-size:.75rem; }
   #agent-scope { margin:.5rem 0; }
   #agent-form textarea { min-height:3rem; height:3rem; }

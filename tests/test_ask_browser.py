@@ -18,6 +18,16 @@ from doxograph import agent, ask_context, config, mcp_server, server, store
 from pdfs import minimal_pdf
 
 
+@pytest.fixture(autouse=True)
+def block_live_providers(monkeypatch):
+    from doxograph import claude_code, codex_cli, extract
+    def blocked(*args, **kwargs):
+        pytest.fail('Ask browser tests must mock every provider entry point')
+    monkeypatch.setattr(claude_code, '_run', blocked)
+    monkeypatch.setattr(codex_cli, '_run', blocked)
+    monkeypatch.setattr(extract, 'client', blocked)
+
+
 @contextmanager
 def _server():
     # An in-process server keeps the model stubs active; no live provider is used.
