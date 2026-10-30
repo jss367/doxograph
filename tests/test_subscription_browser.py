@@ -486,6 +486,49 @@ def test_draft_survives_another_window_deleting_its_conversation(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_conversation_deleted_while_an_older_list_loads_stays_deleted(engine):
+    config.set_ai_provider('claude_code')
+    store.save_paper(store.new_paper('study', title='Memory Study'))
+    store.pdf_path('study').write_bytes(b'%PDF-1.4 fake')
+
+    async def check(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ask, open_chat = await _paper_chat_with_answers(page)
+            await page.goto(url)
+            await open_chat()
+            await ask('First')
+            await page.locator('#chat-close').click()
+            taken, release = asyncio.Event(), asyncio.Event()
+
+            async def held_list(route):
+                # The snapshot still lists the conversation; it arrives after the delete.
+                response = await route.fetch()
+                taken.set()
+                await release.wait()
+                await route.fulfill(response=response)
+
+            await page.route('**/api/chats?paper=study', held_list)
+            await open_chat()
+            await asyncio.wait_for(taken.wait(), timeout=10)
+            await page.locator('#chat-delete').click()
+            await _answer(page, 'Delete conversation')
+            await page.locator('#chat-thread option', has_text='First').wait_for(state='detached')
+            release.set()
+            await page.wait_for_timeout(200)
+            assert await page.locator('#chat-thread option').all_text_contents() == ['New conversation']
+            assert await page.locator('#chat-messages p').count() == 0
+            assert _saved_chats() == []
+            assert not errors
+
+    with _server() as url:
+        run_browser(check(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
     config.set_ai_provider('claude_code')
     store.save_paper(store.new_paper('study', title='Memory Study'))

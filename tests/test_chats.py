@@ -4,11 +4,12 @@ import json
 import os
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import chat, chats, config, server, store
+from doxograph import chat, chats, config, server, storage, store
 
 PAIR = [{'role': 'user', 'content': 'How many adults?'},
         {'role': 'assistant', 'content': 'Twenty (p. 1).', 'assistant': 'Claude', 'model': 'claude-opus-5'}]
@@ -133,3 +134,24 @@ def test_links_and_special_files_among_conversations_are_never_read(client):
         manifest = json.loads(archive.read('manifest.json'))
         assert f'data/chats/{ID}.json' in manifest['files']
         assert {f'chats/{"b" * 32}.json', f'chats/{"c" * 32}.json'} <= set(manifest['skipped'])
+
+
+def test_listing_reads_conversations_while_holding_the_lock_deletion_takes(client, monkeypatch):
+    client.put(f'/api/chats/{ID}', json={'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()})
+    read, blocked = storage.read_model, []
+
+    def read_while_deleting(path, model):
+        # Deletion from another thread must wait until the listing has read every file.
+        with ThreadPoolExecutor(1) as other:
+            def try_delete_lock():
+                try:
+                    with store.document_lock('chats', blocking=False):
+                        return False
+                except BlockingIOError:
+                    return True
+            blocked.append(other.submit(try_delete_lock).result())
+        return read(path, model)
+
+    monkeypatch.setattr(storage, 'read_model', read_while_deleting)
+    assert [c['id'] for c in client.get('/api/chats').json()['chats']] == [ID]
+    assert blocked == [True]

@@ -74,6 +74,8 @@ const ChatThreads = (() => {
       // unsaved version that another window replaced or deleted as its own conversation.
       const threads = [], kept = [];
       for (const saved of response.chats) {
+        // A list read before this tab deleted a conversation must not bring it back.
+        if (target.deleted.has(saved.id)) continue;
         let thread = local.get(saved.id);
         if (thread && (writing(thread) || (thread.dirty ? ahead(thread, saved) : saved.revision <= thread.revision))) {
           threads.push(thread);
@@ -108,7 +110,7 @@ const ChatThreads = (() => {
 
     async function open(workspace, paper) {
       const id = JSON.stringify([workspace, paper]);
-      if (!boxes.has(id)) boxes.set(id, { workspace, paper, threads: [], active: null, loaded: false, issues: [] });
+      if (!boxes.has(id)) boxes.set(id, { workspace, paper, threads: [], active: null, loaded: false, issues: [], deleted: new Set() });
       box = boxes.get(id);
       box.active ||= blank();
       sync();
@@ -231,6 +233,7 @@ const ChatThreads = (() => {
       sync();
       try {
         await api(`/api/chats/${thread.id}?revision=${thread.revision}`, { method: 'DELETE', headers: headers() });
+        target.deleted.add(thread.id);
         target.threads = target.threads.filter(t => t !== thread);
         if (target.active === thread) target.active = target.threads[0] || blank();
       } catch (error) { thread.error = `Could not delete this conversation: ${error.message}`; }

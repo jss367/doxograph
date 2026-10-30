@@ -102,14 +102,16 @@ def _shown(chat: dict) -> dict:
 def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None) -> dict:
     """A paper's conversations, or the library's when no paper is given, newest first."""
     chats, issues = [], []
-    for path in files():
-        try:
-            chat = storage.read_model(path, SavedChat).model_dump()
-        except storage.StorageReadError as exc:
-            issues.append(str(exc))
-            continue
-        if chat["paper"] == paper:
-            chats.append(_shown(chat))
+    # Deletion holds this lock, so no file listed here vanishes before it is read.
+    with store.document_lock("chats"):
+        for path in files():
+            try:
+                chat = storage.read_model(path, SavedChat).model_dump()
+            except storage.StorageReadError as exc:
+                issues.append(str(exc))
+                continue
+            if chat["paper"] == paper:
+                chats.append(_shown(chat))
     chats.sort(key=lambda c: (c["updated"], c["id"]), reverse=True)
     return {"chats": chats, "issues": issues}
 
