@@ -58,12 +58,12 @@ def test_uploaded_pdf_resumes_after_process_exit(engine):
     store.save_paper(store.new_paper('study', title='A monitoring study'))
     pdf = minimal_pdf('A monitoring study.')
     store.pdf_path('study').write_bytes(pdf)
-    script = f'''from doxograph import config, server, ingest
+    script = f'''from doxograph import config, ingest, job_queue, server
 import io
 config.ensure_dirs()
 staged = ingest.stage_upload(io.BytesIO({pdf!r}), 'study.pdf')
-job = server._new_import_job('study.pdf', False, staged=staged, filename='study.pdf')
-server._set(job, state='fetching')
+job = job_queue._new_import_job('study.pdf', False, staged=staged, filename='study.pdf')
+job_queue._set(job, state='fetching')
 '''
     subprocess.run([sys.executable, '-c', script], env=os.environ.copy(), check=True)
 

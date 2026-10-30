@@ -335,7 +335,7 @@ def search_papers(query: str, limit: int = 20, offset: int = 0) -> list[dict]:
         (
             (-sum(weight * (count * (K1 + 1))
                   / (count + K1 * (1 - B + B * lengths[key] / average))
-                  for weight, count in zip(idf, counts[key])), key)
+                  for weight, count in zip(idf, counts[key], strict=True)), key)
             for key in matched
         )
     )

@@ -51,18 +51,22 @@ markers = [
 target-version = "py313"
 
 [tool.ruff.lint]
-# Start with syntax and correctness checks, without restyling the repository.
-select = ["E9", "F"]
+# Syntax, correctness, and bug-prone patterns, without restyling the repository.
+select = ["E9", "F", "B"]
 
 [tool.mypy]
 python_version = "3.13"
-# Keep strict contracts at both persistence and provider boundaries. The
+# Keep strict contracts at the persistence, provider, and HTTP boundaries. The
 # remaining application modules can be added as their annotations narrow.
 files = [
     "doxograph/storage.py", "doxograph/records.py", "doxograph/workspace_metadata.py",
+    "doxograph/store.py",
     "doxograph/analysis_types.py",
     "doxograph/model_errors.py", "doxograph/providers.py",
     "doxograph/claude_code.py", "doxograph/codex_cli.py",
+    "doxograph/server.py", "doxograph/origins.py", "doxograph/activity.py",
+    "doxograph/job_queue.py", "doxograph/papers_api.py", "doxograph/chat_api.py",
+    "doxograph/analysis_api.py",
 ]
 strict = true
 follow_imports = "silent"

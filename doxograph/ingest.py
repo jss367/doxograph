@@ -589,7 +589,7 @@ def _own_bibtex(html: str, page_url: str, pdf_url: str) -> Ref | None:
     # entry is one lookup however many titles and entries the page holds.
     longest = max((c.count(" ") + 1 for c in cited if c), default=0)
     accepted = set().union(*(_title_variants(t, longest) for t in titles))
-    for entry, title in zip(entries, cited):
+    for entry, title in zip(entries, cited, strict=True):
         if title not in accepted:
             continue
         # An exporter escapes the characters TeX treats specially, so a DOI's

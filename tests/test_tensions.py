@@ -6,7 +6,7 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import export, extract, server, store, __main__
+from doxograph import export, extract, job_queue, server, store, __main__
 
 
 def _paper(key, title, author, year, *claims):
@@ -368,12 +368,12 @@ def test_api_find_tensions_queues_nothing_without_two_papers_on_a_topic():
 def test_api_find_tensions_runs_a_topic_named_twice_once_and_skips_one_paper_topics(monkeypatch):
     build_corpus()   # recovery-rate has two papers; scaling has one
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics, force: submitted.append(topics))
+    monkeypatch.setattr(job_queue._pool, "submit", lambda fn, job, topics, force: submitted.append(topics))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/tensions", json={"topics": ["scaling", "nonesuch"]}).json() == {"queued": 0}
         body = {"topics": ["recovery-rate", "scaling", "recovery-rate", "nonesuch"]}
         assert client.post("/api/tensions", json=body).json() == {"queued": 1}
-        assert max(server._jobs.values(), key=lambda j: j["id"])["label"] == "tensions in 1 topics"
+        assert max(job_queue._jobs.values(), key=lambda j: j["id"])["label"] == "tensions in 1 topics"
     assert submitted == [["recovery-rate"]]
 
 
@@ -387,8 +387,8 @@ def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
         return {"added": 2, "reopened": 1, "kept": 0, "returned": 3, "skipped": False}
 
     monkeypatch.setattr(extract, "find_tensions", find)
-    job = server._new_job("tensions in 2 topics")
-    server._run_tensions(job, ["recovery-rate", "scaling"])
+    job = job_queue._new_job("tensions in 2 topics")
+    job_queue._run_tensions(job, ["recovery-rate", "scaling"])
     assert sorted(asked) == ["recovery-rate", "scaling"]  # the failure did not end the pass
     assert job["state"] == "error"
     assert job["detail"] == ("1 of 2 topics failed, 2 new, 1 reopened; "

@@ -7,7 +7,7 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import __main__, config, server, store
+from doxograph import __main__, config, job_queue, origins, server, store
 
 
 # --- a page on another site cannot post into the corpus -------------------
@@ -26,7 +26,7 @@ def queued_jobs(monkeypatch):
     refused to stay offline.
     """
     submitted: list[tuple] = []
-    monkeypatch.setattr(server._pool, "submit", lambda *args, **kwargs: submitted.append(args))
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *args, **kwargs: submitted.append(args))
     return submitted
 
 
@@ -96,8 +96,8 @@ def test_a_cross_site_read_with_an_honest_host_is_left_alone():
 @pytest.fixture
 def bound_nowhere_in_particular(monkeypatch):
     """The default: nothing published beyond the loopback interface."""
-    monkeypatch.setattr(server, "_published_authorities", frozenset())
-    monkeypatch.setattr(server, "_bound_to_every_address", False)
+    monkeypatch.setattr(origins, "_published_authorities", frozenset())
+    monkeypatch.setattr(origins, "_bound_to_every_address", False)
 
 
 def test_a_rebound_hostname_cannot_pose_as_the_page(queued_jobs, bound_nowhere_in_particular):
@@ -194,7 +194,7 @@ def test_a_request_addressed_to_another_port_is_refused(bound_nowhere_in_particu
 
 def test_the_address_serve_published_is_trusted(bound_nowhere_in_particular):
     """`serve --host` is documented, so the page it serves has to keep working."""
-    server.trust_bind("192.168.1.5", 8765)
+    origins.trust_bind("192.168.1.5", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
@@ -218,7 +218,7 @@ def test_a_wildcard_bind_trusts_nothing_the_request_says(bound_nowhere_in_partic
     controls. So matching `Origin` against `Host` is not a fallback here; it is
     the very comparison this whole check exists to refuse.
     """
-    server.trust_bind("0.0.0.0", 8765)
+    origins.trust_bind("0.0.0.0", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.patch("/api/papers/doe2026study", json={"notes": "n"},
@@ -230,7 +230,7 @@ def test_a_wildcard_bind_trusts_nothing_the_request_says(bound_nowhere_in_partic
 
 def test_a_wildcard_bind_still_serves_the_operators_own_machine(bound_nowhere_in_particular):
     """Loopback keeps working, so the app on the host itself is unaffected."""
-    server.trust_bind("0.0.0.0", 8765)
+    origins.trust_bind("0.0.0.0", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
@@ -240,8 +240,8 @@ def test_a_wildcard_bind_still_serves_the_operators_own_machine(bound_nowhere_in
 def test_a_wildcard_bind_trusts_the_name_the_operator_published(monkeypatch,
                                                                 bound_nowhere_in_particular):
     """Someone has to say what the page is served as; only the operator can."""
-    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV, "http://192.168.1.5:8765")
-    server.trust_bind("0.0.0.0", 8765)
+    monkeypatch.setenv(origins.PUBLISHED_ORIGINS_ENV, "http://192.168.1.5:8765")
+    origins.trust_bind("0.0.0.0", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
@@ -262,8 +262,8 @@ def test_a_published_loopback_name_beats_the_bound_port_rule(monkeypatch,
     `PUBLISHED_ORIGINS_ENV` has to be consulted first, or it is accepted at
     startup and then quietly ignored on every request.
     """
-    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV, "https://localhost, http://localhost")
-    server.trust_bind("127.0.0.1", 8765)
+    monkeypatch.setenv(origins.PUBLISHED_ORIGINS_ENV, "https://localhost, http://localhost")
+    origins.trust_bind("127.0.0.1", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
@@ -281,8 +281,8 @@ def test_an_unpublished_loopback_port_is_still_refused(monkeypatch,
     is trusted only if the operator named it, which is what pins the published
     check to going *before* the bound-port rule rather than instead of it.
     """
-    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV, "https://localhost")
-    server.trust_bind("127.0.0.1", 8765)
+    monkeypatch.setenv(origins.PUBLISHED_ORIGINS_ENV, "https://localhost")
+    origins.trust_bind("127.0.0.1", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
@@ -337,7 +337,7 @@ def test_serving_on_an_alternate_loopback_address_still_trusts_its_own_page(
     The narrow origin rule does not cover that address, so `trust_bind` records
     it explicitly -- from the host `serve()` was given, never from a request.
     """
-    server.trust_bind("127.0.0.2", 8765)
+    origins.trust_bind("127.0.0.2", 8765)
     store.save_paper(store.new_paper("doe2026study", title="A Study"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.patch("/api/papers/doe2026study", json={"notes": "n"},
@@ -368,9 +368,9 @@ def test_a_malformed_published_origin_is_skipped_rather_than_fatal(monkeypatch):
     unclosed bracket used to abort the import with a traceback naming neither
     the variable nor the offending entry. The good entry beside it still counts.
     """
-    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV,
+    monkeypatch.setenv(origins.PUBLISHED_ORIGINS_ENV,
                        "http://[::1, http://192.168.1.5:8765")
-    assert server._authorities_from_environment() == {("192.168.1.5", 8765)}
+    assert origins._authorities_from_environment() == {("192.168.1.5", 8765)}
 
 
 def test_a_malformed_origin_header_is_refused_rather_than_a_500(
@@ -424,7 +424,7 @@ def _over_a_unix_socket(headers: dict[str, str]) -> int:
     async def receive():
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    asyncio.run(server.RejectCrossSiteRequests(reached)(scope, receive, send))
+    asyncio.run(origins.RejectCrossSiteRequests(reached)(scope, receive, send))
     return statuses[0]
 
 
@@ -465,10 +465,10 @@ def test_a_socket_with_no_port_trusts_the_name_the_operator_published(
     proxy terminates the TLS: the browser's `Origin` says `https`, while the
     `Host` it forwards over the socket is read against the scope's own `http`.
     """
-    monkeypatch.setenv(server.PUBLISHED_ORIGINS_ENV,
+    monkeypatch.setenv(origins.PUBLISHED_ORIGINS_ENV,
                        "https://papers.example.com, http://papers.example.com")
-    monkeypatch.setattr(server, "_published_authorities",
-                        frozenset(server._authorities_from_environment()))
+    monkeypatch.setattr(origins, "_published_authorities",
+                        frozenset(origins._authorities_from_environment()))
     assert _over_a_unix_socket({"Host": "papers.example.com",
                                 "Origin": "https://papers.example.com"}) == 200
     assert _over_a_unix_socket({"Host": "papers.example.com",
@@ -520,5 +520,5 @@ def test_serve_refuses_port_zero_before_recording_the_authority(
     """The same guard for a caller that skips the parser: a script, or a test."""
     with pytest.raises(ValueError, match="cannot serve on port 0"):
         server.serve(host="192.168.1.5", port=0)
-    assert server._published_authorities == frozenset(), \
+    assert origins._published_authorities == frozenset(), \
         "a port that cannot be served was recorded as trusted anyway"

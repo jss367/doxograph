@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from doxograph import config, server, store
+from doxograph import config, job_queue, server, store
 
 
 def client() -> TestClient:
@@ -78,7 +78,7 @@ def test_signature_sees_every_file_the_page_shows():
 
 def test_jobs_have_their_own_route_and_are_not_in_state():
     with client() as c:
-        job = server._new_job("reading")
+        job = job_queue._new_job("reading")
         assert "jobs" not in c.get("/api/state").json()
         listed = c.get("/api/jobs").json()["jobs"]
         # Other tests leave jobs behind in the module-level table; this one's

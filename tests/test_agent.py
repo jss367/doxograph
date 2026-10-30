@@ -10,7 +10,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import agent, claude_code, codex_cli, config, mcp_server, server, store
+from doxograph import agent, chat_api, claude_code, codex_cli, config, mcp_server, server, store
 from doxograph.model_errors import ModelSetupError
 
 PRIVATE = "PRIVATE-NOTE-SENTINEL"
@@ -203,13 +203,13 @@ def test_codex_library_rejects_failed_or_incomplete_answers(monkeypatch, stdout,
 def test_codex_endpoint_checks_callback_and_the_ai_off_switch(monkeypatch):
     config.set_ai_provider("codex")
     seen = fake_codex(monkeypatch, stream({"type": "turn.completed"}))
-    monkeypatch.setattr(server, "_reachable", lambda url: False)
+    monkeypatch.setattr(chat_api, "_reachable", lambda url: False)
     body = {"messages": [{"role": "user", "content": "Hi"}]}
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/agent/chat", json=body)
         assert response.status_code == 502 and "loopback" in response.json()["detail"]
         assert seen == {}
-        monkeypatch.setattr(server, "_reachable", lambda url: True)
+        monkeypatch.setattr(chat_api, "_reachable", lambda url: True)
         response = client.post("/api/agent/chat", json=body)
         assert response.status_code == 200 and response.json()["assistant"] == "ChatGPT"
         config.set_ai_enabled(False)
@@ -232,7 +232,7 @@ def test_answer_surfaces_a_failed_run(monkeypatch):
 
 def test_endpoint_calls_back_on_its_own_port_in_the_current_workspace(monkeypatch):
     config.set_ai_provider("claude_code")
-    monkeypatch.setattr(server, "_reachable", lambda url: True)
+    monkeypatch.setattr(chat_api, "_reachable", lambda url: True)
     seen = fake_claude(monkeypatch, stream({"type": "result", "result": "Ok."}))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]}).json()["answer"] == "Ok."
@@ -246,7 +246,7 @@ def test_endpoint_calls_back_on_its_own_port_in_the_current_workspace(monkeypatc
 def test_agent_calls_back_on_the_address_the_request_arrived_on(monkeypatch, host, expected):
     config.set_ai_provider("claude_code")
     urls = []
-    monkeypatch.setattr(server, "_reachable", lambda url: True)
+    monkeypatch.setattr(chat_api, "_reachable", lambda url: True)
     monkeypatch.setattr(agent, "answer", lambda messages, callback_url, focus=None: urls.append(callback_url()) or {"answer": "Ok."})
     with TestClient(server.app, base_url=f"http://{host}:8765") as client:
         assert client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]}).status_code == 200
@@ -254,17 +254,17 @@ def test_agent_calls_back_on_the_address_the_request_arrived_on(monkeypatch, hos
 
 
 def test_callback_url_falls_back_to_loopback_for_other_addresses(monkeypatch):
-    monkeypatch.setattr(server, "_reachable", lambda url: True)
+    monkeypatch.setattr(chat_api, "_reachable", lambda url: True)
     request = SimpleNamespace(scope={"server": ("192.168.1.5", 9000)})
-    assert server._callback_url(request) == "http://127.0.0.1:9000"
-    assert server._callback_url(SimpleNamespace(scope={"server": ("::1", 9000)})) == "http://[::1]:9000"
-    assert server._callback_url(SimpleNamespace(scope={})) == "http://127.0.0.1:8765"
+    assert chat_api._callback_url(request) == "http://127.0.0.1:9000"
+    assert chat_api._callback_url(SimpleNamespace(scope={"server": ("::1", 9000)})) == "http://[::1]:9000"
+    assert chat_api._callback_url(SimpleNamespace(scope={})) == "http://127.0.0.1:8765"
 
 
 def test_unreachable_callback_is_rejected_with_setup_guidance_before_any_model_call(monkeypatch):
     config.set_ai_provider("claude_code")
     probed = []
-    monkeypatch.setattr(server, "_reachable", lambda url: probed.append(url) or False)
+    monkeypatch.setattr(chat_api, "_reachable", lambda url: probed.append(url) or False)
     fake_claude(monkeypatch, "")
     monkeypatch.setattr(claude_code, "_run", lambda *a, **k: pytest.fail("Claude Code ran without a reachable callback"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
@@ -291,16 +291,16 @@ def test_reachable_checks_the_health_route_of_a_real_server():
         deadline = time.time() + 10
         while not http.started and time.time() < deadline:
             time.sleep(0.05)
-        assert server._reachable(f"http://127.0.0.1:{port}")
+        assert chat_api._reachable(f"http://127.0.0.1:{port}")
     finally:
         http.should_exit = True
         thread.join(timeout=10)
-    assert not server._reachable(f"http://127.0.0.1:{port}")
+    assert not chat_api._reachable(f"http://127.0.0.1:{port}")
 
 
 def test_the_provider_is_checked_before_the_callback_is_probed(monkeypatch):
     config.set_ai_provider("api")
-    monkeypatch.setattr(server, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
+    monkeypatch.setattr(chat_api, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/agent/chat", json={"messages": [{"role": "user", "content": "Hi"}]})
     assert response.status_code == 502 and "Claude subscription" in response.json()["detail"]
@@ -313,14 +313,14 @@ def test_reachable_requires_this_process_to_answer(monkeypatch, payload):
     from doxograph import fingerprint
     payload = payload if not isinstance(payload, dict) or payload.get("instance") is not None else {**payload, "instance": fingerprint.INSTANCE}
     monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=payload, request=httpx.Request("GET", a[0])))
-    assert server._reachable("http://127.0.0.1:1") is False
+    assert chat_api._reachable("http://127.0.0.1:1") is False
     good = {"app": "doxograph", "instance": fingerprint.INSTANCE}
     monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=good, request=httpx.Request("GET", a[0])))
-    assert server._reachable("http://127.0.0.1:1") is True
+    assert chat_api._reachable("http://127.0.0.1:1") is True
 
 
 def test_endpoint_maps_setup_errors_and_the_off_switch(monkeypatch):
-    monkeypatch.setattr(server, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
+    monkeypatch.setattr(chat_api, "_reachable", lambda url: pytest.fail("probed before the cheap checks"))
     body = {"messages": [{"role": "user", "content": "Hi"}], "paper": "doe2026"}
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         config.set_ai_provider("api")

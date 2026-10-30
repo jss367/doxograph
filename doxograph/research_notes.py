@@ -230,7 +230,7 @@ async def upload_image(file: UploadFile) -> dict:
                     raise ValueError("Unsupported image format")
                 image.verify()
     except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning):
-        raise HTTPException(422, "Choose a valid PNG, JPEG, GIF, or WebP image.")
+        raise HTTPException(422, "Choose a valid PNG, JPEG, GIF, or WebP image.") from None
     name = hashlib.sha256(content).hexdigest() + "." + extension
     folder = config.data_dir() / "note-images"
     folder.mkdir(parents=True, exist_ok=True)

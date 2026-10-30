@@ -8,7 +8,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from doxograph import config, extract, server, store
+from doxograph import config, extract, job_queue, server, store
 
 
 class FakeResponse:
@@ -398,7 +398,7 @@ def test_the_fill_route_queues_only_stale_papers(api, monkeypatch, corpus):
     assert api.post("/api/facets/fill", json={}).json() == {"queued": 0}
     store.add_facet("model", "models")
     submitted = []
-    monkeypatch.setattr(server, "_submit_job", lambda function, job, *args: submitted.append(args))
+    monkeypatch.setattr(job_queue, "_submit_job", lambda function, job, *args: submitted.append(args))
     assert api.post("/api/facets/fill", json={}).json() == {"queued": 1}
     assert submitted == [(["doe2026study"], False)]
 

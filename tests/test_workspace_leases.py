@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import config, server
+from doxograph import config, job_queue, server
 
 
 class ByteRangeLocks:
@@ -103,14 +103,14 @@ def test_windows_named_import_can_submit_and_run_while_request_holds_lease(windo
     workspace, locks = windows_locks
     jobs = []
 
-    @server._workspace_job
+    @job_queue._workspace_job
     def work(job, ref, analyze):
         jobs.append(job)
-        server._set(job, state="done")
+        job_queue._set(job, state="done")
 
-    monkeypatch.setattr(server, "_run_ingest", work)
+    monkeypatch.setattr(job_queue, "_run_ingest", work)
     with ThreadPoolExecutor(1) as pool:
-        monkeypatch.setattr(server, "_pool", pool)
+        monkeypatch.setattr(job_queue, "_pool", pool)
         client = TestClient(server.app, base_url="http://127.0.0.1:8765")
         response = client.post("/api/ingest", headers={"X-Doxograph-Workspace": workspace},
                                json={"text": "2602.06941", "extract": False})
@@ -123,7 +123,7 @@ def test_windows_named_import_can_submit_and_run_while_request_holds_lease(windo
 
 def test_windows_registry_only_retirement_preserves_a_concurrently_restored_directory(windows_locks, monkeypatch):
     workspace, locks = windows_locks
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     folder = config.base_data_dir() / "workspaces" / workspace
     config.shutil.rmtree(folder)
     original = config._write_workspace_records

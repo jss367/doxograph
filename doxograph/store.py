@@ -21,10 +21,10 @@ import tempfile
 import threading
 import time
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Concatenate
 
 import yaml
 from pydantic import ValidationError
@@ -52,15 +52,15 @@ _depth = threading.local()
 try:
     import fcntl
 except ImportError:  # pragma: no cover - not on POSIX
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 try:
     import msvcrt
 except ImportError:
-    msvcrt = None
+    msvcrt = None  # type: ignore[assignment]
 
 
 @contextlib.contextmanager
-def _file_lock(path: Path, *, blocking: bool = True):
+def _file_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
     """Hold an exclusive lock on `path` for the duration of the block.
 
     Silently doing nothing when no locking primitive exists would be worse than
@@ -156,13 +156,13 @@ def document_lock(name: str, *, blocking: bool = True) -> contextlib.AbstractCon
 
 
 @contextlib.contextmanager
-def paper_lock(key: str, *, blocking: bool = True):
+def paper_lock(key: str, *, blocking: bool = True) -> Iterator[None]:
     with _reentrant_file_lock(config.locks_dir() / f"{key}.lock", blocking=blocking):
         yield
 
 
 @contextlib.contextmanager
-def extraction_lock(key: str):
+def extraction_lock(key: str) -> Iterator[None]:
     """Serialize extractions, paper chats, and deletion for one paper.
 
     This is deliberately separate from ``paper_lock``. An extraction holds it
@@ -176,7 +176,7 @@ def extraction_lock(key: str):
 
 
 @contextlib.contextmanager
-def claim_lock():
+def claim_lock() -> Iterator[None]:
     """Guard "is this paper already here, and if not what key does it get".
 
     Lock order is claim before paper: ingest holds this while reserving and then
@@ -187,16 +187,16 @@ def claim_lock():
 
 
 @contextlib.contextmanager
-def vocab_lock():
+def vocab_lock() -> Iterator[None]:
     with _reentrant_file_lock(config.locks_dir() / "vocabulary.lock"):
         _recover_tag_change()
         yield
 
 
-def _locked(func):
+def _locked[**P, R](func: Callable[Concatenate[str, P], R]) -> Callable[Concatenate[str, P], R]:
     """Run a paper mutator while holding that paper's lock (first arg is the key)."""
     @functools.wraps(func)
-    def wrapper(key: str, *args, **kwargs):
+    def wrapper(key: str, /, *args: P.args, **kwargs: P.kwargs) -> R:
         with paper_lock(key):
             return func(key, *args, **kwargs)
     return wrapper
@@ -251,7 +251,7 @@ def citekey(title: str, authors: list[str], year: int | str | None) -> str:
 MAX_KEY_CANDIDATES = 10_000
 
 
-def key_candidates(base: str):
+def key_candidates(base: str) -> Iterator[str]:
     """`base`, then base+a … base+z, then base+aa, base+ab, and onward.
 
     A fixed a–z ceiling became a permanent wall once keys were retired: enough
@@ -302,7 +302,7 @@ def retire_key(key: str) -> None:
             write_atomic(retired_keys_path(), json.dumps(sorted(known), indent=2) + "\n")
 
 
-def reserve_key(base: str, **fields) -> str:
+def reserve_key(base: str, **fields: Any) -> str:
     """Claim an unused key by creating its file atomically, identity included.
 
     Checking `exists()` and writing later is not enough: several papers are
@@ -404,7 +404,7 @@ class PaperReadError(ValueError):
 VANISHED = (KeyError, OSError, json.JSONDecodeError, PaperReadError)
 
 
-def load_paper(key: str) -> dict:
+def load_paper(key: str) -> dict[str, Any]:
     path = paper_path(key)
     try:
         paper = json.loads(path.read_text(encoding="utf-8"))
@@ -427,7 +427,7 @@ def load_paper(key: str) -> dict:
         raise PaperReadError(f"Cannot read {path}: {exc}") from exc
 
 
-def _validate_paper(paper: dict) -> None:
+def _validate_paper(paper: dict[str, Any]) -> None:
     """Validate known fields without filling defaults or discarding extras.
 
     Missing fields in older corpora remain missing. The migration handles the
@@ -446,7 +446,7 @@ def _validate_paper(paper: dict) -> None:
 LEGACY_ERROR = "PDF download failed:"
 
 
-def _migrate(paper: dict) -> dict:
+def _migrate(paper: dict[str, Any]) -> dict[str, Any]:
     """Bring a paper written by an older version up to the current shape.
 
     `notes` used to hold the reason a PDF never arrived, written by the
@@ -466,7 +466,7 @@ def _migrate(paper: dict) -> dict:
     return paper
 
 
-def save_paper(paper: dict) -> None:
+def save_paper(paper: dict[str, Any]) -> None:
     from .notebook import record_history
 
     _validate_paper(paper)
@@ -506,7 +506,7 @@ def _report_paper_issues(issues: list[records.StorageIssue]) -> None:
             _reported_paper_issues.pop(directory, None)
 
 
-def all_papers(*, issues: list[records.StorageIssue] | None = None) -> list[dict]:
+def all_papers(*, issues: list[records.StorageIssue] | None = None) -> list[dict[str, Any]]:
     papers = []
     unreadable: list[records.StorageIssue] = []
     for key in paper_keys():
@@ -543,7 +543,7 @@ def delete_paper(key: str, *, before_remove: Callable[[], None] | None = None) -
     text_path(key).unlink(missing_ok=True)
 
 
-def new_paper(key: str, **fields) -> dict:
+def new_paper(key: str, **fields: Any) -> dict[str, Any]:
     paper = {
         "key": key,
         "claim_seq": 0,
@@ -584,7 +584,7 @@ def new_paper(key: str, **fields) -> dict:
     return paper
 
 
-def ensure_claim_seq(paper: dict) -> int:
+def ensure_claim_seq(paper: dict[str, Any]) -> int:
     """Set and return the paper's claim high-water mark.
 
     Corpora written before `claim_seq` existed derive it from the ids they
@@ -607,7 +607,7 @@ def ensure_claim_seq(paper: dict) -> int:
     return seq
 
 
-def next_claim_id(paper: dict) -> str:
+def next_claim_id(paper: dict[str, Any]) -> str:
     """Allocate a claim id that has never been used on this paper.
 
     Counting the current claims recycles the id of a deleted one, and ids travel
@@ -619,7 +619,7 @@ def next_claim_id(paper: dict) -> str:
     return f"{paper['key']}-c{seq}"
 
 
-def new_claim(paper: dict, **fields) -> dict:
+def new_claim(paper: dict[str, Any], **fields: Any) -> dict[str, Any]:
     claim = {
         "id": next_claim_id(paper),
         "text": "",
@@ -648,7 +648,7 @@ def new_claim(paper: dict, **fields) -> dict:
     return claim
 
 
-def check_quote(key: str, claim: dict) -> bool | None:
+def check_quote(key: str, claim: dict[str, Any]) -> bool | None:
     """Set and return `quote_verified` for one claim against the paper's PDF.
 
     The search knows where it found the quote, so the page comes along for
@@ -656,12 +656,13 @@ def check_quote(key: str, claim: dict) -> bool | None:
     """
     found = quotes.locate(pdf_path(key), claim.get("quote") or "", text_path(key),
                           guard=lambda: paper_lock(key))
-    claim["quote_verified"] = found["found"] if found else None
+    verified: bool | None = found["found"] if found else None
+    claim["quote_verified"] = verified
     claim["quote_page"] = found["page"] if found else None
-    return claim["quote_verified"]
+    return verified
 
 
-def quote_context(key: str, claim_id: str) -> dict:
+def quote_context(key: str, claim_id: str) -> dict[str, Any]:
     """Where a claim's quote sits in the paper, in the paper's own words.
 
     The answer to "this quote was not found — then what does the paper say?",
@@ -675,7 +676,7 @@ def quote_context(key: str, claim_id: str) -> dict:
         raise KeyError(claim_id)
     quote = claim.get("quote") or ""
     locator = claim.get("locator") or ""
-    context = {
+    context: dict[str, Any] = {
         "claim": claim_id, "quote": quote, "locator": locator,
         "locator_page": quotes.locator_page(locator), "diff": [],
     }
@@ -693,7 +694,7 @@ def quote_context(key: str, claim_id: str) -> dict:
 
 
 @_locked
-def verify_quotes(key: str) -> dict:
+def verify_quotes(key: str) -> dict[str, Any]:
     """Re-check every quote on a paper. For corpora extracted before quotes
     were checked, and for a PDF that arrived after its claims did."""
     paper = load_paper(key)
@@ -703,7 +704,7 @@ def verify_quotes(key: str) -> dict:
     return paper
 
 
-def clean_ledger_links(links: Any) -> list[dict]:
+def clean_ledger_links(links: Any) -> list[dict[str, Any]]:
     """Keep only links that name a claim currently in the ledger.
 
     A model can invent an ID that looks right, and `ledger.yaml` can change
@@ -737,7 +738,7 @@ class TopicConflictError(ValueError):
 
 
 @contextlib.contextmanager
-def _claim_edit_lock(key: str, patch: dict):
+def _claim_edit_lock(key: str, patch: dict[str, Any]) -> Iterator[None]:
     # Topic edits share the vocabulary lock with renames, before taking the
     # paper lock. Notes and review decisions can still land during recovery.
     # Facet edits take the facets lock first, as a facet's deletion does.
@@ -758,9 +759,10 @@ def _claim_edit_lock(key: str, patch: dict):
             yield
 
 
-def update_claim(key: str, claim_id: str, patch: dict) -> dict:
+def update_claim(key: str, claim_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     with _claim_edit_lock(key, patch):
         paper = load_paper(key)
+        claim: dict[str, Any]
         for claim in paper.get("claims", []):
             if claim.get("id") == claim_id:
                 for field, value in patch.items():
@@ -777,7 +779,7 @@ def update_claim(key: str, claim_id: str, patch: dict) -> dict:
         raise KeyError(claim_id)
 
 
-def add_claim(key: str, patch: dict) -> dict:
+def add_claim(key: str, patch: dict[str, Any]) -> dict[str, Any]:
     with _claim_edit_lock(key, patch):
         paper = load_paper(key)
         fields = {k: v for k, v in patch.items() if k in CLAIM_FIELDS and k != "facets"}
@@ -837,7 +839,7 @@ def delete_claim(key: str, claim_id: str) -> None:
     save_paper(paper)
 
 
-def refresh_status(paper: dict) -> None:
+def refresh_status(paper: dict[str, Any]) -> None:
     claims = paper.get("claims", [])
     if not claims:
         paper["status"] = "extracted" if paper.get("extraction") else "fetched"
@@ -849,16 +851,16 @@ def refresh_status(paper: dict) -> None:
 
 # --- controlled vocabulary -------------------------------------------------
 
-DEFAULT_TAGS: list[dict] = []
+DEFAULT_TAGS: list[dict[str, Any]] = []
 
 
-def _vocabulary() -> dict:
+def _vocabulary() -> dict[str, Any]:
     return storage.read_yaml_model(
         config.tags_path(), workspace_metadata.Vocabulary,
     ).model_dump(exclude_unset=True)
 
 
-def load_tags() -> list[dict]:
+def load_tags() -> list[dict[str, Any]]:
     return _vocabulary().get("tags") or []
 
 
@@ -866,7 +868,7 @@ def _retired_topics() -> set[str]:
     return set(_vocabulary().get("retired_topics", []))
 
 
-def save_tags(tags: list[dict], *, retire: str | None = None) -> None:
+def save_tags(tags: list[dict[str, Any]], *, retire: str | None = None) -> None:
     """Caller must hold `vocab_lock`; every public mutator below does."""
     ordered = sorted(tags, key=lambda t: t["name"])
     payload = _vocabulary()
@@ -891,7 +893,7 @@ def tag_names() -> list[str]:
     return [t["name"] for t in load_tags()]
 
 
-def add_tag(name: str, description: str = "") -> list[dict]:
+def add_tag(name: str, description: str = "") -> list[dict[str, Any]]:
     name = slugify(name)
     with vocab_lock():
         tags = load_tags()
@@ -976,7 +978,7 @@ def recover_storage() -> None:
         ) from exc
 
 
-def _change_tag(old: str, new: str | None, tags: list[dict]) -> None:
+def _change_tag(old: str, new: str | None, tags: list[dict[str, Any]]) -> None:
     """Start a recoverable topic change; caller holds the vocabulary lock."""
     # Refuse known damage before starting a multi-file operation. A paper
     # deleted during the scan is fine; an unreadable one must not be skipped.
@@ -1013,7 +1015,7 @@ def rename_tag(old: str, new: str) -> None:
         _change_tag(old, new, tags)
 
 
-def _move_pass(data: dict, old: str, new: str | None) -> bool:
+def _move_pass(data: dict[str, Any], old: str, new: str | None) -> bool:
     """Carry a topic's recorded pass to its new name, or drop it with the topic.
 
     A deleted topic loses the pairs it was attached to. Recreating the tag over
@@ -1128,17 +1130,17 @@ def save_context(text: str) -> None:
         write_atomic(context_path(), (text or "").strip() + "\n")
 
 
-def _ledger() -> dict:
+def _ledger() -> dict[str, Any]:
     return storage.read_yaml_model(
         config.ledger_path(), workspace_metadata.ResearchLedger,
     ).model_dump(exclude_unset=True)
 
 
-def load_ledger() -> list[dict]:
+def load_ledger() -> list[dict[str, Any]]:
     return _ledger().get("claims") or []
 
 
-def save_ledger(claims: list[dict]) -> None:
+def save_ledger(claims: list[dict[str, Any]]) -> None:
     with document_lock("ledger"):
         payload = _ledger()
         existing = {claim["id"]: claim for claim in payload.get("claims") or []}
@@ -1162,7 +1164,7 @@ def corpus_signature() -> str:
     mtime; a CLI process writing the corpus is seen the same way as this one.
     Ctime also detects ACL changes that leave contents and mode bits unchanged.
     """
-    parts: list[tuple] = []
+    parts: list[tuple[Any, ...]] = []
     for directory, suffix in ((config.papers_dir(), ".json"), (config.pdfs_dir(), ".pdf")):
         try:
             with os.scandir(directory) as entries:
@@ -1189,7 +1191,7 @@ def corpus_signature() -> str:
     return hashlib.sha1(repr(parts).encode()).hexdigest()
 
 
-def claim_rows(papers: list[dict] | None = None) -> list[dict]:
+def claim_rows(papers: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Flatten every claim with the paper fields needed to display it."""
     rows = []
     for paper in papers if papers is not None else all_papers():
@@ -1223,7 +1225,7 @@ def label_key(label: str) -> str:
     return "ı".join(part.upper().lower() for part in label.lower().split("ı"))
 
 
-def label_keys(papers: list[dict]) -> dict[str, str]:
+def label_keys(papers: list[dict[str, Any]]) -> dict[str, str]:
     """Each stored spelling's key, for the browser to use in place of its own.
 
     The browser folds case with its own Unicode tables, which can be newer or
@@ -1233,7 +1235,7 @@ def label_keys(papers: list[dict]) -> dict[str, str]:
     return {label: label_key(label) for paper in papers for label in paper.get("labels") or []}
 
 
-def has_label(paper: dict, label: str) -> bool:
+def has_label(paper: dict[str, Any], label: str) -> bool:
     return label_key(label) in {label_key(name) for name in paper.get("labels") or []}
 
 
@@ -1253,7 +1255,7 @@ def normalize_labels(values: list[str]) -> list[str]:
     return sorted(labels.values(), key=lambda label: (label_key(label), label))
 
 
-def set_labels(key: str, labels: list[str]) -> dict:
+def set_labels(key: str, labels: list[str]) -> dict[str, Any]:
     """Replace one paper's labels, under its lock."""
     with paper_lock(key):
         paper = load_paper(key)
@@ -1262,7 +1264,7 @@ def set_labels(key: str, labels: list[str]) -> dict:
         return paper
 
 
-def label_counts(papers: list[dict]) -> dict[str, int]:
+def label_counts(papers: list[dict[str, Any]]) -> dict[str, int]:
     """How many papers carry each label, commonest first, ties by name.
 
     The same shape and order as `tag_counts`, which counts claims: the two
@@ -1285,7 +1287,7 @@ def label_counts(papers: list[dict]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], label_key(kv[0]), kv[0])))
 
 
-def tag_counts(rows: list[dict]) -> dict[str, int]:
+def tag_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
         for tag in row.get("tags", []):
@@ -1367,7 +1369,7 @@ def _recover_facet_change() -> None:
         ) from exc
 
 
-def _change_facets(kind: str, name: str, facets: list[dict], old: list[str] | None = None,
+def _change_facets(kind: str, name: str, facets: list[dict[str, Any]], old: list[str] | None = None,
                    new: str = "") -> None:
     """Record a facet change, then carry it out; caller holds the facets lock."""
     # Refuse known damage before starting: an unreadable paper part way
@@ -1383,17 +1385,17 @@ def _change_facets(kind: str, name: str, facets: list[dict], old: list[str] | No
     _recover_facet_change()
 
 
-def _facets_file() -> dict:
+def _facets_file() -> dict[str, Any]:
     return storage.read_yaml_model(
         config.facets_path(), workspace_metadata.Facets,
     ).model_dump(exclude_unset=True)
 
 
-def load_facets() -> list[dict]:
+def load_facets() -> list[dict[str, Any]]:
     return _facets_file().get("facets") or []
 
 
-def _save_facets(facets: list[dict]) -> None:
+def _save_facets(facets: list[dict[str, Any]]) -> None:
     """Caller must hold `facets_lock`."""
     payload = _facets_file()
     payload["facets"] = facets
@@ -1404,7 +1406,7 @@ def _save_facets(facets: list[dict]) -> None:
     )
 
 
-def facet_basis(facet: dict) -> str:
+def facet_basis(facet: dict[str, Any]) -> str:
     """What a facet's values were filled in against. Changing the description
     changes the question, so the values on every paper go stale; aliases do
     not, since they rewrite values already on file as they are added."""
@@ -1416,7 +1418,7 @@ def facet_value_key(value: str) -> str:
     return label_key(facet_value_text(value))
 
 
-def facet_spellings(rows: list[dict], facets: list[dict]) -> dict[str, dict[str, str]]:
+def facet_spellings(rows: list[dict[str, Any]], facets: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     """For each facet, every value on file by its key, in the spelling the
     corpus uses most. A value read from a new paper takes that spelling, so
     "gpt-4" and "GPT-4" are one value without anyone merging them."""
@@ -1432,13 +1434,13 @@ def facet_value_text(value: str) -> str:
     return " ".join(value.replace(",", " ").split())
 
 
-def clean_facet_values(values: Any, facet: dict, known: dict[str, str] | None = None) -> list[str]:
+def clean_facet_values(values: Any, facet: dict[str, Any], known: dict[str, str] | None = None) -> list[str]:
     """A facet's values as they are stored: commas and whitespace collapsed,
     aliases applied, one spelling per value, sorted."""
-    aliases = facet.get("aliases") or {}
+    aliases: dict[str, str] = facet.get("aliases") or {}
     cleaned: dict[str, str] = {}
-    for value in values if isinstance(values, list) else []:
-        if not isinstance(value, str) or not (value := facet_value_text(value)):
+    for raw in values if isinstance(values, list) else []:
+        if not isinstance(raw, str) or not (value := facet_value_text(raw)):
             continue
         key = facet_value_key(value)
         if key in aliases:
@@ -1446,11 +1448,11 @@ def clean_facet_values(values: Any, facet: dict, known: dict[str, str] | None = 
             if not value:
                 continue
             key = facet_value_key(value)
-        cleaned.setdefault(key, (known or {}).get(key, value))
+        cleaned.setdefault(key, known.get(key, value) if known else value)
     return sorted(cleaned.values(), key=lambda value: (facet_value_key(value), value))
 
 
-def clean_claim_facets(raw: Any, facets: list[dict],
+def clean_claim_facets(raw: Any, facets: list[dict[str, Any]],
                        known: dict[str, dict[str, str]] | None = None) -> dict[str, list[str]]:
     """The values for each defined facet; a name no facet has is dropped, and
     so is an empty list, which says no more than a missing one."""
@@ -1463,7 +1465,7 @@ def clean_claim_facets(raw: Any, facets: list[dict],
     return cleaned
 
 
-def set_claim_facets_by_hand(claim: dict, raw: Any) -> None:
+def set_claim_facets_by_hand(claim: dict[str, Any], raw: Any) -> None:
     """Apply a person's facet values to a claim. Only the facets named in
     `raw` are set, and an empty list clears one; the rest keep what they
     hold, which may be newer than anything the person was shown. A facet
@@ -1489,7 +1491,7 @@ def set_claim_facets_by_hand(claim: dict, raw: Any) -> None:
         claim.pop("facets_hand")
 
 
-def claim_needs_facet(claim: dict, facet: dict) -> bool:
+def claim_needs_facet(claim: dict[str, Any], facet: dict[str, Any]) -> bool:
     """Whether no pass has given this claim values for `facet` under its
     current description, and no person has set them."""
     if facet["name"] in (claim.get("facets_hand") or []):
@@ -1497,13 +1499,13 @@ def claim_needs_facet(claim: dict, facet: dict) -> bool:
     return (claim.get("facet_basis") or {}).get(facet["name"]) != facet_basis(facet)
 
 
-def mark_facets_filled(claim: dict, facets: list[dict]) -> None:
+def mark_facets_filled(claim: dict[str, Any], facets: list[dict[str, Any]]) -> None:
     """Record that a pass gave this claim values for `facets` as they are."""
     claim["facet_basis"] = {**(claim.get("facet_basis") or {}),
                             **{facet["name"]: facet_basis(facet) for facet in facets}}
 
 
-def stale_facets(paper: dict, facets: list[dict]) -> list[str]:
+def stale_facets(paper: dict[str, Any], facets: list[dict[str, Any]]) -> list[str]:
     """The facets some claim on this paper still needs values for. Tracked
     claim by claim rather than for the paper: a claim a pass left alone, such
     as one edited while the model ran or one a re-read kept, stays stale
@@ -1512,7 +1514,7 @@ def stale_facets(paper: dict, facets: list[dict]) -> list[str]:
     return [facet["name"] for facet in facets if any(claim_needs_facet(c, facet) for c in claims)]
 
 
-def reconcile_claim_facets(claim: dict, facets: list[dict]) -> None:
+def reconcile_claim_facets(claim: dict[str, Any], facets: list[dict[str, Any]]) -> None:
     """Bring facet data from an older copy of a claim, from history or a
     backup, into line with the facets as they are now: values for a deleted
     facet are dropped, aliases and removals made since are applied, and
@@ -1531,7 +1533,7 @@ def reconcile_claim_facets(claim: dict, facets: list[dict]) -> None:
         claim.pop("facet_basis", None)
 
 
-def facet_counts(rows: list[dict], facets: list[dict]) -> dict[str, dict[str, int]]:
+def facet_counts(rows: list[dict[str, Any]], facets: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     """How many claims carry each value of each facet, commonest first.
     Spellings that differ only in case count as one value, shown as the
     spelling most claims use."""
@@ -1545,11 +1547,11 @@ def facet_counts(rows: list[dict], facets: list[dict]) -> dict[str, dict[str, in
                 seen[value] = seen.get(value, 0) + 1
         counts = {min(seen, key=lambda value: (-seen[value], value)): sum(seen.values())
                   for seen in spellings.values()}
-        result[name] = dict(sorted(counts.items(), key=lambda kv: (-kv[1], facet_value_key(kv[0]), kv[0])))
+        result[name] = dict[str, Any](sorted(counts.items(), key=lambda kv: (-kv[1], facet_value_key(kv[0]), kv[0])))
     return result
 
 
-def stale_facet_papers(papers: list[dict], facets: list[dict]) -> dict[str, int]:
+def stale_facet_papers(papers: list[dict[str, Any]], facets: list[dict[str, Any]]) -> dict[str, int]:
     """For each facet, how many papers have claims it has not been filled on."""
     counts = {facet["name"]: 0 for facet in facets}
     for paper in papers:
@@ -1558,7 +1560,7 @@ def stale_facet_papers(papers: list[dict], facets: list[dict]) -> dict[str, int]
     return counts
 
 
-def add_facet(name: str, description: str = "") -> list[dict]:
+def add_facet(name: str, description: str = "") -> list[dict[str, Any]]:
     name = slugify(name)
     if not name:
         raise ValueError("Name the facet with at least one letter or digit.")
@@ -1571,7 +1573,7 @@ def add_facet(name: str, description: str = "") -> list[dict]:
         return facets
 
 
-def describe_facet(name: str, description: str) -> list[dict]:
+def describe_facet(name: str, description: str) -> list[dict[str, Any]]:
     """Change what a facet asks for. Every paper's values for it go stale."""
     with facets_lock():
         facets = load_facets()
@@ -1583,7 +1585,7 @@ def describe_facet(name: str, description: str) -> list[dict]:
         return facets
 
 
-def _rewrite_papers(rewrite: Callable[[dict], bool]) -> None:
+def _rewrite_papers(rewrite: Callable[[dict[str, Any]], bool]) -> None:
     """Apply `rewrite` to every paper under its lock, saving the ones it
     changed. Caller holds `facets_lock`."""
     for key in paper_keys():
@@ -1596,7 +1598,7 @@ def _rewrite_papers(rewrite: Callable[[dict], bool]) -> None:
                 save_paper(paper)
 
 
-def delete_facet(name: str) -> list[dict]:
+def delete_facet(name: str) -> list[dict[str, Any]]:
     """Remove a facet and its values from every claim.
 
     The values go first and the definition last, so a delete cut short
@@ -1609,7 +1611,7 @@ def delete_facet(name: str) -> list[dict]:
         return load_facets()
 
 
-def _strip_facet(paper: dict, name: str) -> bool:
+def _strip_facet(paper: dict[str, Any], name: str) -> bool:
     changed = False
     for claim in paper.get("claims", []):
         changed |= (claim.get("facets") or {}).pop(name, None) is not None
@@ -1621,7 +1623,7 @@ def _strip_facet(paper: dict, name: str) -> bool:
     return changed
 
 
-def _rewrite_values(paper: dict, name: str, old_keys: set[str], new: str) -> bool:
+def _rewrite_values(paper: dict[str, Any], name: str, old_keys: set[str], new: str) -> bool:
     """Put `new` in place of the values `old_keys` names, or drop them when
     `new` is empty. Running it twice changes nothing more."""
     changed = False
@@ -1639,7 +1641,7 @@ def _rewrite_values(paper: dict, name: str, old_keys: set[str], new: str) -> boo
     return changed
 
 
-def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict]:
+def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict[str, Any]]:
     """Rename one value, merge several into one, or with an empty `new`
     remove them, on every claim. The old spellings become aliases, so a later
     read writes the new value in their place, or drops them."""
@@ -1654,7 +1656,7 @@ def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict]:
         old_keys.discard(new_key)
         if not old_keys:
             return facets
-        aliases = dict(facet.get("aliases") or {})
+        aliases = dict[str, Any](facet.get("aliases") or {})
         # An alias that pointed at a value being renamed follows it.
         for key, target in aliases.items():
             if target and facet_value_key(target) in old_keys:
@@ -1663,7 +1665,7 @@ def rewrite_facet_values(name: str, old: list[str], new: str) -> list[dict]:
             aliases[key] = new
         if new_key is not None:
             aliases.pop(new_key, None)
-        facet["aliases"] = dict(sorted(aliases.items()))
+        facet["aliases"] = dict[str, Any](sorted(aliases.items()))
         _change_facets("values", name, facets, sorted(old_keys), new)
         return load_facets()
 
@@ -1681,7 +1683,7 @@ def needs_extraction(key: str) -> bool:
     return pdf_path(key).exists() and not paper.get("claims")
 
 
-def summarize(paper: dict) -> dict:
+def summarize(paper: dict[str, Any]) -> dict[str, Any]:
     claims = paper.get("claims", [])
     return {
         "key": paper["key"],
@@ -1733,7 +1735,7 @@ def tensions_path() -> Path:
 
 
 @contextlib.contextmanager
-def tensions_lock():
+def tensions_lock() -> Iterator[None]:
     """Guard `tensions.json`. Nothing else nests inside it. It nests inside
     `vocab_lock` alone: a tag rename rewrites topics here, and a tension merge
     takes both so it cannot land halfway through a rename. The pass itself
@@ -1742,7 +1744,7 @@ def tensions_lock():
         yield
 
 
-def _read_tensions() -> dict:
+def _read_tensions() -> dict[str, Any]:
     """Read the ledger, reporting where it is malformed rather than reading it
     as empty. Every writer starts here, so an empty reading would be written
     back over the file: every decision gone and ids restarting at t1. Only a
@@ -1755,21 +1757,21 @@ def _read_tensions() -> dict:
     return loaded
 
 
-def load_tensions() -> list[dict]:
+def load_tensions() -> list[dict[str, Any]]:
     return list(_read_tensions()["tensions"])
 
 
-def _save_tensions(data: dict) -> None:
+def _save_tensions(data: dict[str, Any]) -> None:
     """Caller holds `tensions_lock`."""
     write_json(tensions_path(), data)
 
 
-def _pair(ids) -> tuple[str, str]:
+def _pair(ids: Iterable[str]) -> tuple[str, str]:
     a, b = sorted(ids)
     return (a, b)
 
 
-def _live_claims() -> tuple[dict[str, dict], bool]:
+def _live_claims() -> tuple[dict[str, dict[str, Any]], bool]:
     """Every claim on disk by id, and whether any paper could not be read.
 
     A merge prunes records against the corpus as it is now, and a claim whose
@@ -1786,12 +1788,12 @@ def _live_claims() -> tuple[dict[str, dict], bool]:
     return {c["id"]: c for c in claim_rows(papers)}, bool(issues)
 
 
-def _held_back(ids, live: dict[str, dict], unreadable: bool) -> bool:
+def _held_back(ids: Iterable[str], live: dict[str, dict[str, Any]], unreadable: bool) -> bool:
     """Whether a record's claims include one that cannot be seen right now."""
     return unreadable and any(i not in live for i in ids)
 
 
-def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
+def _shared_topics(tension: dict[str, Any], live: dict[str, dict[str, Any]]) -> list[str]:
     """The stored topics both claims still carry. A topic removed from either
     claim in the editor leaves the tension with it: a pass under that topic
     can no longer return the pair, since the edited claim is no longer in the
@@ -1801,7 +1803,7 @@ def _shared_topics(tension: dict, live: dict[str, dict]) -> list[str]:
     return sorted(t for t in tension.get("topics", []) if all(t in s for s in tags))
 
 
-def claim_fingerprint(claim: dict) -> str:
+def claim_fingerprint(claim: dict[str, Any]) -> str:
     """What a tension's judgment rests on: everything `_tension_listing` shows
     the model about a claim, whose paper included. If the text, evidence or
     kind changes the judgment was made about a claim that no longer exists,
@@ -1811,7 +1813,7 @@ def claim_fingerprint(claim: dict) -> str:
                        claim.get("kind", "finding"), cite_head(claim)])
 
 
-def cite_head(claim: dict) -> str:
+def cite_head(claim: dict[str, Any]) -> str:
     """How a cross-paper prompt names a claim's paper.
 
     `_tension_listing` writes the cited surname, "et al." where there is more
@@ -1827,7 +1829,7 @@ def cite_head(claim: dict) -> str:
     return f"{head} ({claim.get('paper_year') or 'n.d.'}): {claim.get('paper_title') or key}"
 
 
-def _forget_passes(data: dict, topics: set[str]) -> None:
+def _forget_passes(data: dict[str, Any], topics: set[str]) -> None:
     """Drop the recorded pass for each of `topics`. Caller saves."""
     passes = data.get("passes") or {}
     for topic in topics:
@@ -1835,18 +1837,18 @@ def _forget_passes(data: dict, topics: set[str]) -> None:
     data["passes"] = passes
 
 
-def _topic_unchanged(topic: str, shown: dict[str, dict], live: dict[str, dict]) -> bool:
+def _topic_unchanged(topic: str, shown: dict[str, dict[str, Any]], live: dict[str, dict[str, Any]]) -> bool:
     """Whether a topic still holds the claims a pass was asked about, as it
     was asked about them. Anything else and the answer describes a question
     that is no longer being put."""
-    def basis(claims):
+    def basis(claims: dict[str, dict[str, Any]]) -> dict[str, str]:
         return {i: claim_fingerprint(c) for i, c in claims.items()
                 if topic in (c.get("tags") or [])}
     was = basis(shown)
     return bool(was) and was == basis(live)
 
 
-def pass_signature(topic: str, rows: list[dict], extra: str = "") -> str:
+def pass_signature(topic: str, rows: list[dict[str, Any]], extra: str = "") -> str:
     """What a per-topic pass was asked about, in one string.
 
     Everything the prompt carries: which claims are in the topic, what each one
@@ -1873,8 +1875,8 @@ def agreement_pass(topic: str) -> str | None:
     return (_read_agreements().get("passes") or {}).get(topic)
 
 
-def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict],
-                    signature: str | None = None) -> dict:
+def record_tensions(topic: str, found: list[dict[str, Any]], claims_by_id: dict[str, dict[str, Any]],
+                    signature: str | None = None) -> dict[str, Any]:
     """Merge one topic's model output into the file.
 
     `found` is a list of `{"claims": [id, id], "kind", "note"}`; `claims_by_id`
@@ -1999,7 +2001,7 @@ def record_tensions(topic: str, found: list[dict], claims_by_id: dict[str, dict]
         return {"added": added, "reopened": reopened, "kept": kept}
 
 
-def set_tension_status(tension_id: str, status: str) -> dict:
+def set_tension_status(tension_id: str, status: str) -> dict[str, Any]:
     """Record the reviewer's decision.
 
     Confirming or dismissing is a judgment about the claims as they read now,
@@ -2012,6 +2014,7 @@ def set_tension_status(tension_id: str, status: str) -> dict:
         raise ValueError(f"status must be one of {TENSION_STATUSES}, not {status!r}")
     with tensions_lock():
         data = _read_tensions()
+        tension: dict[str, Any]
         for tension in data["tensions"]:
             if tension.get("id") == tension_id:
                 tension["status"] = status
@@ -2045,7 +2048,7 @@ def delete_tension(tension_id: str) -> None:
         _save_tensions(data)
 
 
-def tension_rows(rows: list[dict] | None = None) -> list[dict]:
+def tension_rows(rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Every tension whose claims still exist, joined to those claims.
 
     Each row carries `claims` as the two claim rows (not ids), plus `stale`,
@@ -2068,11 +2071,11 @@ def tension_rows(rows: list[dict] | None = None) -> list[dict]:
         row["stale"] = any(fingerprints.get(i) != claim_fingerprint(live[i]) for i in ids)
         out.append(row)
     order = {s: n for n, s in enumerate(TENSION_STATUSES)}
-    out.sort(key=lambda t: (order.get(t.get("status"), 9), t.get("found") or ""), reverse=False)
+    out.sort(key=lambda t: (order.get(t.get("status", ""), 9), t.get("found") or ""), reverse=False)
     return out
 
 
-def tension_topics(rows: list[dict] | None = None) -> list[str]:
+def tension_topics(rows: list[dict[str, Any]] | None = None) -> list[str]:
     """Topics where a tension is possible: claims from at least two papers."""
     papers_by_tag: dict[str, set[str]] = {}
     for row in rows if rows is not None else claim_rows():
@@ -2096,7 +2099,7 @@ def syntheses_path() -> Path:
 
 
 @contextlib.contextmanager
-def syntheses_lock():
+def syntheses_lock() -> Iterator[None]:
     """Guard `syntheses.json`. Nothing else nests inside it. It nests inside
     `vocab_lock` alone: a tag rename rewrites topics here, and a write from
     the model takes both so it cannot land halfway through a rename. It is
@@ -2105,7 +2108,7 @@ def syntheses_lock():
         yield
 
 
-def _read_syntheses() -> dict:
+def _read_syntheses() -> dict[str, Any]:
     """Read the file, reporting where it is malformed rather than reading it
     as empty: every writer starts here and would write the empty reading back
     over it. Only a missing file is empty."""
@@ -2114,20 +2117,20 @@ def _read_syntheses() -> dict:
     return loaded
 
 
-def load_syntheses() -> dict[str, dict]:
+def load_syntheses() -> dict[str, dict[str, Any]]:
     return dict(_read_syntheses()["syntheses"])
 
 
-def _save_syntheses(data: dict) -> None:
+def _save_syntheses(data: dict[str, Any]) -> None:
     """Caller holds `syntheses_lock`."""
     write_json(syntheses_path(), data)
 
 
-def topic_claims(topic: str, rows: list[dict] | None = None) -> list[dict]:
+def topic_claims(topic: str, rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     return [r for r in (rows if rows is not None else claim_rows()) if topic in (r.get("tags") or [])]
 
 
-def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None,
+def synthesis_prompt_basis(topic: str, tags: list[dict[str, Any]] | None = None,
                            context: str | None = None) -> str:
     """What a synthesis was asked, apart from its claims and tensions.
 
@@ -2149,7 +2152,7 @@ def synthesis_prompt_basis(topic: str, tags: list[dict] | None = None,
     return json.dumps([config.PASS_VERSION, config.analysis_identity(), topic, description, context])
 
 
-def synthesis_basis(rows: list[dict]) -> dict[str, str]:
+def synthesis_basis(rows: list[dict[str, Any]]) -> dict[str, str]:
     """Half of what a synthesis rests on: the set of claims, what each said,
     and which paper it came from. A claim added, removed, or edited (text,
     evidence, kind) changes it, and so does a correction to the author, year
@@ -2161,13 +2164,13 @@ def synthesis_basis(rows: list[dict]) -> dict[str, str]:
     return {r["id"]: synthesis_claim_basis(r) for r in rows}
 
 
-def synthesis_claim_basis(claim: dict) -> str:
+def synthesis_claim_basis(claim: dict[str, Any]) -> str:
     """One claim as a synthesis rests on it: what it says, and whose paper it
     is. The same string the tensions merge compares."""
     return claim_fingerprint(claim)
 
 
-def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
+def synthesis_tensions(topic: str, tensions: list[dict[str, Any]]) -> dict[str, list[Any]]:
     """The other half: the topic's tensions as the prompt shows them, by id,
     with kind, status, whether the prompt said a claim had changed since it was
     judged, and the note. Dismissed ones are left out of the prompt, so
@@ -2193,10 +2196,10 @@ def synthesis_tensions(topic: str, tensions: list[dict]) -> dict[str, list]:
 UNCHECKED = object()
 
 
-def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
-                     tensions: list[dict] | None = None, source: str = "model",
-                     before: dict | None | object = UNCHECKED,
-                     basis: str | None = None) -> dict | None:
+def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict[str, Any]],
+                     tensions: list[dict[str, Any]] | None = None, source: str = "model",
+                     before: dict[str, Any] | None | object = UNCHECKED,
+                     basis: str | None = None) -> dict[str, Any] | None:
     """Write one topic's synthesis.
 
     `claims_by_id` is every claim the model was shown, as it stood when the
@@ -2259,7 +2262,7 @@ def record_synthesis(topic: str, text: str, claims_by_id: dict[str, dict],
         return record
 
 
-def set_synthesis_text(topic: str, text: str) -> dict:
+def set_synthesis_text(topic: str, text: str) -> dict[str, Any]:
     """Record a correction by hand. It is a judgment against the claims and
     tensions as they stand now, so the basis is refreshed and the synthesis
     stops being stale."""
@@ -2270,7 +2273,7 @@ def set_synthesis_text(topic: str, text: str) -> dict:
         data = _read_syntheses()
         if topic not in data["syntheses"]:
             raise KeyError(topic)
-        record = data["syntheses"][topic]
+        record: dict[str, Any] = data["syntheses"][topic]
         record.update(text=text, source="hand", written=now(),
                       prompt_basis=synthesis_prompt_basis(topic),
                       claims=synthesis_basis(topic_claims(topic)),
@@ -2287,8 +2290,8 @@ def delete_synthesis(topic: str) -> None:
         _save_syntheses(data)
 
 
-def synthesis_rows(rows: list[dict] | None = None,
-                   tensions: list[dict] | None = None) -> list[dict]:
+def synthesis_rows(rows: list[dict[str, Any]] | None = None,
+                   tensions: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Every synthesis whose topic still has claims, with `stale` set when a
     claim in the topic was added, removed, or edited since it was written, or
     a tension in it was found, confirmed, dismissed, or deleted. A stale
@@ -2314,7 +2317,7 @@ def synthesis_rows(rows: list[dict] | None = None,
     return out
 
 
-def synthesis_topics(rows: list[dict] | None = None) -> list[str]:
+def synthesis_topics(rows: list[dict[str, Any]] | None = None) -> list[str]:
     """Topics worth a synthesis by default: claims from at least two papers.
     One paper's claims can be synthesized too, by naming the topic."""
     return tension_topics(rows)
@@ -2338,14 +2341,14 @@ def agreements_path() -> Path:
 
 
 @contextlib.contextmanager
-def agreements_lock():
+def agreements_lock() -> Iterator[None]:
     """Guard `agreements.json`. Nests inside `vocab_lock` alone, as the
     tensions lock does, and is never held with it."""
     with _reentrant_file_lock(config.locks_dir() / "agreements.lock"):
         yield
 
 
-def _read_agreements() -> dict:
+def _read_agreements() -> dict[str, Any]:
     loaded = storage.read_model(agreements_path(), records.Agreements).model_dump(exclude_unset=True)
     loaded.setdefault("seq", 0)
     loaded.setdefault("agreements", [])
@@ -2353,20 +2356,20 @@ def _read_agreements() -> dict:
     return loaded
 
 
-def load_agreements() -> list[dict]:
+def load_agreements() -> list[dict[str, Any]]:
     return list(_read_agreements()["agreements"])
 
 
-def _save_agreements(data: dict) -> None:
+def _save_agreements(data: dict[str, Any]) -> None:
     write_json(agreements_path(), data)
 
 
-def _agreement_papers(ids, live: dict[str, dict]) -> set[str]:
+def _agreement_papers(ids: Iterable[str], live: dict[str, dict[str, Any]]) -> set[str | None]:
     return {live[i].get("paper") for i in ids if i in live}
 
 
-def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dict],
-                      signature: str | None = None) -> dict:
+def record_agreements(topic: str, found: list[dict[str, Any]], claims_by_id: dict[str, dict[str, Any]],
+                      signature: str | None = None) -> dict[str, Any]:
     """Merge one topic's model output into the file.
 
     `found` is a list of `{"claims": [id, ...], "note"}`. The rules follow
@@ -2498,7 +2501,7 @@ def record_agreements(topic: str, found: list[dict], claims_by_id: dict[str, dic
         return {"added": added, "grown": grown, "reopened": reopened, "kept": kept}
 
 
-def set_agreement_status(agreement_id: str, status: str) -> dict:
+def set_agreement_status(agreement_id: str, status: str) -> dict[str, Any]:
     """Record the reviewer's decision; as for tensions, deciding refreshes
     the fingerprints and reopening does not. A decision is about the members
     that still exist, so it also drops deleted ones from the record, as long
@@ -2507,6 +2510,7 @@ def set_agreement_status(agreement_id: str, status: str) -> dict:
         raise ValueError(f"status must be one of {AGREEMENT_STATUSES}, not {status!r}")
     with agreements_lock():
         data = _read_agreements()
+        record: dict[str, Any]
         for record in data["agreements"]:
             if record.get("id") == agreement_id:
                 record["status"] = status
@@ -2537,7 +2541,7 @@ def delete_agreement(agreement_id: str) -> None:
         _save_agreements(data)
 
 
-def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
+def agreement_rows(rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Every agreement still backed by claims from two papers, joined to
     those claims, with `stale`, `n_papers`, and topics filtered to what every
     member still carries. Stale when a member was edited or removed since the
@@ -2567,5 +2571,5 @@ def agreement_rows(rows: list[dict] | None = None) -> list[dict]:
                         or any(fingerprints[i] != claim_fingerprint(live[i]) for i in ids))
         out.append(row)
     order = {s: n for n, s in enumerate(AGREEMENT_STATUSES)}
-    out.sort(key=lambda r: (order.get(r.get("status"), 9), -r["n_papers"], r.get("found") or ""))
+    out.sort(key=lambda r: (order.get(r.get("status", ""), 9), -r["n_papers"], r.get("found") or ""))
     return out

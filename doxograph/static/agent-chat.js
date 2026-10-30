@@ -3,7 +3,7 @@
 // "Ask the library": conversations with a subscription agent, which reads this workspace
 // through read-only tools. Conversations are saved per workspace, each with its own agent.
 // Answers can be kept as workspace-local research notes.
-// Loaded after app.js, which owns `$`, `api`, `esc`, `paragraphs`, `sendOnEnter`, and `S`.
+// Loaded after app.js, which owns `$`, `api`, `esc`, and `S`, and papers.js, which owns `paragraphs` and `sendOnEnter`.
 const agentChats = ChatThreads.create({
   prefix: 'agent',
   agents: () => ['claude_code', 'codex'],

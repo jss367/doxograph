@@ -7,12 +7,12 @@ import pytest
 from fastapi.testclient import TestClient
 from pdfs import minimal_pdf
 
-from doxograph import config, extract, ingest, server, store
+from doxograph import config, extract, ingest, job_queue, server, store
 
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         yield client
 
@@ -21,9 +21,9 @@ def client(monkeypatch):
 def test_dismiss_finished_job_preserves_paper_and_other_jobs(client, state):
     paper = store.new_paper("study", title="A study")
     store.save_paper(paper)
-    job = server._new_job("study")
-    server._set(job, state=state, key="study", detail="Result to acknowledge")
-    other = server._new_job("Another paper")
+    job = job_queue._new_job("study")
+    job_queue._set(job, state=state, key="study", detail="Result to acknowledge")
+    other = job_queue._new_job("Another paper")
 
     response = client.delete(f"/api/jobs/{job['id']}")
 
@@ -36,8 +36,8 @@ def test_dismiss_finished_job_preserves_paper_and_other_jobs(client, state):
 
 @pytest.mark.parametrize("state", ["queued", "fetching", "reading"])
 def test_running_job_cannot_be_dismissed(client, state):
-    job = server._new_job("A paper")
-    server._set(job, state=state)
+    job = job_queue._new_job("A paper")
+    job_queue._set(job, state=state)
 
     assert client.delete(f"/api/jobs/{job['id']}").status_code == 409
     assert client.get("/api/jobs").json()["jobs"] == [job]
@@ -46,8 +46,8 @@ def test_running_job_cannot_be_dismissed(client, state):
 def test_job_cannot_be_dismissed_from_another_workspace(client):
     other = config.create_workspace("Other research")
     with config.use_workspace(other["id"]):
-        job = server._new_job("A paper")
-        server._set(job, state="error")
+        job = job_queue._new_job("A paper")
+        job_queue._set(job, state="error")
 
     assert client.delete(f"/api/jobs/{job['id']}").status_code == 404
     headers = {"X-Doxograph-Workspace": other["id"]}
@@ -63,7 +63,7 @@ def immediate_worker(monkeypatch):
         future.set_result(fn(*args))
         return future
 
-    monkeypatch.setattr(server._pool, "submit", submit)
+    monkeypatch.setattr(job_queue._pool, "submit", submit)
 
 
 @pytest.fixture
@@ -77,11 +77,11 @@ def metadata_timeout(monkeypatch):
 def test_explicit_retry_uses_the_current_model_access(client, monkeypatch):
     config.set_ai_provider("codex")
     ref = ingest.Ref("url", "https://example.org/paper.pdf", "https://example.org/paper.pdf")
-    job = server._new_import_job("Paper", True, ref=ref)
-    server._set(job, state="error")
+    job = job_queue._new_import_job("Paper", True, ref=ref)
+    job_queue._set(job, state="error")
     config.set_ai_provider("claude_code")
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda fn, queued, *args: submitted.append(queued["ai_provider"]))
+    monkeypatch.setattr(job_queue._pool, "submit", lambda fn, queued, *args: submitted.append(queued["ai_provider"]))
     assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
     assert submitted == ["claude_code"]
 
@@ -159,11 +159,11 @@ def test_uploaded_bytes_survive_failure_and_are_released_after_retry(
 def test_retry_is_atomic_and_workspace_scoped(client, monkeypatch):
     other = config.create_workspace("Other research")
     with config.use_workspace(other["id"]):
-        job = server._new_import_job("study", False,
+        job = job_queue._new_import_job("study", False,
                                      ref=ingest.Ref("arxiv", "2602.06941", "2602.06941"))
-        server._set(job, state="error", detail="offline", explanation="Check your connection.")
+        job_queue._set(job, state="error", detail="offline", explanation="Check your connection.")
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args) or Future())
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *args: submitted.append(args) or Future())
     path = f"/api/jobs/{job['id']}/retry"
     assert client.post(path).status_code == 404
     headers = {"X-Doxograph-Workspace": other["id"]}
@@ -178,13 +178,13 @@ def test_retry_is_atomic_and_workspace_scoped(client, monkeypatch):
 
 
 def test_retry_submission_failure_keeps_failure_and_source(client, monkeypatch):
-    job = server._new_import_job("study", False, ref=ingest.Ref("arxiv", "2602.06941", ""))
-    server._set(job, state="error", detail="offline", explanation="Check your connection.")
+    job = job_queue._new_import_job("study", False, ref=ingest.Ref("arxiv", "2602.06941", ""))
+    job_queue._set(job, state="error", detail="offline", explanation="Check your connection.")
 
     def refuse(*args):
         raise RuntimeError("pool unavailable")
 
-    monkeypatch.setattr(server._pool, "submit", refuse)
+    monkeypatch.setattr(job_queue._pool, "submit", refuse)
     assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 503
     [failed] = client.get("/api/jobs").json()["jobs"]
     assert failed["state"] == "error"
@@ -197,8 +197,8 @@ def test_retry_respects_analysis_disabled_since_failure(client, monkeypatch, imm
     key = "study"
     store.save_paper(store.new_paper(key))
     store.pdf_path(key).write_bytes(minimal_pdf("A study"))
-    job = server._new_import_job("study", True, ref=ingest.Ref("arxiv", "2602.06941", ""))
-    server._set(job, state="error", key=key)
+    job = job_queue._new_import_job("study", True, ref=ingest.Ref("arxiv", "2602.06941", ""))
+    job_queue._set(job, state="error", key=key)
     monkeypatch.setattr(ingest, "ingest_ref", lambda ref: (key, False))
     monkeypatch.setattr(extract, "extract_paper", lambda key: pytest.fail("analysis is disabled"))
     config.set_ai_enabled(False)
@@ -238,8 +238,8 @@ def test_import_explains_why_analysis_was_skipped(
 
 @pytest.mark.parametrize("state", ["queued", "fetching", "reading", "done", "error"])
 def test_nonretryable_job_is_rejected(client, state):
-    job = server._new_job("Analysis job")
-    server._set(job, state=state)
+    job = job_queue._new_job("Analysis job")
+    job_queue._set(job, state=state)
     assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 409
     assert client.post("/api/jobs/999999/retry").status_code == 404
 
@@ -254,13 +254,13 @@ def test_failed_upload_cleanup_releases_retained_bytes(client, immediate_worker,
         assert client.delete(f"/api/jobs/{job['id']}").status_code == 204
     else:
         for _ in range(40):
-            server._set(server._new_job("Finished"), state="done")
-        server._prune_jobs()
+            job_queue._set(job_queue._new_job("Finished"), state="done")
+        job_queue._prune_jobs()
     assert list(config.pdfs_dir().glob(".incoming-*")) == []
 
 
 def test_shutdown_preserves_failed_uploads_in_every_workspace(monkeypatch, immediate_worker, metadata_timeout):
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     other = config.create_workspace("Other research")
     retained = []
     store.save_paper(store.new_paper("existing"))
@@ -283,9 +283,9 @@ def test_shutdown_preserves_failed_uploads_in_every_workspace(monkeypatch, immed
 
 
 def test_worker_failing_after_shutdown_preserves_its_retry_input(monkeypatch, metadata_timeout):
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda *args: submitted.append(args))
+    monkeypatch.setattr(job_queue._pool, "submit", lambda *args: submitted.append(args))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         client.post("/api/upload?extract_now=false",
                     files={"files": ("study.pdf", minimal_pdf("A study"), "application/pdf")})

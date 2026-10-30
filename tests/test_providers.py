@@ -13,7 +13,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from doxograph import config, extract, providers, quotes, server, store
+from doxograph import config, extract, job_queue, providers, quotes, server, store
 from pdfs import minimal_pdf
 
 
@@ -311,10 +311,10 @@ def test_provider_and_endpoint_are_in_topic_pass_signatures():
     first = (extract._pass_extra("recovery", "", ""), store.synthesis_prompt_basis("recovery"))
     select("ollama", config.MODEL)
     second = (extract._pass_extra("recovery", "", ""), store.synthesis_prompt_basis("recovery"))
-    assert all(a != b for a, b in zip(first, second))
+    assert all(a != b for a, b in zip(first, second, strict=True))
     select("ollama", config.MODEL, "http://localhost:11435")
     third = (extract._pass_extra("recovery", "", ""), store.synthesis_prompt_basis("recovery"))
-    assert all(a != b for a, b in zip(second, third))
+    assert all(a != b for a, b in zip(second, third, strict=True))
 
 
 @pytest.mark.parametrize("provider", ["ollama", "openai", "openai-compatible"])
@@ -342,9 +342,9 @@ def test_openai_missing_key_fails_before_making_a_request(monkeypatch, tmp_path)
 def test_provider_authentication_errors_explain_how_to_fix_analysis(status):
     request = httpx.Request("POST", "http://localhost:1234/v1/chat/completions")
     response = httpx.Response(status, request=request)
-    job = server._new_job("import")
+    job = job_queue._new_job("import")
     job["state"] = "reading"
-    server._import_failed(job, httpx.HTTPStatusError("Access refused", request=request, response=response))
+    job_queue._import_failed(job, httpx.HTTPStatusError("Access refused", request=request, response=response))
     assert "provider's credentials" in job["explanation"]
     assert "upload the PDF" not in job["explanation"]
 
@@ -362,8 +362,8 @@ def test_queued_batch_items_keep_the_original_provider(monkeypatch, entry):
     requests = transport(monkeypatch, {"assignments": []},
                          during=lambda: select("openai-compatible", "cloud-model", "https://remote.example/v1"))
     if entry == "server":
-        job = server._new_job("retag")
-        server._run_retag(job, keys)
+        job = job_queue._new_job("retag")
+        job_queue._run_retag(job, keys)
         assert job["state"] == "done"
     elif entry == "cli":
         assert __main__.cmd_retag(SimpleNamespace(keys=keys)) == 0
@@ -475,7 +475,7 @@ def test_remote_analysis_uses_proxy_while_loopback_bypasses_it(monkeypatch, chat
 def test_outer_queue_keeps_settings_from_job_acceptance(monkeypatch, route, operation):
     select()
     original = config.analysis_config()
-    monkeypatch.setattr(server, "_jobs", {})
+    monkeypatch.setattr(job_queue, "_jobs", {})
     monkeypatch.setattr(config, "api_key", lambda provider="anthropic": None)
     create = Mock(side_effect=AssertionError("This regression must not create an AI client"))
     monkeypatch.setattr(extract, "client", create)
@@ -497,7 +497,7 @@ def test_outer_queue_keeps_settings_from_job_acceptance(monkeypatch, route, oper
         assert release.wait(15), "The outer pool was not released"
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        monkeypatch.setattr(server, "_pool", pool)
+        monkeypatch.setattr(job_queue, "_pool", pool)
         blocker = pool.submit(block_pool)
         assert occupied.wait(5)
         try:

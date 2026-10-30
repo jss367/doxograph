@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 
-from doxograph import export, extract, server, store, __main__
+from doxograph import export, extract, job_queue, server, store, __main__
 
 
 def _paper(key, title, author, year, *claims):
@@ -430,13 +430,13 @@ def test_api_state_carries_syntheses_and_they_can_be_edited_and_deleted():
 def test_api_synthesize_defaults_to_two_paper_topics_and_accepts_any_named_topic_with_claims(monkeypatch):
     build_corpus()
     submitted = []
-    monkeypatch.setattr(server._pool, "submit", lambda fn, job, topics, force: submitted.append(topics))
+    monkeypatch.setattr(job_queue._pool, "submit", lambda fn, job, topics, force: submitted.append(topics))
     with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
         assert client.post("/api/syntheses", json={}).json() == {"queued": 1}
         assert client.post("/api/syntheses", json={"topics": ["nonesuch"]}).json() == {"queued": 0}
         body = {"topics": ["scaling", "recovery-rate", "scaling", "nonesuch"]}
         assert client.post("/api/syntheses", json=body).json() == {"queued": 2}
-        assert max(server._jobs.values(), key=lambda j: j["id"])["label"] == "synthesis of 2 topics"
+        assert max(job_queue._jobs.values(), key=lambda j: j["id"])["label"] == "synthesis of 2 topics"
     assert submitted == [["recovery-rate"], ["recovery-rate", "scaling"]]
 
 
@@ -456,15 +456,15 @@ def test_web_pass_goes_on_after_a_topic_fails_and_says_so(monkeypatch):
         return {"written": True, "skipped": False, "claims": 1, "papers": 1}
 
     monkeypatch.setattr(extract, "synthesize_topic", synth)
-    job = server._new_job("synthesis of 2 topics")
-    server._run_syntheses(job, ["recovery-rate", "scaling"])
+    job = job_queue._new_job("synthesis of 2 topics")
+    job_queue._run_syntheses(job, ["recovery-rate", "scaling"])
     assert sorted(asked) == ["recovery-rate", "scaling"]   # topics run a few at a time
     assert job["state"] == "error"
     assert job["detail"] == ("1 of 2 topics failed, 1 written; "
                              "recovery-rate: RuntimeError: synthesis refused for recovery-rate: no")
 
-    job = server._new_job("synthesis of 1 topics")
-    server._run_syntheses(job, ["scaling"])
+    job = job_queue._new_job("synthesis of 1 topics")
+    job_queue._run_syntheses(job, ["scaling"])
     assert (job["state"], job["detail"]) == ("done", "1 of 1 topics written")
 
 
@@ -478,8 +478,8 @@ def test_a_failed_pass_still_says_what_it_did_not_have_to_ask(monkeypatch):
         return {"written": False, "skipped": True, "claims": 1, "papers": 1}
 
     monkeypatch.setattr(extract, "synthesize_topic", synth)
-    job = server._new_job("synthesis of 2 topics")
-    server._run_syntheses(job, ["recovery-rate", "scaling"])
+    job = job_queue._new_job("synthesis of 2 topics")
+    job_queue._run_syntheses(job, ["recovery-rate", "scaling"])
     assert job["detail"] == ("1 of 2 topics failed, 0 written, 1 unchanged; "
                              "recovery-rate: RuntimeError: no")
 
