@@ -1212,8 +1212,14 @@ so they need no JavaScript build step.
 For the fast Python/API checks, browser executables do not need to be installed:
 
 ```
-.venv/bin/python -m pytest -m "not browser" --durations=20
+.venv/bin/python -m pytest -p no_live_providers -m "not browser" --durations=20
 ```
+
+The Python CI job uses `no_live_providers` to reject model CLI launches and
+network connections outside servers opened by the current test. Mock transports
+remain available; the guard applies to the pytest process, not child interpreters.
+CI also prints stacks for a test stalled for 60 seconds and stops the process
+before the job deadline so its diagnostics can be retained.
 
 Run browser checks separately with `-m browser`. CI splits them across four
 jobs; run the same selection locally with, for example,

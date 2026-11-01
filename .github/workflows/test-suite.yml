@@ -38,7 +38,14 @@ jobs:
           python -m pip install --no-deps -e .
           python -m pip check
       - name: Run Python tests
-        run: python -m pytest -m "not browser" -v --tb=short --durations=20
+        # Finish before the job deadline so GitHub can retain the test log.
+        # A stalled test prints its stacks after 60s; the process deadline also
+        # catches hangs during collection or session teardown.
+        run: >-
+          timeout --signal=ABRT --kill-after=10s 210s
+          python -u -X faulthandler -m pytest -p no_live_providers
+          -m "not browser" -v --tb=short --durations=20
+          -o faulthandler_timeout=60
 
   browser:
     name: Browser tests (${{ matrix.shard }}/4)
