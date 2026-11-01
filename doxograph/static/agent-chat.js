@@ -138,7 +138,9 @@ function syncAgentChatControls() {
   const problem = scopeProblem(chat);
   $('agent-send').disabled = chat.busy || chat.reading || !enabled || Boolean(problem);
   // Polls refresh availability without replacing focused scope controls.
-  $('agent-claims-only').hidden = !claimsFallback(chat);
+  $('agent-claims-only').hidden = !retrievalFallback(chat);
+  $('agent-claims-only').textContent = catalog().claims.some(c => c.paper === chat.scope.papers[0])
+    ? 'Use extracted claims only' : 'Use paper metadata only';
   $('agent-settings').hidden = !setup;
   $('agent-codex-guidance').hidden = chat.agent !== 'codex';
   $('agent-status').textContent = chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
@@ -186,9 +188,10 @@ function scopeLabel(scope, workspace = agentChats.workspace) {
   const titles = scope.papers.map(key => sources.papers.find(p => p.key === key)?.title || key);
   return `${scope.mode === 'paper' ? 'Paper' : 'Sources'}: ${titles.join(', ') || 'No sources selected'}${about}`;
 }
-function claimsFallback(chat) {
-  return chat.scope.mode === 'paper' && catalog().claims.some(c => c.paper === chat.scope.papers[0])
-    && (!catalog().papers.find(p => p.key === chat.scope.papers[0])?.has_pdf || /no readable|PDF.*unavailable/i.test(chat.error || ''));
+function retrievalFallback(chat) {
+  const paper = catalog().papers.find(p => p.key === chat.scope.papers[0]);
+  return chat.scope.mode === 'paper' && Boolean(paper)
+    && (!paper.has_pdf || /no readable|PDF.*unavailable/i.test(chat.error || ''));
 }
 function scopeProblem(chat) {
   if (!chat) return '';
@@ -198,7 +201,7 @@ function scopeProblem(chat) {
   if (scope.mode !== 'library' && scope.papers.some(key => !catalog().papers.some(p => p.key === key))) return 'Source unavailable. Repair the selection before asking another question.';
   if ((scope.focus || []).some(f => f.claim && !catalog().claims.some(c => c.paper === f.paper && c.id === f.claim))) return 'A focused claim is unavailable. Repair the selection.';
   if (scope.mode !== 'paper' && chat.agent === 'api') return 'Retrieval needs Claude or ChatGPT subscription. Choose a supported agent above; your draft is kept.';
-  if (scope.mode === 'paper' && !catalog().papers.find(p => p.key === scope.papers[0])?.has_pdf) return 'No PDF is available. Choose Use extracted claims only if this paper has claims.';
+  if (scope.mode === 'paper' && !catalog().papers.find(p => p.key === scope.papers[0])?.has_pdf) return 'No PDF is available. Use the retrieval option to ask from available paper metadata and claims.';
   return '';
 }
 function renderAskScope(chat) {
@@ -220,12 +223,14 @@ function renderAskScope(chat) {
   $('agent-expand').disabled = false;
   $('agent-add').disabled = false;
   $('agent-add').textContent = scope.mode === 'library' ? 'Choose specific sources' : 'Add sources';
-  $('agent-claims-only').hidden = !claimsFallback(chat);
+  $('agent-claims-only').hidden = !retrievalFallback(chat);
   $('agent-claims-only').disabled = false;
   const images = chat.agent === 'claude_code' || (chat.agent === 'api' && (!S.provider || S.provider === 'anthropic'));
   $('agent-input-format').textContent = scope.mode === 'paper'
     ? images ? 'Sends the full PDF, including page images, to the chosen provider.' : 'Sends extracted paper text. Figures and unreadable scanned pages are unavailable.'
-    : 'Retrieves claims and text passages as needed. Figures and page images are unavailable; a search is not an exhaustive review.';
+    : scope.mode === 'selected' && scope.papers.length === 1 && !papers.find(p => p.key === scope.papers[0])?.has_pdf && !catalog().claims.some(c => c.paper === scope.papers[0])
+      ? 'Uses available paper metadata, such as its title, abstract, and summary. Full text, extracted claims, and page images are unavailable.'
+      : 'Retrieves paper metadata, claims, and text passages as needed. Figures and page images are unavailable; a search is not an exhaustive review.';
   const starters = scope.focus?.some(f => f.claim) ? ['What supports this claim?', 'What qualifications does the paper give?', 'Find conflicting evidence']
     : scope.mode === 'library' ? ['What does this library say about…?', 'What remains unresolved?']
     : scope.papers.length > 1 ? ['Compare methods', 'Where do their findings differ?'] : ['Explain the main result', 'What are the limitations?'];

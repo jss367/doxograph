@@ -374,3 +374,55 @@ def test_attachment_only_draft_survives_contextual_open_and_refresh(engine):
                 await expect(page.locator('#agent-attachments')).to_contain_text('draft.txt')
                 assert httpx.get(url + '/api/chats').json()['chats'] == []
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('has_claims', [False, True])
+def test_paper_without_pdf_offers_explicit_scoped_retrieval(engine, has_claims, monkeypatch):
+    paper = store.new_paper('metadata', title='A study without a PDF', abstract='An abstract about recovery.')
+    if has_claims:
+        paper['claims'].append(store.new_claim(paper, text='An extracted finding.'))
+    store.save_paper(paper)
+    store.save_paper(store.new_paper('outside', title='Unrelated study'))
+    config.set_ai_provider('api')
+    calls = []
+    def answer(messages, callback):
+        capture = ask_context.active.get()
+        calls.append((capture.scope.model_dump(), messages))
+        mcp = mcp_server.create_server(workspace='default', papers=capture.scope.papers,
+            evidence_log=str(capture.log), transport=httpx.ASGITransport(app=server.app))
+        async def retrieve():
+            result = await mcp.call_tool('get_paper', {'workspace':'default', 'key':'metadata'})
+            return result.structured_content
+        evidence = asyncio.run(retrieve())['evidence'][0]
+        return {'answer':f"The abstract discusses recovery [[e:{evidence['ref']}]]. Full text was not available.",
+                'assistant':'ChatGPT', 'model':'mock'}
+    monkeypatch.setattr(agent, 'answer', answer)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1100})
+            with _server() as url:
+                await page.goto(url + '/#paper=metadata')
+                await page.get_by_role('button', name='Ask about this paper', exact=True).click()
+                await page.locator('#agent-question').fill('What does the abstract say?')
+                await expect(page.locator('#agent-send')).to_be_disabled()
+                label = 'Use extracted claims only' if has_claims else 'Use paper metadata only'
+                await page.get_by_role('button', name=label, exact=True).click()
+                await expect(page.locator('#agent-agent')).to_have_value('api')
+                await expect(page.locator('#agent-send')).to_be_disabled()
+                await expect(page.locator('#agent-status')).to_contain_text('Choose a supported agent')
+                await expect(page.locator('#agent-question')).to_have_value('What does the abstract say?')
+                if not has_claims:
+                    await expect(page.locator('#agent-input-format')).to_contain_text('Full text, extracted claims, and page images are unavailable')
+                await page.locator('#agent-agent').select_option('codex')
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-question')).to_be_empty()
+                assert len(calls) == 1 and calls[0][0]['mode'] == 'selected'
+                assert calls[0][0]['papers'] == ['metadata']
+                await page.locator('.citation-link').click()
+                await expect(page.locator('#citation-body')).to_contain_text('An abstract about recovery.')
+                saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats']
+                assert saved[0]['scope']['papers'] == ['metadata']
+    run_browser(scenario())

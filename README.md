@@ -157,9 +157,10 @@ lets you return to earlier ones in this workspace.
 Single-paper chat sends the PDF or extracted page-numbered text to the selected
 API, local, Claude subscription, or ChatGPT subscription provider. Native Claude
 PDF inputs include page images; text inputs cannot inspect figures or unreadable
-scans. If a paper has extracted claims but no readable PDF, **Use extracted claims
-only** offers retrieval through a subscription. Personal Doxograph notes are
-excluded from both paths. The ChatGPT option includes global Codex instructions,
+scans. If a paper has no readable PDF, **Use extracted claims only** offers
+retrieval through a subscription. For papers without extracted claims, **Use paper
+metadata only** retrieves available titles, abstracts, and summaries instead.
+Personal Doxograph notes are excluded from both paths. The ChatGPT option includes global Codex instructions,
 as disclosed in the panel.
 
 Source chips above the question show the evidence available to the next answer.
