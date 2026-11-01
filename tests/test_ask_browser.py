@@ -428,3 +428,39 @@ def test_paper_without_pdf_offers_explicit_scoped_retrieval(engine, has_claims, 
                 saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats']
                 assert saved[0]['scope']['papers'] == ['metadata']
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('enabled', [False, True])
+def test_ask_waits_for_initial_provider_state(engine, enabled, monkeypatch):
+    seed()
+    config.set_ai_enabled(enabled)
+    calls = model_stub(monkeypatch)
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1100})
+            started, release = asyncio.Event(), asyncio.Event()
+            async def delayed_state(route):
+                response = await route.fetch()
+                started.set()
+                await release.wait()
+                await route.fulfill(response=response)
+            await page.route('**/api/state', delayed_state)
+            with _server() as url:
+                await page.goto(url)
+                await asyncio.wait_for(started.wait(), 5)
+                await expect(page.locator('#btn-agent')).to_be_disabled()
+                release.set()
+                await page.locator('#btn-agent:enabled').click()
+                await expect(page.locator('#agent-agent')).to_have_value('codex')
+                if enabled:
+                    await page.locator('#agent-question').fill('What do these papers say?')
+                    await page.locator('#agent-send').click()
+                    await expect(page.locator('#agent-question')).to_be_empty()
+                    assert len(calls) == 1
+                else:
+                    await expect(page.locator('#agent-send')).to_be_disabled()
+                    await expect(page.locator('#agent-settings')).to_be_visible()
+                    assert not calls
+    run_browser(scenario())

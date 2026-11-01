@@ -1385,14 +1385,14 @@ async function boot() {
   connectPaperMap(workspaceClient);
   AppStartup.phase('connection');
   await loadWorkspaces();
-  // A stale saved workspace may have fallen back to default. Only open chats
-  // after that selection is final; their setup help is available with AI off.
-  $('btn-agent').disabled = false;
   applyHash();
   const changed = await pull();
   AppStartup.phase('interface');
   if (changed) corpusChanged();
   render();
+  // New conversations need both the final workspace and initial provider state.
+  // AI-off setup help remains accessible once that state is loaded.
+  $('btn-agent').disabled = false;
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   // A filter the URL named that the corpus does not have is already gone: the
