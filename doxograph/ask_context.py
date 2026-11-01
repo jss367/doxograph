@@ -98,13 +98,21 @@ def entry(**values: Any) -> dict[str, Any]:
     return Evidence(ref=digest, **values).model_dump()
 
 
+def metadata_entries(paper: dict[str, Any]) -> list[dict[str, Any]]:
+    # Both fields are returned to the model. Preserve all of each, splitting
+    # long metadata into bounded, independently citable records.
+    text = "\n\n".join(f"{name.capitalize()}:\n{paper[name]}" for name in ("summary", "abstract") if paper.get(name))
+    return [entry(kind="metadata", paper=paper["key"], title=paper.get("title", "")[:2000],
+                  text=text[offset:offset + 20000], format=f"Paper metadata, part {offset // 20000 + 1}")
+            for offset in range(0, max(1, len(text)), 20000)]
+
+
 def collect(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Only record content actually present in a successful tool response."""
     entries = []
     if isinstance(data.get("paper"), dict):
         p = data["paper"]
-        entries.append(entry(kind="metadata", paper=p["key"], title=p.get("title", "")[:2000],
-                             text=(p.get("summary") or p.get("abstract") or "")[:20000]))
+        entries.extend(metadata_entries(p))
     elif isinstance(data.get("paper"), str) and "text" in data:
         entries.append(entry(kind="passage", paper=data["paper"], page=data["page"], text=data["text"][:20000]))
     for p in data.get("papers", []):
@@ -123,8 +131,7 @@ def collect(data: dict[str, Any]) -> list[dict[str, Any]]:
                                  quote=(row.get("quote") or "")[:20000], locator=(row.get("locator") or "")[:2000],
                                  reviewed=row.get("reviewed"), quote_verified=row.get("quote_verified")))
         elif "key" in row:
-            entries.append(entry(kind="metadata", paper=row["key"], title=row.get("title", "")[:2000],
-                                 text=(row.get("summary") or "")[:20000]))
+            entries.extend(metadata_entries(row))
     return entries
 
 

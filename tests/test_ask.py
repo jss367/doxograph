@@ -378,3 +378,21 @@ def test_more_than_500_citation_tokens_can_be_saved(monkeypatch):
                 'evidence':result['evidence'], 'citations':result['citations']}]})
         assert response.status_code == 200, response.text
         assert len(response.json()['messages'][1]['citations']) == 501
+
+
+@pytest.mark.parametrize('length', [100, 25000])
+def test_metadata_evidence_preserves_summary_and_abstract_after_later_edits(length, tmp_path):
+    paper = store.new_paper('metadata', title='Metadata study', summary='S' * length, abstract='A' * length)
+    store.save_paper(paper)
+    log = tmp_path / 'evidence.jsonl'
+    mcp = tool_server(['metadata'], log)
+    result = call(mcp, 'get_paper', key='metadata')
+    records = result['evidence']
+    assert ''.join(e['text'] for e in records) == 'Summary:\n' + 'S' * length + '\n\nAbstract:\n' + 'A' * length
+    assert all(len(e['text']) <= 20000 for e in records)
+    assert len({e['ref'] for e in records}) == len(records)
+    paper.update(summary='Changed summary', abstract='Changed abstract')
+    store.save_paper(paper)
+    assert ask_context.read_log(log) == records
+    scope = ask_context.Scope(mode='selected', papers=['metadata'])
+    assert all(c['valid'] for c in ask_context.citations(' '.join(f"[[e:{e['ref']}]]" for e in records), records, scope))

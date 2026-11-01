@@ -380,7 +380,8 @@ def test_attachment_only_draft_survives_contextual_open_and_refresh(engine):
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('has_claims', [False, True])
 def test_paper_without_pdf_offers_explicit_scoped_retrieval(engine, has_claims, monkeypatch):
-    paper = store.new_paper('metadata', title='A study without a PDF', abstract='An abstract about recovery.')
+    paper = store.new_paper('metadata', title='A study without a PDF', abstract='An abstract about recovery.',
+                            summary='A separate summary about study design.')
     if has_claims:
         paper['claims'].append(store.new_claim(paper, text='An extracted finding.'))
     store.save_paper(paper)
@@ -423,6 +424,7 @@ def test_paper_without_pdf_offers_explicit_scoped_retrieval(engine, has_claims, 
                 assert calls[0][0]['papers'] == ['metadata']
                 await page.locator('.citation-link').click()
                 await expect(page.locator('#citation-body')).to_contain_text('An abstract about recovery.')
+                await expect(page.locator('#citation-body')).to_contain_text('A separate summary about study design.')
                 saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats']
                 assert saved[0]['scope']['papers'] == ['metadata']
     run_browser(scenario())
