@@ -98,13 +98,21 @@ def entry(**values: Any) -> dict[str, Any]:
     return Evidence(ref=digest, **values).model_dump()
 
 
-def metadata_entries(paper: dict[str, Any]) -> list[dict[str, Any]]:
-    # Both fields are returned to the model. Preserve all of each, splitting
-    # long metadata into bounded, independently citable records.
-    text = "\n\n".join(f"{name.capitalize()}:\n{paper[name]}" for name in ("summary", "abstract") if paper.get(name))
-    return [entry(kind="metadata", paper=paper["key"], title=paper.get("title", "")[:2000],
-                  text=text[offset:offset + 20000], format=f"Paper metadata, part {offset // 20000 + 1}")
+def snapshot_text(record: dict[str, Any], omitted: tuple[str, ...] = ()) -> str:
+    """Preserve the fields supplied to the model, with readable field labels."""
+    return "\n\n".join(f"{name.replace('_', ' ').capitalize()}:\n"
+        + (value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True))
+        for name, value in sorted(record.items()) if name not in omitted)
+
+
+def snapshot_entries(text: str, label: str, **values: Any) -> list[dict[str, Any]]:
+    return [entry(**values, text=text[offset:offset + 20000], format=f"{label}, part {offset // 20000 + 1}")
             for offset in range(0, max(1, len(text)), 20000)]
+
+
+def metadata_entries(paper: dict[str, Any]) -> list[dict[str, Any]]:
+    return snapshot_entries(snapshot_text(paper, ("notes",)), "Paper metadata",
+                            kind="metadata", paper=paper["key"], title=paper.get("title", "")[:2000])
 
 
 def collect(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -116,20 +124,21 @@ def collect(data: dict[str, Any]) -> list[dict[str, Any]]:
     elif isinstance(data.get("paper"), str) and "text" in data:
         entries.append(entry(kind="passage", paper=data["paper"], page=data["page"], text=data["text"][:20000]))
     for p in data.get("papers", []):
+        entries.extend(metadata_entries({k: v for k, v in p.items() if k != "passages"}))
         for passage in p.get("passages", []):
             entries.append(entry(kind="passage", paper=p["key"], title=p.get("title", "")[:2000],
                                  page=passage["page"], text=passage["text"][:20000]))
     for row in data.get("items", []):
         if row.get("source_papers"):
-            entries.append(entry(kind="analysis", paper=row["source_papers"][0], sources=row["source_papers"],
+            entries.extend(snapshot_entries(snapshot_text(row), "Analysis evidence",
+                kind="analysis", paper=row["source_papers"][0], sources=row["source_papers"],
                 title=f"{data.get('kind', 'Analysis').capitalize()} · {row.get('topic') or ', '.join(row.get('topics', []))}"[:2000],
-                text=(row.get("text") or row.get("note") or "")[:20000],
                 status=row.get("status", ""), stale=bool(row.get("stale"))))
         elif "paper" in row and "text" in row and "id" in row:
-            entries.append(entry(kind="claim", paper=row["paper"], claim=row["id"],
-                                 title=row.get("paper_title", "")[:2000], text=row["text"][:20000],
-                                 quote=(row.get("quote") or "")[:20000], locator=(row.get("locator") or "")[:2000],
-                                 reviewed=row.get("reviewed"), quote_verified=row.get("quote_verified")))
+            entries.extend(snapshot_entries(snapshot_text(row, query.PERSONAL_CLAIM_FIELDS), "Claim evidence",
+                kind="claim", paper=row["paper"], claim=row["id"], title=row.get("paper_title", "")[:2000],
+                quote=(row.get("quote") or "")[:20000], locator=(row.get("locator") or "")[:2000],
+                reviewed=row.get("reviewed"), quote_verified=row.get("quote_verified")))
         elif "key" in row:
             entries.extend(metadata_entries(row))
     return entries

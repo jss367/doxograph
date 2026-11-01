@@ -117,7 +117,7 @@ def test_ask_focus_is_loaded_without_notes_and_evidence_persists(monkeypatch):
         result = first.json()
         assert seen[0].scope.focus[0].text == claim["text"]
         assert [c["valid"] for c in result["citations"]] == [True, False]
-        assert result["evidence"][0]["text"] == claim["text"]
+        assert claim["text"] in result["evidence"][0]["text"]
         conversation = uuid.uuid4().hex
         messages = [{**body["messages"][0], "scope": result["scope"]},
                     {"role": "assistant", "content": result["answer"], "evidence": result["evidence"],
@@ -131,7 +131,7 @@ def test_ask_focus_is_loaded_without_notes_and_evidence_persists(monkeypatch):
             "messages": [{"role": m["role"], "content": m["content"]} for m in messages] + [{"role": "user", "content": "Limitations?"}]}
         second = client.post("/api/ask", json=follow)
         assert second.status_code == 200, second.text
-        assert second.json()["evidence"][0]["text"] == claim["text"]
+        assert second.json()["evidence"][0]["text"] == result["evidence"][0]["text"]
         assert second.json()["evidence"][0]["carried"] is True
         narrowed = client.post("/api/ask", json={**follow, "scope": {"mode": "selected", "papers": ["a"]}})
         assert narrowed.status_code == 409
@@ -388,7 +388,9 @@ def test_metadata_evidence_preserves_summary_and_abstract_after_later_edits(leng
     mcp = tool_server(['metadata'], log)
     result = call(mcp, 'get_paper', key='metadata')
     records = result['evidence']
-    assert ''.join(e['text'] for e in records) == 'Summary:\n' + 'S' * length + '\n\nAbstract:\n' + 'A' * length
+    text = ''.join(e['text'] for e in records)
+    assert 'Summary:\n' + 'S' * length in text
+    assert 'Abstract:\n' + 'A' * length in text
     assert all(len(e['text']) <= 20000 for e in records)
     assert len({e['ref'] for e in records}) == len(records)
     paper.update(summary='Changed summary', abstract='Changed abstract')
@@ -396,3 +398,50 @@ def test_metadata_evidence_preserves_summary_and_abstract_after_later_edits(leng
     assert ask_context.read_log(log) == records
     scope = ask_context.Scope(mode='selected', papers=['metadata'])
     assert all(c['valid'] for c in ask_context.citations(' '.join(f"[[e:{e['ref']}]]" for e in records), records, scope))
+
+
+@pytest.mark.parametrize('tool', ['get_paper', 'search_papers'])
+def test_metadata_snapshot_preserves_bibliography(tool, tmp_path):
+    paper = store.new_paper('bibliography', title='Original title', authors=['Original author'], year=2024,
+        venue='Original journal', doi='10.1234/original', source={'kind':'doi', 'id':'10.1234/original',
+        'url':'https://example.org/original'}, notes='PRIVATE')
+    store.save_paper(paper)
+    log = tmp_path / 'evidence.jsonl'
+    result = call(tool_server(['bibliography'], log), tool, **({'key':'bibliography'} if tool == 'get_paper' else {}))
+    text = '\n'.join(e['text'] for e in result['evidence'])
+    for value in ['Original author', '2024', 'Original journal', '10.1234/original', 'https://example.org/original']:
+        assert value in text
+    assert 'PRIVATE' not in text
+    paper.update(authors=['New author'], year=2026, venue='New journal')
+    store.save_paper(paper)
+    assert ask_context.read_log(log) == result['evidence']
+
+
+def test_claim_snapshot_preserves_supporting_fields_and_excludes_personal_notes(tmp_path):
+    claim = seed('a')
+    paper = store.load_paper('a')
+    paper['claims'][0].update(evidence='Supporting detail. ' * 2000, strength='central',
+        quote='Original quote', locator='Page 7', conditions='PRIVATE conditions', limitations='PRIVATE limitations')
+    store.save_paper(paper)
+    log = tmp_path / 'evidence.jsonl'
+    result = call(tool_server(['a'], log), 'search_claims')
+    records = result['evidence']
+    text = ''.join(e['text'] for e in records)
+    assert 'Supporting detail. ' * 2000 in text
+    assert 'central' in text and 'Original quote' in text and 'Page 7' in text
+    assert all(e['claim'] == claim['id'] and len(e['text']) <= 20000 for e in records)
+    assert 'PRIVATE' not in text
+    paper['claims'][0]['evidence'] = 'Edited support'
+    store.save_paper(paper)
+    assert ask_context.read_log(log) == records
+
+
+def test_analysis_and_text_search_snapshots_keep_supporting_metadata():
+    analysis = ask_context.collect({'kind':'tensions', 'items':[{'source_papers':['a', 'b'],
+        'text':'Conflicting results', 'note':'The sample sizes differ', 'status':'confirmed', 'claims':[{'id':'a-1'}]}]})
+    assert 'Conflicting results' in analysis[0]['text'] and 'The sample sizes differ' in analysis[0]['text']
+    assert 'a-1' in analysis[0]['text'] and analysis[0]['sources'] == ['a', 'b']
+    results = ask_context.collect({'papers':[{'key':'a', 'title':'Study', 'authors':['Original author'], 'year':2024,
+        'passages':[{'page':1, 'text':'Original passage'}]}]})
+    assert any(e['kind'] == 'metadata' and 'Original author' in e['text'] and '2024' in e['text'] for e in results)
+    assert any(e['kind'] == 'passage' and e['text'] == 'Original passage' for e in results)
