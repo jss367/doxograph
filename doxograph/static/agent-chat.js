@@ -52,6 +52,9 @@ function renderAgentChat(chat) {
   syncAgentChatControls();
 }
 
+function boundedNoteText(text, limit, label) {
+  return text.length <= limit ? text : `${text.slice(0, limit)}\n\n${label} shortened for note storage. Complete scope, answer, and evidence remain in the saved conversation.`;
+}
 function libraryAnswerNote(chat, index, workspace) {
   const message = chat.messages[index];
   const question = chat.messages[index - 1]?.content || chat.messages[index - 1]?.attachments?.[0]?.name || 'Library synthesis';
@@ -60,7 +63,10 @@ function libraryAnswerNote(chat, index, workspace) {
     ? `\n\n## Library lookups\n\n${message.activity.map(a => `- ${a}`).join('\n')}` : '';
   const evidence = (message.evidence || []).map(e => `- ${e.title || e.paper} · ${e.kind}${e.page ? ` · PDF page ${e.page}` : ''}${e.carried ? ` · from turn ${e.turn}` : ''}${e.stale ? ' · stale analysis' : ''}${e.status ? ` · ${e.status}` : ''}\n\n${e.text || e.quote || ''}`).join('\n\n');
   const scope = message.scope || chat.messages[index - 1]?.scope;
-  const members = scope ? `\n\nAvailable papers at submission:\n${scope.papers.map(key => `- ${message.evidence?.find(e => e.paper === key)?.title || key} (${key})`).join('\n')}` : '';
+  const members = scope ? `\n\nAvailable papers at submission (${scope.papers.length} total):\n${scope.papers.slice(0, 200).map(key => {
+    const title = message.evidence?.find(e => e.paper === key)?.title;
+    return `- ${title && title !== key ? `${title.slice(0, 200)} (${key})` : key}`;
+  }).join('\n')}${scope.papers.length > 200 ? `\n\n${scope.papers.length - 200} additional papers omitted from this note; complete membership remains in the saved conversation.` : ''}` : '';
   const provenance = `\n\n## Sources\n\n${scope ? scopeLabel(scope, workspace) : 'Evidence details unavailable for this older answer'}${members}\n\n${evidence}\n\nModel: ${message.model || 'Not recorded'}`;
   let answer = answerMarkdown(message);
   for (const c of message.citations || []) {
@@ -68,7 +74,7 @@ function libraryAnswerNote(chat, index, workspace) {
     const url = c.valid ? citationUrl(c, workspace) : '';
     answer = answer.replaceAll(c.token, c.valid ? `[${e?.title || c.paper}${c.page ? `, PDF page ${c.page}` : ''}](${url})` : `${c.token} (unverified reference)`);
   }
-  return {title, body: `## Question\n\n${question}\n\n## Answer\n\n${answer}\n\n---\n\nSaved from Ask the library · ${message.assistant || 'Assistant'} · ${message.created || new Date().toISOString()}${lookups}${provenance}`};
+  return {title, body: boundedNoteText(`## Question\n\n${question}\n\n## Answer\n\n${answer}\n\n---\n\nSaved from Ask the library · ${message.assistant || 'Assistant'} · ${message.created || new Date().toISOString()}${lookups}${provenance}`, 1_900_000, 'Note')};
 }
 
 $('agent-messages').addEventListener('click', async (event) => {

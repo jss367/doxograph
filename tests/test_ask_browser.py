@@ -510,3 +510,32 @@ def test_scope_fork_isolates_attachments_from_inflight_messages(engine):
                 assert await page.evaluate('forkDraft.draftAttachments.map(a => a.name)') == ['fork.txt']
                 await expect(page.locator('#agent-attachments')).to_contain_text('other.txt')
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_large_source_roster_saves_a_bounded_note(engine):
+    seed()
+    keys = [f'{i:05d}-' + 'x' * 194 for i in range(10000)]
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1100})
+            async def answer(route):
+                await route.fulfill(json={'answer':'A short answer.', 'scope':{'mode':'library', 'papers':keys, 'focus':[]}, 'evidence':[]})
+            await page.route('**/api/ask', answer)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill('Summarize')
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-question')).to_be_empty()
+                await page.get_by_role('button', name='Save as research note', exact=True).click()
+                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
+                note = httpx.get(url + '/api/research-notes').json()['notes'][0]
+                assert 'A short answer.' in note['body']
+                assert '9800 additional papers omitted' in note['body']
+                assert len(note['body']) < 2_000_000
+                saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats'][0]
+                assert saved['messages'][0]['scope']['papers'] == keys
+                assert await page.evaluate("boundedNoteText('x'.repeat(2100000), 1900000, 'Note').length") < 2_000_000
+    run_browser(scenario())
