@@ -488,8 +488,12 @@ def test_concurrent_tool_calls_cannot_overrun_the_evidence_budget(tmp_path):
                 for i in range(60)]})
         mcp = mcp_server.create_server(workspace='default', papers=['a'], evidence_limit=100,
             evidence_log=str(log), transport=httpx.MockTransport(response))
-        results = await asyncio.gather(*[mcp.call_tool('search_claims', {'workspace':'default', 'q':group, 'limit':60})
-            for group in ('first', 'second')], return_exceptions=True)
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*[
+                mcp.call_tool('search_claims', {'workspace':'default', 'q':group, 'limit':60})
+                for group in ('first', 'second')], return_exceptions=True), timeout=5)
+        except TimeoutError:
+            pytest.fail(f'Concurrent MCP lookup test stalled: {requests}/2 HTTP requests reached the barrier')
         assert sum(isinstance(result, ToolError) for result in results) == 1
         assert any(isinstance(result, ToolError) and 'Evidence limit reached' in str(result) for result in results)
     asyncio.run(scenario())
