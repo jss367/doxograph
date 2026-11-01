@@ -371,7 +371,7 @@ const ChatThreads = (() => {
         box.active.agent = agent;
         box.active.scope = structuredClone(scope);
         box.active.draft = draft;
-        box.active.draftAttachments = draftAttachments || [];
+        box.active.draftAttachments = structuredClone(draftAttachments || []);
         sync();
       },
       // Save into the chat the conversation belongs to, even after the dialog moved on.

@@ -464,3 +464,49 @@ def test_ask_waits_for_initial_provider_state(engine, enabled, monkeypatch):
                     await expect(page.locator('#agent-settings')).to_be_visible()
                     assert not calls
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_scope_fork_isolates_attachments_from_inflight_messages(engine):
+    seed()
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440, 'height':1100})
+            started, release = asyncio.Event(), asyncio.Event()
+            async def delayed_answer(route):
+                started.set()
+                await release.wait()
+                await route.fulfill(json={'answer':'Original answer', 'scope':route.request.post_data_json['scope'], 'evidence':[]})
+            await page.route('**/api/ask', delayed_answer)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-files').set_input_files({'name':'original.txt', 'mimeType':'text/plain', 'buffer':b'Original'})
+                await page.locator('#agent-question').fill('Original question')
+                await page.locator('#agent-send').click()
+                await asyncio.wait_for(started.wait(), 5)
+                await page.evaluate("agentChats.newScope({mode:'selected', papers:['a'], focus:[]})")
+                await expect(page.locator('#agent-attachments')).to_contain_text('original.txt')
+                await page.locator('#agent-attachments button').click()
+                await page.locator('#agent-files').set_input_files({'name':'new.txt', 'mimeType':'text/plain', 'buffer':b'New'})
+                release.set()
+                await page.wait_for_function("!document.querySelector('#agent-thread').textContent.includes('answering')")
+                saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats'][0]
+                assert [a['name'] for a in saved['messages'][0]['attachments']] == ['original.txt']
+                await page.locator('#agent-thread').select_option(saved['id'])
+                await page.locator('#agent-files').set_input_files({'name':'old-draft.txt', 'mimeType':'text/plain', 'buffer':b'Old draft'})
+                await expect(page.locator('#agent-attachments')).to_contain_text('old-draft.txt')
+                # Fork a settled conversation too, then edit both drafts independently.
+                await page.evaluate("agentChats.newScope({mode:'selected', papers:['b'], focus:[]})")
+                await page.locator('#agent-attachments button').click()
+                await page.locator('#agent-files').set_input_files({'name':'fork.txt', 'mimeType':'text/plain', 'buffer':b'Fork'})
+                await expect(page.locator('#agent-attachments')).to_contain_text('fork.txt')
+                await page.evaluate('window.forkDraft = activeAgentChat()')
+                await page.locator('#agent-thread').select_option(saved['id'])
+                await expect(page.locator('#agent-attachments')).to_contain_text('old-draft.txt')
+                await page.locator('#agent-attachments button').click()
+                await page.locator('#agent-files').set_input_files({'name':'other.txt', 'mimeType':'text/plain', 'buffer':b'Other'})
+                assert await page.evaluate('forkDraft.draftAttachments.map(a => a.name)') == ['fork.txt']
+                await expect(page.locator('#agent-attachments')).to_contain_text('other.txt')
+    run_browser(scenario())
