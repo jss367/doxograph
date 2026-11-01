@@ -470,3 +470,27 @@ def test_scoped_analyses_reject_ambiguous_claim_ids(method, kind, monkeypatch):
         response = getattr(client, method)('/api/query/evidence', params=params, **kwargs)
         assert response.status_code == 200, response.text
         assert response.json()['items'] == [] and 'EXCLUDED' not in response.text
+
+
+def test_concurrent_tool_calls_cannot_overrun_the_evidence_budget(tmp_path):
+    log = tmp_path / 'evidence.jsonl'
+    async def scenario():
+        ready = asyncio.Event()
+        requests = 0
+        async def response(request):
+            nonlocal requests
+            requests += 1
+            if requests == 2:
+                ready.set()
+            await ready.wait()
+            group = request.url.params['q']
+            return httpx.Response(200, json={'items':[{'id':f'{group}-{i}', 'paper':'a', 'text':f'{group} finding {i}'}
+                for i in range(60)]})
+        mcp = mcp_server.create_server(workspace='default', papers=['a'], evidence_limit=100,
+            evidence_log=str(log), transport=httpx.MockTransport(response))
+        results = await asyncio.gather(*[mcp.call_tool('search_claims', {'workspace':'default', 'q':group, 'limit':60})
+            for group in ('first', 'second')], return_exceptions=True)
+        assert sum(isinstance(result, ToolError) for result in results) == 1
+        assert any(isinstance(result, ToolError) and 'Evidence limit reached' in str(result) for result in results)
+    asyncio.run(scenario())
+    assert len(ask_context.read_log(log)) == 60
