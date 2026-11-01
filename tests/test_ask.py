@@ -445,3 +445,28 @@ def test_analysis_and_text_search_snapshots_keep_supporting_metadata():
         'passages':[{'page':1, 'text':'Original passage'}]}]})
     assert any(e['kind'] == 'metadata' and 'Original author' in e['text'] and '2024' in e['text'] for e in results)
     assert any(e['kind'] == 'passage' and e['text'] == 'Original passage' for e in results)
+
+
+@pytest.mark.parametrize('method', ['get', 'post'])
+@pytest.mark.parametrize('kind', ['agreements', 'tensions', 'syntheses'])
+def test_scoped_analyses_reject_ambiguous_claim_ids(method, kind, monkeypatch):
+    claims = {key: seed(key) for key in ('a', 'b', 'outside')}
+    for key in ('a', 'outside'):
+        paper = store.load_paper(key)
+        paper['claims'][0]['id'] = 'restored-duplicate'
+        store.save_paper(paper)
+    refs = ['restored-duplicate', claims['b']['id']]
+    record = {'id':'ambiguous', 'claims':refs, 'fingerprints':dict.fromkeys(refs, 'old'),
+        'note':'EXCLUDED analysis', 'topics':['recovery'], 'status':'open'}
+    monkeypatch.setattr(store, 'load_agreements', lambda: [record])
+    monkeypatch.setattr(store, 'load_tensions', lambda: [record])
+    monkeypatch.setattr(store, 'load_syntheses', lambda: {'recovery': {'text':'EXCLUDED synthesis',
+        'claims':dict.fromkeys(refs, 'old')}})
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        params = {'kind':kind, 'library_snapshot':'true'}
+        kwargs = {'json':{'paper_keys':['a', 'b']}} if method == 'post' else {}
+        if method == 'get':
+            params['paper_keys'] = ['a', 'b']
+        response = getattr(client, method)('/api/query/evidence', params=params, **kwargs)
+        assert response.status_code == 200, response.text
+        assert response.json()['items'] == [] and 'EXCLUDED' not in response.text

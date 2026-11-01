@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -134,12 +135,16 @@ def evidence(kind: Literal["agreements", "tensions", "syntheses"], topic: str = 
     rows = readers[kind](claims)
     if paper_keys is not None:
         papers_and_issues(paper_keys)  # Fail explicitly if a bound source vanished.
-        allowed = {c["id"] for c in claims if c["paper"] in paper_keys}
+        counts = Counter(c["id"] for c in claims)
+        allowed_pairs = {(c["paper"], c["id"]) for c in claims if c["paper"] in paper_keys}
+        # Persisted analyses identify claims by ID alone. A legacy/restored ID
+        # shared by multiple claims cannot establish which source supported it.
+        allowed = {claim_id for _, claim_id in allowed_pairs if counts[claim_id] == 1}
         if kind == "syntheses":
             rows = [r for r in rows if library_snapshot and set(r.get("claims", {})) <= allowed]
         else:
             rows = [r for r in rows
-            if r.get("claims") and all(c["id"] in allowed for c in r["claims"])
+            if r.get("claims") and all((c["paper"], c["id"]) in allowed_pairs and c["id"] in allowed for c in r["claims"])
             and set(r.get("fingerprints", {})) <= allowed]
         issues = []  # Never leak storage details about excluded papers.
     rows = [r for r in rows if not topic or topic in r.get("topics", []) or r.get("topic") == topic]
