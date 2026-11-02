@@ -109,7 +109,8 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 await page.get_by_role('button', name='Open saved note', exact=True).click()
                 await page.locator('#research-notes').wait_for(state='visible')
                 await ready(page)
-                assert await page.locator('#library-agent').is_hidden()
+                # The note opens in the main pane with the conversation still beside it.
+                assert await page.locator('#library-agent').is_visible()
                 assert await page.locator('#note-body').input_value() == note['body']
                 await page.reload()
                 await page.locator('#research-notes').wait_for(state='visible')
@@ -125,7 +126,6 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 assert exported.startswith('# Recovery across the project\n\n')
                 assert ANSWER in exported
                 # The conversation, and the note it was saved to, survive the reload.
-                await page.get_by_role('button', name='Close research notes', exact=True).click()
                 await page.locator('#btn-agent').click()
                 await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
                 assert await page.locator('#agent-thread [data-thread-open]').all_text_contents() == [QUESTION]
@@ -198,7 +198,6 @@ def test_committed_save_with_lost_response_retries_once_and_deleted_note_can_be_
                 await page.get_by_role('button', name='Delete note', exact=True).click()
                 await _answer(page, 'Delete note')
                 await ready(page)
-                await page.get_by_role('button', name='Close research notes', exact=True).click()
                 await page.locator('#btn-agent').click()
                 await page.get_by_role('button', name='Open saved note', exact=True).click()
                 await page.get_by_role('alert').filter(has_text='The saved note was deleted').wait_for()

@@ -400,7 +400,7 @@
         <div id="content"></div>
       </div>
     </div>
-    <section id="datasets-sheet" class="datasets-sheet" aria-labelledby="datasets-heading" hidden>
+    <section id="datasets-sheet" class="datasets-sheet main-page" aria-labelledby="datasets-heading" hidden>
       <div class="sheet-head">
         <div><h2 id="datasets-heading">Datasets</h2><span class="hint">Data used or produced by this project, connected to your research.</span></div>
       </div>
@@ -414,6 +414,21 @@
           <nav id="datasets-list" aria-label="Datasets"></nav>
         </aside>
         <div id="dataset-document"></div>
+      </div>
+    </section>
+    <section id="research-notes" class="notes-sheet main-page" aria-labelledby="notes-heading" hidden>
+      <div class="sheet-head">
+        <div><h2 id="notes-heading">Research notes</h2><span class="hint">Long-form documents for arguments, reviews, and plans, connected to your library.</span></div>
+      </div>
+      <p id="notes-status" class="hint" role="status" aria-live="polite"></p>
+      <div class="notes-layout">
+        <aside class="notes-library">
+          <button type="button" data-notes-action="new" class="primary">New note</button>
+          <label for="notes-search" class="sr-only">Search research notes</label>
+          <input type="search" id="notes-search" placeholder="Search notes…">
+          <nav id="notes-list" aria-label="Research notes"></nav>
+        </aside>
+        <div id="notes-document"></div>
       </div>
     </section>
   </section>
@@ -539,22 +554,6 @@
   <nav id="research-tabs" aria-label="Research tools"></nav>
   <p id="research-message" role="status"></p>
   <div id="research-body"></div>
-</dialog>
-<dialog id="research-notes" class="notes-sheet" aria-labelledby="notes-heading">
-  <div class="sheet-head">
-    <div><h2 id="notes-heading">Research notes</h2><span class="hint">Long-form documents for arguments, reviews, and plans, connected to your library.</span></div>
-    <button type="button" data-notes-action="close" aria-label="Close research notes">×</button>
-  </div>
-  <p id="notes-status" class="hint" role="status" aria-live="polite"></p>
-  <div class="notes-layout">
-    <aside class="notes-library">
-      <button type="button" data-notes-action="new" class="primary">New note</button>
-      <label for="notes-search" class="sr-only">Search research notes</label>
-      <input type="search" id="notes-search" placeholder="Search notes…">
-      <nav id="notes-list" aria-label="Research notes"></nav>
-    </aside>
-    <div id="notes-document"></div>
-  </div>
 </dialog>
 <dialog id="focused-review" aria-labelledby="focused-review-title">
   <div class="focus-heading">
