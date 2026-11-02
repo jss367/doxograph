@@ -387,8 +387,12 @@ function noteAutosave(key) {
       if (V.noteDrafts[key] === text) delete V.noteDrafts[key];
     },
     changed() {
+      if (workspaceClient.workspaceId !== workspace) return;
+      // A reverted edit needs no write, but must stop counting as a draft.
+      // While saving, keep it: the pending write may change the stored text.
+      if (!autosave.saving && V.noteDrafts[key] === storedNote(key)) delete V.noteDrafts[key];
       const label = document.querySelector(`[data-note-status="${CSS.escape(key)}"]`);
-      if (!label || workspaceClient.workspaceId !== workspace) return;
+      if (!label) return;
       label.textContent = autosave.describe();
       label.className = autosave.failure ? 'warn' : 'hint';
     },
