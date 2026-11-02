@@ -281,6 +281,8 @@ function graphData() {
 // set of nodes or edges changed, which is what warrants reheating.
 function graphSync() {
   const hoveredNote = GRAPH.hover?.type === 'note' ? { text: GRAPH.hover.text, label: GRAPH.hover.label } : null;
+  const hoveredNoteEdge = GRAPH.hoverEdge?.type === 'note'
+    ? { source: GRAPH.hoverEdge.source.label, target: GRAPH.hoverEdge.target.label } : null;
   const { nodes, edges, maxShared, minShared } = graphData();
   const signature = JSON.stringify([V.graph.xAxis, nodes.map((n) => [n.id, n.n, n.topic, n.color, n.year]),
     edges.map((e) => [e.type, e.a, e.b, e.w, e.n, e.open, e.relation])]);
@@ -312,7 +314,8 @@ function graphSync() {
     const old = GRAPH.hoverEdge;
     GRAPH.hoverEdge = GRAPH.edges.find((e) => e.type === old.type && e.a === old.a
       && e.b === old.b && e.relation === old.relation) || null;
-    if (!GRAPH.hoverEdge) graphTip(null);
+    if (!GRAPH.hoverEdge || (hoveredNoteEdge && (GRAPH.hoverEdge.source.label !== hoveredNoteEdge.source
+      || GRAPH.hoverEdge.target.label !== hoveredNoteEdge.target))) graphTip(null);
   }
   return changed;
 }
