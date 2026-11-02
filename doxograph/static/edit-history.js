@@ -154,7 +154,15 @@ function createEditHistory() {
             const paper = await raw(`/api/papers/${match[1]}`);
             const current = match[2] ? paper.claims.find(c => c.id === decodeURIComponent(match[2])) : paper;
             if (!current) throw new Error('This item no longer exists.');
-            await write(path, 'PATCH', merge(expected, wanted, pick(current)));
+            const patch = merge(expected, wanted, pick(current));
+            if (match[2] && patch.facets) {
+              // Claim PATCH merges named facets; omission keeps a value. Undo
+              // must name removed keys explicitly, without rewriting others.
+              patch.facets = Object.fromEntries([...new Set([...Object.keys(expected.facets || {}), ...Object.keys(wanted.facets || {})])]
+                .filter(name => !equal(expected.facets?.[name], wanted.facets?.[name]))
+                .map(name => [name, wanted.facets?.[name] || []]));
+            }
+            await write(path, 'PATCH', patch);
           };
           entry = {undo: () => restore(after, before), redo: () => restore(before, after)};
         }

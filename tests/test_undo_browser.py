@@ -160,3 +160,38 @@ def test_label_save_failure_keeps_the_draft_and_success_can_be_undone():
                 assert httpx.get(url + '/api/papers/paper').json()['labels'] == []
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_added_claim_facets_clear_on_undo_and_return_on_redo(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Facet edits'))
+    store.add_facet('method')
+    store.add_facet('model')
+    claim = store.add_claim('paper', {'text': 'A finding'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f'{url}/#view=claims&paper=paper')
+                await page.locator('.claim').wait_for()
+                path = f'/api/papers/paper/claims/{claim["id"]}'
+                await page.evaluate('''async path => {
+                  await api(path, {method:'PATCH', headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({facets:{method:['survey']}})});
+                  await refreshAll();
+                }''', path)
+                # An unrelated facet set by a different window must survive.
+                httpx.patch(url + path, json={'facets': {'model': ['GPT']}}).raise_for_status()
+                await page.keyboard.press('Meta+z')
+                await page.wait_for_function('!S.claims[0].facets.method')
+                stored = httpx.get(url + '/api/papers/paper').json()['claims'][0]
+                assert stored['facets'] == {'model': ['GPT']}
+                await page.keyboard.press('Meta+Shift+z')
+                await page.wait_for_function('S.claims[0].facets.method?.[0] === "survey"')
+                stored = httpx.get(url + '/api/papers/paper').json()['claims'][0]
+                assert stored['facets'] == {'method': ['survey'], 'model': ['GPT']}
+
+    run_browser(scenario())
