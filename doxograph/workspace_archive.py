@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import backups, bib, chats, config, notebook, research_notes, storage, store
+from . import backups, bib, chats, config, datasets, notebook, research_notes, storage, store
 
 router = APIRouter(prefix='/api/workspace')
 _downloads: dict[str, tuple[Path, str, float]] = {}
@@ -63,7 +63,7 @@ def _snapshot_locks():
     while True:
         locks = contextlib.ExitStack()
         try:
-            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'context', 'ledger',
+            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'datasets', 'context', 'ledger',
                          'agreements', 'tensions', 'syntheses', 'retired-keys', 'chats'):
                 locks.enter_context(store.document_lock(name, blocking=False))
             keys = store.paper_keys()
@@ -106,6 +106,7 @@ def build() -> Path:
                     raise HTTPException(409, f'The archive cannot include a symbolic link: papers/{key}.json')
             keys = [key for key in keys if store.paper_path(key).is_file()]
             notes = research_notes.load()
+            saved_datasets = datasets.load()
             saved_notebook = notebook.load()
             note_names = {n['id']: f'{(store.slugify(n["title"]) or "note")[:80]}-{n["id"]}.md' for n in notes}
             with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
@@ -191,6 +192,36 @@ def build() -> Path:
                     write(f'papers/{key}.md', '\n'.join(lines))
                 for note in notes:
                     write('notes/' + note_names[note['id']], '# ' + notebook.md(note['title']) + '\n\n' + portable_links(note['body'], note_names))
+                dataset_lines = ['# Project datasets', '']
+                papers_by_key = {paper['key']: paper for paper in saved_papers}
+                for dataset in saved_datasets:
+                    dataset_lines.extend(['## ' + notebook.md(dataset['name']), ''])
+                    for field, label in (('description', 'Description'), ('source', 'Source'), ('version', 'Version'),
+                                         ('license', 'License'), ('access_notes', 'Access notes')):
+                        if dataset[field]:
+                            dataset_lines.extend([label + ': ' + notebook.md(dataset[field]), ''])
+                    dataset_lines.extend(['Roles: ' + ', '.join(role.replace('-', ' ') for role in dataset['roles']), ''])
+                    if dataset['facet_values']:
+                        dataset_lines.extend(['Other dataset names: ' + notebook.md(', '.join(dataset['facet_values'])), ''])
+                    names = {store.facet_value_key(value) for value in [dataset['name'], *dataset['facet_values']]}
+                    references = {(ref['paper'], ref['claim']) for ref in dataset['claims']}
+                    for paper in saved_papers:
+                        for claim in paper.get('claims', []):
+                            if any(store.facet_value_key(value) in names for facet in ('dataset', 'datasets')
+                                   for value in claim.get('facets', {}).get(facet, [])):
+                                references.add((paper['key'], claim['id']))
+                    linked_papers = set(dataset['papers']) | {paper for paper, _ in references}
+                    for key in sorted(linked_papers):
+                        paper = papers_by_key.get(key)
+                        if paper:
+                            dataset_lines.append(f'- [{notebook.md(paper.get("title") or key)}](papers/{key}.md)')
+                        else:
+                            dataset_lines.append('- Missing paper: ' + notebook.md(key))
+                        for _, claim_id in sorted(ref for ref in references if ref[0] == key):
+                            claim = next((c for c in (paper or {}).get('claims', []) if c['id'] == claim_id), None)
+                            dataset_lines.append('  - ' + notebook.md(claim['text'] if claim else f'Missing claim: {claim_id}'))
+                    dataset_lines.append('')
+                write('datasets.md', '\n'.join(dataset_lines))
                 write('workspace-notes.md', portable_links(saved_notebook['notes'], note_names, '.'))
                 for board in saved_notebook['boards']:
                     response = notebook.export_selection(notebook.Selection(board=board['id']))
@@ -201,11 +232,13 @@ def build() -> Path:
                     write('boards/' + name, bytes(response.body).decode('utf-8') + '\n\n## Local sources\n\n' + sources)
                 write('references.bib', '\n\n'.join(bib.entry(p) for p in saved_papers))
                 write('index.md', '# ' + notebook.md(config.get_workspace()['name']) + '\n\n'
+                      + '[Project datasets](datasets.md)\n\n'
                       + '\n'.join(f'- [{notebook.md(p.get("title") or p["key"])}](papers/{p["key"]}.md)' for p in saved_papers)
                       + '\n\n## Research notes\n\n'
                       + '\n'.join(f'- [{notebook.md(n["title"])}](notes/{note_names[n["id"]]})' for n in notes))
                 write('README.md', '# Portable research workspace\n\nOpen index.md in a Markdown reader. '
-                    'The papers, notes, boards, images, PDFs, and references work without a running Doxograph server. '
+                    'The papers, notes, datasets, boards, images, PDFs, and references work without a running Doxograph server. '
+                    'Dataset records contain source references; external dataset files are not copied into this archive. '
                     'Original workspace files are under data/. Keep a copy before copying those files into an empty workspace data directory. '
                     'The archive excludes installation settings, credential files, active job inputs, and other workspaces. '
                     'Links to items outside this workspace still require their original destination. '

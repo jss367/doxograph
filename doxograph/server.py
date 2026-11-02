@@ -20,7 +20,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 from pydantic import BaseModel, Field
 
-from . import (__version__, activity, analysis_api, backups, bib, chat_api, chats, codex_cli, config, export,
+from . import (__version__, activity, analysis_api, backups, bib, chat_api, chats, codex_cli, config, datasets, export,
                fingerprint, job_journal, job_queue, notebook, origins, papers_api, query, records,
                research_notes, storage, store, workspace_archive)
 from .model_errors import ModelSetupError
@@ -62,6 +62,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.include_router(research_notes.router)
+app.include_router(datasets.router)
 app.include_router(chats.router)
 app.include_router(query.router)
 app.include_router(backups.router)
