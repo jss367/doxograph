@@ -391,6 +391,13 @@ links below a chosen number of shared claims; it starts at the median so
 a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
 and click a paper to read it. Clicking a topic filters to it.
 
+In the map, choose **X axis → Publication date** to place papers on a timeline.
+Imports retain the publication day when arXiv, DOI metadata, or a forum supplies
+it. Dates with only a month or year are centered in that period and labeled
+as such in the tooltip; papers without a date appear in **Undated**. Older
+papers that only have a year continue to use that year. The date axis adjusts
+its labels from years to months and days as you zoom in.
+
 Press `⌘K` (`Ctrl+K` on Windows or Linux), or click **Jump to…**, to search
 papers by title, author, year, or key; topics; evidence boards; and actions in
 the current workspace. Use the arrow keys and Enter to open a result, or

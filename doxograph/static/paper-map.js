@@ -121,6 +121,34 @@ function graphCite(p) {
   return `${who} ${p.year || ''}`.trim();
 }
 
+const GRAPH_DAY = 86400000;
+const GRAPH_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function graphUTC(year, month = 0, day = 1) {
+  const date = new Date(0);
+  date.setUTCFullYear(year, month, day);
+  return date.getTime();
+}
+
+function graphPublication(p) {
+  const date = p.publication_date || (Number.isInteger(p.year) && p.year > 0 ? String(p.year).padStart(4, '0') : null);
+  if (!date) return { date: null, time: null };
+  const [year, month, day] = date.split('-').map(Number);
+  const start = graphUTC(year, (month || 1) - 1, day || 1);
+  // Center imprecise dates in their known period; retain the original value
+  // for tooltips instead of presenting the midpoint as a known date.
+  const end = day ? start : month ? graphUTC(year, month) : graphUTC(year + 1);
+  return { date, time: (start + end) / 2 };
+}
+
+function graphDateLabel(date) {
+  if (!date) return 'Publication date unknown';
+  const [year, month, day] = date.split('-').map(Number);
+  if (!month) return `${year} (year only)`;
+  if (!day) return `${GRAPH_MONTHS[month - 1]} ${year} (month only)`;
+  return `${GRAPH_MONTHS[month - 1]} ${day}, ${year}`;
+}
+
 // The nodes and edges the current options call for, computed fresh from the client snapshot.
 // `maxShared` is the heaviest topic edge before the threshold is applied, so
 // the slider's range can follow the corpus.
@@ -161,6 +189,7 @@ function graphData() {
       // Colored by a facet, a paper takes the value most of its claims carry.
       color: colorBy ? graphDominantValue(facets, colorBy) : null,
       year: Number.isInteger(p.year) && p.year > 0 ? p.year : null,
+      ...graphPublication(p),
       r: 6 + 3 * Math.sqrt(p.n_claims || 0),
     });
   }
@@ -270,7 +299,7 @@ function graphData() {
 // set of nodes or edges changed, which is what warrants reheating.
 function graphSync() {
   const { nodes, edges, maxShared, minShared } = graphData();
-  const signature = JSON.stringify([V.graph.xAxis, nodes.map((n) => [n.id, n.n, n.topic, n.color, n.year]),
+  const signature = JSON.stringify([V.graph.xAxis, nodes.map((n) => [n.id, n.n, n.topic, n.color, n.year, n.date]),
     edges.map((e) => [e.type, e.a, e.b, e.w, e.n, e.open, e.relation])]);
   const changed = signature !== GRAPH.signature;
   GRAPH.signature = signature;
@@ -302,23 +331,60 @@ function graphSync() {
   return changed;
 }
 
-// Only the vertical position is simulated in timeline mode. Missing years
+// Only the vertical position is simulated in timeline mode. Missing dates
 // (including the ledger's own claims) get a separate, explicitly undated lane.
 function graphTimeline() {
   GRAPH.timeline = null;
+  // Keep the persisted option value for existing views and saved searches.
   if (V.graph.xAxis !== 'year' || !GRAPH.nodes.size) return;
   const nodes = [...GRAPH.nodes.values()];
-  const years = nodes.filter((n) => n.year != null).map((n) => n.year);
-  const min = years.length ? Math.min(...years) : null;
-  const max = years.length ? Math.max(...years) : null;
+  const dates = nodes.filter((n) => n.time != null).map((n) => n.time);
+  const min = dates.length ? Math.min(...dates) : null;
+  const max = dates.length ? Math.max(...dates) : null;
   const width = min !== max ? Math.max(640, 100 * Math.sqrt(nodes.length)) : 0;
-  const undatedX = years.length ? width / 2 + 160 : 0;
-  GRAPH.timeline = { min, max, width, undatedX, hasUndated: nodes.some((n) => n.year == null) };
+  const undatedX = dates.length ? width / 2 + 160 : 0;
+  GRAPH.timeline = { min, max, width, undatedX, hasUndated: nodes.some((n) => n.time == null) };
   for (const n of nodes) {
-    n.timelineX = n.year == null ? undatedX : min === max ? 0 : (n.year - min) / (max - min) * width - width / 2;
+    n.timelineX = n.time == null ? undatedX : min === max ? 0 : (n.time - min) / (max - min) * width - width / 2;
     n.x = n.timelineX;
     n.vx = 0;
   }
+}
+
+// Calendar-aligned ticks adapt from days to months to years as the scale changes.
+function graphDateTicks(min, max, pixels) {
+  const wanted = (max - min) * 110 / Math.max(1, pixels);
+  let unit, step;
+  if (wanted <= 14 * GRAPH_DAY) {
+    unit = 'day'; step = [1, 2, 7, 14].find(n => n * GRAPH_DAY >= wanted);
+  } else if (wanted <= 180 * GRAPH_DAY) {
+    unit = 'month'; step = [1, 2, 3, 6].find(n => n * 30 * GRAPH_DAY >= wanted);
+  } else {
+    unit = 'year';
+    const years = Math.max(1, wanted / (365.2425 * GRAPH_DAY));
+    const base = 10 ** Math.floor(Math.log10(years));
+    step = [1, 2, 5, 10].map(n => n * base).find(n => n >= years);
+  }
+  const label = time => {
+    const d = new Date(time), year = d.getUTCFullYear(), month = GRAPH_MONTHS[d.getUTCMonth()];
+    return unit === 'year' ? String(year) : unit === 'month' ? `${month} ${year}` : `${month} ${d.getUTCDate()}, ${year}`;
+  };
+  const first = new Date(min);
+  let time = unit === 'day' ? Math.ceil(min / (step * GRAPH_DAY)) * step * GRAPH_DAY
+    : unit === 'month' ? graphUTC(first.getUTCFullYear(), Math.ceil(first.getUTCMonth() / step) * step)
+    : graphUTC(Math.ceil(first.getUTCFullYear() / step) * step);
+  const ticks = [{ time: min, label: label(min) }];
+  for (; time < max;) {
+    if ((time - min) * pixels / (max - min) >= 110 && (max - time) * pixels / (max - min) >= 110) {
+      ticks.push({ time, label: label(time) });
+    }
+    const d = new Date(time);
+    time = unit === 'day' ? time + step * GRAPH_DAY
+      : unit === 'month' ? graphUTC(d.getUTCFullYear(), d.getUTCMonth() + step)
+      : graphUTC(d.getUTCFullYear() + step);
+  }
+  if (pixels >= 110) ticks.push({ time: max, label: label(max) });
+  return ticks;
 }
 
 // One step of the simulation: pairwise repulsion, springs along edges, a pull
@@ -627,26 +693,21 @@ function graphDrawTimeline(ctx, w, h, colors) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   ctx.fillStyle = colors.muted;
   if (min != null) {
-    if (min === max) tick(0, min);
+    if (min === max) {
+      const node = [...GRAPH.nodes.values()].find(n => n.time === min);
+      tick(0, node.date.length === 4 ? node.date : graphDateLabel(node.date));
+    }
     else {
-      // Whole-year ticks at 1, 2, 5, 10, ... year intervals, spaced for legibility.
-      const wanted = Math.max(1, (max - min) * 80 / (width * GRAPH.zoom));
-      const base = 10 ** Math.floor(Math.log10(wanted));
-      const step = [1, 2, 5, 10].map((n) => n * base).find((n) => n >= wanted);
-      tick(-width / 2, min);
-      for (let year = Math.ceil(min / step) * step; year < max; year += step) {
-        if ((year - min) * width * GRAPH.zoom / (max - min) < 64
-          || (max - year) * width * GRAPH.zoom / (max - min) < 64) continue;
-        tick((year - min) / (max - min) * width - width / 2, year);
+      for (const { time, label } of graphDateTicks(min, max, width * GRAPH.zoom)) {
+        tick((time - min) / (max - min) * width - width / 2, label);
       }
-      if (width * GRAPH.zoom >= 64) tick(width / 2, max);
     }
   }
   if (hasUndated) tick(undatedX, 'Undated');
   ctx.strokeStyle = colors.line;
   ctx.beginPath(); ctx.moveTo(0, h - 32); ctx.lineTo(w, h - 32); ctx.stroke();
   ctx.textAlign = 'left';
-  ctx.fillText('Publication year →', 10, h - 13);
+  ctx.fillText('Publication date →', 10, h - 13);
   ctx.restore();
 }
 
@@ -720,7 +781,7 @@ function graphTip(node, sx, sy, edge = null) {
     const p = mapClient.state.papers.find((x) => x.key === node.key) || {};
     const topics = [...node.tags].sort().slice(0, 6).map((t) => `#${t}`).join(' ');
     tip.innerHTML = `<div>${esc(node.label)}</div>
-      <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')}${p.year ? ' · ' + esc(p.year) : ''}
+      <div class="pm">${esc((p.authors || []).join(', ') || 'authors unknown')} · ${esc(graphDateLabel(node.date))}
         · ${node.n} claims${topics ? ' · ' + esc(topics) : ''}</div>`;
     const outgoing = GRAPH.edges.filter((e) => e.type === 'cite' && e.source === node).map((e) => e.target);
     const incoming = GRAPH.edges.filter((e) => e.type === 'cite' && e.target === node).map((e) => e.source);
@@ -861,8 +922,9 @@ function graphHeader() {
       topic it speaks to most, or by a facet you choose. Squares are your own claims. Drag a node to move it, scroll to
       zoom, drag the background to pan, and click a paper to read it.
       Hover over a paper or connection to see who cites whom.</p>
-    <p class="ps" data-graph-timeline-hint ${opts.xAxis === 'year' ? '' : 'hidden'}>Earlier papers are on the left, later papers on the right, using their publication year.
-      Papers without a year and your own claims are in the Undated column. Drag vertically to separate items from the same year.</p>
+    <p class="ps" data-graph-timeline-hint ${opts.xAxis === 'year' ? '' : 'hidden'}>Earlier papers are on the left, later papers on the right, using their publication date.
+      Month-only and year-only dates are centered in their known period and labeled in the tooltip.
+      Papers without a date and your own claims are in the Undated column. Drag vertically to separate items from the same date.</p>
     <div class="graph-legend">
       <span><i class="cite"></i>cites, arrow to the paper cited</span>
       <span><i class="tension"></i>papers disagree (dashed while open)</span>
@@ -875,7 +937,7 @@ function graphHeader() {
     <div class="row graph-controls">
       <label>X axis <select aria-label="X axis" data-graph-opt="xAxis">
         <option value="connections" ${opts.xAxis !== 'year' ? 'selected' : ''}>Connections</option>
-        <option value="year" ${opts.xAxis === 'year' ? 'selected' : ''}>Publication year</option>
+        <option value="year" ${opts.xAxis === 'year' ? 'selected' : ''}>Publication date</option>
       </select></label>
       <label>Color by <select aria-label="Color by" data-graph-opt="color">
         <option value="">Topic</option>
@@ -1002,7 +1064,7 @@ document.getElementById('graph-nav').addEventListener('click', (event) => {
 
 // For the browser tests and anyone poking at the console: where things are.
 window.doxographGraph = () => ({
-  nodes: [...GRAPH.nodes.values()].map((n) => ({ id: n.id, type: n.type, key: n.key, x: n.x, y: n.y, r: n.r, topic: n.topic, year: n.year, dimmed: graphDimmed(n) })),
+  nodes: [...GRAPH.nodes.values()].map((n) => ({ id: n.id, type: n.type, key: n.key, x: n.x, y: n.y, r: n.r, topic: n.topic, year: n.year, date: n.date, time: n.time, dimmed: graphDimmed(n) })),
   edges: GRAPH.edges.map((e) => ({ type: e.type, a: e.a, b: e.b, w: e.w, n: e.n, relation: e.relation })),
   zoom: GRAPH.zoom, tx: GRAPH.tx, ty: GRAPH.ty, alpha: GRAPH.alpha,
   xAxis: V.graph.xAxis, timeline: GRAPH.timeline,
