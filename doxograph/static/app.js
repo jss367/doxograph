@@ -466,6 +466,11 @@ function renderWorkspacePicker() {
 function resetWorkspaceView() {
   S = workspaceClient.state;
   $('sync-status').hidden = true;
+  // Retire the catalog as soon as selection commits, before the new read can
+  // pause or fail. Earlier draft checks can still refuse a workspace switch.
+  Datasets.hide();
+  document.body.classList.remove('datasets-view');
+  $('btn-datasets').removeAttribute('aria-current');
   Object.assign(V, {
     paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},

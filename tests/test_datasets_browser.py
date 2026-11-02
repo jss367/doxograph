@@ -202,6 +202,43 @@ def test_following_dataset_evidence_preserves_history_and_draft(engine, target):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_workspace_switch_hides_dataset_before_destination_refresh(engine):
+    config.set_ai_enabled(False)
+    other = config.create_workspace('Another project')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                item = httpx.post(url + '/api/datasets', json={'name': 'Original workspace corpus'}).json()
+                await page.goto(url + '/#view=datasets&dataset=' + item['id'])
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                held, release = asyncio.Event(), asyncio.Event()
+
+                async def hold_destination(route):
+                    if route.request.headers.get('x-doxograph-workspace') == other['id']:
+                        held.set()
+                        await release.wait()
+                    await route.continue_()
+
+                await page.route('**/api/state', hold_destination)
+                await page.locator('#workspace').select_option(other['id'])
+                await asyncio.wait_for(held.wait(), timeout=5)
+                try:
+                    assert await page.locator('#workspace').input_value() == other['id']
+                    assert not await view.is_visible()
+                    assert not await page.locator('body').evaluate("node => node.classList.contains('datasets-view')")
+                finally:
+                    release.set()
+                await page.wait_for_function('workspaceController.pending === null')
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_dataset_editor_and_linked_research(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))
