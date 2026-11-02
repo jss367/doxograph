@@ -398,7 +398,10 @@ papers that support, contradict, refine, or supply a method for them; a
 link marked independent is not drawn. A slider hides topic
 links below a chosen number of shared claims; it starts at the median so
 a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
-and click a paper to read it. Clicking a topic filters to it.
+and click a paper to read it. Turn on **my notes** to include each paper’s saved
+personal note as a document node connected to that paper. Hover to preview a
+note and click it to open the paper’s note. Empty notes are omitted, and notes
+share their paper’s publication date in the timeline. Clicking a topic filters to it.
 
 In the map, choose **X axis → Publication date** to place papers on a timeline.
 Imports retain the publication day when arXiv, DOI metadata, or a forum supplies
