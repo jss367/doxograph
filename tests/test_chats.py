@@ -92,6 +92,45 @@ def test_a_save_whose_response_was_lost_still_counts_as_this_pages_own(client):
     assert client.put(f'/api/chats/{ID}', json=body | {'operation': op()}).status_code == 409
 
 
+def test_archive_restore_preserves_history_and_checks_revisions_and_workspace(client):
+    body = {'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()}
+    original = client.put(f'/api/chats/{ID}', json=body).json()
+    assert original['archived'] is False
+    archived = client.patch(f'/api/chats/{ID}', json={'revision': 1, 'archived': True}).json()
+    assert archived['archived'] is True and archived['revision'] == 2
+    assert archived['messages'] == original['messages']
+    assert archived['created'] == original['created']
+    assert archived['operation'] != original['operation']
+    assert client.get('/api/chats').json()['chats'] == [archived]
+    # Neither an old archive command nor a save whose response was lost can undo it.
+    assert client.patch(f'/api/chats/{ID}', json={'revision': 1, 'archived': False}).status_code == 409
+    assert client.put(f'/api/chats/{ID}', json=body | {'unconfirmed': [body['operation']]}).status_code == 409
+    elsewhere = config.create_workspace('Other library')
+    assert client.patch(f'/api/chats/{ID}', headers={'X-Doxograph-Workspace': elsewhere['id']},
+                        json={'revision': 2, 'archived': False}).status_code == 404
+    # Ordinary saves preserve archive state; they cannot silently restore a conversation.
+    saved = client.put(f'/api/chats/{ID}', json=body | {'revision': 2, 'operation': op()}).json()
+    assert saved['archived'] is True
+    restored = client.patch(f'/api/chats/{ID}', json={'revision': 3, 'archived': False}).json()
+    assert restored['archived'] is False and restored['revision'] == 4
+    assert restored['messages'] == original['messages']
+    # Old files without an archive flag remain readable and active.
+    path = chats.chats_dir() / f'{ID}.json'
+    legacy = json.loads(path.read_text())
+    del legacy['archived']
+    path.write_text(json.dumps(legacy))
+    assert client.get('/api/chats').json()['chats'][0]['archived'] is False
+
+
+def test_archived_conversations_survive_workspace_export(client):
+    client.put(f'/api/chats/{ID}', json={'agent': 'codex', 'messages': PAIR, 'revision': 0, 'operation': op()})
+    client.patch(f'/api/chats/{ID}', json={'revision': 1, 'archived': True})
+    download = client.post('/api/workspace/archive').json()['download']
+    with zipfile.ZipFile(io.BytesIO(client.get(download).content)) as archive:
+        saved = json.loads(archive.read(f'data/chats/{ID}.json'))
+        assert saved['archived'] is True and saved['messages'][0]['content'] == PAIR[0]['content']
+
+
 def test_workspace_archive_includes_conversations_of_the_papers_it_holds(client):
     library, removed = 'b' * 32, 'c' * 32
     client.put(f'/api/chats/{ID}', json={'paper': 'study', 'agent': 'api', 'messages': PAIR, 'revision': 0, 'operation': op()})

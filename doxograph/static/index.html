@@ -466,8 +466,15 @@
     Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>
   <p class="hint" id="agent-input-format"></p>
   <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
+  <nav class="chat-conversations" aria-label="Conversations">
+    <h3>Conversations</h3>
+    <ul id="agent-thread" class="chat-thread-list"></ul>
+    <details id="agent-archive" hidden>
+      <summary id="agent-archive-label">Archived conversations</summary>
+      <ul id="agent-archived" class="chat-thread-list" aria-label="Archived conversations"></ul>
+    </details>
+  </nav>
   <div class="row chat-threads">
-    <label>Conversation <select id="agent-thread"></select></label>
     <label>Agent <select id="agent-agent"></select></label>
     <button type="button" id="agent-delete" hidden>Delete</button>
   </div>

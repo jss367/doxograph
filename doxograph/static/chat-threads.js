@@ -35,10 +35,10 @@ const ChatThreads = (() => {
 
     const defaultAgent = () => agents().includes(S.ai_provider) ? S.ai_provider : agents()[0];
     const blank = () => ({ id: operation(), revision: 0, agent: defaultAgent(), messages: [],
-      draft: '', draftAttachments: [], busy: false, error: '', dirty: false, unconfirmed: [],
+      draft: '', draftAttachments: [], busy: false, archived: false, error: '', dirty: false, unconfirmed: [],
       ...(unified ? {scope: {mode: 'library', papers: [], focus: []}, paper: null} : {}) });
     const headers = (extra = {}) => ({ 'X-Doxograph-Workspace': box.workspace, ...extra });
-    const writing = (thread) => thread.busy || thread.reading || thread.saving || thread.messages.some(m => m.saving);
+    const writing = (thread) => thread.busy || thread.reading || thread.saving || thread.archiving || thread.messages.some(m => m.saving);
     // Whether a dirty thread still extends what is on disk: nothing newer was saved, or the newest
     // save is one of this tab's whose response was lost.
     const ahead = (thread, saved) => saved.revision === thread.revision || thread.unconfirmed.includes(saved.operation);
@@ -47,23 +47,46 @@ const ChatThreads = (() => {
       Object.assign(thread, { id: operation(), revision: 0, unconfirmed: [], dirty: true, kept: true, error: KEPT });
     }
 
+    function keepDraft(target) {
+      const thread = target.active;
+      if ((thread.draft || thread.draftAttachments?.length || thread.reading) && !target.threads.includes(thread)) target.threads.unshift(thread);
+    }
+
+    function renderThreadList(element, threads) {
+      const focused = element.contains(document.activeElement) ? document.activeElement : null;
+      const focusId = focused?.dataset.threadOpen || focused?.dataset.threadArchive;
+      const focusAction = focused?.hasAttribute('data-thread-archive') ? 'threadArchive' : 'threadOpen';
+      const scroll = element.scrollTop;
+      element.innerHTML = threads.map(t => `<li>
+        <button type="button" class="chat-thread-open" data-thread-open="${t.id}" aria-current="${t === box.active}">${esc(title(t))}${t.busy ? ' (answering…)' : ''}</button>
+        <button type="button" class="chat-thread-action" data-thread-archive="${t.id}"
+          aria-label="${t.archived ? 'Restore' : 'Archive'} ${esc(title(t))}" ${!t.revision || t.dirty || writing(t) ? 'disabled' : ''}>${t.archiving ? 'Saving…' : t.archived ? 'Restore' : 'Archive'}</button>
+        ${t.archiveError ? `<span class="chat-thread-error" role="alert">${esc(t.archiveError)}</span>` : ''}
+      </li>`).join('');
+      element.scrollTop = scroll;
+      if (focusId) Array.from(element.querySelectorAll('button')).find(b => b.dataset[focusAction] === focusId)?.focus({preventScroll: true});
+    }
+
     function sync() {
       if (!box) return;
       const thread = box.active;
       const listed = box.threads.includes(thread) ? box.threads : [thread, ...box.threads];
-      $(`${prefix}-thread`).innerHTML = listed.map(t => `<option value="${t.id}">${esc(title(t))}${t.busy ? ' (answering…)' : ''}</option>`).join('');
-      $(`${prefix}-thread`).value = thread.id;
-      $(`${prefix}-thread`).disabled = listed.length < 2;
+      renderThreadList($(`${prefix}-thread`), listed.filter(t => !t.archived));
+      const archived = listed.filter(t => t.archived);
+      renderThreadList($(`${prefix}-archived`), archived);
+      $(`${prefix}-archive`).hidden = !archived.length;
+      if (thread.archived) $(`${prefix}-archive`).open = true;
+      $(`${prefix}-archive-label`).textContent = `Archived conversations (${archived.length})`;
       $(`${prefix}-agent`).innerHTML = agents().map(a => `<option value="${a}">${esc(agentLabel(a))}</option>`).join('');
       $(`${prefix}-agent`).value = thread.agent;
-      $(`${prefix}-agent`).disabled = thread.busy || thread.saving;
+      $(`${prefix}-agent`).disabled = thread.busy || thread.saving || thread.archiving || thread.archived;
       $(`${prefix}-delete`).hidden = !thread.revision;
       $(`${prefix}-delete`).disabled = writing(thread);
       $(`${prefix}-clear`).disabled = !thread.messages.length && !thread.busy && !thread.draft.trim() && !(thread.draftAttachments || []).length;
       render(thread);
       $(`${prefix}-attachments`).innerHTML = attachmentsHTML(thread.draftAttachments || [], true);
-      $(`${prefix}-attach`).disabled = thread.busy || thread.reading;
-      $(`${prefix}-files`).disabled = thread.busy || thread.reading;
+      $(`${prefix}-attach`).disabled = thread.busy || thread.reading || thread.archiving || thread.archived;
+      $(`${prefix}-files`).disabled = thread.busy || thread.reading || thread.archiving || thread.archived;
       $(`${prefix}-question`).required = !(thread.draftAttachments || []).length;
       if (thread.reading) {
         $(`${prefix}-send`).disabled = true;
@@ -97,7 +120,7 @@ const ChatThreads = (() => {
           thread = null;
         }
         threads.push(Object.assign(thread || { draft: '', draftAttachments: [], busy: false, error: '', dirty: false, unconfirmed: [] },
-          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages, paper: saved.paper,
+          { id: saved.id, revision: saved.revision, agent: saved.agent, messages: saved.messages, paper: saved.paper, archived: Boolean(saved.archived),
             ...(unified ? {scope: saved.scope || {mode: saved.paper ? 'paper' : 'library', papers: saved.paper ? [saved.paper] : [], focus: []}} : {}) }));
       }
       for (const thread of target.threads) {
@@ -114,7 +137,7 @@ const ChatThreads = (() => {
       kept.forEach(thread => save(target, thread));
       target.issues = response.issues || [];
       // Reopen the latest conversation, unless a question was started while the list loaded.
-      if (!target.loaded && !target.active.draft && !target.active.draftAttachments?.length && !target.active.reading && !target.active.busy && !target.active.messages.length) target.active = threads[0] || target.active;
+      if (!target.loaded && !target.active.draft && !target.active.draftAttachments?.length && !target.active.reading && !target.active.busy && !target.active.messages.length) target.active = threads.find(t => !t.archived) || target.active;
       else if (!threads.includes(target.active) && target.active.revision) target.active = blank();
       target.loaded = true;
     }
@@ -125,7 +148,7 @@ const ChatThreads = (() => {
       box = boxes.get(id);
       box.active ||= blank();
       if (options.fresh) {
-        if ((box.active.draft || box.active.draftAttachments?.length || box.active.reading) && !box.threads.includes(box.active)) box.threads.unshift(box.active);
+        keepDraft(box);
         box.active = blank();
         box.active.scope = structuredClone(options.scope);
         box.loaded = true;
@@ -170,6 +193,7 @@ const ChatThreads = (() => {
               ({ role, content, attachments, assistant, model, activity, created, saved_note, note_operation, scope, evidence, citations })) }),
         });
         thread.revision = saved.revision;
+        thread.archived = Boolean(saved.archived);
         thread.savedAt = ++clock;
         thread.unconfirmed = [];
         if (thread.dirty) thread.error = thread.kept ? KEPT : '';
@@ -195,7 +219,7 @@ const ChatThreads = (() => {
     async function ask(request) {
       const target = box;
       const thread = target?.active;
-      if (!thread || thread.busy || thread.reading || (!thread.draft.trim() && !thread.draftAttachments?.length)) return;
+      if (!thread || thread.busy || thread.reading || thread.archiving || thread.archived || (!thread.draft.trim() && !thread.draftAttachments?.length)) return;
       const submittedScope = unified ? structuredClone(thread.scope) : null;
       const messages = [...thread.messages, { role: 'user', content: thread.draft.trim(),
         ...(thread.draftAttachments?.length ? { attachments: thread.draftAttachments } : {}), created: new Date().toISOString() }];
@@ -238,7 +262,7 @@ const ChatThreads = (() => {
     // Capture the thread and workspace before reading, so switching conversations cannot move files.
     async function addFiles(files) {
       const target = box, thread = target?.active;
-      if (!thread || thread.busy || thread.reading || !files.length) return;
+      if (!thread || thread.busy || thread.reading || thread.archiving || thread.archived || !files.length) return;
       thread.reading = true;
       thread.error = '';
       thread.draftAttachments ||= [];
@@ -276,7 +300,7 @@ const ChatThreads = (() => {
     });
     $(`${prefix}-attachments`).addEventListener('click', (event) => {
       const button = event.target.closest('[data-remove-attachment]');
-      if (!button || !box || box.active.busy || box.active.reading) return;
+      if (!button || !box || box.active.busy || box.active.reading || box.active.archiving || box.active.archived) return;
       box.active.draftAttachments.splice(Number(button.dataset.removeAttachment), 1);
       sync();
     });
@@ -319,14 +343,57 @@ const ChatThreads = (() => {
       if (files.length) { event.preventDefault(); addFiles(files); }
     });
 
-    $(`${prefix}-thread`).addEventListener('change', () => {
-      const thread = box?.threads.find(t => t.id === $(`${prefix}-thread`).value);
-      if (thread) { box.active = thread; sync(); }
+    for (const list of [$(`${prefix}-thread`), $(`${prefix}-archived`)]) list.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-thread-open], [data-thread-archive]');
+      const target = box;
+      const id = button?.dataset.threadOpen || button?.dataset.threadArchive;
+      const thread = target && (target.active.id === id ? target.active : target.threads.find(t => t.id === id));
+      if (!thread) return;
+      if (button.hasAttribute('data-thread-open')) {
+        keepDraft(target);
+        target.active = thread;
+        sync();
+        return;
+      }
+      if (!thread.revision || thread.dirty || writing(thread)) return;
+      thread.archiving = true;
+      thread.archiveError = '';
+      const archived = !thread.archived;
+      sync();
+      try {
+        const saved = await api(`/api/chats/${thread.id}`, {
+          method: 'PATCH', headers: {'Content-Type': 'application/json', 'X-Doxograph-Workspace': target.workspace},
+          body: JSON.stringify({revision: thread.revision, archived}),
+        });
+        thread.archived = saved.archived;
+        thread.revision = saved.revision;
+        thread.unconfirmed = [];
+        thread.savedAt = ++clock;
+        if (thread.archived && target.active === thread) target.active = target.threads.find(t => !t.archived) || blank();
+        else if (!thread.archived) {
+          keepDraft(target);
+          target.active = thread;
+        }
+      } catch (error) {
+        thread.archiveError = `Could not ${thread.archived ? 'restore' : 'archive'} this conversation: ${error.message}`;
+        // A response can be lost after the change reached disk; reload its latest state.
+        thread.archiving = false;
+        try {
+          await refresh(target);
+          if (thread.archived === archived) thread.archiveError = '';
+        } catch (_) { /* keep the error beside the conversation */ }
+      } finally {
+        thread.archiving = false;
+        if (box === target) {
+          sync();
+          if (!target.active.archived) $(`${prefix}-question`).focus();
+        }
+      }
     });
     $(`${prefix}-agent`).addEventListener('change', async () => {
       const target = box;
       const thread = target?.active;
-      if (!thread || thread.busy || thread.saving) return;
+      if (!thread || thread.busy || thread.saving || thread.archiving || thread.archived) return;
       thread.agent = $(`${prefix}-agent`).value;
       thread.error = '';
       if (thread.messages.length) {
@@ -338,6 +405,7 @@ const ChatThreads = (() => {
     $(`${prefix}-clear`).addEventListener('click', () => {
       if (!box) return;
       const scope = box.active.scope;
+      keepDraft(box);
       box.active = blank();
       if (unified) box.active.scope = structuredClone(scope);
       sync();
@@ -354,7 +422,7 @@ const ChatThreads = (() => {
         await api(`/api/chats/${thread.id}?revision=${thread.revision}`, { method: 'DELETE', headers: headers() });
         target.deleted.add(thread.id);
         target.threads = target.threads.filter(t => t !== thread);
-        if (target.active === thread) target.active = target.threads[0] || blank();
+        if (target.active === thread) target.active = target.threads.find(t => !t.archived) || blank();
       } catch (error) { thread.error = `Could not delete this conversation: ${error.message}`; }
       finally {
         thread.saving = false;

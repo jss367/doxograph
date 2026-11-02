@@ -1,0 +1,149 @@
+"""Conversation rows switch independently; archiving preserves saved evidence."""
+from pathlib import Path
+
+import httpx
+import pytest
+from playwright.async_api import expect
+
+from browser_support import browser_session, run_browser
+from doxograph import config
+from test_browser import _server
+
+
+def seed_conversations(url):
+    config.set_ai_provider('codex')
+    for letter, question, answer in [
+        ('a', 'Which findings have the strongest evidence?', 'The studies agree on improved recovery, with different sample sizes.'),
+        ('b', 'Where do the papers disagree?', 'The reported effect varies with the intervention and measurement.'),
+        ('c', 'What should I read next?', 'Start with the comparison study, then inspect the supporting experiments.'),
+    ]:
+        response = httpx.put(f'{url}/api/chats/{letter * 32}', json={
+            'agent': 'codex', 'revision': 0, 'operation': letter * 32,
+            'messages': [{'role': 'user', 'content': question,
+                          'attachments': [{'name': 'context.txt', 'media_type': 'text/plain', 'data': 'Q29udGV4dA=='}]},
+                         {'role': 'assistant', 'content': answer, 'assistant': 'ChatGPT'}],
+        })
+        assert response.status_code == 200
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_conversations_list_archive_restore_reload_and_keep_drafts(engine):
+    async def scenario(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1100, 'height': 1100})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            rows = page.locator('#agent-thread [data-thread-open]')
+            await expect(rows).to_have_count(3)
+            assert await page.locator('select#agent-thread').count() == 0
+            positions = await rows.evaluate_all('(rows) => rows.map(r => r.getBoundingClientRect().top)')
+            assert positions == sorted(set(positions))
+            first = page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]')
+            second = page.locator(f'#agent-thread [data-thread-open="{"b" * 32}"]')
+            await first.focus()
+            await page.keyboard.press('Enter')
+            await expect(first).to_have_attribute('aria-current', 'true')
+            await page.locator('#agent-question').fill('Keep this draft with the evidence question')
+            await page.locator('#agent-clear').click()
+            await page.locator('#agent-question').fill('An independent question')
+            draft_id = await page.locator('#agent-thread [aria-current="true"]').get_attribute('data-thread-open')
+            await second.click()
+            await page.locator('#agent-question').fill('Compare the measurement conditions')
+            await first.click()
+            await expect(page.locator('#agent-question')).to_have_value('Keep this draft with the evidence question')
+
+            # Archive another row without changing the current draft or transcript.
+            archive_third = page.locator(f'[data-thread-archive="{"c" * 32}"]')
+            await archive_third.click()
+            await expect(rows).to_have_count(3)
+            await expect(page.locator('#agent-question')).to_have_value('Keep this draft with the evidence question')
+            await page.locator('#agent-archive summary').click()
+            await expect(page.locator('#agent-archived [data-thread-open]')).to_have_count(1)
+            if engine == 'chromium':
+                Path('.context').mkdir(exist_ok=True)
+                await page.screenshot(path='.context/conversation-list.png')
+
+            await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
+            await expect(first).not_to_be_visible()
+            await expect(page.locator('#agent-question')).to_have_value('An independent question')
+            await second.click()
+            await expect(page.locator('#agent-question')).to_have_value('Compare the measurement conditions')
+            archived_first = page.locator(f'#agent-archived [data-thread-open="{"a" * 32}"]')
+            await archived_first.click()
+            await expect(page.locator('#agent-messages')).to_contain_text('improved recovery')
+            await expect(page.locator('#agent-send')).to_be_disabled()
+            await page.get_by_role('button', name='Restore Which findings have the strongest evidence?', exact=True).click()
+            await expect(first).to_have_attribute('aria-current', 'true')
+            await expect(page.locator('#agent-question')).to_have_value('Keep this draft with the evidence question')
+            await page.locator(f'[data-thread-open="{draft_id}"]').click()
+            await expect(page.locator('#agent-question')).to_have_value('An independent question')
+
+            await page.reload()
+            await page.locator('#btn-agent:enabled').click()
+            await expect(rows).to_have_count(2)
+            await expect(page.locator('#agent-archive summary')).to_have_text('Archived conversations (1)')
+            await first.click()
+            await expect(page.locator('#agent-messages a[data-chat-download]')).to_have_text('context.txt')
+            # When all saved conversations are archived, a fresh one stays usable.
+            for letter in ['a', 'b']:
+                await page.locator(f'[data-thread-archive="{letter * 32}"]').click()
+                await expect(page.locator(f'#agent-thread [data-thread-open="{letter * 32}"]')).to_have_count(0)
+            await expect(rows).to_have_text(['New conversation'])
+            await page.reload()
+            await page.locator('#btn-agent:enabled').click()
+            await expect(rows).to_have_text(['New conversation'])
+            await expect(page.locator('#agent-question')).to_be_enabled()
+            assert not errors
+
+    with _server() as url:
+        seed_conversations(url)
+        run_browser(scenario(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_archive_failure_and_lost_response_keep_saved_conversations(engine):
+    async def scenario(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            archive = page.locator(f'[data-thread-archive="{"a" * 32}"]')
+            original = httpx.get(url + '/api/chats').json()['chats'][-1]
+
+            async def fail_archive(route):
+                if route.request.method == 'PATCH':
+                    await route.fulfill(status=507, json={'detail': 'Disk full'})
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/chats/*', fail_archive)
+            await archive.click()
+            await expect(page.locator('.chat-thread-error')).to_contain_text('Disk full')
+            await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(3)
+            assert httpx.get(url + '/api/chats').json()['chats'][-1] == original
+            await page.unroute('**/api/chats/*', fail_archive)
+
+            async def lose_response(route):
+                if route.request.method == 'PATCH':
+                    await route.fetch()
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/chats/*', lose_response)
+            await archive.click()
+            await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(2)
+            saved = next(c for c in httpx.get(url + '/api/chats').json()['chats'] if c['id'] == 'a' * 32)
+            assert saved['archived'] and saved['messages'] == original['messages']
+            await page.unroute('**/api/chats/*', lose_response)
+            await page.locator('#agent-archive summary').click()
+            await page.get_by_role('button', name='Restore Which findings have the strongest evidence?', exact=True).click()
+            await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(3)
+
+    with _server() as url:
+        seed_conversations(url)
+        run_browser(scenario(url))
