@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/research-tools.css">
 <link rel="stylesheet" href="/vendor/katex.min.css">
 <link rel="stylesheet" href="/research-notes.css">
+<link rel="stylesheet" href="/datasets.css">
 </head>
 <body>
 <header>
@@ -233,6 +234,7 @@
         <ul class="plist" id="papers" tabindex="0" aria-label="Papers in this workspace"></ul>
       </div>
       <div class="sec research-tools-nav">
+        <button type="button" id="btn-datasets" title="Datasets used or produced by this project"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5 M4 12c0 4 16 4 16 0"/></svg>Datasets</button>
         <button type="button" data-tool="searches"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg>Saved searches</button>
       </div>
       <div class="sec" id="labels-sec" hidden>
@@ -528,6 +530,23 @@
     <div id="notes-document"></div>
   </div>
 </dialog>
+<dialog id="datasets-sheet" class="datasets-sheet" aria-labelledby="datasets-heading">
+  <div class="sheet-head">
+    <div><h2 id="datasets-heading">Datasets</h2><span class="hint">Data used or produced by this project, connected to your research.</span></div>
+    <button type="button" data-dataset-action="close" aria-label="Close datasets">×</button>
+  </div>
+  <p id="datasets-status" class="hint" role="status" aria-live="polite"></p>
+  <div class="datasets-layout">
+    <aside class="datasets-library">
+      <button type="button" id="dataset-new" data-dataset-action="new" class="primary">Add dataset</button>
+      <label for="datasets-search" class="sr-only">Search datasets</label>
+      <input type="search" id="datasets-search" placeholder="Search datasets…">
+      <p id="datasets-count" class="hint"></p>
+      <nav id="datasets-list" aria-label="Datasets"></nav>
+    </aside>
+    <div id="dataset-document"></div>
+  </div>
+</dialog>
 <dialog id="focused-review" aria-labelledby="focused-review-title">
   <div class="focus-heading">
     <div><h2 id="focused-review-title">Focused review</h2>
@@ -546,6 +565,7 @@
 <script src="/note-writing.js"></script>
 <script src="/workspace-notes.js"></script>
 <script src="/research-notes.js"></script>
+<script src="/datasets.js"></script>
 <script src="/research-tools.js"></script>
 <script src="/appearance.js"></script>
 <script src="/paper-map.js"></script>

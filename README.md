@@ -577,6 +577,19 @@ writing space are stored locally in `note-images/`.
 - **Saved searches** remember the current query, paper, topic, label, claim kind,
   review and quote-verification filters, and grouping. Opening one runs those
   filters against the current corpus, so new matching claims appear naturally.
+- **Datasets**, under Library, catalogs the data your project uses or produces.
+  Add a record with a name, description, source URL or local path, version,
+  license, access notes, and roles (training, evaluation, reference, or project
+  output). Search the inventory and link records to papers and individual claims.
+  **Linked research** also includes claims whose `dataset` or `datasets` facets
+  match the record's name or one of its **Other dataset names in findings**.
+  These matches appear automatically; existing facets are left as you entered them.
+  Removed papers and claims remain labeled as missing so their references can be
+  reconciled. Records stay in the selected workspace in `datasets.json`, work
+  with AI disabled, and have automatic backups with conflict protection.
+  Workspace archives include the original records and a readable `datasets.md`
+  inventory. Source references point to your data; adding a record does not
+  upload, download, or copy dataset files.
 - **Research notes** are a separate writing space for arguments, literature
   reviews, derivations, and experiment plans. Open **Research notes** in the
   sidebar to create, search, rename, and write notes in Markdown with a live

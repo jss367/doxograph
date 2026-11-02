@@ -495,13 +495,13 @@ function hasWorkspaceDrafts() {
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
     && !V.synthSaving && !V.noteSaving && !V.researchSaving && !trash.size
-    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
+    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !Datasets.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
 }
 
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
     return await WorkspaceNotes.beforeWorkspaceSwitch()
-      && await ResearchNotes.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+      && await ResearchNotes.beforeWorkspaceSwitch() && await Datasets.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave() {
@@ -1380,6 +1380,13 @@ async function updateFromPoll() {
 async function boot() {
   WorkspaceNotes.connect(workspaceClient);
   ResearchNotes.connect(workspaceClient);
+  Datasets.connect(workspaceClient, (paper, claim) => {
+    captureOpenEditor(); parkNewClaimForNavigation(paper);
+    V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.q = ''; V.kind = '';
+    V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
+    $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
+    scheduleTextSearch(); renderAll(); syncHash(true);
+  });
   ResearchTools.connect(workspaceClient);
   window.FocusedReview.connect(workspaceClient);
   connectPaperMap(workspaceClient);
@@ -1407,6 +1414,8 @@ async function boot() {
   if (V.view === 'research') renderContent();
   const noteId = new URLSearchParams(location.search).get('note');
   if (noteId) await ResearchNotes.open(noteId);
+  const datasetId = new URLSearchParams(location.search).get('dataset');
+  if (datasetId && !noteId) await Datasets.open(datasetId);
   libraryInitialized = true;
   $('btn-refresh-library').disabled = false;
   poller.start();
