@@ -590,7 +590,10 @@ writing space are stored locally in `note-images/`.
 - **Datasets**, under Library, catalogs the data your project uses or produces.
   Add a record with a name, description, source URL or local path, version,
   license, access notes, and roles (training, evaluation, reference, or project
-  output). Search the inventory and link records to papers and individual claims.
+  output). Add **Labels** separated by commas, such as `open source` or
+  `needs review`; labels appear in the inventory and are included in dataset
+  search and workspace exports. Labels preserve your spelling and ignore case
+  when deduplicating. Search the inventory and link records to papers and individual claims.
   **Linked research** also includes claims whose `dataset` or `datasets` facets
   match the record's name or one of its **Other dataset names in findings**.
   These matches appear automatically; existing facets are left as you entered them.

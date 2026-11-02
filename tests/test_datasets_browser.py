@@ -104,6 +104,7 @@ def test_dataset_editor_and_linked_research(engine):
                 await dialog.get_by_label('Source URL or local path', exact=True).fill('https://example.org/datasets/evaluation')
                 await dialog.get_by_label('License', exact=True).fill('CC BY 4.0')
                 await dialog.get_by_label('Access notes', exact=True).fill('Public download; preserve attribution.')
+                await dialog.get_by_label('Labels', exact=True).fill('needs review, Open source, OPEN SOURCE')
                 await dialog.get_by_label('Evaluation', exact=True).check()
                 await dialog.get_by_label('Other dataset names in findings', exact=True).fill('EVAL, corpus')
                 await page.locator('#dataset-research').get_by_role('button', name=claim['text'], exact=True).wait_for()
@@ -116,9 +117,17 @@ def test_dataset_editor_and_linked_research(engine):
                 assert saved['roles'] == ['evaluation'] and saved['papers'] == ['study']
                 assert saved['claims'] == [{'paper': 'study', 'claim': claim['id']}]
                 assert saved['facet_values'] == ['EVAL, corpus']
+                assert saved['labels'] == ['needs review', 'Open source']
+                assert await dialog.get_by_label('Labels', exact=True).input_value() == 'needs review, Open source'
+                assert await page.locator('#datasets-list .dataset-label').all_text_contents() == saved['labels']
+                await page.locator('#datasets-search').fill('OPEN SOURCE')
+                assert await page.locator('#datasets-list button').count() == 1
+                await page.locator('#datasets-search').fill('private')
+                assert await page.locator('#datasets-list button').count() == 0
+                await page.locator('#datasets-search').fill('')
                 # Another window updates the record; a stale save preserves this draft.
                 httpx.put(url + '/api/datasets/' + saved['id'], json={
-                    **{key: saved[key] for key in ['name','description','source','version','license','access_notes','roles','facet_values','papers','claims']},
+                    **{key: saved[key] for key in ['name','description','source','version','license','access_notes','roles','labels','facet_values','papers','claims']},
                     'revision': saved['revision'], 'version': '2026-12'}).raise_for_status()
                 await dialog.get_by_label('Version', exact=True).fill('My unsaved version')
                 await dialog.get_by_role('button', name='Save dataset', exact=True).click()
@@ -128,6 +137,7 @@ def test_dataset_editor_and_linked_research(engine):
                 await dialog.get_by_role('button', name='Reload saved version', exact=True).click()
                 await ready(page)
                 assert '2026-12' in await page.locator('#dataset-saved-version').inner_text()
+                assert 'Open source' in await page.locator('#dataset-saved-version').inner_text()
                 assert await dialog.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
                 await dialog.get_by_label('Version', exact=True).fill('2026-11')
                 await dialog.get_by_role('button', name='Replace draft with saved version', exact=True).click()
@@ -138,6 +148,7 @@ def test_dataset_editor_and_linked_research(engine):
                 await ready(page)
                 await dialog.wait_for(state='visible')
                 assert await dialog.get_by_label('Dataset name', exact=True).input_value() == 'Evaluation corpus'
+                assert await dialog.get_by_label('Labels', exact=True).input_value() == 'needs review, Open source'
                 if engine == 'chromium':
                     screenshot = Path(__file__).parents[1] / '.context' / 'datasets.png'
                     screenshot.parent.mkdir(exist_ok=True)
@@ -166,6 +177,7 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
             with _server() as url:
                 item = httpx.post(url + '/api/datasets', json={
                     'name': '<img src=x onerror=alert(1)>', 'source': 'javascript:alert(1)',
+                    'labels': ['<img src=x onerror=alert(1)>'],
                     'papers': ['study'], 'claims': [{'paper': 'study', 'claim': claim['id']}]}).json()
                 store.paper_path('study').unlink()
                 await page.goto(url + '/?dataset=' + item['id'])

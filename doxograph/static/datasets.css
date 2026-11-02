@@ -12,6 +12,8 @@
 #datasets-list button[aria-current] { border-color: var(--accent); background: var(--sel); }
 #datasets-list strong, #datasets-list small { display: block; }
 #datasets-list small { margin-top: .35rem; color: var(--muted); }
+.dataset-labels { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .5rem; }
+.dataset-label { font-size: .8rem; font-weight: normal; border: 1px solid var(--line); border-radius: 1rem; padding: .1rem .5rem; }
 #dataset-document { min-width: 0; }
 .dataset-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
 .dataset-fields { display: grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr); gap: .8rem; }
