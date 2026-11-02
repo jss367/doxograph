@@ -50,7 +50,7 @@ def test_chat_files_retry_reopen_followup_and_download(engine, entry):
                         await page.locator('[data-paper-chat="study"]:visible').click()
                     await expect(page.locator(f'#{prefix}-attach')).to_be_enabled()
                     if entry == 'paper' and len(requests) > 1:
-                        await page.locator('#agent-thread').select_option(index=1)
+                        await page.locator('#agent-thread [data-thread-open]').nth(1).click()
 
                 await open_chat()
                 async with page.expect_file_chooser() as chooser:
@@ -133,8 +133,8 @@ def test_invalid_files_show_readable_errors_and_drafts_stay_with_their_chat(engi
                     assert response.status_code == 200
                 await page.goto(url)
                 await page.locator('#btn-agent:enabled').click()
-                await expect(page.locator('#agent-thread option')).to_have_count(2)
-                selected = await page.locator('#agent-thread').input_value()
+                await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(2)
+                selected = await page.locator('#agent-thread [aria-current="true"]').get_attribute('data-thread-open')
                 await page.locator('#agent-files').set_input_files({'name': 'archive.zip', 'mimeType': 'application/zip', 'buffer': b'binary'})
                 await expect(page.locator('#agent-status')).to_contain_text('use PNG')
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(0)
@@ -146,9 +146,9 @@ def test_invalid_files_show_readable_errors_and_drafts_stay_with_their_chat(engi
                 await page.locator('#agent-attachments button').click()
                 await page.locator('#agent-files').set_input_files({'name': 'draft.md', 'mimeType': 'text/markdown', 'buffer': b'A draft attachment'})
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(1)
-                await page.locator('#agent-thread').select_option('a' * 32 if selected != 'a' * 32 else 'b' * 32)
+                await page.locator('#agent-thread [aria-current="false"]').click()
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(0)
-                await page.locator('#agent-thread').select_option(selected)
+                await page.locator(f'[data-thread-open="{selected}"]').click()
                 await expect(page.locator('#agent-attachments')).to_contain_text('draft.md')
                 await page.locator('#agent-clear').click()
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(0)

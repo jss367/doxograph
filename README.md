@@ -151,8 +151,11 @@ Extraction, quote checks, and **Add claim by hand** are under **Paper actions**.
 open the same Ask panel with the relevant sources already selected. A claim
 stays in focus while its originating paper supplies evidence. Use the existing
 paper and claim checkboxes to prepare a comparison of up to 200 papers; filters alone do not select
-sources. Contextual actions start a fresh conversation, and **Conversation**
-lets you return to earlier ones in this workspace.
+sources. Contextual actions start a fresh conversation, and **Conversations**
+lists conversations in this workspace so you can switch between them. Each row
+has an **Archive** button to put a finished conversation aside. Expand **Archived
+conversations** to read it again or **Restore** it to the active list. Archiving
+keeps its history, evidence, and attachments, including in workspace exports.
 
 Single-paper chat sends the PDF or extracted page-numbered text to the selected
 API, local, Claude subscription, or ChatGPT subscription provider. Native Claude

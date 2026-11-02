@@ -19,7 +19,7 @@ function renderAgentChat(chat) {
     message.className = `agent-message ${assistant ? 'agent-answer' : 'agent-question'}`;
     message.innerHTML = `<div class="agent-message-head"><span class="who">${assistant ? esc(m.assistant || 'Assistant') : 'You'}</span>
       ${assistant ? `<div class="agent-answer-actions">
-        <button type="button" data-agent-action="${m.saved_note ? 'open' : 'save'}" data-message="${index}" ${m.saving ? 'disabled' : ''}>${m.saved_note ? 'Open saved note' : m.saving ? 'Saving…' : 'Save as research note'}</button>
+        <button type="button" data-agent-action="${m.saved_note ? 'open' : 'save'}" data-message="${index}" ${m.saving || chat.archiving ? 'disabled' : ''}>${m.saved_note ? 'Open saved note' : m.saving ? 'Saving…' : 'Save as research note'}</button>
         <span class="hint" role="status">${m.saved_note ? 'Saved in Research notes' : ''}</span>
       </div>` : ''}</div>
       ${m.saveError ? `<p class="warn" role="alert">${esc(m.saveError)}</p>` : ''}
@@ -47,7 +47,7 @@ function renderAgentChat(chat) {
   });
   $('agent-messages').replaceChildren(...messages);
   $('agent-question').value = chat.draft;
-  $('agent-question').disabled = chat.busy;
+  $('agent-question').disabled = chat.busy || chat.archiving || chat.archived;
   renderAskScope(chat);
   syncAgentChatControls();
 }
@@ -80,7 +80,7 @@ function libraryAnswerNote(chat, index, workspace) {
 $('agent-messages').addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-agent-action]');
   const chat = activeAgentChat(), workspace = agentChats.workspace;
-  if (!button || !chat) return;
+  if (!button || !chat || chat.archiving) return;
   const index = Number(button.dataset.message);
   const message = chat.messages[index];
   if (message?.role !== 'assistant' || message.saving) return;
@@ -142,14 +142,14 @@ function syncAgentChatControls() {
   const enabled = S.ai_enabled === true;
   const setup = enabled ? '' : 'Enable AI analysis in Settings.';
   const problem = scopeProblem(chat);
-  $('agent-send').disabled = chat.busy || chat.reading || !enabled || Boolean(problem);
+  $('agent-send').disabled = chat.busy || chat.reading || chat.archiving || chat.archived || !enabled || Boolean(problem);
   // Polls refresh availability without replacing focused scope controls.
   $('agent-claims-only').hidden = !retrievalFallback(chat);
   $('agent-claims-only').textContent = catalog().claims.some(c => c.paper === chat.scope.papers[0])
     ? 'Use extracted claims only' : 'Use paper metadata only';
   $('agent-settings').hidden = !setup;
   $('agent-codex-guidance').hidden = chat.agent !== 'codex';
-  $('agent-status').textContent = chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
+  $('agent-status').textContent = chat.archived ? 'Archived conversation. Restore it to ask another question.' : chat.archiving ? 'Saving conversation…' : chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
 }
 
 $('btn-agent').addEventListener('click', () => {
@@ -212,11 +212,12 @@ function scopeProblem(chat) {
 }
 function renderAskScope(chat) {
   const scope = chat.scope;
+  const locked = chat.archived || chat.archiving;
   $('library-agent-title').textContent = scope.mode === 'library' ? 'Ask the library' : 'Ask about sources';
   const papers = catalog().papers;
   const chips = scope.papers.map(key => {
     const paper = papers.find(p => p.key === key);
-    return `<span class="ask-chip">${esc(paper?.title || key)}${paper ? '' : ' · Source unavailable'} <button type="button" data-remove-source="${esc(key)}" aria-label="Remove ${esc(paper?.title || key)}">×</button></span>`;
+    return `<span class="ask-chip">${esc(paper?.title || key)}${paper ? '' : ' · Source unavailable'} <button type="button" data-remove-source="${esc(key)}" aria-label="Remove ${esc(paper?.title || key)}" ${locked ? 'disabled' : ''}>×</button></span>`;
   });
   const focus = (scope.focus || []).filter(f => f.claim).map(f => {
     const claim = catalog().claims.find(c => c.paper === f.paper && c.id === f.claim);
@@ -226,11 +227,11 @@ function renderAskScope(chat) {
     ? `<p>Search: entire library · ${papers.length} papers</p>`
     : `<p>${scope.focus?.some(f => f.claim) ? 'Evidence from originating papers' : 'Selected sources'}</p><div class="ask-chips">${chips.slice(0, 3).join('')}</div>${chips.length > 3 ? `<details><summary>Show all ${chips.length} sources</summary><div class="ask-chips">${chips.slice(3).join('')}</div></details>` : ''}`);
   $('agent-expand').hidden = scope.mode === 'library';
-  $('agent-expand').disabled = false;
-  $('agent-add').disabled = false;
+  $('agent-expand').disabled = locked;
+  $('agent-add').disabled = locked;
   $('agent-add').textContent = scope.mode === 'library' ? 'Choose specific sources' : 'Add sources';
   $('agent-claims-only').hidden = !retrievalFallback(chat);
-  $('agent-claims-only').disabled = false;
+  $('agent-claims-only').disabled = locked;
   const images = chat.agent === 'claude_code' || (chat.agent === 'api' && (!S.provider || S.provider === 'anthropic'));
   $('agent-input-format').textContent = scope.mode === 'paper'
     ? images ? 'Sends the full PDF, including page images, to the chosen provider.' : 'Sends extracted paper text. Figures and unreadable scanned pages are unavailable.'
@@ -251,7 +252,7 @@ async function openAsk(scope) {
 }
 async function changeAskScope(scope) {
   const chat = activeAgentChat();
-  if (!chat) return false;
+  if (!chat || chat.archived || chat.archiving) return false;
   const previous = chat.scope;
   const narrowed = previous.mode === 'library' ? scope.mode !== 'library'
     : scope.mode !== 'library' && previous.papers.some(p => !scope.papers.includes(p));

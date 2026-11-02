@@ -414,9 +414,9 @@ def test_attachment_only_draft_survives_contextual_open_and_refresh(engine):
                 await expect(page.locator('#agent-question')).to_be_empty()
                 await page.locator('#agent-close').click()
                 await page.locator('[data-paper-chat="a"]').first.click()
-                await expect(page.locator('#agent-thread option')).to_have_count(2)
+                await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(2)
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(0)
-                await page.locator('#agent-thread').select_option(index=1)
+                await page.locator('#agent-thread [data-thread-open]').nth(1).click()
                 await expect(page.locator('#agent-attachments')).to_contain_text('draft.txt')
                 await page.locator('#agent-close').click()
                 await page.locator('#btn-agent:enabled').click()
@@ -543,7 +543,7 @@ def test_scope_fork_isolates_attachments_from_inflight_messages(engine):
                 await page.wait_for_function("!document.querySelector('#agent-thread').textContent.includes('answering')")
                 saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats'][0]
                 assert [a['name'] for a in saved['messages'][0]['attachments']] == ['original.txt']
-                await page.locator('#agent-thread').select_option(saved['id'])
+                await page.locator(f"[data-thread-open='{saved['id']}']").click()
                 await page.locator('#agent-files').set_input_files({'name':'old-draft.txt', 'mimeType':'text/plain', 'buffer':b'Old draft'})
                 await expect(page.locator('#agent-attachments')).to_contain_text('old-draft.txt')
                 # Fork a settled conversation too, then edit both drafts independently.
@@ -552,7 +552,7 @@ def test_scope_fork_isolates_attachments_from_inflight_messages(engine):
                 await page.locator('#agent-files').set_input_files({'name':'fork.txt', 'mimeType':'text/plain', 'buffer':b'Fork'})
                 await expect(page.locator('#agent-attachments')).to_contain_text('fork.txt')
                 await page.evaluate('window.forkDraft = activeAgentChat()')
-                await page.locator('#agent-thread').select_option(saved['id'])
+                await page.locator(f"[data-thread-open='{saved['id']}']").click()
                 await expect(page.locator('#agent-attachments')).to_contain_text('old-draft.txt')
                 await page.locator('#agent-attachments button').click()
                 await page.locator('#agent-files').set_input_files({'name':'other.txt', 'mimeType':'text/plain', 'buffer':b'Other'})
