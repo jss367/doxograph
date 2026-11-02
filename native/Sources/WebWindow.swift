@@ -11,6 +11,9 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     var onFilesDropped: (([URL]) -> Void)?
 
     private let status: NSTextField
+    /// What the status label sits on. An update's progress shows over a loaded
+    /// page, and bare text there mixes into the document under it.
+    private let statusBackground: NSBox
     private var auxiliaryWindows: [NSWindow] = []
     private var host: String?
     /// Whether the status label is showing a navigation failure. Only that
@@ -28,6 +31,13 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         status.font = .systemFont(ofSize: 13)
         status.textColor = .secondaryLabelColor
         status.alignment = .center
+
+        statusBackground = NSBox()
+        statusBackground.boxType = .custom
+        statusBackground.fillColor = .windowBackgroundColor
+        statusBackground.borderColor = .separatorColor
+        statusBackground.cornerRadius = 8
+        statusBackground.contentViewMargins = .zero
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
@@ -57,10 +67,17 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         content.addSubview(webView)
 
         status.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(status)
+        statusBackground.translatesAutoresizingMaskIntoConstraints = false
+        statusBackground.contentView?.addSubview(status)
+        content.addSubview(statusBackground)
         NSLayoutConstraint.activate([
-            status.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            status.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            status.leadingAnchor.constraint(equalTo: statusBackground.leadingAnchor, constant: 16),
+            status.trailingAnchor.constraint(equalTo: statusBackground.trailingAnchor, constant: -16),
+            status.topAnchor.constraint(equalTo: statusBackground.topAnchor, constant: 10),
+            status.bottomAnchor.constraint(equalTo: statusBackground.bottomAnchor, constant: -10),
+            statusBackground.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            statusBackground.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            statusBackground.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -40),
         ])
 
         window.contentView = content
@@ -94,13 +111,13 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
 
     func showStatus(_ text: String) {
         status.stringValue = text
-        status.isHidden = false
+        statusBackground.isHidden = false
         showingFailure = false
     }
 
     /// Take a status message down again without touching the page under it.
     func hideStatus() {
-        status.isHidden = true
+        statusBackground.isHidden = true
         showingFailure = false
     }
 
