@@ -62,7 +62,9 @@ python_version = "3.13"
 # remaining application modules can be added as their annotations narrow.
 files = [
     "doxograph/storage.py", "doxograph/records.py", "doxograph/publication_dates.py", "doxograph/workspace_metadata.py",
-    "doxograph/store.py",
+    "doxograph/store.py", "doxograph/store_claims.py", "doxograph/store_vocab.py",
+    "doxograph/store_ledger.py", "doxograph/store_views.py", "doxograph/store_facets.py",
+    "doxograph/store_tensions.py", "doxograph/store_syntheses.py", "doxograph/store_agreements.py",
     "doxograph/analysis_types.py", "doxograph/ask_context.py",
     "doxograph/model_errors.py", "doxograph/providers.py",
     "doxograph/claude_code.py", "doxograph/codex_cli.py",
