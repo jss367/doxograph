@@ -742,3 +742,51 @@ def test_ask_owner_name_tracks_registry_updates_without_changing_conversation(en
                 await expect(page.locator('#agent-question')).to_have_value('Keep the same conversation')
                 assert await page.evaluate('agentChats.workspace') == 'default'
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_job_notifications_do_not_cover_the_ask_composer(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            calls = []
+
+            async def answer(route):
+                calls.append(route.request.post_data_json)
+                await route.fulfill(json={'answer': 'You can ask while papers import.', 'assistant': 'ChatGPT',
+                    'scope': {**calls[-1]['scope'], 'papers': ['a', 'b', 'c']}})
+
+            await page.route('**/api/ask', answer)
+            await page.route('**/api/jobs', lambda route: route.fulfill(json={'jobs': [{
+                'id': 'running', 'kind': 'import', 'state': 'fetching', 'label': 'An active import',
+                'workspace': 'default', 'detail': '',
+            }]}))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                for width in [1440, 900]:
+                    await page.set_viewport_size({'width': width, 'height': 1000})
+                    if width == 900:
+                        await expect(page.locator('body')).to_have_class(re.compile(r'agent-docked'))
+                    else:
+                        await expect(page.locator('body')).not_to_have_class(re.compile(r'agent-docked'))
+                    await expect(page.locator('#jobs .job')).to_be_visible()
+                    jobs = await page.locator('#jobs').bounding_box()
+                    pane = await page.locator('#library-agent').bounding_box()
+                    if width == 1440:
+                        assert jobs['x'] + jobs['width'] <= pane['x']
+                    else:
+                        assert jobs['y'] + jobs['height'] <= pane['y']
+                    await page.locator('#agent-question').fill(f'Question at {width}px')
+                    # A real click checks stacking and hit targets as well as box geometry.
+                    await page.locator('#agent-send').click()
+                    await expect(page.locator('#agent-question')).to_be_enabled()
+                assert len(calls) == 2
+                await page.locator('#agent-close').click()
+                jobs = await page.locator('#jobs').bounding_box()
+                assert jobs['x'] + jobs['width'] == 884
+                assert jobs['y'] + jobs['height'] == 984
+    run_browser(scenario())
