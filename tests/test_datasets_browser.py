@@ -202,7 +202,8 @@ def test_following_dataset_evidence_preserves_history_and_draft(engine, target):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_workspace_switch_hides_dataset_before_destination_refresh(engine):
+@pytest.mark.parametrize('failed_refresh', [False, True])
+def test_workspace_switch_hides_dataset_before_destination_refresh(engine, failed_refresh):
     config.set_ai_enabled(False)
     other = config.create_workspace('Another project')
 
@@ -221,10 +222,15 @@ def test_workspace_switch_hides_dataset_before_destination_refresh(engine):
                     if route.request.headers.get('x-doxograph-workspace') == other['id']:
                         held.set()
                         await release.wait()
+                        if failed_refresh:
+                            await route.fulfill(status=503, json={'detail': 'Destination is unavailable.'})
+                            return
                     await route.continue_()
 
                 await page.route('**/api/state', hold_destination)
-                await page.locator('#workspace').select_option(other['id'])
+                await page.evaluate('''id => {
+                    void switchWorkspace(id).catch(error => { window.datasetSwitchError = error.message; });
+                }''', other['id'])
                 await asyncio.wait_for(held.wait(), timeout=5)
                 try:
                     assert await page.locator('#workspace').input_value() == other['id']
@@ -233,6 +239,10 @@ def test_workspace_switch_hides_dataset_before_destination_refresh(engine):
                 finally:
                     release.set()
                 await page.wait_for_function('workspaceController.pending === null')
+                if failed_refresh:
+                    assert await page.evaluate('window.datasetSwitchError') == 'Destination is unavailable.'
+                    assert not await view.is_visible()
+                    assert await page.locator('#sync-status').is_visible()
 
     run_browser(scenario())
 
