@@ -14,8 +14,11 @@ const ResearchTools = (() => {
   // held apart from the notebook, so a save made for anything else, such as a
   // reading status or a saved search, cannot carry them, and the notebook can
   // be read again around them when the reader comes back from a paper.
+  // Each keeps the saved version it started from, so a save can tell when
+  // another window changed or removed the same board or connection meanwhile.
   // `dirty` is the notebook itself differing from the saved one: a failed save.
-  let edits = {boards:{}, notes:{}};
+  const noEdits = () => ({boards:{}, notes:{}, boardBases:{}, noteBases:{}});
+  let edits = noEdits();
   const editing = () => Object.keys(edits.boards).length + Object.keys(edits.notes).length > 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
   // it stays up while the research tools are opened and closed over it.
@@ -135,6 +138,12 @@ const ResearchTools = (() => {
     const merging = Boolean(board && edits.boards[board]) || (notes && Object.keys(edits.notes).length > 0);
     let next = notebook;
     if (merging) {
+      // The board or connection this edit started from has changed since, here
+      // or in another window: saving would overwrite that, or bring it back.
+      // Refuse, as the server does for a stale notebook; the edits stay on screen.
+      const changed = (board && edits.boards[board] && edits.boardBases[board] !== JSON.stringify(notebook.boards.find(b => b.id === board) ?? null))
+        || (notes && Object.keys(edits.notes).some(id => edits.noteBases[id] !== JSON.stringify(notebook.connections.find(c => c.id === id)?.note ?? null)));
+      if (changed) throw new Error('Research tools changed in another window. Reload the saved version before trying again.');
       next = structuredClone(notebook);
       if (board && edits.boards[board]) {
         const i = next.boards.findIndex(b => b.id === board);
@@ -147,8 +156,8 @@ const ResearchTools = (() => {
     } else dirty = true;
     notebook = await request('', 'PUT', next);
     dirty = false;
-    if (board) delete edits.boards[board];
-    if (notes) edits.notes = {};
+    if (board) { delete edits.boards[board]; delete edits.boardBases[board]; }
+    if (notes) { edits.notes = {}; edits.noteBases = {}; }
     await refreshAll();
     message('Saved.');
   }
@@ -294,7 +303,7 @@ const ResearchTools = (() => {
     }).join('')}</section>`;
   }
   // The boards as they stand on screen: saved ones with their held edits, and
-  // an edited board removed elsewhere meanwhile, which Save board puts back.
+  // an edited board removed elsewhere meanwhile, kept so its text can be copied.
   function boards() {
     const listed = notebook.boards.map(b => edits.boards[b.id] || b);
     return listed.concat(Object.values(edits.boards).filter(b => !notebook.boards.some(n => n.id === b.id)));
@@ -302,7 +311,10 @@ const ResearchTools = (() => {
   function currentBoard() { return boards().find(b => b.id === boardId); }
   // The board on screen, to be changed: a copy held until Save board.
   function editBoard() {
-    if (!edits.boards[boardId]) edits.boards[boardId] = structuredClone(currentBoard());
+    if (!edits.boards[boardId]) {
+      edits.boardBases[boardId] = JSON.stringify(notebook.boards.find(b => b.id === boardId) ?? null);
+      edits.boards[boardId] = structuredClone(currentBoard());
+    }
     return edits.boards[boardId];
   }
   function renderBoards() {
@@ -1344,7 +1356,7 @@ const ResearchTools = (() => {
   async function discardDrafts() {
     if ((dirty || editing() || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
     if (dirty) { notebook = await request(); dirty = false; }
-    edits = {boards:{}, notes:{}};
+    edits = noEdits();
     connectionDraft = false;
     return true;
   }
@@ -1405,7 +1417,7 @@ const ResearchTools = (() => {
     if (name === 'delete-board') {
       if (!await confirmDialog('Delete this evidence board? Source claims will remain in the library.',{ok:'Delete board'})) return;
       const id = boardId;
-      notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id];
+      notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id]; delete edits.boardBases[id];
       // The URL stops naming the board deleted.
       render(); return;
     }
@@ -1421,14 +1433,14 @@ const ResearchTools = (() => {
       if (JSON.stringify(from) === JSON.stringify(to)) throw new Error('Choose two different claims.');
       const relation = el('connection-relation').value;
       const existing = notebook.connections.find(c => refKey(c.source) === JSON.stringify(from) && refKey(c.target) === JSON.stringify(to) && c.relation === relation);
-      if (existing) { existing.note = el('connection-note').value; delete edits.notes[existing.id]; }
+      if (existing) { existing.note = el('connection-note').value; delete edits.notes[existing.id]; delete edits.noteBases[existing.id]; }
       else notebook.connections.push({id:uid(),source:{paper:from[0],claim:from[1]},target:{paper:to[0],claim:to[1]},relation,note:el('connection-note').value});
       await save(); connectionDraft = false; renderConnections(); return;
     }
     if (name === 'delete-connection') {
       const id = target.closest('[data-connection]').dataset.connection;
       if (!await confirmDialog('Remove this manual connection?',{ok:'Remove connection'})) return;
-      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); delete edits.notes[id]; renderConnections(); return;
+      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); delete edits.notes[id]; delete edits.noteBases[id]; renderConnections(); return;
     }
     if (name.startsWith('reading-')) {
       const key = target.closest('[data-reading]').dataset.reading, items = notebook.reading;
@@ -1593,7 +1605,11 @@ const ResearchTools = (() => {
     if (target.id.startsWith('connection-')) connectionDraft = true;
     if (target.id.startsWith('board-') && ['title','question','conclusion','open_questions'].includes(target.id.slice(6))) editBoard()[target.id.slice(6)] = target.value;
     if (target.dataset.entryText) editBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value;
-    if (target.dataset.connectionNote) edits.notes[target.dataset.connectionNote] = target.value;
+    if (target.dataset.connectionNote) {
+      const id = target.dataset.connectionNote;
+      if (!Object.hasOwn(edits.notes, id)) edits.noteBases[id] = JSON.stringify(notebook.connections.find(c => c.id === id)?.note ?? null);
+      edits.notes[id] = target.value;
+    }
   });
   window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
@@ -1630,7 +1646,7 @@ const ResearchTools = (() => {
     connect(value, {open: opening, selected}) { client = value; navigate = opening; select = selected; }, show, hide,
     resetWorkspace() {
       hide();
-      notebook = null; dirty = false; edits = {boards:{}, notes:{}}; connectionDraft = false; historyData = null; boardId = null;
+      notebook = null; dirty = false; edits = noEdits(); connectionDraft = false; historyData = null; boardId = null;
       wanted = loaded = null; modalWorkspace = null;
     },
     sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,

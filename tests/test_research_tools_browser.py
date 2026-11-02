@@ -1618,6 +1618,65 @@ def test_held_board_edits_stay_out_of_other_saves_and_merge_on_save_board(engine
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('change', ['edit', 'delete'])
+def test_save_board_refuses_a_held_edit_when_another_window_changed_that_board(engine, change):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': board, 'kind': 'board', 'title': title, 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}
+                                      for board, title in [('b1', 'First board'), ('b2', 'Second board')]]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=boards&board=b1')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await page.locator('#board-title').fill('Unsaved board title')
+                # Another window changes or removes this same board while a paper is open here.
+                await page.locator('#papers li[data-paper="study"]').click()
+                await view.wait_for(state='hidden')
+                other = httpx.get(url + '/api/notebook').json()
+                if change == 'edit': other['boards'][0]['title'] = 'Another window title'
+                else: other['boards'] = other['boards'][1:]
+                assert httpx.put(url + '/api/notebook', json=other).status_code == 200
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'Unsaved board title'
+                await view.get_by_role('button', name='Save board', exact=True).click()
+                await ready(page)
+                assert 'another window' in await page.locator('#research-message').inner_text()
+                assert await page.locator('#board-title').input_value() == 'Unsaved board title'
+                saved = httpx.get(url + '/api/notebook').json()
+                if change == 'edit': assert [b['title'] for b in saved['boards']] == ['Another window title', 'Second board']
+                else: assert [b['id'] for b in saved['boards']] == ['b2']
+                # Reloading shows the other window's version, as for any notebook conflict.
+                await view.get_by_role('button', name='Reload saved version').click()
+                await _answer(page, 'Discard changes')
+                await ready(page)
+                expected = 'Another window title' if change == 'edit' else 'Second board'
+                assert await page.locator('#board-title').input_value() == expected
+                # Saving another board is not held up by the refused one.
+                await page.locator('#board-title').fill('Saved after reload')
+                await view.get_by_role('button', name='Save board', exact=True).click()
+                await ready(page)
+                assert await page.locator('#research-message').inner_text() == 'Saved.'
+                titles = [b['title'] for b in httpx.get(url + '/api/notebook').json()['boards']]
+                assert titles == (['Saved after reload', 'Second board'] if change == 'edit' else ['Saved after reload'])
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_choosing_or_creating_a_board_updates_the_url_and_history(engine):
     config.set_ai_enabled(False)
 
