@@ -612,8 +612,10 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .graph-tip .pm { color: var(--muted); font-size: .76rem; margin-top: .15rem; }
 .graph-tip-relation { margin: .3rem 0; font-weight: 700; }
 .graph-tip-relation.cite { color: var(--map-cite); }
+.graph-tip-relation.paper-note { color: var(--map-other); }
 .graph-tip-relation.conflict, .graph-conflict { color: var(--map-conflict); }
 .graph-tip-citations { margin-top: .4rem; }
+.graph-note-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: hidden; margin-top: .4rem; }
 .graph-controls { flex-wrap: wrap; font-size: .84rem; color: var(--muted); }
 .graph-controls label { display: flex; align-items: center; gap: .25rem; }
 .graph-controls input[type=range] { width: 6rem; }
@@ -628,6 +630,7 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .graph-legend i.supports { border-top: 2px solid var(--ok); }
 .graph-legend i.contradicts { border-top: 3px dotted var(--map-conflict); }
 .graph-legend i.other { border-top: 2px dashed var(--map-other); }
+.graph-legend i.paper-note { border-top: 2px dotted var(--map-other); }
 
 /* The research form: context and the ledger of my own claims. */
 .edit.research .linkrow input[name="ledger-id"] { flex: 0 0 5rem; font-family: ui-monospace, Menlo, monospace; }

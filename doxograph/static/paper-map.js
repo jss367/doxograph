@@ -6,7 +6,8 @@ function connectPaperMap(client) { mapClient = client; }
 // --- the map: papers as nodes ----------------------------------------------
 
 // A force layout on a canvas, with no library behind it. Nodes are papers;
-// squares are the ledger's own claims. Edges show shared topics, citations,
+// squares are the ledger's own claims, and document nodes are paper notes.
+// Edges show shared topics, citations, notes belonging to papers,
 // disagreements, and papers bearing on my claims. Citation data comes from
 // the server; the layout and other connections use the client snapshot.
 //
@@ -165,6 +166,16 @@ function graphData() {
     });
   }
   const edges = [];
+  if (opts.notes) {
+    for (const p of mapClient.state.papers) {
+      const text = (p.notes || '').trim();
+      if (!text) continue;
+      nodes.push({ id: `n:${p.key}`, type: 'note', key: p.key, label: `My note on ${p.title || p.key}`,
+        cite: `Note · ${graphCite(p)}`, text, n: 0, r: 9,
+        year: Number.isInteger(p.year) && p.year > 0 ? p.year : null });
+      edges.push({ type: 'note', a: `p:${p.key}`, b: `n:${p.key}` });
+    }
+  }
   let maxShared = 1;
   let minShared = opts.minShared || 1;
   // The weights are worked out whether or not topic edges are drawn, so the
@@ -292,7 +303,7 @@ function graphSync() {
   GRAPH.maxShared = maxShared;
   GRAPH.minShared = minShared;
   graphTimeline();
-  if (GRAPH.hover && !GRAPH.nodes.has(GRAPH.hover.id)) GRAPH.hover = null;
+  if (GRAPH.hover && !GRAPH.nodes.has(GRAPH.hover.id)) { GRAPH.hover = null; graphTip(null); }
   if (GRAPH.hoverEdge) {
     const old = GRAPH.hoverEdge;
     GRAPH.hoverEdge = GRAPH.edges.find((e) => e.type === old.type && e.a === old.a
@@ -351,9 +362,9 @@ function graphTick() {
     b.vx -= dx * f; b.vy -= dy * f;
   }
   for (const n of nodes) {
-    // My own claims hang off one or two papers each; a stronger pull keeps
+    // My own claims and notes hang off papers; a stronger pull keeps
     // them among the papers rather than orbiting the whole map.
-    const pull = n.type === 'claim' ? 0.05 : 0.015;
+    const pull = n.type === 'paper' ? 0.015 : 0.05;
     n.vx -= n.x * pull * alpha;
     n.vy -= n.y * pull * alpha;
     n.vx *= 0.6; n.vy *= 0.6;
@@ -421,6 +432,7 @@ function graphRelationColor(relation, colors) {
 }
 
 function graphEdgeLabel(edge) {
+  if (edge.type === 'note') return 'has my note';
   if (edge.type === 'cite') return 'cites';
   if (edge.type === 'topic') return 'shares a topic with';
   if (edge.type === 'tension') return edge.kinds.has('contradiction') ? 'contradicts' : 'disagrees with';
@@ -492,8 +504,9 @@ function graphAutofit(w, h) {
 // A filter greys the papers it leaves out rather than removing them, so the
 // shape of the corpus stays visible behind the ones picked out. A label dims
 // the same way a topic does, in any case it is spelled; a claim node carries
-// neither and is left alone by both.
+// neither and is left alone by both. Notes follow their paper's filters.
 function graphDimmed(n) {
+  if (n.type === 'note') return graphDimmed(GRAPH.nodes.get(`p:${n.key}`));
   const facet = facetFilter();
   return n.type === 'paper'
     && ((V.tag && !n.tags.has(V.tag)) || (V.label && !(n.labels || new Set()).has(labelKey(V.label)))
@@ -560,6 +573,7 @@ function graphDraw() {
     ctx.lineWidth = (width + (touching ? 0.8 : 0)) / GRAPH.zoom;
     const dash = e.type === 'tension' && e.open ? [9, 5]
       : e.relation === 'contradicts' ? [4, 4]
+      : e.type === 'note' ? [3, 4]
       : e.type === 'ledger' && !['supports', 'contradicts'].includes(e.relation) ? [8, 4, 2, 4] : [];
     ctx.setLineDash(dash.map((n) => n / GRAPH.zoom));
     ctx.beginPath();
@@ -591,6 +605,17 @@ function graphDraw() {
       if (n === hover || (V.paper === n.key && !faded)) {
         ctx.strokeStyle = colors.ink; ctx.lineWidth = 2; ctx.stroke();
       }
+    } else if (n.type === 'note') {
+      ctx.fillStyle = colors.bg;
+      ctx.strokeStyle = colors.other;
+      ctx.lineWidth = n === hover ? 2 : 1.2;
+      const x = n.x - n.r * 0.75, y = n.y - n.r;
+      const width = n.r * 1.5, fold = n.r * 0.5;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + width - fold, y);
+      ctx.lineTo(x + width, y + fold); ctx.lineTo(x + width, y + 2 * n.r);
+      ctx.lineTo(x, y + 2 * n.r); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x + width - fold, y); ctx.lineTo(x + width - fold, y + fold);
+      ctx.lineTo(x + width, y + fold); ctx.stroke();
     } else {
       ctx.fillStyle = colors.bg;
       ctx.strokeStyle = colors.ink;
@@ -599,7 +624,7 @@ function graphDraw() {
     }
     if (showLabels || n === hover || linked.has(n)) {
       ctx.fillStyle = faded ? colors.muted : colors.ink;
-      const text = n.type === 'paper' ? n.cite : n.key;
+      const text = n.type === 'claim' ? n.key : n.cite;
       ctx.strokeStyle = colors.panel; ctx.lineWidth = 3 / GRAPH.zoom;
       ctx.lineJoin = 'round';
       ctx.strokeText(text, n.x, n.y + n.r + 3);
@@ -710,9 +735,9 @@ function graphTip(node, sx, sy, edge = null) {
   if (!tip) return;
   if (!node && !edge) { tip.hidden = true; return; }
   if (edge) {
-    const name = (n) => n.type === 'paper' ? n.label : `My claim ${n.key}: ${n.label}`;
+    const name = (n) => n.type === 'claim' ? `My claim ${n.key}: ${n.label}` : n.label;
     tip.innerHTML = `<strong>${esc(name(edge.source))}</strong>
-      <div class="graph-tip-relation ${edge.type === 'tension' || edge.relation === 'contradicts' ? 'conflict' : edge.type}">${esc(graphEdgeLabel(edge))}${edge.type === 'cite' ? ' →' : ''}</div>
+      <div class="graph-tip-relation ${edge.type === 'tension' || edge.relation === 'contradicts' ? 'conflict' : edge.type === 'note' ? 'paper-note' : edge.type}">${esc(graphEdgeLabel(edge))}${edge.type === 'cite' ? ' →' : ''}</div>
       <strong>${esc(name(edge.target))}</strong>`;
     if (edge.type === 'tension') tip.innerHTML += `<div class="pm">${edge.n} disagreement${edge.n === 1 ? '' : 's'} · ${edge.open ? 'includes unreviewed findings' : 'reviewed'}</div>`;
     if (edge.type === 'topic') tip.innerHTML += `<div class="pm">${esc(edge.tags.join(', '))}</div>`;
@@ -726,6 +751,10 @@ function graphTip(node, sx, sy, edge = null) {
     const incoming = GRAPH.edges.filter((e) => e.type === 'cite' && e.target === node).map((e) => e.source);
     const listing = (label, nodes) => nodes.length ? `<div class="graph-tip-citations"><strong>${label} (${nodes.length})</strong>: ${nodes.slice(0, 5).map((n) => esc(n.cite)).join(', ')}${nodes.length > 5 ? `, +${nodes.length - 5} more` : ''}</div>` : '';
     tip.innerHTML += listing('Cites', outgoing) + listing('Cited by', incoming);
+  } else if (node.type === 'note') {
+    const preview = node.text.length > 600 ? node.text.slice(0, 600) + '…' : node.text;
+    tip.innerHTML = `<strong>${esc(node.label)}</strong><div class="graph-note-preview">${esc(preview)}</div>
+      <div class="pm">Click to open this paper’s note.</div>`;
   } else {
     tip.innerHTML = `<div><span class="kind">my claim</span> ${esc(node.label)}</div><div class="pm"><code>${esc(node.key)}</code></div>`;
   }
@@ -736,7 +765,7 @@ function graphTip(node, sx, sy, edge = null) {
   tip.style.top = `${Math.max(0, Math.min(sy + 14, wrap.height - height - 4))}px`;
 }
 
-function graphOpenPaper(key) {
+function graphOpenPaper(key, openNote = false) {
   captureOpenEditor();
   closeEditorsNotBelongingTo(key);
   showView('claims');
@@ -748,6 +777,7 @@ function graphOpenPaper(key) {
   V.paper = key; V.tag = null; V.selectedId = null;
   syncHash(true);   // leaving the map is navigation: Back returns to it
   renderAll();
+  if (openNote) $('content').querySelector('.note')?.scrollIntoView({ block: 'center' });
 }
 
 function graphBindCanvas(canvas) {
@@ -815,6 +845,7 @@ function graphBindCanvas(canvas) {
     const { x, y } = graphWorld(event);
     const node = graphNodeAt(x, y);
     if (node && node.type === 'paper') graphOpenPaper(node.key);
+    if (node && node.type === 'note') graphOpenPaper(node.key, true);
   });
   canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
@@ -858,11 +889,12 @@ function graphHeader() {
   return `<div class="paperhead">
     <h2>How the papers connect</h2>
     <p class="ps">Each circle is a paper, sized by how many claims it makes and colored by the
-      topic it speaks to most, or by a facet you choose. Squares are your own claims. Drag a node to move it, scroll to
+      topic it speaks to most, or by a facet you choose. Squares are your own claims.
+      Turn on my notes to show saved paper notes; hover to preview and click to open. Drag a node to move it, scroll to
       zoom, drag the background to pan, and click a paper to read it.
       Hover over a paper or connection to see who cites whom.</p>
     <p class="ps" data-graph-timeline-hint ${opts.xAxis === 'year' ? '' : 'hidden'}>Earlier papers are on the left, later papers on the right, using their publication year.
-      Papers without a year and your own claims are in the Undated column. Drag vertically to separate items from the same year.</p>
+      Notes share their paper’s year. Papers without a year and your own claims are in the Undated column. Drag vertically to separate items from the same year.</p>
     <div class="graph-legend">
       <span><i class="cite"></i>cites, arrow to the paper cited</span>
       <span><i class="tension"></i>papers disagree (dashed while open)</span>
@@ -870,6 +902,7 @@ function graphHeader() {
       <span><i class="supports"></i>supports my claim</span>
       <span class="graph-conflict"><i class="contradicts"></i>contradicts my claim</span>
       <span><i class="other"></i>refines it or supplies a method</span>
+      <span><i class="paper-note"></i>my note on a paper</span>
       <span>(links marked independent are not drawn)</span>
     </div>
     <div class="row graph-controls">
@@ -888,6 +921,7 @@ function graphHeader() {
       <label><input type="checkbox" data-graph-opt="tensions" ${opts.tensions ? 'checked' : ''}> tensions</label>
       <label><input type="checkbox" data-graph-opt="cites" ${opts.cites ? 'checked' : ''}> citations</label>
       <label><input type="checkbox" data-graph-opt="ledger" ${opts.ledger ? 'checked' : ''}> my claims</label>
+      <label><input type="checkbox" data-graph-opt="notes" ${opts.notes ? 'checked' : ''}> my notes</label>
       <span class="hint" data-graph-count style="margin-left:auto"></span>
     </div>
     <div class="graph-legend graph-colors" data-graph-colors hidden></div>
@@ -915,7 +949,11 @@ function graphStatus() {
   const count = $('content').querySelector('[data-graph-count]');
   if (!count) return;
   const papers = [...GRAPH.nodes.values()].filter((n) => n.type === 'paper').length;
-  const bits = [`${papers} papers`, `${GRAPH.edges.length} links`];
+  const bits = [`${papers} paper${papers === 1 ? '' : 's'}`, `${GRAPH.edges.length} link${GRAPH.edges.length === 1 ? '' : 's'}`];
+  if (V.graph.notes) {
+    const notes = [...GRAPH.nodes.values()].filter((n) => n.type === 'note').length;
+    bits.splice(1, 0, `${notes} note${notes === 1 ? '' : 's'}`);
+  }
   if (V.tag) bits.push(`highlighting #${V.tag}`);
   const facet = facetFilter();
   if (facet) bits.push(`highlighting ${facet.name}: ${facet.value}`);
