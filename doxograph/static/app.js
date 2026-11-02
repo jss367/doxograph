@@ -459,7 +459,7 @@ function renderWorkspacePicker() {
   $('btn-workspace-delete').title = selected?.id === 'default' ? 'The default workspace cannot be deleted.' : '';
   document.title = selected ? `${selected.name} — Doxograph` : 'Doxograph';
   window.doxographWorkspaceId = workspaceClient.workspaceId || 'default';
-  syncAskWorkspace();
+  if (typeof syncAskWorkspace === 'function') syncAskWorkspace();
 }
 
 function resetWorkspaceView() {
