@@ -1,6 +1,8 @@
-/* Long-form, reader-owned notes. All rendering libraries are bundled locally. */
+/* Long-form, reader-owned notes. All rendering libraries are bundled locally.
+   A view in the main pane: leaving it keeps the draft for the next visit. */
 const ResearchNotes = (() => {
-  let client;
+  let client, navigate, follow, select, shown = false, loaded = false;
+  let requested = null, revealed = null;
   const el = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   let workspace, notes = [], draft = null, saved = null, busy = false, previewTimer;
@@ -27,7 +29,12 @@ const ResearchNotes = (() => {
     setBusy(true);
     try { await task(); }
     catch (error) { status(error.message, true); }
-    finally { setBusy(false); }
+    finally {
+      setBusy(false);
+      // Hash navigation can arrive during a load, save, or discard prompt.
+      // Drain the latest target once that work releases the editor.
+      if (shown && loaded && requested !== revealed) void run(revealRequested);
+    }
   }
   function noteURL(id) {
     return `/?note=${encodeURIComponent(id)}#${new URLSearchParams({ws:workspace})}`;
@@ -40,6 +47,7 @@ const ResearchNotes = (() => {
       const hash = new URLSearchParams(url.hash.slice(1));
       if ((hash.get('ws') || 'default') !== workspace) return null;
       if (url.searchParams.has('note')) return {kind:'note', id:url.searchParams.get('note')};
+      if (hash.has('note')) return {kind:'note', id:hash.get('note')};
       if (hash.has('paper')) return {kind:'paper', id:hash.get('paper')};
     } catch (_) { /* Plain text remains editable even with malformed links. */ }
     return null;
@@ -53,12 +61,6 @@ const ResearchNotes = (() => {
       }
     });
     return links;
-  }
-  function updateURL(id) {
-    const url = new URL(location.href);
-    if (id) url.searchParams.set('note', id);
-    else url.searchParams.delete('note');
-    history.replaceState(null, '', url);
   }
   function renderList() {
     const query = el('notes-search').value.trim().toLowerCase();
@@ -94,6 +96,8 @@ const ResearchNotes = (() => {
     renderPreview();
   }
   function renderPreview() {
+    // A redraw still pending from typing would replace the links under a click.
+    clearTimeout(previewTimer);
     if (!draft || !el('note-preview')) return;
     const fragment = NoteWriting.render(draft.body, workspace);
     fragment.querySelectorAll('a').forEach(link => {
@@ -125,28 +129,60 @@ const ResearchNotes = (() => {
     const note = notes.find(n => n.id === id);
     if (!note) throw new Error('This research note no longer exists. Reload the saved version to update the list.');
     saved = structuredClone(note); draft = structuredClone(note);
-    updateURL(id); status(''); renderList(); renderDocument();
+    select(id); status(''); renderList(); renderDocument();
   }
-  async function open(id) {
-    if (el('research-notes').open) return;
-    workspace = client.workspaceId;
-    draft = saved = null;
+  function reset() {
+    clearTimeout(previewTimer);
+    workspace = client.workspaceId; notes = []; draft = saved = null; loaded = false;
     el('notes-search').value = '';
-    el('research-notes').showModal();
+  }
+  // The note a URL names, or else the one last open, or else the newest.
+  async function reveal(id, current) {
+    if (isDirty() && (!id || id === draft.id)) { renderList(); status('Unsaved changes'); return; }
+    if (id && id !== draft?.id && !await discard()) {
+      if (current()) select(saved?.id || null);
+      return;
+    }
+    if (!current()) return;
+    const last = notes.some(n => n.id === draft?.id) ? draft.id : null;
+    const note = notes.find(n => n.id === (id || last)) || (!id && [...notes].sort((a,b) => b.updated.localeCompare(a.updated))[0]);
+    if (note) {
+      // Read from disk again: nothing unsaved is waiting here.
+      saved = structuredClone(note); draft = structuredClone(note);
+      select(note.id); status(''); renderList(); renderDocument();
+    } else {
+      draft = saved = null; select(null); renderList(); renderDocument();
+      status(id ? 'This research note no longer exists.' : 'Notes stay in this workspace and are never sent to a model.');
+    }
+  }
+  async function revealRequested() {
+    if (!shown) return;
+    const target = requested;
+    try { await reveal(target.id, () => shown && requested === target); }
+    finally { revealed = target; }
+  }
+  async function show(id) {
+    // The URL catching up with a record picked here is not a new destination,
+    // and must not rebuild the editor under the cursor.
+    if (shown && id && id === draft?.id) { requested = revealed = {id}; return; }
+    const changed = !shown || requested?.id !== id;
+    if (changed) requested = {id};
+    if (shown) {
+      if (changed && loaded) await run(revealRequested);
+      return;
+    }
+    shown = true;
+    el('research-notes').hidden = false;
+    if (workspace !== client.workspaceId) reset();
+    renderList(); renderDocument(); status(isDirty() ? 'Unsaved changes' : '');
     await run(async () => {
-      notes = (await request()).notes;
-      renderList(); renderDocument();
-      if (id || notes.length) await choose(id || [...notes].sort((a,b) => b.updated.localeCompare(a.updated))[0].id);
-      else status('Notes stay in this workspace and are never sent to a model.');
+      notes = (await request()).notes; loaded = true;
+      await revealRequested();
     });
   }
-  async function close() {
-    if (busy || !await discard()) return false;
-    clearTimeout(previewTimer);
-    draft = saved = null;
-    updateURL(null);
-    el('research-notes').close();
-    return true;
+  function hide() {
+    shown = false;
+    el('research-notes').hidden = true;
   }
   async function save() {
     if (!draft?.title.trim()) throw new Error('Give your note a title before saving.');
@@ -218,14 +254,14 @@ const ResearchNotes = (() => {
       notes = latest; draft = saved = null;
       renderList(); renderDocument();
       if (notes.some(n => n.id === id)) await choose(id);
-      else { updateURL(null); status('The note was deleted in another window.'); }
+      else { select(null); status('The note was deleted in another window.'); }
       return;
     }
     if (name === 'delete') {
       if (!await confirmDialog(`Delete “${draft.title}”? Links to this note will be marked as missing.`, {ok:'Delete note'})) return;
       await request(`/${draft.id}?revision=${saved.revision}`, 'DELETE');
       notes = notes.filter(n => n.id !== draft.id); draft = saved = null;
-      updateURL(null); renderList(); renderDocument(); status('Note deleted.'); return;
+      select(null); renderList(); renderDocument(); status('Note deleted.'); return;
     }
     if (name === 'export') {
       // Export the current draft so unsaved writing can be recovered on conflict.
@@ -250,21 +286,13 @@ const ResearchNotes = (() => {
       const {linkKind:kind,linkId:id} = target.dataset;
       if (kind === 'note') return choose(id);
       if (!client.state.papers.some(p => p.key === id)) throw new Error('This paper has been removed.');
-      if (!await discard()) return;
-      // Mirror ordinary paper navigation, preserving any library editor draft.
-      captureOpenEditor(); parkNewClaimForNavigation(id);
-      V.paper = id; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false; V.selectedId = null;
-      el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
-      draft = saved = null; updateURL(null); el('research-notes').close();
-      scheduleTextSearch(); renderAll(); syncHash(true);
+      follow(id);
     }
   }
-  el('btn-research-notes').addEventListener('click', () => open());
   el('research-notes').addEventListener('click', event => {
     const target = event.target.closest('[data-notes-action]');
     if (!target) return;
     event.preventDefault();
-    if (target.dataset.notesAction === 'close') { close(); return; }
     // Open the picker during the click, before run() disables the file input.
     // The change handler freezes the editor while the selected image uploads.
     if (target.dataset.notesAction === 'image') {
@@ -277,7 +305,6 @@ const ResearchNotes = (() => {
     }
     run(() => action(target.dataset.notesAction, target));
   });
-  el('research-notes').addEventListener('cancel', event => { event.preventDefault(); close(); });
   el('notes-search').addEventListener('input', renderList);
   el('research-notes').addEventListener('input', event => {
     if (event.target.id === 'note-link-search') return filterLinks();
@@ -308,6 +335,12 @@ const ResearchNotes = (() => {
     if (file) { event.preventDefault(); event.stopPropagation(); run(() => upload(file)); }
   });
   window.addEventListener('beforeunload', event => { if (isDirty()) { event.preventDefault(); event.returnValue = ''; } });
-  return {connect(value) { client = value; }, open, hasUnsavedChanges: () => Boolean(isDirty() || busy),
-    beforeWorkspaceSwitch:async () => !el('research-notes').open || await close()};
+  return {connect(value, {open: opening, follow: following, selected}) { client = value; navigate = opening; follow = following; select = selected; },
+    show, hide, open: id => navigate(id),
+    resetWorkspace() { hide(); reset(); },
+    hasUnsavedChanges: () => Boolean(isDirty() || busy),
+    async beforeWorkspaceSwitch() {
+      // A later guard may still refuse. Only committed selection clears drafts.
+      return !busy && await discard();
+    }};
 })();

@@ -648,7 +648,8 @@ writing space are stored locally in `note-images/`.
 - **Research notes** are a separate writing space for arguments, literature
   reviews, derivations, and experiment plans. Open **Research notes** in the
   sidebar to create, search, rename, and write notes in Markdown with a live
-  preview. Choose Write, Split, or Preview to suit the task. Headings, lists,
+  preview. Notes open in the main pane beside the sidebar; follow a paper and
+  come back with **Back**, and an unsaved draft is still there. Choose Write, Split, or Preview to suit the task. Headings, lists,
   blockquotes, code, and tables render alongside inline LaTeX (`$...$`) and
   display equations (`$$...$$`). The toolbar inserts common formatting,
   equations, tables, and images. Upload, drop, or paste PNG, JPEG, GIF, or WebP

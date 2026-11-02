@@ -102,7 +102,7 @@ $('agent-messages').addEventListener('click', async (event) => {
         await switchWorkspace(workspace);
         if (workspaceClient.workspaceId !== workspace) return;
       }
-      closeAsk();
+      // The note opens in the main pane; the conversation stays beside it.
       await ResearchNotes.open(message.saved_note);
     } catch (error) { message.saveError = `Could not open this note: ${error.message}`; }
     finally {
