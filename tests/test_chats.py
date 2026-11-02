@@ -153,7 +153,8 @@ def test_paper_chat_answers_with_the_conversation_agent(client, monkeypatch, age
     config.set_ai_provider('api')
     seen = []
 
-    def answer(key, messages):
+    def answer(key, messages, *, callback_url=None):
+        assert callable(callback_url) == (config.ai_provider() in ('claude_code', 'codex'))
         seen.append(config.ai_provider())
         return {'answer': 'Twenty.', 'model': 'test', 'assistant': 'Claude'}
 
