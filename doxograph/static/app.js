@@ -520,7 +520,11 @@ const workspaceController = createWorkspaceController(workspaceClient, {
                                            { ok: 'Discard and switch' });
   },
   beforeLeave: flushTrash,
-  beforeSelect: () => WorkspaceNotes.beforeWorkspaceSwitch(),
+  async beforeSelect() {
+    if (!await WorkspaceNotes.beforeWorkspaceSwitch()) return false;
+    if (typeof rememberAskCatalog === 'function') rememberAskCatalog();
+    return true;
+  },
   async enter() {
     resetWorkspaceView();
     // Selection cleared the client snapshot. Retire the previous workspace's

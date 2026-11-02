@@ -185,6 +185,10 @@ $('agent-form').addEventListener('submit', (event) => {
 // workspace is now open behind the dialog. Never include personal note fields.
 const askCatalogs = new Map();
 let picker = null;
+function rememberAskCatalog() {
+  if (S.workspace?.id !== workspaceClient.workspaceId) return;
+  askCatalogs.set(workspaceClient.workspaceId, {papers: structuredClone(S.papers), claims: S.claims.map(c => ({paper:c.paper, id:c.id, text:c.text, quote:c.quote, locator:c.locator, tags:c.tags, reviewed:c.reviewed}))});
+}
 function catalog(workspace = agentChats.workspace) {
   if (workspace === workspaceClient.workspaceId) return S;
   return askCatalogs.get(workspace) || {papers: [], claims: []};
@@ -254,7 +258,7 @@ async function openAsk(scope, opener = document.activeElement) {
       : askOpener?.dataset.askClaim ? `[data-ask-claim="${CSS.escape(askOpener.dataset.askClaim)}"][data-paper="${CSS.escape(askOpener.dataset.paper)}"]`
       : askOpener?.dataset.paperChat ? `[data-paper-chat="${CSS.escape(askOpener.dataset.paperChat)}"]` : '';
   }
-  askCatalogs.set(workspaceClient.workspaceId, {papers: structuredClone(S.papers), claims: S.claims.map(c => ({paper:c.paper, id:c.id, text:c.text, quote:c.quote, locator:c.locator, tags:c.tags, reviewed:c.reviewed}))});
+  rememberAskCatalog();
   const opening = agentChats.open(workspaceClient.workspaceId, null, scope ? {fresh: true, scope} : {});
   $('library-agent').hidden = false;
   document.body.classList.add('agent-open');
