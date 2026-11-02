@@ -199,6 +199,8 @@ def build() -> Path:
                         if dataset[field]:
                             dataset_lines.extend([label + ': ' + notebook.md(dataset[field]), ''])
                     dataset_lines.extend(['Roles: ' + ', '.join(role.replace('-', ' ') for role in dataset['roles']), ''])
+                    if dataset['labels']:
+                        dataset_lines.extend(['Labels: ' + notebook.md(', '.join(dataset['labels'])), ''])
                     if dataset['facet_values']:
                         dataset_lines.extend(['Other dataset names: ' + notebook.md(', '.join(dataset['facet_values'])), ''])
                     names = {store.facet_value_key(value) for value in [dataset['name'], *dataset['facet_values']]}

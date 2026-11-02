@@ -48,10 +48,40 @@ def test_dataset_lifecycle_and_workspace_isolation(client):
     {'name': 'x', 'papers': ['../outside']}, {'name': 'x', 'papers': ['missing']},
     {'name': 'x', 'claims': [{'paper': 'missing', 'claim': 'one'}]},
     {'name': 'x', 'extra': 'unexpected'}, {'name': 'x' * 301},
+    {'name': 'x', 'labels': ['two, labels']}, {'name': 'x', 'labels': ['x' * 301]},
+    {'name': 'x', 'labels': 'not a list'}, {'name': 'x', 'labels': [None]},
 ])
 def test_invalid_records_do_not_write(client, body):
     assert client.post('/api/datasets', json=body).status_code == 422
     assert not (config.data_dir() / 'datasets.json').exists()
+
+
+def test_dataset_labels_normalize_and_can_be_replaced_or_removed(client):
+    item = client.post('/api/datasets', json={'name': 'Corpus', 'labels': [
+        ' Open\tsource ', 'OPEN SOURCE', 'needs review', '', '  ', 'Straße', 'STRASSE',
+    ]}).json()
+    assert item['labels'] == ['needs review', 'Open source', 'Straße']
+    assert datasets.load()[0]['labels'] == item['labels']
+    edited = client.put('/api/datasets/' + item['id'], json={
+        'name': 'Corpus', 'revision': item['revision'], 'labels': ['reviewed'],
+    }).json()
+    assert edited['labels'] == ['reviewed']
+    cleared = client.put('/api/datasets/' + item['id'], json={
+        'name': 'Corpus', 'revision': edited['revision'], 'labels': [],
+    }).json()
+    assert cleared['labels'] == []
+
+
+def test_existing_datasets_without_labels_remain_editable(client):
+    item = client.post('/api/datasets', json={'name': 'Older corpus'}).json()
+    del item['labels']
+    (config.data_dir() / 'datasets.json').write_text(json.dumps([item]))
+    assert client.get('/api/datasets').json()['datasets'][0]['labels'] == []
+    edited = client.put('/api/datasets/' + item['id'], json={
+        'name': item['name'], 'revision': item['revision'], 'labels': ['archived'],
+    })
+    assert edited.status_code == 200
+    assert edited.json()['labels'] == ['archived']
 
 
 def test_removed_references_are_preserved_but_new_broken_links_are_rejected(client):
@@ -107,6 +137,7 @@ def test_archive_and_restore_include_datasets_and_invalidate_old_editors(client)
     store.add_facet('dataset', 'Datasets used')
     store.update_claim('study', claim['id'], {'facets': {'dataset': ['EVAL corpus']}})
     item = client.post('/api/datasets', json={'name': 'Evaluation corpus', 'facet_values': ['Eval corpus'],
+                                            'labels': ['open source', 'needs review'],
                                             'source': '/data/evaluation.parquet', 'license': 'CC BY 4.0'}).json()
     revised = client.put('/api/datasets/' + item['id'], json={**datasets.DatasetBody.model_validate(
         {key: item[key] for key in datasets.DatasetBody.model_fields}).model_dump(), 'name': 'Revised corpus', 'revision': item['revision']}).json()
@@ -117,11 +148,13 @@ def test_archive_and_restore_include_datasets_and_invalidate_old_editors(client)
     client.post('/api/workspace/backups/' + backup['id'] + '/restore', json={'expected': backup['expected']}).raise_for_status()
     [restored] = client.get('/api/datasets').json()['datasets']
     assert restored['name'] == item['name'] and restored['revision'] not in (item['revision'], revised['revision'])
+    assert restored['labels'] == ['needs review', 'open source']
     assert client.put('/api/datasets/' + item['id'], json={'name': 'Stale edit', 'revision': item['revision']}).status_code == 409
     prepared = client.post('/api/workspace/archive').json()
     with zipfile.ZipFile(io.BytesIO(client.get(prepared['download']).content)) as archive:
         assert json.loads(archive.read('data/datasets.json')) == [restored]
         readable = archive.read('datasets.md').decode()
         assert '/data/evaluation.parquet' in readable and 'CC BY 4.0' in readable
+        assert 'Labels: needs review, open source' in readable
         assert '[Dataset evaluation study](papers/study.md)' in readable and 'A matched result' in readable
         assert '[Project datasets](datasets.md)' in archive.read('index.md').decode()

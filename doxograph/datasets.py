@@ -24,6 +24,7 @@ class DatasetBody(BaseModel):
     license: str = Field(default="", max_length=1000)
     access_notes: str = Field(default="", max_length=20000)
     roles: list[Role] = Field(default_factory=list, max_length=4)
+    labels: list[Annotated[str, Field(max_length=300)]] = Field(default_factory=list, max_length=200)
     facet_values: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, max_length=200)
     papers: list[PaperKey] = Field(default_factory=list, max_length=1000)
     claims: list[Reference] = Field(default_factory=list, max_length=5000)
@@ -41,6 +42,11 @@ class DatasetBody(BaseModel):
         if any(not value.strip() for value in values):
             raise ValueError("Dataset facet names must not be blank.")
         return list(dict.fromkeys(value.strip() for value in values))
+
+    @field_validator("labels")
+    @classmethod
+    def normalize_labels(cls, values: list[str]) -> list[str]:
+        return store.normalize_labels(values)
 
     @model_validator(mode="after")
     def distinct_links(self) -> Self:
