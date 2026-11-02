@@ -145,3 +145,54 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
                 assert httpx.get(url + '/api/datasets').json() == {'datasets': []}
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('intervening_change', ['update', 'delete'])
+def test_replacing_dataset_draft_requires_inspecting_intervening_changes(engine, intervening_change):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                original = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'version': 'Original'}).json()
+                endpoint = url + '/api/datasets/' + original['id']
+                await page.goto(url + '/?dataset=' + original['id'])
+                dialog = page.locator('#datasets-sheet')
+                await dialog.wait_for(state='visible')
+                await ready(page)
+                await dialog.get_by_label('Version', exact=True).fill('My draft')
+                inspected = httpx.put(endpoint, json={
+                    'name': 'Corpus', 'version': 'Inspected version', 'revision': original['revision']}).json()
+                await dialog.get_by_role('button', name='Reload saved version', exact=True).click()
+                await ready(page)
+                assert 'Inspected version' in await page.locator('#dataset-saved-version').inner_text()
+                if intervening_change == 'update':
+                    httpx.put(endpoint, json={
+                        'name': 'Corpus', 'version': 'Newer version', 'revision': inspected['revision']}).raise_for_status()
+                    expected = 'Newer version'
+                else:
+                    httpx.delete(endpoint, params={'revision': inspected['revision']}).raise_for_status()
+                    expected = 'This dataset record has been deleted.'
+                await dialog.get_by_role('button', name='Replace draft with saved version', exact=True).click()
+                await ready(page)
+                assert await dialog.get_by_label('Version', exact=True).input_value() == 'My draft'
+                assert 'saved version changed again' in await page.locator('#datasets-status').inner_text()
+                assert expected in await page.locator('#dataset-saved-version').inner_text()
+                # The refreshed comparison still needs explicit approval to discard writing.
+                await dialog.get_by_role('button', name='Replace draft with saved version', exact=True).click()
+                await _answer(page, 'Cancel')
+                await ready(page)
+                assert await dialog.get_by_label('Version', exact=True).input_value() == 'My draft'
+                await dialog.get_by_role('button', name='Replace draft with saved version', exact=True).click()
+                await _answer(page, 'Discard changes')
+                await ready(page)
+                if intervening_change == 'update':
+                    assert await dialog.get_by_label('Version', exact=True).input_value() == expected
+                else:
+                    assert await page.locator('#dataset-form').count() == 0
+                    assert expected in await page.locator('#datasets-status').inner_text()
+
+    run_browser(scenario())

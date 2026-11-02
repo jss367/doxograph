@@ -1,6 +1,7 @@
 /* Workspace dataset inventory, including links to the evidence that uses it. */
 const Datasets = (() => {
   let client, navigate, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false;
+  let inspectedRevision;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
@@ -106,6 +107,12 @@ const Datasets = (() => {
       return `<dt>${labels[field]}</dt><dd>${esc(value || 'None recorded')}</dd>`;
     }).join('') + '</dl>';
   }
+  function showSavedComparison(version) {
+    inspectedRevision = version?.revision ?? null;
+    const comparison = el('dataset-saved-version');
+    comparison.hidden = false;
+    comparison.innerHTML = '<h3>Saved version</h3>' + renderSavedVersion(version) + button('replace','Replace draft with saved version');
+  }
   function matches(claim) {
     const names = new Set([draft.name, ...draft.facet_values].map(key).filter(Boolean));
     return Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
@@ -145,6 +152,7 @@ const Datasets = (() => {
     return !dirty() || await confirmDialog('Discard unsaved changes to this dataset?', {ok:'Discard changes'});
   }
   function choose(item) {
+    inspectedRevision = undefined;
     saved = structuredClone(item); draft = structuredClone(item);
     updateURL(item.id); renderList(); renderDocument(); status('');
   }
@@ -175,6 +183,7 @@ const Datasets = (() => {
     if (name === 'new') {
       if (!loaded || !await discard()) return;
       saved = null;
+      inspectedRevision = undefined;
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
       draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',roles:[],facet_values:[],papers:[],claims:[]};
       updateURL(null); renderList(); renderDocument(); status('New dataset · Unsaved changes');
@@ -189,16 +198,19 @@ const Datasets = (() => {
     } else if (name === 'reload') {
       const latest = (await request()).datasets;
       const version = latest.find(item => item.id === saved.id);
-      const comparison = el('dataset-saved-version');
       // Always leave the draft intact while the reader inspects the disk version.
-      comparison.hidden = false;
-      comparison.innerHTML = '<h3>Saved version</h3>' + renderSavedVersion(version) + button('replace','Replace draft with saved version');
+      showSavedComparison(version);
       items = latest; renderList(); status('Your draft is still in the editor. Inspect the saved version below before replacing it.');
     } else if (name === 'replace') {
-      if (!await discard()) return;
       const latest = (await request()).datasets;
       const version = latest.find(item => item.id === saved.id);
-      items = latest;
+      items = latest; renderList();
+      if (inspectedRevision === undefined || (version?.revision ?? null) !== inspectedRevision) {
+        showSavedComparison(version);
+        status('The saved version changed again. Your draft is still here. Inspect the updated comparison before replacing it.');
+        return;
+      }
+      if (!await discard()) return;
       if (version) choose(version);
       else { draft = saved = null; updateURL(null); renderList(); renderDocument(); status('This dataset record has been deleted.'); }
     } else if (name === 'delete') {
