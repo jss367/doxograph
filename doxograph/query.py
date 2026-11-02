@@ -136,7 +136,8 @@ def evidence(kind: Literal["agreements", "tensions", "syntheses"], topic: str = 
     if paper_keys is not None:
         papers_and_issues(paper_keys)  # Fail explicitly if a bound source vanished.
         counts = Counter(c["id"] for c in claims)
-        allowed_pairs = {(c["paper"], c["id"]) for c in claims if c["paper"] in paper_keys}
+        selected = set(paper_keys)
+        allowed_pairs = {(c["paper"], c["id"]) for c in claims if c["paper"] in selected}
         # Persisted analyses identify claims by ID alone. A legacy/restored ID
         # shared by multiple claims cannot establish which source supported it.
         allowed = {claim_id for _, claim_id in allowed_pairs if counts[claim_id] == 1}
