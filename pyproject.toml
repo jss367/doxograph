@@ -72,6 +72,7 @@ files = [
     "doxograph/datasets.py",
     "doxograph/loupe.py",
     "doxograph/analysis_api.py",
+    "doxograph/mcp_server.py", "doxograph/workspace_archive.py",
 ]
 strict = true
 follow_imports = "silent"

@@ -147,6 +147,56 @@ def test_api_errors_are_actionable(status, payload, message):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("tool,arguments,response,message", [
+    ("get_paper", {"workspace": "default", "key": "gone"}, httpx.Response(404, text="not json"), "restart its server"),
+    ("list_workspaces", {}, httpx.Response(404, text="not json"), "HTTP 404: request failed"),
+    ("list_workspaces", {}, httpx.Response(200, text="not json"), "invalid JSON response"),
+    ("list_workspaces", {}, httpx.Response(200, json=["not", "an", "object"]), "unexpected response"),
+])
+def test_malformed_responses_are_actionable(tool, arguments, response, message):
+    async def run():
+        s = create_server(transport=httpx.MockTransport(lambda r: response))
+        with pytest.raises(ToolError, match=message):
+            await s.call_tool(tool, arguments)
+    asyncio.run(run())
+
+
+def test_selected_sources_travel_in_the_request_body():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    async def run():
+        scoped = create_server(workspace="default", papers=["b", "a", "b"], library_snapshot=True,
+                               transport=httpx.MockTransport(respond))
+        for name, arguments in [("read_evidence", {"kind": "tensions"}), ("list_topics", {}), ("get_paper", {"key": "a"})]:
+            await scoped.call_tool(name, {"workspace": "default", **arguments})
+
+    asyncio.run(run())
+    evidence, topics, paper = requests
+    for request in (evidence, topics):
+        assert request.method == "POST" and json.loads(request.content) == {"paper_keys": ["b", "a"]}
+        assert request.url.params["omit_notes"] == "true"
+    assert evidence.url.params["library_snapshot"] == "true" and "library_snapshot" not in topics.url.params
+    assert paper.method == "GET" and paper.url.path == "/api/query/papers/a" and not paper.content
+
+
+def test_evidence_log_refuses_to_grow_past_its_size_cap(tmp_path):
+    log = tmp_path / "evidence.jsonl"
+    log.write_text("[]\n" * 666_667)
+    before = log.stat().st_size
+
+    async def run():
+        s = create_server(workspace="default", evidence_log=str(log),
+                          transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+        with pytest.raises(ToolError, match=r"already retrieved\.$"):
+            await s.call_tool("search_claims", {"workspace": "default"})
+    asyncio.run(run())
+    assert log.stat().st_size == before
+
+
 def test_offline_server_error_explains_how_to_start_it():
     def offline(request):
         raise httpx.ConnectError("offline", request=request)
