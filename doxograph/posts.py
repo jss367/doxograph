@@ -29,7 +29,7 @@ import httpx
 from fpdf import FPDF
 from PIL import Image
 
-from . import config
+from . import config, publication_dates
 
 # The Alignment Forum is a view onto LessWrong's database: an AF post is a
 # LessWrong post with the same id, so the two are one source.
@@ -114,6 +114,7 @@ def metadata(kind: str, post: dict) -> dict:
         "title": re.sub(r"\s+", " ", post.get("title") or "").strip() or post["_id"],
         "authors": [n["displayName"].strip() for n in names if (n or {}).get("displayName")],
         "year": int(posted[:4]) if posted[:4].isdigit() else None,
+        "publication_date": publication_dates.from_timestamp(posted),
         "abstract": "",
         "venue": venue_of(kind, bool(post.get("af"))),
         "doi": "",

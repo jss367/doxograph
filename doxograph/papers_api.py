@@ -10,10 +10,11 @@ import httpx
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import chats, cites, config, extract, ingest, job_journal, job_queue, pairs, search, store
 from .model_errors import ModelSetupError
+from .publication_dates import PublicationDate
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,7 @@ class PaperPatch(BaseModel):
     title: str = ""
     authors: list[str] = []
     year: int | None = None
+    publication_date: PublicationDate | None = None
     venue: str | None = None
     doi: str | None = None
     summary: str | None = None
@@ -135,6 +137,13 @@ class PaperPatch(BaseModel):
     # `error`, which is the machine's to write and not offered here.
     notes: str = ""
     labels: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _consistent_date(self) -> PaperPatch:
+        if self.publication_date and "year" in self.model_fields_set:
+            if self.year != int(self.publication_date[:4]):
+                raise ValueError("year must match publication_date")
+        return self
 
     @field_validator("labels")
     @classmethod
@@ -230,11 +239,16 @@ def patch_paper(key: str, patch: PaperPatch) -> dict[str, Any]:
     # Only the fields the caller sent: an unset field is not a field set to
     # None, and writing the whole model would blank everything left out.
     fields = patch.model_dump(exclude_unset=True)
+    if fields.get("publication_date"):
+        fields["year"] = int(fields["publication_date"][:4])
     with store.paper_lock(key):
         try:
             paper = store.load_paper(key)
         except KeyError:
             raise HTTPException(404, f"no paper {key}") from None
+        # Correcting a year must not leave an older full date on the timeline.
+        if "year" in fields and "publication_date" not in fields and fields["year"] != paper.get("year"):
+            fields["publication_date"] = None
         paper.update(fields)
         store.save_paper(paper)
     return paper

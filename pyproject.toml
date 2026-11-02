@@ -59,7 +59,7 @@ python_version = "3.13"
 # Keep strict contracts at the persistence, provider, and HTTP boundaries. The
 # remaining application modules can be added as their annotations narrow.
 files = [
-    "doxograph/storage.py", "doxograph/records.py", "doxograph/workspace_metadata.py",
+    "doxograph/storage.py", "doxograph/records.py", "doxograph/publication_dates.py", "doxograph/workspace_metadata.py",
     "doxograph/store.py",
     "doxograph/analysis_types.py",
     "doxograph/model_errors.py", "doxograph/providers.py",
