@@ -415,7 +415,8 @@ def cmd_mcp(args) -> int:
     from .mcp_server import run
 
     try:
-        run(args.url, without_notes=args.without_notes, workspace=args.workspace)
+        run(args.url, without_notes=args.without_notes, workspace=args.workspace,
+            papers=args.papers, papers_file=args.papers_file, evidence_log=args.evidence_log, library_snapshot=args.library_snapshot, evidence_limit=args.evidence_limit)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -464,6 +465,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--without-notes", action="store_true",
                    help="leave out personal notes, claim notes, and links to your own claims")
     p.add_argument("--workspace", help="restrict all tools to this workspace ID")
+    source_scope = p.add_mutually_exclusive_group()
+    source_scope.add_argument("--papers", nargs="+", help="restrict reads to these paper keys (requires --workspace)")
+    source_scope.add_argument("--papers-file", help=argparse.SUPPRESS)
+    p.add_argument("--evidence-log", help=argparse.SUPPRESS)
+    p.add_argument("--evidence-limit", type=int, default=500, help=argparse.SUPPRESS)
+    p.add_argument("--library-snapshot", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("serve", help="run the web app")

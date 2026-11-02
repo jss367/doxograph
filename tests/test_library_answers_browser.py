@@ -52,7 +52,7 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 await route.fulfill(json={'answer': ANSWER, 'assistant': 'ChatGPT',
                                           'activity': ['Searched papers recovery', 'Read claims recovery2026']})
 
-            await page.route('**/api/agent/chat', respond)
+            await page.route('**/api/ask', respond)
             with _server() as url:
                 await page.goto(url + '/#ws=' + workspace['id'])
                 await page.locator('#btn-agent:enabled').click()
@@ -162,7 +162,7 @@ def test_committed_save_with_lost_response_retries_once_and_deleted_note_can_be_
                 else:
                     await route.continue_()
 
-            await page.route('**/api/agent/chat', answer)
+            await page.route('**/api/ask', answer)
             await page.route('**/api/research-notes', save)
             with _server() as url:
                 await page.goto(url + '/#ws=' + workspace['id'])
@@ -252,7 +252,7 @@ def test_library_answer_safe_rendering_and_failed_save_retry(engine):
                     await release.wait()
                     await route.continue_()
 
-            await page.route('**/api/agent/chat', lambda route: route.fulfill(json={
+            await page.route('**/api/ask', lambda route: route.fulfill(json={
                 'answer': unsafe, 'assistant': 'Claude'}))
             await page.route('**/api/research-notes', save)
             with _server() as url:
@@ -327,7 +327,7 @@ def test_note_save_with_lost_response_keeps_its_key_across_a_reload(engine):
                 else:
                     await route.continue_()
 
-            await page.route('**/api/agent/chat', lambda route: route.fulfill(json={'answer': ANSWER, 'assistant': 'Claude'}))
+            await page.route('**/api/ask', lambda route: route.fulfill(json={'answer': ANSWER, 'assistant': 'Claude'}))
             await page.route('**/api/research-notes', save)
             await page.route('**/api/chats/*', conversation)
             with _server() as url:

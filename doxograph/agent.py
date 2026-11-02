@@ -13,14 +13,14 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from . import claude_code, codex_cli, config
+from . import ask_context, claude_code, codex_cli, config
 from .model_errors import InputTooLargeError, ModelSetupError
 from .chat_attachments import conversation_blocks
 
 SERVER = "doxograph"
 # The notes tools are not registered under --without-notes; listing only these
 # keeps the permission list matching what the agent can see.
-TOOLS = ("search_papers", "search_claims", "search_paper_text", "get_paper", "list_topics", "read_evidence")
+TOOLS = ("search_papers", "search_claims", "search_paper_text", "get_paper", "list_topics", "read_evidence", "read_passage")
 SYSTEM = """You are the research assistant inside Doxograph, a library of papers broken into claims.
 Answer from the library, using the tools to look things up. Always pass workspace={workspace!r}.
 Cite papers by key and claims by ID, with the paper's quote and locator. Check reviewed, quote_verified,
@@ -34,28 +34,43 @@ The conversation is provided as labeled messages. Answer only the last question.
 TIMEOUT = 600
 _VERBS = {"search_papers": "Searched papers", "search_claims": "Searched claims",
           "search_paper_text": "Searched paper text", "get_paper": "Read paper",
-          "list_topics": "Listed topics", "read_evidence": "Read"}
+          "list_topics": "Listed topics", "read_evidence": "Read", "read_passage": "Read passage"}
 
 
 def instructions(workspace: str, focus: str | None) -> str:
     system = SYSTEM.format(workspace=workspace)
     if focus:
         system += f"\nThe user is looking at the paper with key {focus!r}; assume questions are about it unless they say otherwise."
+    capture = ask_context.active.get()
+    if capture:
+        system += "\n" + ask_context.CITATION_INSTRUCTIONS
     return system
 
 
 def library_server(url: str, workspace: str) -> codex_cli.MCPServer:
     # Run the same code as this server, not whichever `doxograph` the environment finds first.
+    capture = ask_context.active.get()
+    extra = []
+    enabled = TOOLS
+    if capture:
+        snapshot = capture.log.with_name("papers.json")
+        snapshot.write_text(json.dumps(capture.scope.papers), encoding="utf-8")
+        extra = ["--papers-file", str(snapshot), "--evidence-log", str(capture.log),
+                 "--evidence-limit", str(capture.remaining())]
+        if capture.scope.mode == "library":
+            extra.append("--library-snapshot")
+        else:
+            enabled = tuple(t for t in TOOLS if t != "list_topics")
     return codex_cli.MCPServer(
         name=SERVER, command=sys.executable,
-        args=["-m", "doxograph", "mcp", "--url", url, "--without-notes", "--workspace", workspace],
-        env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}, enabled_tools=TOOLS)
+        args=["-m", "doxograph", "mcp", "--url", url, "--without-notes", "--workspace", workspace, *extra],
+        env={"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}, enabled_tools=enabled)
 
 
 def command(binary: str, url: str, workspace: str, focus: str | None) -> list[str]:
     entry = library_server(url, workspace)
     server = {"command": entry.command, "args": entry.args, "env": entry.env}
-    allowed = ",".join(f"mcp__{SERVER}__{name}" for name in TOOLS)
+    allowed = ",".join(f"mcp__{SERVER}__{name}" for name in entry.enabled_tools)
     return [binary, "--setting-sources", "", "-p", "--output-format", "stream-json", "--verbose",
             "--model", config.model(), "--system-prompt", instructions(workspace, focus),
             "--tools", "", "--allowedTools", allowed, "--permission-mode", "dontAsk",
@@ -96,19 +111,21 @@ def answer(messages: list[dict], callback_url: Callable[[], str], focus: str | N
     if config.ai_provider() not in ("claude_code", "codex"):
         raise ModelSetupError("Choose Claude subscription or ChatGPT subscription (Codex) in Settings → Model access.")
     workspace = config.workspace_id()
+    capture = ask_context.active.get()
+    context = [{"type": "text", "text": capture.prompt()}] if capture else []
     if config.ai_provider() == "codex":
         client = codex_cli.Client(mcp_server=lambda: library_server(callback_url(), workspace))
         response = client.create(model=config.model(), system=instructions(workspace, focus),
-                                 messages=[{"role": "user", "content": conversation_blocks(messages, text_pdfs=True)}])
+                                 messages=[{"role": "user", "content": context + conversation_blocks(messages, text_pdfs=True)}])
         return {"answer": response.text, "activity": activity(client.events),
                 "model": config.model(), "assistant": "ChatGPT"}
     binary, env = claude_code.executable(), claude_code.environment()
-    blocks = conversation_blocks(messages)
+    blocks = context + conversation_blocks(messages)
     has_attachments = any(message.get("attachments") for message in messages)
     prompt = (json.dumps({"type": "user", "message": {"role": "user", "content": blocks}}) + "\n"
-              if has_attachments else f"Conversation:\n{json.dumps(messages, ensure_ascii=False)}")
-    if len(prompt.encode("utf-8")) > 9_500_000:
-        raise InputTooLargeError("This conversation exceeds Claude Code's input limit. Use smaller attachments or start a new conversation.")
+              if has_attachments else (capture.prompt() + "\n" if capture else "") + f"Conversation:\n{json.dumps(messages, ensure_ascii=False)}")
+    if len(prompt.encode("utf-8")) + len(instructions(workspace, focus).encode("utf-8")) > 9_500_000:
+        raise InputTooLargeError("This conversation exceeds Claude Code's input limit. Use fewer sources, smaller attachments, or start a new conversation.")
     with tempfile.TemporaryDirectory(prefix="doxograph-agent-") as cwd:
         claude_code.require_subscription([binary, "--setting-sources", ""], env, cwd)
         config.require_ai_enabled()
