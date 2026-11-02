@@ -20,11 +20,14 @@ permissions:
 
 jobs:
   python:
-    name: Python tests
+    name: Python tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    # Up to 5 minutes of setup, 220s for the bounded test process, and
-    # 80s for runner overhead and post-job cleanup.
-    timeout-minutes: 10
+    # 5m setup + 220s test process + 2m artifact upload + 80s cleanup.
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Check out the repository
         timeout-minutes: 1
@@ -45,14 +48,30 @@ jobs:
           python -m pip install --no-deps -e .
           python -m pip check
       - name: Run Python tests
-        # Finish before the job deadline so GitHub can retain the test log.
-        # A stalled test prints its stacks after 60s; the process deadline also
-        # catches hangs during collection or session teardown.
-        run: >-
-          timeout --signal=ABRT --kill-after=10s 210s
-          python -u -X faulthandler -m pytest -p no_live_providers
-          -m "not browser" -v --tb=short --durations=20
-          -o faulthandler_timeout=60
+        shell: bash
+        env:
+          PYTHON_SHARD: ${{ matrix.shard }}/4
+        # The process deadline also covers collection and session teardown.
+        # pipefail keeps timeout/assertion failures red despite the tee command.
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          timeout --signal=ABRT --kill-after=10s 210s \
+            python -u -X faulthandler -m pytest -p no_live_providers \
+            -m "not browser" --python-shard="$PYTHON_SHARD" \
+            -v --tb=short --durations=0 --durations-min=0 \
+            --timeout=60 --timeout-method=thread -o faulthandler_timeout=30 \
+            --report-log=test-results/events.jsonl --junitxml=test-results/junit.xml \
+            2>&1 | tee test-results/console.log
+      - name: Retain Python test diagnostics
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-tests-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 7
 
   browser:
     name: Browser tests (${{ matrix.shard }}/4)

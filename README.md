@@ -1215,11 +1215,24 @@ For the fast Python/API checks, browser executables do not need to be installed:
 .venv/bin/python -m pytest -p no_live_providers -m "not browser" --durations=20
 ```
 
-The Python CI job uses `no_live_providers` to reject model CLI launches and
+CI splits Python tests into four independent jobs, keeping each test module
+in one job. Run a matching shard locally with
+`.venv/bin/python -m pytest -p no_live_providers -m "not browser" --python-shard=1/4 --timeout=60 --timeout-method=thread`.
+Every selected test runs in exactly one shard; one failure does not cancel the others.
+
+The Python CI jobs use `no_live_providers` to reject model CLI launches and
 network connections outside servers opened by the current test. Mock transports
 remain available; the guard applies to the pytest process, not child interpreters.
-CI also prints stacks for a test stalled for 60 seconds and stops the process
-before the job deadline so its diagnostics can be retained.
+Each test, including fixture setup and teardown, has a 60-second timeout that
+prints thread stacks and fails its process. An earlier stack dump at 30 seconds
+and a separate 210-second process deadline cover slow tests and broader stalls.
+
+Each shard uploads a `python-tests-<shard>-attempt-<attempt>` artifact for seven
+days, even on failure: `console.log` contains test names and stack traces,
+`events.jsonl` records each completed test phase and its duration as it happens,
+and `junit.xml` summarizes normal completion. A hard timeout may prevent JUnit
+creation; the flushed event log still records progress. Artifact upload requires
+a functioning runner and cannot recover files from a lost worker.
 
 Run browser checks separately with `-m browser`. CI splits them across four
 jobs; run the same selection locally with, for example,
@@ -1229,7 +1242,7 @@ its Chromium and WebKit processes, while every scenario gets fresh browser
 contexts and a temporary server and corpus. Update checks can invoke the
 normal polling function directly; scheduling checks still exercise the real
 background timer. The final **Python and browser tests** CI check passes only
-when the Python job and every browser shard pass.
+when every Python and browser shard passes.
 
 The suite is offline: its browser checks run against a temporary local
 server and corpus. It covers reference parsing, the store and its status
