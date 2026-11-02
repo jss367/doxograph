@@ -790,3 +790,34 @@ def test_job_notifications_do_not_cover_the_ask_composer(engine):
                 assert jobs['x'] + jobs['width'] == 884
                 assert jobs['y'] + jobs['height'] == 984
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_removing_an_ask_source_disables_send_and_explains_the_repair(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url + '/#paper=a')
+                await page.locator('[data-paper-chat="a"]').first.click()
+                await page.locator('#agent-question').fill('Keep my question after removing this paper')
+                await expect(page.locator('#agent-send')).to_be_enabled()
+                await page.locator('#papers li[data-paper="a"] .pmenu').click()
+                await page.locator('#ctxmenu [data-act="del-paper"]').click()
+                await page.locator('#ask-ok').click()
+                await expect(page.locator('#papers li[data-paper="a"]')).to_have_count(0)
+                await expect(page.locator('#agent-send')).to_be_disabled()
+                await expect(page.locator('#agent-status')).to_have_text('Source unavailable. Repair the selection before asking another question.')
+                await expect(page.locator('#agent-question')).to_have_value('Keep my question after removing this paper')
+                # The existing repair controls remain usable without reopening Ask.
+                await page.locator('[data-remove-source="a"]').click()
+                await page.locator('#agent-add').click()
+                await page.locator('[data-source-paper="b"]').check()
+                await page.locator('#source-apply').click()
+                await expect(page.locator('#agent-scope')).to_contain_text('Recovery under intervention')
+                await expect(page.locator('#agent-send')).to_be_enabled()
+    run_browser(scenario())
+
