@@ -167,7 +167,13 @@ const ResearchTools = (() => {
     }
     if (wanted !== target) return;
     loaded = target;
-    if (!await WorkspaceNotes.flush()) {
+    // Back, a link, or leaving the tools can arrive during each wait below.
+    // The newer move then stands: this load stops without drawing or naming
+    // its tab, and run() drains the newest target once it returns.
+    const current = () => shown && tabKey(wanted) === tabKey(target);
+    const flushed = await WorkspaceNotes.flush();
+    if (!current()) return;
+    if (!flushed) {
       notebook = null;
       el('research-tabs').innerHTML = '';
       el('research-body').innerHTML = `<p class="warn">Your workspace notes could not be saved, so the research tools stay closed until they are. ${button('reload', 'Try again')}</p>`;
@@ -183,7 +189,10 @@ const ResearchTools = (() => {
       // Leaving a paper for the tools saves its reading progress on the way
       // out. Read the notebook after that save, or the next save conflicts.
       await flushReadingProgress();
-      notebook = await request();
+      if (!current()) return;
+      const fresh = await request();
+      if (!current()) return;
+      notebook = fresh;
       dirty = false;
     }
     if (target.board) {
@@ -213,9 +222,12 @@ const ResearchTools = (() => {
     render();
   }
   // The URL follows a tab or board chosen here without asking for a reload.
+  // A move that arrived while the work drawing this was out is newer: the URL
+  // is left to it, and run() brings it on screen.
   function syncLocation() {
-    const board = ['boards', 'questions'].includes(tab) ? boardId : null;
-    wanted = loaded = {tab, board};
+    const board = ['boards', 'questions'].includes(tab) ? boardId : null, next = {tab, board};
+    if (tabKey(wanted) !== tabKey(loaded) && tabKey(wanted) !== tabKey(next)) return;
+    wanted = loaded = next;
     select(tab, board);
   }
   function citation(row) {

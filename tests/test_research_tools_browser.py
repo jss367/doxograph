@@ -1672,3 +1672,48 @@ def test_choosing_or_creating_a_board_updates_the_url_and_history(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_back_during_a_tool_load_keeps_the_newer_destination(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=reading')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                held, release = [], asyncio.Event()
+                async def hold_get(route):
+                    if route.request.method == 'GET' and not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_get)
+                nav = page.locator('.research-tools-nav')
+                await nav.get_by_role('button', name='Evidence boards', exact=True).click()
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held and 'tool=boards' in page.url
+                # Back while the boards are still loading: the reading queue stands.
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                release.set()
+                await ready(page)
+                await page.wait_for_function("document.querySelector('[data-tab=\"reading\"][aria-current=\"page\"]')")
+                await ready(page)
+                assert 'tool=reading' in page.url and 'board=' not in page.url
+                assert await nav.get_by_role('button', name='Reading queue', exact=True).get_attribute('aria-current') == 'page'
+                assert await page.locator('#board-picker').count() == 0
+                await page.unroute('**/api/notebook')
+                assert not errors
+
+    run_browser(scenario())
