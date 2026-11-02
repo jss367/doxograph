@@ -7,12 +7,16 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Unpack
+from typing import TYPE_CHECKING, Any, Unpack
 
 from . import config
 from .analysis_types import ModelResponse, ProviderRequest
 from .model_errors import InputTooLargeError, ModelSetupError
+
+if TYPE_CHECKING:
+    from .codex_cli import MCPServer
 
 
 def executable() -> str:
@@ -70,13 +74,15 @@ def require_subscription(base: list[str], env: dict[str, str], cwd: str) -> None
 
 
 class Client:
-    def __init__(self) -> None:
+    def __init__(self, *, mcp_server: Callable[[], MCPServer] | None = None) -> None:
         self.messages = self
+        self.mcp_server = mcp_server
+        self.events: list[dict[str, Any]] = []
 
     def create(self, **kwargs: Unpack[ProviderRequest]) -> ModelResponse:
         config.require_ai_enabled()
         binary, env = executable(), environment()
-        # No project instructions, hooks, plugins, tools, or MCP connections.
+        # No project instructions, hooks, plugins, or ambient tools/MCP connections.
         # --bare cannot be used: it deliberately disables subscription login.
         with tempfile.TemporaryDirectory(prefix="doxograph-claude-") as cwd:
             base = [binary, "--setting-sources", ""]
@@ -97,6 +103,11 @@ class Client:
                     "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                     "--settings", '{"disableAllHooks":true}', "--disable-slash-commands", "--no-chrome",
                     "--no-session-persistence", "--permission-mode", "dontAsk"]
+            if self.mcp_server is not None:
+                entry = self.mcp_server()
+                args[args.index("--mcp-config") + 1] = json.dumps({"mcpServers": {entry.name: {
+                    "command": entry.command, "args": entry.args, "env": entry.env}}})
+                args.extend(["--allowedTools", ",".join(f"mcp__{entry.name}__{name}" for name in entry.enabled_tools)])
             schema = kwargs.get("output_config", {}).get("format", {}).get("schema")
             if schema:
                 args.extend(["--json-schema", json.dumps(schema)])
@@ -112,6 +123,7 @@ class Client:
                 raise ValueError("Expected JSON objects")
         except ValueError as exc:
             raise RuntimeError("Claude Code returned an unreadable response. Update Claude Code and retry.") from exc
+        self.events = events
         final: dict[str, Any] = next((e for e in reversed(events) if e.get("type") == "result"), {})
         if result.returncode or final.get("is_error") or not final:
             detail = final.get("result") or "; ".join(final.get("errors") or [])

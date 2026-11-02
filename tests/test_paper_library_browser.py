@@ -335,6 +335,80 @@ def test_library_search_topics_labels_sort_and_live_status(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_library_search_highlights_and_prioritizes_authors_and_titles(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper("author", title="Zebra monitoring", authors=["Simon Storf", "Élodie Straße <Lab> & Co."],
+                                    added="2020-01-01T00:00:00+00:00"))
+    summary = store.new_paper("summary", title="Alpha summary")
+    summary["summary"] = "A discussion of Storf's work."
+    store.save_paper(summary)
+    store.save_paper(store.new_paper("citation", title="Beta citations"))
+    store.pdf_path("citation").write_bytes(minimal_pdf(["Storf is cited here. " * 30]))
+    store.save_paper(store.new_paper("title", title="Yellow Storf studies"))
+    store.save_paper(store.new_paper("unmatched", title="Gamma unrelated"))
+    store.set_labels("author", ["favorites"])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={"width": 1440, "height": 1050})
+            with _server() as url:
+                await page.goto(url)
+                cards = page.locator(".library-paper")
+                await expect(cards).to_have_count(5)
+                await page.locator("#workspace-notes-toggle").click()
+                await page.locator("#paper-sort").select_option("title")
+                await page.locator("#q").fill("storf")
+                await expect(cards).to_have_count(4)
+                await expect(cards.locator(".library-paper-link")).to_have_text([
+                    "Yellow Storf studies", "Zebra monitoring", "Alpha summary", "Beta citations",
+                ])
+                author = page.locator('[data-library-paper="author"]')
+                await expect(author.locator(".library-paper-meta mark")).to_have_text("Storf")
+                await expect(cards.first.locator("h3 mark")).to_have_text("Storf")
+                await expect(page.locator('[data-library-paper="citation"] .library-paper-passage')).to_have_count(2)
+                assert await page.locator('#papers li[data-paper]:not([data-paper=""])').evaluate_all(
+                    "rows => rows.map(row => row.dataset.paper)"
+                ) == ["title", "author", "summary", "citation"]
+                # Within each search group, a new sort is respected immediately.
+                await page.locator("#paper-sort").select_option("added-asc")
+                await expect(cards.first).to_have_attribute("data-library-paper", "author")
+                if engine == "chromium":
+                    await page.screenshot(path=".context/author-search.png")
+                await page.locator("#paper-sort").select_option("title")
+                await page.locator('#labels [data-label="favorites"]').click()
+                await expect(cards).to_have_count(1)
+                await page.get_by_role("button", name="Clear all", exact=True).click()
+                await expect(cards).to_have_count(5)
+                await expect(cards.first).to_have_attribute("data-library-paper", "summary")
+                await expect(cards.locator("mark")).to_have_count(0)
+
+                # Reversed words and prefixes use the same matching rules as
+                # filtering; accent and case folding preserve displayed names.
+                for query, marked in [("storf sim", ["Simon", "Storf"]),
+                                      ("storf monitoring", ["Storf"]),
+                                      ("ELODIE STRASSE", ["Élodie Straße"]),
+                                      ("storf elodie", ["Storf", "Élodie"]),
+                                      ("monitoring simon", ["Simon"]),
+                                      ("strasse elodie", ["Élodie", "Straße"]),
+                                      ("lab", ["Lab"])]:
+                    await page.locator("#q").fill(query)
+                    await expect(cards).to_have_count(1)
+                    await expect(author.locator(".library-paper-meta mark")).to_have_text(marked)
+                    await expect(author.locator(".library-paper-meta")).to_have_text(
+                        "Simon Storf, Élodie Straße <Lab> & Co. · Year unknown"
+                    )
+                    await expect(author.locator(".library-paper-meta lab")).to_have_count(0)
+                await page.locator("#q").fill("monitoring")
+                await expect(author.locator("h3 mark")).to_have_text("monitoring")
+                await page.reload()
+                await expect(cards).to_have_count(1)
+                await expect(author.locator("h3 mark")).to_have_text("monitoring")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_failed_claim_save_keeps_library_live_and_preserves_draft(engine):
     config.set_ai_enabled(False)
     _paper("one", "A paper with a draft")

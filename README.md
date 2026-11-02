@@ -215,13 +215,21 @@ and multiple-paper retrieval require **Claude subscription (Claude Code)** or
 you explicitly choose a supported one; Doxograph never switches billing modes
 for you. All Ask requests require AI analysis to be enabled.
 
-The assistant searches through the read-only [MCP server](#query-doxograph-from-agents),
-with no shell, file, web, or write tools. It can retrieve metadata, claims,
-PDF passages, and existing analyses. A selected-paper connection enforces its
-paper list before ranking, counts, and pagination; it omits library-wide topics
+Claude and Codex assistants search through the [MCP server](#query-doxograph-from-agents)
+and can add, remove, or replace paper labels when asked. For example: “Label papers
+about activation steering based on their content.” They read the sources before
+classifying papers and add labels by default, preserving existing ones. The chat's
+**Library activity** lists label-edit requests alongside lookups. Single-paper chat
+keeps its full-paper input and can label that paper; API-based paper chat answers
+questions without editing labels.
+
+The agents have no shell, file, or web tools and cannot edit claims or notes. They
+can retrieve metadata, claims, PDF passages, and existing analyses. A selected-paper
+connection enforces its paper list before ranking, counts, and pagination; it omits library-wide topics
 and syntheses and excludes agreements or tensions with outside dependencies.
 Whole-library requests retain topic and synthesis access within their captured
-paper membership. Searching the library does not mean reading every paper.
+paper membership. Label edits obey the same workspace and paper membership.
+Searching the library does not mean reading every paper.
 
 Retrieval captures the workspace and available papers when you send the question.
 Answers return to that conversation even if you switch workspaces. Both subscription
@@ -362,7 +370,9 @@ topics, and reading status, including papers without extracted claims. Click a
 card to open the paper. Reading status comes from the reading queue: papers
 start **Unread**, then show **Queued**, **Reading**, or **Finished**. Search
 matches paper metadata, summaries, claims, and PDF text; matching passages stay
-under their paper. The sidebar's sort order also controls the cards.
+under their paper. Matching titles and author names are highlighted, and those
+papers appear before matches elsewhere. The sidebar's sort order also controls
+the cards, including the order within each search group.
 Choose **Extracted claims** to browse and review claims across papers, or
 **Papers** to return to the library. Saved searches remember this choice.
 
@@ -584,7 +594,10 @@ writing space are stored locally in `note-images/`.
 - **Datasets**, under Library, catalogs the data your project uses or produces.
   Add a record with a name, description, source URL or local path, version,
   license, access notes, and roles (training, evaluation, reference, or project
-  output). Search the inventory and link records to papers and individual claims.
+  output). Add **Labels** separated by commas, such as `open source` or
+  `needs review`; labels appear in the inventory and are included in dataset
+  search and workspace exports. Labels preserve your spelling and ignore case
+  when deduplicating. Search the inventory and link records to papers and individual claims.
   **Linked research** also includes claims whose `dataset` or `datasets` facets
   match the record's name or one of its **Other dataset names in findings**.
   These matches appear automatically; existing facets are left as you entered them.
@@ -594,6 +607,29 @@ writing space are stored locally in `note-images/`.
   Workspace archives include the original records and a readable `datasets.md`
   inventory. Source references point to your data; adding a record does not
   upload, download, or copy dataset files.
+  For a local source, **Open in Loupe** starts the dataset viewer in a separate
+  window, including before you save the record. Supported sources are conversation
+  JSON/JSONL files with a `messages` array per record, `loupe.survey.v1` survey
+  JSON exports, and Gloom directories containing both `gloom-train.parquet` and
+  `gloom-test.parquet` (either file can also be selected). Use an absolute path,
+  a `~/` path, or a local `file://` URL. Download remote datasets first.
+  The integrated launcher is available on macOS and Linux. On Windows or other
+  unsupported platforms, start Loupe separately and save its URL as the dataset
+  source; **Open source** opens the viewer.
+  Install [Loupe](https://github.com/jss367/loupe) at `~/git/loupe`, or set
+  `DOXOGRAPH_LOUPE_DIR` to its checkout before starting Doxograph. The launcher
+  requires a compatible Loupe version; the verified baseline is
+  [`bb7d2b4`](https://github.com/jss367/loupe/commit/bb7d2b4e351587b61e3505d11649e71c4574f3b5)
+  or newer, which includes both `--conversations` and `--survey`. Update older
+  checkouts before using these modes. The launcher
+  uses Loupe's `.venv/bin/python` when available, otherwise `python3` from PATH;
+  `DOXOGRAPH_LOUPE_PYTHON` overrides the interpreter. Install Loupe's dependencies
+  in that interpreter for conversation/Gloom support. Running viewers are reused,
+  reloaded when source files change, and stopped when Doxograph shuts down.
+  Each source path uses a stable local port so Loupe's browser-local notes remain
+  available across restarts. Keep using the same browser and source path and
+  export reviews before moving files. An occupied port reports an error; it
+  never opens an unrelated server. Dataset files stay unchanged.
 - **Research notes** are a separate writing space for arguments, literature
   reviews, derivations, and experiment plans. Open **Research notes** in the
   sidebar to create, search, rename, and write notes in Markdown with a live
@@ -664,7 +700,7 @@ API key in `~/.credentials` rather than exporting it in `.zshrc`.
 
 ## Query Doxograph from agents
 
-Doxograph includes a read-only **Model Context Protocol (MCP)** server, so an
+Doxograph includes a **Model Context Protocol (MCP)** server, read-only by default, so an
 agent can discover your workspaces, find papers and claims, and read their
 sources without learning the web API. It uses stdio: your agent client launches
 `doxograph mcp`, which queries the running local app over HTTP. It does not
@@ -700,6 +736,13 @@ another port when 8765 is occupied. `--url` accepts local HTTP origins only,
 and defaults to `http://127.0.0.1:8765`. No API key is needed. The adapter does
 not open or initialize a separate corpus, so `DOXOGRAPH_DATA` belongs on the
 HTTP server, not on the MCP command.
+
+To enable paper labeling for an external agent, add `--allow-labels --workspace <id>`.
+This registers `update_paper_labels`, which accepts `papers`, `labels`, and a `mode`
+of `add` (the default), `remove`, or `replace`. It edits up to 200 papers per call;
+`replace` with an empty label list clears their labels. `--papers <key> ...` further
+restricts both reading and labeling to those papers. Label edits cannot cross the
+bound workspace. In-app Claude and Codex chats enable labeling automatically.
 
 Add `--without-notes` to leave out the note tools and the personal fields of the
 other tools: paper notes, claim notes, and links from claims to your own claims.
@@ -856,18 +899,19 @@ than re-reading them and leaves hand-edited claim text alone.
 
 ### Labels on papers
 
-A topic is about a claim and comes out of the model. A label is about the
-paper and is put on by hand: that it is open source, that a model of it is on
-HuggingFace, that it is worth rereading. **Labels** in a paper's header opens
+A topic is about a claim and comes out of extraction. A label is about the
+paper and can be added by hand or by asking the chat agent: that it is open source,
+that a model of it is on HuggingFace, that it is worth rereading. **Labels** in a paper's header opens
 a field for them, separated by commas, and they appear as a Labels
 list in the sidebar that filters the corpus to the papers carrying one.
 
 They are deliberately not part of the topic vocabulary. The vocabulary goes
 into the extraction prompt as the list of things to look for in a paper's
 text, and nothing in a paper's text says it is on your reading list. So no
-pass writes a label, `retag` cannot take one off, and labelling a paper does
-not stale its syntheses. Labels can contain spaces, such as `open source` or
-`reading list`. They are stored in lowercase with extra whitespace removed.
+extraction or retagging pass writes a label, `retag` cannot take one off, and labeling
+a paper does not stale its syntheses. Agents can assign content-based labels when
+you request it. Labels can contain spaces, such as `open source` or `reading list`.
+They preserve capitalization with extra whitespace removed and match without regard to case.
 Commas separate labels in the editor and cannot be part of a label's name.
 Existing hyphenated labels keep their names. Topics still use hyphenated slugs.
 

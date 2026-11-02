@@ -81,6 +81,55 @@ def model_stub(monkeypatch):
 
 
 @pytest.mark.browser
+def test_agent_labels_appear_in_activity_and_sidebar_without_reloading(monkeypatch):
+    seed()
+    store.set_labels('a', ['Reading list'])
+
+    def answer(messages, callback):
+        capture = ask_context.active.get()
+
+        async def classify():
+            mcp = mcp_server.create_server(workspace=config.workspace_id(), papers=capture.scope.papers,
+                allow_labels=True, evidence_log=str(capture.log), without_notes=True,
+                transport=httpx.ASGITransport(app=server.app))
+            await mcp.call_tool('search_claims', {'workspace': config.workspace_id(), 'paper': 'a'})
+            result = await mcp.call_tool('update_paper_labels', {'workspace': config.workspace_id(),
+                'papers': ['a'], 'labels': ['Activation steering']})
+            assert result.structured_content['changed'] == 1
+
+        asyncio.run(classify())
+        return {'answer': 'Added Activation steering to Memory and recovery.', 'assistant': 'ChatGPT',
+                'model': 'test', 'activity': ['Requested label update (add): Activation steering · a']}
+
+    monkeypatch.setattr(agent, 'answer', answer)
+
+    async def scenario():
+        async with browser_session('chromium') as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill('Label the memory paper based on its content.')
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-messages .agent-answer')).to_contain_text('Added Activation steering')
+                summary = page.get_by_text('Library activity (1)', exact=True)
+                await expect(summary).to_be_visible()
+                await summary.click()
+                await expect(page.locator('#agent-messages .activity').filter(has=summary)).to_contain_text('Activation steering · a')
+                await page.locator('#agent-close').click()
+                await page.evaluate('pollOnce()')
+                await expect(page.locator('#labels')).to_contain_text('Activation steering')
+                await expect(page.locator('#labels')).to_contain_text('Reading list')
+                assert store.load_paper('a')['labels'] == ['Activation steering', 'Reading list']
+                assert store.load_paper('b')['labels'] == []
+                await page.locator('#btn-agent').click()
+                await page.get_by_text('Library activity (1)', exact=True).click()
+                await page.screenshot(path='.context/agent-labels.png', full_page=True)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_selection_citations_notes_and_narrowing(engine, monkeypatch):
     seed()

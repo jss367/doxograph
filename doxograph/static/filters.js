@@ -123,14 +123,15 @@ function fold(text) {
     .toLowerCase();
 }
 
+function queryIsPhrase(query) {
+  return S.claims.some((row) => fold(haystack(row)).includes(query))
+    || S.papers.some((paper) => fold(paperHaystack(paper)).includes(query));
+}
+
 function queryMatcher() {
   const query = fold(V.q.trim());
   if (!query) return () => true;
-  const phrase = (text) => fold(text).includes(query);
-  if (S.claims.some((row) => phrase(haystack(row)))
-      || S.papers.some((paper) => phrase(paperHaystack(paper)))) {
-    return phrase;
-  }
+  if (queryIsPhrase(query)) return (text) => fold(text).includes(query);
   const patterns = queryPatterns(query);
   // A query of punctuation alone has no words to look for, and `every` over
   // nothing is true: it would show the whole corpus for a query the phrase
@@ -138,6 +139,58 @@ function queryMatcher() {
   if (!patterns.length) return () => false;
   // Both sides folded, so the patterns need no case flag of their own.
   return (text) => { const folded = fold(text); return patterns.every((p) => p.test(folded)); };
+}
+
+// Map folded matches back to the displayed spelling, including names like
+// Straße and García. Build the query once for all the library's cards.
+function queryHighlighter() {
+  const query = fold(V.q.trim());
+  if (!query) return esc;
+  const patterns = queryPatterns(query);
+  return (value) => {
+    const text = String(value ?? '');
+    let folded = '', offset = 0;
+    const starts = [], ends = [];
+    for (const char of text) {
+      const part = fold(char);
+      for (let i = 0; i < part.length; i++) {
+        starts.push(offset);
+        ends.push(offset + char.length);
+      }
+      // A dropped accent still belongs to the preceding displayed letter.
+      if (!part && ends.length) ends[ends.length - 1] = offset + char.length;
+      folded += part;
+      offset += char.length;
+    }
+    const spans = [];
+    // A matching phrase may span fields or adjacent authors in the haystack.
+    // If the display splits it, highlight the individual query words instead.
+    if (folded.includes(query)) {
+      for (let at = folded.indexOf(query); at >= 0; at = folded.indexOf(query, at + query.length)) {
+        spans.push([starts[at], ends[at + query.length - 1]]);
+      }
+    } else {
+      for (const pattern of patterns) {
+        for (const match of folded.matchAll(new RegExp(pattern.source, 'gu'))) {
+          const at = match.index + match[0].length - match[1].length;
+          spans.push([starts[at], ends[at + match[1].length - 1]]);
+        }
+      }
+    }
+    spans.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const span of spans) {
+      const last = merged[merged.length - 1];
+      if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+      else merged.push(span);
+    }
+    let html = '', at = 0;
+    for (const [start, end] of merged) {
+      html += esc(text.slice(at, start)) + `<mark>${esc(text.slice(start, end))}</mark>`;
+      at = end;
+    }
+    return html + esc(text.slice(at));
+  };
 }
 
 // Scripts that do not put spaces between their words, as `search.py` has
@@ -157,12 +210,12 @@ function queryPatterns(query) {
   // the server does not.
   return (fold(query).match(/[\p{L}\p{N}_\p{M}]+/gu) || [])
     .map((term) => (UNSEGMENTED.test(term)
-      ? new RegExp(term, 'u')
+      ? new RegExp(`(${term})`, 'u')
       // The underscore is a word character to the server's `\w`, so it is one
       // here: `bar` does not start a word in `foo_bar` on either side. So is
       // a mark the folding kept — a vowel sign is part of the word it sits
       // in, and a boundary inside किताब would find ताब there.
-      : new RegExp(`(?:^|[^\\p{L}\\p{N}_\\p{M}])${term}`, 'u')));
+      : new RegExp(`(?:^|[^\\p{L}\\p{N}_\\p{M}])(${term}[\\p{L}\\p{N}_\\p{M}]*)`, 'u')));
 }
 
 // A claim's searchable text. It carries its paper's key and year as well as
@@ -323,10 +376,22 @@ function visiblePapers() {
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)).map(row => row.paper)) : null;
   const matched = new Set(matchingPapers().map(p => p.key));
-  return sortedPapers(S.papers.filter(p =>
+  return searchSortedPapers(S.papers.filter(p =>
     (!V.label || findLabel(p.labels, V.label) !== undefined)
     && (!owners || owners.has(p.key))
-    && matched.has(p.key)), V.paperSort);
+    && matched.has(p.key)));
+}
+
+// A title or author is a direct way to find a paper. Put those hits before
+// mentions in claims, summaries, or PDFs, retaining the chosen order in each
+// group and restoring it for the whole library when the query is cleared.
+function searchSortedPapers(papers) {
+  const sorted = sortedPapers(papers, V.paperSort);
+  if (!V.q.trim()) return sorted;
+  const matches = queryMatcher();
+  const direct = new Set(papers.filter(p =>
+    matches([p.title, (p.authors || []).join(' ')].join(' '))).map(p => p.key));
+  return sorted.sort((a, b) => Number(direct.has(b.key)) - Number(direct.has(a.key)));
 }
 
 // A destination the label filter excludes arrives empty: a paper's header

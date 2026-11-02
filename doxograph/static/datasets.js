@@ -5,7 +5,7 @@ const Datasets = (() => {
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
-  const fields = ['name','description','source','version','license','access_notes','roles','facet_values','papers','claims'];
+  const fields = ['name','description','source','version','license','access_notes','roles','labels','facet_values','papers','claims'];
   const body = item => Object.fromEntries(fields.map(key => [key, item[key]]));
   const dirty = () => !!draft && (!saved || JSON.stringify(body(draft)) !== JSON.stringify(body(saved)));
   const key = value => facetValueKey(value);
@@ -46,13 +46,13 @@ const Datasets = (() => {
     const query = el('datasets-search').value.toLowerCase().trim();
     const filtered = items.filter(item => fields.filter(f => !['papers','claims'].includes(f))
       .map(f => item[f]).join('\n').toLowerCase().includes(query)).sort((a,b) => a.name.localeCompare(b.name));
-    el('datasets-list').innerHTML = filtered.map(item => button('open', `<strong>${esc(item.name)}</strong><small>${esc([item.version, ...item.roles.map(r => roles[r])].filter(Boolean).join(' · ') || 'Dataset')}</small>`,
+    el('datasets-list').innerHTML = filtered.map(item => button('open', `<strong>${esc(item.name)}</strong><small>${esc([item.version, ...item.roles.map(r => roles[r])].filter(Boolean).join(' · ') || 'Dataset')}</small>${item.labels.length ? `<span class="dataset-labels">${item.labels.map(label => `<span class="dataset-label">${esc(label)}</span>`).join('')}</span>` : ''}`,
       `data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="page"' : ''}`)).join('')
       || `<p class="hint">${query ? 'No datasets match your search.' : 'Catalog the datasets your project uses or produces.'}</p>`;
     el('datasets-count').textContent = `${items.length} ${items.length === 1 ? 'dataset' : 'datasets'}`;
   }
   function input(field, label, multiline = false, hint = '', max = 300) {
-    const value = field === 'facet_values' ? draft[field].join('\n') : draft[field];
+    const value = field === 'facet_values' ? draft[field].join('\n') : field === 'labels' ? draft[field].join(', ') : draft[field];
     const help = hint ? `aria-describedby="dataset-${field}-help"` : '';
     return `<div class="dataset-field"><label for="dataset-${field}">${label}</label>${multiline
       ? `<textarea id="dataset-${field}" data-field="${field}" rows="${field === 'description' || field === 'access_notes' ? 3 : 2}" maxlength="${max}" ${help}>${esc(value)}</textarea>`
@@ -68,9 +68,10 @@ const Datasets = (() => {
       <div class="dataset-actions">${button('save','Save dataset','class="primary"')}${saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel','Cancel')}</div>
       <div class="dataset-fields">${input('name','Dataset name')}${input('version','Version')}
       ${input('description','Description',true,'',20000)}
-      ${input('source','Source URL or local path',false,'A reference to the data’s location.',4000)}
+      ${input('source','Source URL or local path',false,'Use a local conversation JSON/JSONL file, survey export, or Gloom directory to inspect it in Loupe.',4000)}
       ${input('license','License',false,'',1000)}
       ${input('access_notes','Access notes',true,'Permissions, download instructions, or other requirements.',20000)}</div>
+      ${input('labels','Labels',false,'Separate labels with commas. Labels can contain spaces, such as open source or needs review.',60398)}
       <fieldset class="dataset-roles"><legend>Role in this project</legend>${Object.entries(roles).map(([value,label]) => `<label><input type="checkbox" data-role="${value}" ${draft.roles.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</fieldset>
       ${input('facet_values','Other dataset names in findings',true,'One per line. The dataset name and these spellings match existing dataset or datasets facet values.',60200)}
       <details class="dataset-link-picker"><summary>Link papers and claims</summary>
@@ -86,6 +87,10 @@ const Datasets = (() => {
   function renderSource() {
     const container = el('dataset-source-link');
     container.replaceChildren();
+    if (/^(\/|~\/|file:)/.test(draft.source.trim())) {
+      container.innerHTML = button('loupe', 'Open in Loupe');
+      return;
+    }
     try {
       const url = new URL(draft.source);
       if (!['http:','https:'].includes(url.protocol)) return;
@@ -94,10 +99,32 @@ const Datasets = (() => {
       container.append(link);
     } catch (_) { /* Local paths remain available as editable text. */ }
   }
+  function openInLoupe() {
+    if (busy) return;
+    // Reserve the viewer during the click so browsers allow the new window.
+    const viewer = window.open('about:blank', '_blank');
+    if (viewer) viewer.opener = null;
+    run(async () => {
+      status('Starting Loupe…');
+      try {
+        const result = await request('/loupe', 'POST', {source:draft.source});
+        const url = new URL(result.url);
+        if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) throw new Error('Loupe returned an invalid local address.');
+        if (viewer && !viewer.closed) viewer.location.replace(url.href);
+        status(dirty() ? 'Loupe is ready. Your dataset edits are still unsaved. ' : 'Loupe is ready. ');
+        const link = document.createElement('a');
+        link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open viewer';
+        el('datasets-status').append(link);
+      } catch (error) {
+        if (viewer && !viewer.closed) viewer.close();
+        throw error;
+      }
+    });
+  }
   function renderSavedVersion(item) {
     if (!item) return '<p>This dataset record has been deleted.</p>';
     const labels = {name:'Dataset name',description:'Description',source:'Source',version:'Version',license:'License',access_notes:'Access notes',
-      roles:'Roles',facet_values:'Other dataset names',papers:'Linked papers',claims:'Linked claims'};
+      roles:'Roles',labels:'Labels',facet_values:'Other dataset names',papers:'Linked papers',claims:'Linked claims'};
     return '<dl>' + fields.map(field => {
       let value = item[field];
       if (field === 'roles') value = value.map(role => roles[role]).join(', ');
@@ -185,7 +212,7 @@ const Datasets = (() => {
       saved = null;
       inspectedRevision = undefined;
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
-      draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',roles:[],facet_values:[],papers:[],claims:[]};
+      draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',roles:[],labels:[],facet_values:[],papers:[],claims:[]};
       updateURL(null); renderList(); renderDocument(); status('New dataset · Unsaved changes');
       focusName = true;
     } else if (name === 'open') {
@@ -230,6 +257,7 @@ const Datasets = (() => {
     if (!target) return;
     event.preventDefault();
     if (target.dataset.datasetAction === 'close') { close(); return; }
+    if (target.dataset.datasetAction === 'loupe') { openInLoupe(); return; }
     run(() => action(target.dataset.datasetAction,target));
   });
   el('datasets-sheet').addEventListener('cancel', event => { event.preventDefault(); close(); });
@@ -239,7 +267,8 @@ const Datasets = (() => {
     if (event.target.id === 'dataset-link-search') return renderPicker();
     const field = event.target.dataset.field;
     if (!draft || !field) return;
-    draft[field] = field === 'facet_values' ? event.target.value.split('\n').map(v => v.trim()).filter(Boolean) : event.target.value;
+    draft[field] = field === 'labels' ? event.target.value.split(',').map(normalizeLabel).filter(Boolean)
+      : field === 'facet_values' ? event.target.value.split('\n').map(v => v.trim()).filter(Boolean) : event.target.value;
     status('Unsaved changes');
     if (['name','facet_values'].includes(field)) renderResearch();
     if (field === 'source') renderSource();

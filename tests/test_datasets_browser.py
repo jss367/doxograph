@@ -15,6 +15,69 @@ async def ready(page):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1100, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Dataset name', exact=True).fill('Conversation examples')
+                source = dialog.get_by_label('Source URL or local path', exact=True)
+                await source.fill('/data/Conversation examples.jsonl')
+                launches = []
+
+                async def launch(route):
+                    launches.append(route.request.post_data_json)
+                    await route.fulfill(json={'url': url + '/?loupe-viewer'})
+
+                await page.route('**/api/datasets/loupe', launch)
+                async with page.expect_popup() as opened:
+                    await dialog.get_by_role('button', name='Open in Loupe', exact=True).click()
+                viewer = await opened.value
+                await viewer.wait_for_url(url + '/?loupe-viewer')
+                await ready(page)
+                assert await viewer.evaluate('window.opener === null')
+                assert launches == [{'source': '/data/Conversation examples.jsonl'}]
+                assert 'still unsaved' in await page.locator('#datasets-status').inner_text()
+                assert httpx.get(url + '/api/datasets').json() == {'datasets': []}
+                assert await source.input_value() == '/data/Conversation examples.jsonl'
+                await viewer.close()
+
+                # A blocked popup still leaves a normal, usable viewer link.
+                await page.evaluate('window.open = () => null')
+                await dialog.get_by_role('button', name='Open in Loupe', exact=True).click()
+                await ready(page)
+                assert await page.get_by_role('link', name='Open viewer', exact=True).get_attribute('href') == url + '/?loupe-viewer'
+
+                await page.unroute('**/api/datasets/loupe', launch)
+                await page.route('**/api/datasets/loupe', lambda route: route.fulfill(
+                    status=422, json={'detail': 'This dataset format is not supported by Loupe.'}))
+                await dialog.get_by_role('button', name='Open in Loupe', exact=True).click()
+                await ready(page)
+                assert 'not supported' in await page.locator('#datasets-status').inner_text()
+                assert await source.input_value() == '/data/Conversation examples.jsonl'
+                assert await dialog.get_by_role('button', name='Open in Loupe', exact=True).is_enabled()
+                await source.fill('https://example.org/dataset.json')
+                assert await dialog.get_by_role('button', name='Open in Loupe', exact=True).count() == 0
+                assert await dialog.get_by_role('link', name='Open source', exact=True).get_attribute('href') == 'https://example.org/dataset.json'
+                await source.fill('javascript:alert(1)')
+                assert await page.locator('#dataset-source-link').inner_text() == ''
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_dataset_editor_and_linked_research(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))
@@ -41,6 +104,7 @@ def test_dataset_editor_and_linked_research(engine):
                 await dialog.get_by_label('Source URL or local path', exact=True).fill('https://example.org/datasets/evaluation')
                 await dialog.get_by_label('License', exact=True).fill('CC BY 4.0')
                 await dialog.get_by_label('Access notes', exact=True).fill('Public download; preserve attribution.')
+                await dialog.get_by_label('Labels', exact=True).fill('needs review, Open source, OPEN SOURCE')
                 await dialog.get_by_label('Evaluation', exact=True).check()
                 await dialog.get_by_label('Other dataset names in findings', exact=True).fill('EVAL, corpus')
                 await page.locator('#dataset-research').get_by_role('button', name=claim['text'], exact=True).wait_for()
@@ -53,9 +117,17 @@ def test_dataset_editor_and_linked_research(engine):
                 assert saved['roles'] == ['evaluation'] and saved['papers'] == ['study']
                 assert saved['claims'] == [{'paper': 'study', 'claim': claim['id']}]
                 assert saved['facet_values'] == ['EVAL, corpus']
+                assert saved['labels'] == ['needs review', 'Open source']
+                assert await dialog.get_by_label('Labels', exact=True).input_value() == 'needs review, Open source'
+                assert await page.locator('#datasets-list .dataset-label').all_text_contents() == saved['labels']
+                await page.locator('#datasets-search').fill('OPEN SOURCE')
+                assert await page.locator('#datasets-list button').count() == 1
+                await page.locator('#datasets-search').fill('private')
+                assert await page.locator('#datasets-list button').count() == 0
+                await page.locator('#datasets-search').fill('')
                 # Another window updates the record; a stale save preserves this draft.
                 httpx.put(url + '/api/datasets/' + saved['id'], json={
-                    **{key: saved[key] for key in ['name','description','source','version','license','access_notes','roles','facet_values','papers','claims']},
+                    **{key: saved[key] for key in ['name','description','source','version','license','access_notes','roles','labels','facet_values','papers','claims']},
                     'revision': saved['revision'], 'version': '2026-12'}).raise_for_status()
                 await dialog.get_by_label('Version', exact=True).fill('My unsaved version')
                 await dialog.get_by_role('button', name='Save dataset', exact=True).click()
@@ -65,6 +137,7 @@ def test_dataset_editor_and_linked_research(engine):
                 await dialog.get_by_role('button', name='Reload saved version', exact=True).click()
                 await ready(page)
                 assert '2026-12' in await page.locator('#dataset-saved-version').inner_text()
+                assert 'Open source' in await page.locator('#dataset-saved-version').inner_text()
                 assert await dialog.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
                 await dialog.get_by_label('Version', exact=True).fill('2026-11')
                 await dialog.get_by_role('button', name='Replace draft with saved version', exact=True).click()
@@ -75,6 +148,7 @@ def test_dataset_editor_and_linked_research(engine):
                 await ready(page)
                 await dialog.wait_for(state='visible')
                 assert await dialog.get_by_label('Dataset name', exact=True).input_value() == 'Evaluation corpus'
+                assert await dialog.get_by_label('Labels', exact=True).input_value() == 'needs review, Open source'
                 if engine == 'chromium':
                     screenshot = Path(__file__).parents[1] / '.context' / 'datasets.png'
                     screenshot.parent.mkdir(exist_ok=True)
@@ -103,6 +177,7 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
             with _server() as url:
                 item = httpx.post(url + '/api/datasets', json={
                     'name': '<img src=x onerror=alert(1)>', 'source': 'javascript:alert(1)',
+                    'labels': ['<img src=x onerror=alert(1)>'],
                     'papers': ['study'], 'claims': [{'paper': 'study', 'claim': claim['id']}]}).json()
                 store.paper_path('study').unlink()
                 await page.goto(url + '/?dataset=' + item['id'])

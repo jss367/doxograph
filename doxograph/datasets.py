@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal, Self
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from . import config, storage, store
+from . import config, loupe, storage, store
 from .notebook import PaperKey, Reference
 
 router = APIRouter(prefix="/api/datasets")
@@ -24,6 +24,7 @@ class DatasetBody(BaseModel):
     license: str = Field(default="", max_length=1000)
     access_notes: str = Field(default="", max_length=20000)
     roles: list[Role] = Field(default_factory=list, max_length=4)
+    labels: list[Annotated[str, Field(max_length=300)]] = Field(default_factory=list, max_length=200)
     facet_values: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, max_length=200)
     papers: list[PaperKey] = Field(default_factory=list, max_length=1000)
     claims: list[Reference] = Field(default_factory=list, max_length=5000)
@@ -42,6 +43,11 @@ class DatasetBody(BaseModel):
             raise ValueError("Dataset facet names must not be blank.")
         return list(dict.fromkeys(value.strip() for value in values))
 
+    @field_validator("labels")
+    @classmethod
+    def normalize_labels(cls, values: list[str]) -> list[str]:
+        return store.normalize_labels(values)
+
     @model_validator(mode="after")
     def distinct_links(self) -> Self:
         self.roles = list(dict.fromkeys(self.roles))
@@ -52,6 +58,16 @@ class DatasetBody(BaseModel):
 
 class DatasetUpdate(DatasetBody):
     revision: Token
+
+
+class LoupeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/loupe")
+def open_in_loupe(body: LoupeBody) -> dict[str, str]:
+    return {"url": loupe.open_dataset(body.source)}
 
 
 class SavedDataset(DatasetBody):
