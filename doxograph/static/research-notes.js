@@ -1,5 +1,6 @@
 /* Long-form, reader-owned notes. All rendering libraries are bundled locally.
-   A view in the main pane: leaving it keeps the draft for the next visit. */
+   A view in the main pane. Writing saves itself shortly after typing stops,
+   and leaving the view saves at once; a draft that cannot save stays put. */
 const ResearchNotes = (() => {
   let client, navigate, follow, select, shown = false, loaded = false;
   let requested = null, revealed = null;
@@ -14,6 +15,19 @@ const ResearchNotes = (() => {
     el('notes-status').textContent = text;
     el('notes-status').className = error ? 'warn' : 'hint';
   }
+  const autosave = createAutosave({current: () => draft, dirty: isDirty,
+    blocked: () => draft.title.trim() ? '' : 'Give your note a title.',
+    async write(target) {
+      const note = await request('/' + target.id, 'PUT', {title:target.title, body:target.body, revision:saved.revision});
+      if (draft !== target) return;
+      saved = note;
+      notes = notes.map(n => n.id === note.id ? note : n);
+      renderList();
+    },
+    changed: () => progress()});
+  function progress() {
+    if (draft) status(autosave.describe(), Boolean(autosave.failure));
+  }
   async function request(path = '', method = 'GET', body) {
     return client.request('/api/research-notes' + path, {method, headers:{'X-Doxograph-Workspace':workspace,
       ...(body instanceof FormData ? {} : {'Content-Type':'application/json'})},
@@ -27,10 +41,13 @@ const ResearchNotes = (() => {
   async function run(task) {
     if (busy) return;
     setBusy(true);
-    try { await task(); }
+    // Actions read the saved revision, so a save under way lands first. A
+    // pending one is held while the editor is frozen and resumes after.
+    try { await autosave.settle(); await task(); }
     catch (error) { status(error.message, true); }
     finally {
       setBusy(false);
+      autosave.resume();
       // Hash navigation can arrive during a load, save, or discard prompt.
       // Drain the latest target once that work releases the editor.
       if (shown && loaded && requested !== revealed) void run(revealRequested);
@@ -78,7 +95,7 @@ const ResearchNotes = (() => {
     el('notes-document').innerHTML = `<div class="note-document-head">
       <label for="note-title" class="sr-only">Note title</label>
       <input id="note-title" maxlength="300" placeholder="Untitled research note" value="${escape(draft.title)}">
-      <div class="note-actions">${button('save','Save note','class="primary"')}${button('export','Export Markdown')}${button('reload','Reload saved version')}${button('delete','Delete note')}</div>
+      <div class="note-actions">${button('export','Export Markdown')}${button('reload','Reload saved version')}${button('delete','Delete note')}</div>
       <div class="note-toolbar" aria-label="Writing tools">
         ${button('heading','Heading')}${button('bold','Bold')}${button('equation','Equation')}${button('table','Table')}${button('image','Image')}${button('link','Link note or paper')}
         <input id="note-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
@@ -90,7 +107,7 @@ const ResearchNotes = (() => {
       <div class="note-write"><label for="note-body" class="hint">Markdown</label><textarea id="note-body" spellcheck="true" placeholder="Start writing…">${escape(draft.body)}</textarea></div>
       <div class="note-read"><span class="hint">Preview</span><article id="note-preview" class="note-prose" aria-label="Note preview"></article></div>
     </div>
-    <div class="note-footer"><span id="note-word-count" class="hint"></span><span class="hint">⌘/Ctrl + S to save · Drop or paste images into your note</span></div>
+    <div class="note-footer"><span id="note-word-count" class="hint"></span><span class="hint">Saves as you write · Drop or paste images into your note</span></div>
     <details class="note-help"><summary>Formatting guide</summary><p>Use # for headings, **bold**, *italic*, lists, blockquotes, and [text](https://…) for links. Put inline LaTeX between $…$ and display equations between $$…$$. Use the toolbar to insert a table, upload an image, or link a note or paper. Images are stored locally. Raw HTML is shown as text.</p></details>
     <section id="note-backlinks" aria-label="Linked research"></section>`;
     renderPreview();
@@ -110,7 +127,7 @@ const ResearchNotes = (() => {
       } else { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
     });
     el('note-preview').replaceChildren(fragment);
-    el('note-word-count').textContent = `${draft.body.trim() ? draft.body.trim().split(/\s+/u).length.toLocaleString() : 0} words · ${isDirty() ? 'Unsaved changes' : 'Saved'}`;
+    el('note-word-count').textContent = `${draft.body.trim() ? draft.body.trim().split(/\s+/u).length.toLocaleString() : 0} words`;
     const backlinks = notes.filter(n => n.id !== draft.id && noteLinks(n.body).some(link => link.kind === 'note' && link.id === draft.id));
     const outgoing = [...new Map(noteLinks(draft.body).map(link => [link.kind+':'+link.id, link])).values()];
     el('note-backlinks').innerHTML = `<h3>Linked research</h3><div class="note-linked-items">${outgoing.map(link => {
@@ -120,8 +137,8 @@ const ResearchNotes = (() => {
       <h3>Backlinks <span class="hint">${backlinks.length}</span></h3><div class="note-linked-items">${backlinks.map(n => button('open',escape(n.title),`data-note-id="${n.id}"`)).join('') || '<span class="hint">No other notes link here yet.</span>'}</div>`;
   }
   async function discard() {
-    if (!isDirty()) return true;
-    return confirmDialog('Discard unsaved changes to this research note?', {ok:'Discard changes'});
+    if (await autosave.flush()) return true;
+    return confirmDialog(`This research note couldn’t be saved. ${autosave.failure} Discard your changes?`, {ok:'Discard changes'});
   }
   async function choose(id) {
     if (draft?.id === id) return;
@@ -129,16 +146,16 @@ const ResearchNotes = (() => {
     const note = notes.find(n => n.id === id);
     if (!note) throw new Error('This research note no longer exists. Reload the saved version to update the list.');
     saved = structuredClone(note); draft = structuredClone(note);
-    select(id); status(''); renderList(); renderDocument();
+    select(id); renderList(); renderDocument(); progress();
   }
   function reset() {
-    clearTimeout(previewTimer);
+    clearTimeout(previewTimer); void autosave.settle();
     workspace = client.workspaceId; notes = []; draft = saved = null; loaded = false;
     el('notes-search').value = '';
   }
   // The note a URL names, or else the one last open, or else the newest.
   async function reveal(id, current) {
-    if (isDirty() && (!id || id === draft.id)) { renderList(); status('Unsaved changes'); return; }
+    if (isDirty() && (!id || id === draft.id)) { renderList(); progress(); return; }
     if (id && id !== draft?.id && !await discard()) {
       if (current()) select(saved?.id || null);
       return;
@@ -149,7 +166,7 @@ const ResearchNotes = (() => {
     if (note) {
       // Read from disk again: nothing unsaved is waiting here.
       saved = structuredClone(note); draft = structuredClone(note);
-      select(note.id); status(''); renderList(); renderDocument();
+      select(note.id); renderList(); renderDocument(); progress();
     } else {
       draft = saved = null; select(null); renderList(); renderDocument();
       status(id ? 'This research note no longer exists.' : 'Notes stay in this workspace and are never sent to a model.');
@@ -174,7 +191,7 @@ const ResearchNotes = (() => {
     shown = true;
     el('research-notes').hidden = false;
     if (workspace !== client.workspaceId) reset();
-    renderList(); renderDocument(); status(isDirty() ? 'Unsaved changes' : '');
+    renderList(); renderDocument(); progress();
     await run(async () => {
       notes = (await request()).notes; loaded = true;
       await revealRequested();
@@ -183,13 +200,7 @@ const ResearchNotes = (() => {
   function hide() {
     shown = false;
     el('research-notes').hidden = true;
-  }
-  async function save() {
-    if (!draft?.title.trim()) throw new Error('Give your note a title before saving.');
-    const note = await request('/' + draft.id, 'PUT', {title:draft.title, body:draft.body, revision:saved.revision});
-    saved = structuredClone(note); draft = structuredClone(note);
-    notes = notes.map(n => n.id === note.id ? note : n);
-    status('Saved.'); renderList(); renderPreview();
+    void autosave.flush();
   }
   function insert(before, after = '', fallback = '') {
     const field = el('note-body');
@@ -198,7 +209,7 @@ const ResearchNotes = (() => {
     const selected = field.value.slice(start,end) || fallback;
     field.setRangeText(before + selected + after, start, end, 'end');
     draft.body = field.value;
-    renderPreview(); field.focus();
+    autosave.schedule(); renderPreview(); field.focus();
   }
   function renderLinkPicker() {
     const picker = el('note-link-picker');
@@ -221,7 +232,6 @@ const ResearchNotes = (() => {
     const form = new FormData(); form.append('file', file);
     const result = await request('/images', 'POST', form);
     insert(`\n![${(file.name || 'Figure').replace(/[\[\]\\\r\n]/g,'')}](${result.url})\n`);
-    status('Image added. Save your note to keep this placement.');
   }
   async function action(name, target) {
     if (name === 'open') return choose(target.dataset.noteId);
@@ -232,8 +242,8 @@ const ResearchNotes = (() => {
       const note = await request('', 'POST', {title:title.trim()});
       notes.push(note); draft = saved = null; return choose(note.id);
     }
-    if (name === 'save') return save();
     if (name === 'reload') {
+      await autosave.flush();
       // Read first: a network failure must not erase the draft.
       const latest = (await request()).notes;
       if (isDirty()) {
@@ -311,7 +321,7 @@ const ResearchNotes = (() => {
     if (!draft) return;
     if (event.target.id === 'note-title') draft.title = event.target.value;
     if (event.target.id === 'note-body') draft.body = event.target.value;
-    status('Unsaved changes'); clearTimeout(previewTimer); previewTimer = setTimeout(renderPreview, 180);
+    autosave.schedule(); clearTimeout(previewTimer); previewTimer = setTimeout(renderPreview, 180);
   });
   el('research-notes').addEventListener('change', event => {
     if (event.target.id === 'note-view') {
@@ -320,7 +330,8 @@ const ResearchNotes = (() => {
     if (event.target.id === 'note-image' && event.target.files[0]) run(() => upload(event.target.files[0]));
   });
   el('research-notes').addEventListener('keydown', event => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); run(save); }
+    // Saving is automatic. The shortcut saves now, or retries a failed save.
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!busy) void autosave.flush(); }
   });
   for (const name of ['dragenter','dragover','dragleave','drop']) el('research-notes').addEventListener(name, event => {
     event.stopPropagation();
@@ -334,11 +345,14 @@ const ResearchNotes = (() => {
     const file = [...(event.clipboardData?.files || [])].find(file => file.type.startsWith('image/'));
     if (file) { event.preventDefault(); event.stopPropagation(); run(() => upload(file)); }
   });
-  window.addEventListener('beforeunload', event => { if (isDirty()) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => {
+    if (isDirty() || autosave.saving) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
+  });
   return {connect(value, {open: opening, follow: following, selected}) { client = value; navigate = opening; follow = following; select = selected; },
-    show, hide, open: id => navigate(id),
-    resetWorkspace() { hide(); reset(); },
-    hasUnsavedChanges: () => Boolean(isDirty() || busy),
+    show, hide, flush: () => autosave.flush(), open: id => navigate(id),
+    // Reset first: a draft the writer chose to discard must not save on hide.
+    resetWorkspace() { reset(); hide(); },
+    hasUnsavedChanges: () => Boolean(isDirty() || busy || autosave.saving),
     async beforeWorkspaceSwitch() {
       // A later guard may still refuse. Only committed selection clears drafts.
       return !busy && await discard();

@@ -14,6 +14,21 @@ async def ready(page):
     await page.wait_for_function("document.querySelector('#datasets-sheet').getAttribute('aria-busy') !== 'true'")
 
 
+async def settled(page):
+    await page.wait_for_function("document.querySelector('#datasets-status').textContent === 'Saved'")
+
+
+async def refuse_saves(page):
+    """Fail every dataset write, so a draft stays unsaved and leaving it asks."""
+    async def refuse(route):
+        if route.request.method in ('POST', 'PUT'):
+            await route.fulfill(status=503, json={'detail': 'Saving is unavailable.'})
+        else:
+            await route.continue_()
+    await page.route('**/api/datasets', refuse)
+    await page.route('**/api/datasets/*', refuse)
+
+
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
@@ -34,6 +49,7 @@ def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
                 await dialog.get_by_label('Dataset name', exact=True).fill('Conversation examples')
                 source = dialog.get_by_label('Source URL or local path', exact=True)
                 await source.fill('/data/Conversation examples.jsonl')
+                await settled(page)
                 launches = []
 
                 async def launch(route):
@@ -48,8 +64,7 @@ def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
                 await ready(page)
                 assert await viewer.evaluate('window.opener === null')
                 assert launches == [{'source': '/data/Conversation examples.jsonl'}]
-                assert 'still unsaved' in await page.locator('#datasets-status').inner_text()
-                assert httpx.get(url + '/api/datasets').json() == {'datasets': []}
+                assert 'Loupe is ready' in await page.locator('#datasets-status').inner_text()
                 assert await source.input_value() == '/data/Conversation examples.jsonl'
                 await viewer.close()
 
@@ -106,9 +121,8 @@ def test_dataset_navigation_uses_the_latest_target_while_busy(engine, pending):
                 await view.wait_for(state='visible')
                 if pending != 'load':
                     await ready(page)
-                    await view.get_by_label('Version', exact=True).fill('My changed version')
                     await page.route('**/api/datasets/' + first['id'], hold_request)
-                    await view.get_by_role('button', name='Save dataset', exact=True).click()
+                    await view.get_by_label('Version', exact=True).fill('My changed version')
                 await asyncio.wait_for(held.wait(), timeout=5)
                 # New hash targets and Back must win over the older pending work.
                 for item in [second, third]:
@@ -150,6 +164,7 @@ def test_dataset_navigation_ignores_a_superseded_discard_prompt(engine, answer):
                 view = page.locator('#datasets-sheet')
                 await view.wait_for(state='visible')
                 await ready(page)
+                await refuse_saves(page)
                 await view.get_by_label('Version', exact=True).fill('My unsaved version')
                 await page.evaluate('id => { location.hash = "view=datasets&dataset=" + id; }', second['id'])
                 await page.locator('#ask').wait_for(state='visible')
@@ -196,6 +211,7 @@ def test_following_dataset_evidence_preserves_history_and_draft(engine, target):
                 await ready(page)
                 assert f'dataset={item["id"]}' in page.url
                 assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
+                assert httpx.get(url + '/api/datasets').json()['datasets'][0]['version'] == 'My unsaved version'
 
     run_browser(scenario())
 
@@ -264,6 +280,7 @@ def test_dataset_draft_survives_a_later_workspace_guard_refusal(engine, new_data
                 view = page.locator('#datasets-sheet')
                 await view.wait_for(state='visible')
                 await ready(page)
+                await refuse_saves(page)
                 if new_dataset:
                     await view.get_by_role('button', name='Add dataset', exact=True).click()
                     await ready(page)
@@ -333,8 +350,7 @@ def test_dataset_editor_and_linked_research(engine):
                 await dialog.get_by_text('Link papers and claims', exact=True).click()
                 await page.locator('#dataset-link-options').get_by_label('Paper Evaluation study', exact=True).check()
                 await page.locator('#dataset-link-options').get_by_label('Claim ' + claim['text'], exact=True).check()
-                await dialog.get_by_role('button', name='Save dataset', exact=True).click()
-                await ready(page)
+                await settled(page)
                 [saved] = httpx.get(url + '/api/datasets').json()['datasets']
                 assert saved['roles'] == ['evaluation'] and saved['papers'] == ['study']
                 assert saved['claims'] == [{'paper': 'study', 'claim': claim['id']}]
@@ -352,9 +368,7 @@ def test_dataset_editor_and_linked_research(engine):
                     **{key: saved[key] for key in ['name','description','source','version','license','access_notes','roles','labels','facet_values','papers','claims']},
                     'revision': saved['revision'], 'version': '2026-12'}).raise_for_status()
                 await dialog.get_by_label('Version', exact=True).fill('My unsaved version')
-                await dialog.get_by_role('button', name='Save dataset', exact=True).click()
-                await ready(page)
-                assert 'changed in another window' in await page.locator('#datasets-status').inner_text()
+                await page.wait_for_function("document.querySelector('#datasets-status').textContent.includes('changed in another window')")
                 assert await dialog.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
                 await dialog.get_by_role('button', name='Reload saved version', exact=True).click()
                 await ready(page)
@@ -410,14 +424,9 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
                 assert await page.locator('#dataset-research').get_by_text('Missing claim: ' + claim['id'], exact=True).count() == 1
                 assert await dialog.locator('img, a[href^="javascript:"]').count() == 0
                 assert await dialog.evaluate('node => node.scrollWidth <= node.clientWidth + 1')
+                # Switching workspaces saves the draft before leaving it.
                 await dialog.get_by_label('Dataset name', exact=True).fill('My draft')
                 await page.evaluate("void switchWorkspace('" + other['id'] + "')")
-                await _answer(page, 'Cancel')
-                await ready(page)
-                assert await dialog.get_by_label('Dataset name', exact=True).input_value() == 'My draft'
-                assert await page.locator('#workspace').input_value() == 'default'
-                await page.evaluate("void switchWorkspace('" + other['id'] + "')")
-                await _answer(page, 'Discard changes')
                 await dialog.wait_for(state='hidden')
                 await page.wait_for_function('id => workspaceClient.workspaceId === id', arg=other['id'])
                 await page.get_by_role('button', name='Datasets', exact=True).click()
@@ -426,6 +435,7 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
                 await page.locator('#workspace').select_option('default')
                 await page.get_by_role('button', name='Datasets', exact=True).click()
                 await ready(page)
+                assert await dialog.get_by_label('Dataset name', exact=True).input_value() == 'My draft'
                 await page.locator('#datasets-search').fill('not present')
                 assert 'No datasets match your search.' in await page.locator('#datasets-list').inner_text()
                 await page.locator('#datasets-search').fill('')
@@ -433,8 +443,9 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
                 await dialog.get_by_text('Link papers and claims', exact=True).click()
                 await page.locator('#dataset-link-options').get_by_label('Paper Missing paper: study', exact=True).uncheck()
                 await page.locator('#dataset-link-options').get_by_label('Claim Missing claim: ' + claim['id'], exact=True).uncheck()
-                await dialog.get_by_role('button', name='Save dataset', exact=True).click()
-                await ready(page)
+                await settled(page)
+                [kept] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert kept['papers'] == [] and kept['claims'] == [] and kept['labels'] == item['labels']
                 await dialog.get_by_role('button', name='Delete record', exact=True).click()
                 await _answer(page, 'Delete record')
                 await ready(page)
@@ -528,8 +539,10 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 await view.wait_for(state='visible')
                 await ready(page)
                 assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
-                assert 'Unsaved changes' in await page.locator('#datasets-status').inner_text()
-                assert httpx.get(url + '/api/datasets').json()['datasets'][0]['version'] == 'Saved'
+                assert await page.locator('#datasets-status').inner_text() == 'Saved'
+                # Leaving the catalog saved the draft without waiting for a pause.
+                saved = {d['id']: d for d in httpx.get(url + '/api/datasets').json()['datasets']}
+                assert saved[item['id']]['version'] == 'My unsaved version'
                 # Opening the map also leaves the catalog and keeps its draft.
                 await page.locator('#graph-nav [data-view="graph"]').click()
                 await view.wait_for(state='hidden')
@@ -539,13 +552,9 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 await ready(page)
                 assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
                 # Keys typed in the catalog stay with it.
-                await view.get_by_role('button', name='Save dataset', exact=True).focus()
+                await view.get_by_role('button', name='Reload saved version', exact=True).focus()
                 await page.keyboard.press('Escape')
                 assert await view.is_visible()
-                await view.get_by_role('button', name='Save dataset', exact=True).click()
-                await ready(page)
-                saved = {d['id']: d for d in httpx.get(url + '/api/datasets').json()['datasets']}
-                assert saved[item['id']]['version'] == 'My unsaved version'
                 # Picking a record moves the URL; a redraw that follows leaves the editor alone.
                 await page.locator('#datasets-list').get_by_role('button', name='Second corpus').click()
                 await ready(page)

@@ -606,8 +606,9 @@ writing space are stored locally in `note-images/`.
   filters against the current corpus, so new matching claims appear naturally.
 - **Datasets**, under Library, catalogs the data your project uses or produces.
   The catalog opens in the main pane with the sidebar still beside it, so you
-  can follow a linked paper or claim and come back with **Back**; an unsaved
-  draft waits for you. Each record has its own link. Add a record with a name, description, source URL or local path, version,
+  can follow a linked paper or claim and come back with **Back**. Edits save
+  as you type, and leaving the catalog saves at once; a new record saves once
+  it has a name. Each record has its own link. Add a record with a name, description, source URL or local path, version,
   license, access notes, and roles (training, evaluation, reference, or project
   output). Add **Labels** separated by commas, such as `open source` or
   `needs review`; labels appear in the inventory and are included in dataset
@@ -623,7 +624,7 @@ writing space are stored locally in `note-images/`.
   inventory. Source references point to your data; adding a record does not
   upload, download, or copy dataset files.
   For a local source, **Open in Loupe** starts the dataset viewer in a separate
-  window, including before you save the record. Supported sources are conversation
+  window, including before the record is saved. Supported sources are conversation
   JSON/JSONL files with a `messages` array per record, `loupe.survey.v1` survey
   JSON exports, and Gloom directories containing both `gloom-train.parquet` and
   `gloom-test.parquet` (either file can also be selected). Use an absolute path,
@@ -649,7 +650,7 @@ writing space are stored locally in `note-images/`.
   reviews, derivations, and experiment plans. Open **Research notes** in the
   sidebar to create, search, rename, and write notes in Markdown with a live
   preview. Notes open in the main pane beside the sidebar; follow a paper and
-  come back with **Back**, and an unsaved draft is still there. Choose Write, Split, or Preview to suit the task. Headings, lists,
+  come back with **Back**, and your writing is still there. Choose Write, Split, or Preview to suit the task. Headings, lists,
   blockquotes, code, and tables render alongside inline LaTeX (`$...$`) and
   display equations (`$$...$$`). The toolbar inserts common formatting,
   equations, tables, and images. Upload, drop, or paste PNG, JPEG, GIF, or WebP
@@ -662,9 +663,12 @@ writing space are stored locally in `note-images/`.
   note; removed destinations are marked as missing. Note links can be bookmarked
   and reopen the right note and workspace. Ordinary Markdown web links open
   in another tab.
-  Save with **Save note** or Command/Ctrl+S. Leaving unsaved writing asks before
-  discarding it. A conflicting save keeps your draft; **Reload saved version**
-  lets you inspect the saved text before explicitly replacing your draft.
+  Notes save as you write, a moment after you stop typing; leaving the note,
+  switching workspaces, or quitting the Mac app saves at once, and
+  Command/Ctrl+S saves without waiting. A save that fails says why above the
+  note and keeps your draft, and leaving it asks before discarding it. When
+  another window changed the note first, **Reload saved version** lets you
+  inspect the saved text before explicitly replacing your draft.
   **Export Markdown** downloads your current writing, including an unsaved
   draft. Image and library links use absolute URLs back to this Doxograph
   installation; this is an export, not two-way Markdown synchronization.
@@ -1065,8 +1069,9 @@ It supports Markdown, equations, tables, and local images, with Write, Split,
 and Preview views. For multiple named documents, use **Research notes**.
 
 A paper's note sits under the summary in its header, or at the top of the rail
-beside the paper when its PDF is open. An empty note is ready to type into;
-Save puts it on the paper, and it is there the next time you open it.
+beside the paper when its PDF is open. An empty note is ready to type into,
+and it saves as you write; **Done** or `Escape` closes the editor, and the note
+is there the next time you open the paper.
 Write what the paper is for, what to read it for, what is wrong with it, what
 to do about it — whatever the extraction could not have told you. A claim's
 note is a field in its editor, under the links to your own claims: press `e`,

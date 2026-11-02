@@ -81,8 +81,9 @@ def test_paper_overview_keeps_context_notes_and_reading_position(engine, width):
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('Reading · Page 3')
                 await expect(note).to_have_value('An unfinished thought about these conditions.')
                 await expect(note).to_be_focused()
-                await overview.locator('[data-act="save-note"]').click()
+                await overview.locator('[data-act="done-note"]').click()
                 await ready(page)
+                await expect(note).to_have_count(0)
                 await expect(overview.locator('.note')).to_contain_text('An unfinished thought about these conditions.')
                 # Reloading cancels a library read still in flight, which Linux WebKit
                 # reports as an access-control page error. Reads come from the poller
@@ -132,7 +133,8 @@ def test_paper_overview_without_analysis_or_pdf_can_be_noted_and_queued(engine):
                 await page.locator('[data-tool="close"]').click()
                 await expect(page.locator('#research-tools')).to_be_hidden()
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('Finished · Page 1')
-                await overview.locator('[data-act="save-note"]').click()
+                await overview.locator('[data-act="done-note"]').click()
+                await expect(overview.locator('textarea[data-note]')).to_have_count(0)
                 await expect(overview.locator('.note')).to_contain_text('A question to return to.')
                 await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Add claim by hand', exact=True).click()

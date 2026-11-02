@@ -240,8 +240,10 @@ def test_choosing_a_facet_away_from_a_paper_keeps_its_note_draft(engine):
                 await expect(page.locator(".claim[data-claim='one-c1']")).to_have_count(0)
                 await expect(note).to_have_count(0)
                 assert "paper=" not in page.url
-                assert await page.evaluate("V.noteDrafts.one") == "A draft about the steering study."
+                # Leaving the paper saves the note rather than holding a draft.
                 assert await page.evaluate("V.noteEditing") is None
+                await page.wait_for_function("!paperNotesSaving() && !V.noteDrafts.one")
+                assert store.load_paper("one")["notes"] == "A draft about the steering study."
                 assert errors == []
 
     run_browser(scenario())

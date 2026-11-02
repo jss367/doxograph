@@ -1,5 +1,6 @@
 /* Workspace dataset inventory, including links to the evidence that uses it.
-   A view in the main pane: leaving it keeps the draft for the next visit. */
+   A view in the main pane. Edits save themselves shortly after typing stops,
+   and leaving the view saves at once; a draft that cannot save stays put. */
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
@@ -16,6 +17,28 @@ const Datasets = (() => {
     el('datasets-status').textContent = message;
     el('datasets-status').className = error ? 'warn' : 'hint';
   }
+  const autosave = createAutosave({current: () => draft, dirty,
+    blocked: () => draft.name.trim() ? '' : 'Give your dataset a name.',
+    async write(target) {
+      const sent = body(target), first = !saved;
+      const item = first ? await request('','POST',sent) : await request('/' + saved.id,'PUT',{...sent,revision:saved.revision});
+      if (draft !== target) return;
+      saved = structuredClone(item);
+      // Take the stored spelling (a trimmed name, merged labels) unless the
+      // writer has typed past it; the fields keep showing what was typed.
+      if (JSON.stringify(body(target)) === JSON.stringify(sent)) {
+        Object.assign(target, structuredClone(body(item)));
+        const labels = el('dataset-labels');
+        if (labels && document.activeElement !== labels) labels.value = target.labels.join(', ');
+      }
+      items = [...items.filter(row => row.id !== item.id), item];
+      if (first) { select(item.id); renderActions(); }
+      renderList();
+    },
+    changed: () => progress()});
+  function progress() {
+    if (draft) status(autosave.describe(), Boolean(autosave.failure));
+  }
   async function request(path = '', method = 'GET', data) {
     return client.request('/api/datasets' + path, {method,
       headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':workspace,
@@ -31,10 +54,13 @@ const Datasets = (() => {
   async function run(task) {
     if (busy) return;
     setBusy(true);
-    try { await task(); }
+    // Actions read the saved revision, so a save under way lands first. A
+    // pending one is held while the editor is frozen and resumes after.
+    try { await autosave.settle(); await task(); }
     catch (error) { status(error.message, true); }
     finally {
       setBusy(false);
+      autosave.resume();
       if (focusName) { el('dataset-name')?.focus(); focusName = false; }
       // Hash navigation can arrive during a load, save, or discard prompt.
       // Drain the latest target once that work releases the editor.
@@ -64,7 +90,7 @@ const Datasets = (() => {
       return;
     }
     el('dataset-document').innerHTML = `<form id="dataset-form">
-      <div class="dataset-actions">${button('save','Save dataset','class="primary"')}${saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel','Cancel')}</div>
+      <div class="dataset-actions"></div>
       <div class="dataset-fields">${input('name','Dataset name')}${input('version','Version')}
       ${input('description','Description',true,'',20000)}
       ${input('source','Source URL or local path',false,'Use a local conversation JSON/JSONL file, survey export, or Gloom directory to inspect it in Loupe.',4000)}
@@ -80,8 +106,16 @@ const Datasets = (() => {
       <section aria-label="Linked research"><h3>Linked research</h3><p class="hint">Includes your links and claims whose dataset facets match this record.</p><div id="dataset-research"></div></section>
       <div id="dataset-saved-version" hidden></div>
     </form>`;
-    renderPicker(); renderResearch(); renderSource();
+    renderActions(); renderPicker(); renderResearch(); renderSource();
     if (busy) setBusy(true);
+  }
+  // A new record's first save swaps Cancel for the saved record's actions
+  // without rebuilding the fields under the cursor.
+  function renderActions() {
+    const actions = el('dataset-form')?.querySelector('.dataset-actions');
+    if (!actions) return;
+    actions.innerHTML = saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel','Discard new dataset');
+    if (busy) actions.querySelectorAll('button').forEach(field => field.disabled = true);
   }
   function renderSource() {
     const container = el('dataset-source-link');
@@ -110,7 +144,7 @@ const Datasets = (() => {
         const url = new URL(result.url);
         if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) throw new Error('Loupe returned an invalid local address.');
         if (viewer && !viewer.closed) viewer.location.replace(url.href);
-        status(dirty() ? 'Loupe is ready. Your dataset edits are still unsaved. ' : 'Loupe is ready. ');
+        status('Loupe is ready. ');
         const link = document.createElement('a');
         link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open viewer';
         el('datasets-status').append(link);
@@ -175,20 +209,22 @@ const Datasets = (() => {
       || '<p class="hint">No matching papers or claims.</p>';
   }
   async function discard() {
-    return !dirty() || await confirmDialog('Discard unsaved changes to this dataset?', {ok:'Discard changes'});
+    if (await autosave.flush()) return true;
+    return confirmDialog(`This dataset couldn’t be saved. ${autosave.failure} Discard your changes?`, {ok:'Discard changes'});
   }
   function choose(item) {
     inspectedRevision = undefined;
     saved = structuredClone(item); draft = structuredClone(item);
-    select(item.id); renderList(); renderDocument(); status('');
+    select(item.id); renderList(); renderDocument(); progress();
   }
   function reset() {
+    void autosave.settle();
     workspace = client.workspaceId; items = []; draft = saved = null; loaded = false; inspectedRevision = undefined;
     el('datasets-search').value = '';
   }
   // The record a URL names, or else the one last open, or else the first.
   async function reveal(id, current) {
-    if (dirty() && (!id || id === draft.id)) { renderList(); status('Unsaved changes'); return; }
+    if (dirty() && (!id || id === draft.id)) { renderList(); progress(); return; }
     if (id && id !== draft?.id && !await discard()) {
       if (current()) select(saved?.id || null);
       return;
@@ -220,7 +256,8 @@ const Datasets = (() => {
     shown = true;
     el('datasets-sheet').hidden = false;
     if (workspace !== client.workspaceId) reset();
-    renderList(); renderDocument(); status(dirty() ? 'Unsaved changes' : 'Loading datasets…');
+    renderList(); renderDocument();
+    if (dirty()) progress(); else status('Loading datasets…');
     await run(async () => {
       items = (await request()).datasets; loaded = true;
       await revealRequested();
@@ -229,13 +266,7 @@ const Datasets = (() => {
   function hide() {
     shown = false;
     el('datasets-sheet').hidden = true;
-  }
-  async function save() {
-    if (!draft?.name.trim()) throw new Error('Give your dataset a name before saving.');
-    if (!el('dataset-form').reportValidity()) return;
-    const item = saved ? await request('/' + saved.id,'PUT',{...body(draft),revision:saved.revision})
-      : await request('','POST',body(draft));
-    items = [...items.filter(row => row.id !== item.id),item]; choose(item); status('Saved.');
+    void autosave.flush();
   }
   async function action(name, target) {
     if (name === 'new') {
@@ -244,16 +275,16 @@ const Datasets = (() => {
       inspectedRevision = undefined;
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
       draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',roles:[],labels:[],facet_values:[],papers:[],claims:[]};
-      select(null); renderList(); renderDocument(); status('New dataset · Unsaved changes');
+      select(null); renderList(); renderDocument(); status('New dataset. It saves once it has a name.');
       focusName = true;
     } else if (name === 'open') {
       if (draft?.id === target.dataset.id || !await discard()) return;
       choose(items.find(item => item.id === target.dataset.id));
-    } else if (name === 'save') await save();
-    else if (name === 'cancel') {
-      if (!await discard()) return;
+    } else if (name === 'cancel') {
+      if (!await confirmDialog('Discard this new dataset?', {ok:'Discard dataset'})) return;
       draft = saved = null; renderDocument(); renderList(); status('');
     } else if (name === 'reload') {
+      await autosave.flush();
       const latest = (await request()).datasets;
       const version = latest.find(item => item.id === saved.id);
       // Always leave the draft intact while the reader inspects the disk version.
@@ -268,7 +299,8 @@ const Datasets = (() => {
         status('The saved version changed again. Your draft is still here. Inspect the updated comparison before replacing it.');
         return;
       }
-      if (!await discard()) return;
+      // Replacing is the point here, so the draft is not saved first.
+      if (dirty() && !await confirmDialog('Discard unsaved changes to this dataset?', {ok:'Discard changes'})) return;
       if (version) choose(version);
       else { draft = saved = null; select(null); renderList(); renderDocument(); status('This dataset record has been deleted.'); }
     } else if (name === 'delete') {
@@ -288,7 +320,7 @@ const Datasets = (() => {
     if (target.dataset.datasetAction === 'loupe') { openInLoupe(); return; }
     run(() => action(target.dataset.datasetAction,target));
   });
-  el('datasets-sheet').addEventListener('submit', event => { event.preventDefault(); run(save); });
+  el('datasets-sheet').addEventListener('submit', event => { event.preventDefault(); if (!busy) void autosave.flush(); });
   el('datasets-search').addEventListener('input', renderList);
   el('datasets-sheet').addEventListener('input', event => {
     if (event.target.id === 'dataset-link-search') return renderPicker();
@@ -296,7 +328,7 @@ const Datasets = (() => {
     if (!draft || !field) return;
     draft[field] = field === 'labels' ? event.target.value.split(',').map(normalizeLabel).filter(Boolean)
       : field === 'facet_values' ? event.target.value.split('\n').map(v => v.trim()).filter(Boolean) : event.target.value;
-    status('Unsaved changes');
+    autosave.schedule();
     if (['name','facet_values'].includes(field)) renderResearch();
     if (field === 'source') renderSource();
   });
@@ -315,17 +347,19 @@ const Datasets = (() => {
       }
       renderResearch();
     } else return;
-    status('Unsaved changes');
+    autosave.schedule();
   });
   el('datasets-sheet').addEventListener('keydown', event => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); run(save); }
+    // Saving is automatic. The shortcut saves now, or retries a failed save.
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!busy) void autosave.flush(); }
   });
   window.addEventListener('beforeunload', event => {
-    if (dirty() || busy) { event.preventDefault(); event.returnValue = ''; }
+    if (dirty() || busy || autosave.saving) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
-  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide,
-    resetWorkspace() { hide(); reset(); },
-    hasUnsavedChanges:() => dirty() || busy,
+  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, flush: () => autosave.flush(),
+    // Reset first: a draft the writer chose to discard must not save on hide.
+    resetWorkspace() { reset(); hide(); },
+    hasUnsavedChanges:() => dirty() || busy || autosave.saving,
     async beforeWorkspaceSwitch() {
       // A later guard may still refuse. Only committed selection clears drafts.
       return !busy && await discard();

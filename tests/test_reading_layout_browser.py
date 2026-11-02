@@ -288,6 +288,10 @@ def test_reading_layout_and_library_return(engine, width):
                 await expect(page.locator('body')).not_to_have_class('reading-paper')
                 await expect(page.locator('#q')).to_have_value('Oversight')
                 await page.locator('#papers li[data-paper="paper"]').click()
+                # Leaving the paper saved the note; it comes back as written.
+                await expect(page.locator('#content .paper-overview .note')).to_contain_text('My unfinished thought.')
+                assert store.load_paper('paper')['notes'] == 'My unfinished thought.'
+                await page.locator('[data-act="edit-note"]').click()
                 await expect(page.locator('textarea[data-note="paper"]')).to_have_value('My unfinished thought.')
 
                 # Escape dismisses the actions without cancelling the note draft.
@@ -305,7 +309,7 @@ def test_reading_layout_and_library_return(engine, width):
                 await page.get_by_role('button', name='Show PDF', exact=True).click()
                 await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
                 await page.locator('textarea[data-note="paper"]').fill('Saved from the reader.')
-                await page.locator('.note [data-act="save-note"]').click()
+                await page.locator('.note [data-act="done-note"]').click()
                 await ready(page)
                 await expect(page.locator('textarea[data-note="paper"]')).to_have_count(0)
                 await expect(page.locator('#content .paper-overview .note')).to_contain_text('Saved from the reader.')

@@ -86,6 +86,26 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         }
     }
 
+    /// Saves writing the page is still waiting to save. Answers true once
+    /// nothing is left unsaved, and false when something could not be saved
+    /// or the page did not answer in time; the caller asks rather than
+    /// waiting on a page that may never answer.
+    func saveDrafts(_ done: @escaping (Bool) -> Void) {
+        var answered = false
+        let finish = { (saved: Bool) in
+            guard !answered else { return }
+            answered = true
+            done(saved)
+        }
+        webView.callAsyncJavaScript(
+            "return window.doxographSaveDrafts ? await window.doxographSaveDrafts() : true",
+            arguments: [:], in: nil, in: .page
+        ) { result in
+            if case .success(let saved) = result { finish((saved as? Bool) ?? false) } else { finish(false) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(false) }
+    }
+
     func load(_ url: URL) {
         host = url.host
         hideStatus()

@@ -118,8 +118,7 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 assert await page.locator('#note-title').input_value() == QUESTION
                 assert await page.locator('#note-preview table').count() == 1
                 await page.locator('#note-title').fill('Recovery across the project')
-                await page.get_by_role('button', name='Save note', exact=True).click()
-                await ready(page)
+                await page.wait_for_function("document.querySelector('#notes-status').textContent === 'Saved'")
                 async with page.expect_download() as download:
                     await page.get_by_role('button', name='Export Markdown', exact=True).click()
                 exported = Path(await (await download.value).path()).read_text()

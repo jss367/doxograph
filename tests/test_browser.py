@@ -5366,7 +5366,7 @@ def test_a_paper_is_not_removed_out_from_under_a_write_already_on_its_way():
 
 
 @pytest.mark.browser
-def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
+def test_a_note_on_a_paper_saves_as_it_is_written():
     _paper("paper-a", "Paper A", "recovery")
     _paper("paper-b", "Paper B", "recovery")
 
@@ -5383,25 +5383,28 @@ def test_a_note_on_a_paper_is_written_kept_as_a_draft_and_saved():
                 assert await page.evaluate("Object.keys(V.noteDrafts).length") == 0
                 await field.fill("Read this one for the method.")
 
+                # A pause in typing saves it, and the editor stays open.
+                await page.locator('[data-note-status="paper-a"]').get_by_text("Saved", exact=True).wait_for()
+                assert store.load_paper("paper-a")["notes"] == "Read this one for the method."
+                assert await field.is_visible()
+                await field.fill("Read this one for the method and the appendix.")
+
                 # Leaving the paper takes the header with it, so the editor is
-                # parked rather than left pointing at a textarea nobody can see.
+                # parked, and saves without waiting for the pause.
                 await page.click('#papers [data-paper="paper-b"]')
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
                 assert await page.locator('textarea[data-note="paper-b"]').input_value() == ""
+                await page.wait_for_function("!paperNotesSaving() && !Object.keys(V.noteDrafts).length")
 
-                # Coming back offers the draft again rather than a blank box.
+                # Coming back shows the saved note, with editing beside it.
                 await page.click('#papers [data-paper="paper-a"]')
-                assert await field.input_value() == "Read this one for the method."
-
-                await page.get_by_role("button", name="Save", exact=True).click()
-                await field.wait_for(state="hidden")
                 await page.locator(".paper-overview .note").get_by_text(
-                    "Read this one for the method.").wait_for()
-                # Saved notes offer editing beside the text.
+                    "Read this one for the method and the appendix.").wait_for()
+                await page.locator('[data-act="edit-note"][data-paper="paper-a"]').wait_for()
                 assert await page.get_by_role("button", name="Write a note").count() == 0
 
     run_browser(scenario())
-    assert store.load_paper("paper-a")["notes"] == "Read this one for the method."
+    assert store.load_paper("paper-a")["notes"] == "Read this one for the method and the appendix."
     assert store.load_paper("paper-b")["notes"] == ""
 
 
@@ -5449,9 +5452,9 @@ def test_a_claim_note_is_written_in_the_editor_and_the_search_finds_it():
 
 @pytest.mark.browser
 def test_a_note_is_refused_while_the_paper_is_being_removed():
-    """The header stands until the removal comes back, so its buttons are
-    still clickable. A note saved into that window would be reported saved
-    and then thrown away with the paper."""
+    """The header stands until the removal comes back, so its editor is
+    still there to type into. A note saved into that window would be reported
+    saved and then thrown away with the paper."""
     _paper("shared", "Shared paper", "recovery")
 
     async def scenario():
@@ -5474,25 +5477,28 @@ def test_a_note_is_refused_while_the_paper_is_being_removed():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
-                await page.locator('textarea[data-note="shared"]').fill("Typed while it was going.")
+                field = page.locator('textarea[data-note="shared"]')
+                await field.fill("Saved before the removal.")
+                status = page.locator('[data-note-status="shared"]')
+                await status.get_by_text("Saved", exact=True).wait_for()
 
                 await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Remove paper", exact=True).click()
                 await _answer(page, "Remove")
                 await asyncio.wait_for(in_flight.wait(), 10)
 
-                await page.locator(".note").get_by_role("button", name="Save").click()
-                await page.locator("#toasts .toast", has_text="the note would go with it").wait_for()
-
-                # Cancelling does not offer another editor during removal.
-                await page.locator(".note").get_by_role("button", name="Cancel").click()
-                assert await page.locator("textarea[data-note]").count() == 0
+                await field.fill("Typed while it was going.")
+                await status.get_by_text("That paper is being removed.").wait_for()
+                # Done keeps the editor and its reason rather than closing on
+                # writing that was never saved.
+                await page.locator(".note").get_by_role("button", name="Done").click()
+                assert await field.input_value() == "Typed while it was going."
 
                 release.set()
                 await page.locator('#papers [data-paper="shared"]').wait_for(state="detached")
 
 
-        assert wrote == []
+        assert len(wrote) == 1
 
     run_browser(scenario())
     assert store.all_papers() == []
@@ -5536,8 +5542,8 @@ def test_removing_a_paper_takes_its_note_draft_with_it():
 
 
 @pytest.mark.browser
-def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_saved():
-    """The same contract the synthesis editor has: a note action redraws the
+def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_closed():
+    """The same contract the synthesis editor has: closing a note redraws the
     whole pane, so it must read the claim form first or the typing since the
     last redraw is replaced by the older draft."""
     _paper("paper-a", "Paper A", "recovery")
@@ -5551,15 +5557,9 @@ def test_a_claim_being_edited_keeps_its_text_when_a_note_editor_is_cancelled_or_
                 note_field = page.locator('textarea[data-note="paper-a"]')
                 claim_field = page.locator('form[data-form="paper-a-c1"] textarea[name="text"]')
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
-                await claim_field.fill("Claim text typed while the note editor was open.")
-                await note_field.fill("A note to discard.")
-                await page.locator(".note").get_by_role("button", name="Cancel").click()
-                assert await note_field.input_value() == ""
-                assert await claim_field.input_value() == "Claim text typed while the note editor was open."
-
                 await note_field.fill("A note of my own.")
                 await claim_field.fill("Claim text typed before the note was saved.")
-                await page.locator(".note").get_by_role("button", name="Save").click()
+                await page.locator(".note").get_by_role("button", name="Done").click()
                 await note_field.wait_for(state="hidden")
                 await page.locator(".paper-overview .note").get_by_text("A note of my own.").wait_for()
                 assert await claim_field.input_value() == "Claim text typed before the note was saved."
@@ -5662,7 +5662,6 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('textarea[data-note="paper-a"]').fill("A's note.")
-                await page.locator(".note").get_by_role("button", name="Save").click()
                 await asyncio.wait_for(in_flight.wait(), 10)
 
                 # Move to B and start a note there while A's save is held.
@@ -5670,21 +5669,17 @@ def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
                 field_b = page.locator('textarea[data-note="paper-b"]')
                 await field_b.fill("B's note, still being written.")
 
-                # B's Save is drawn enabled, and says why it will not run.
-                await page.locator(".note").get_by_role("button", name="Save").click()
-                await page.locator("#toasts .toast",
-                                   has_text="Wait for the note being saved").wait_for()
-
                 release.set()
                 # A's answer lands, and a poll redraws after it: B's editor is
                 # still open on B's text.
-                await page.wait_for_function("!V.noteSaving", timeout=10000)
+                await page.wait_for_function("!paperNotesSaving() && !Object.keys(V.noteDrafts).length",
+                                             timeout=10000)
                 await _poll(page)
                 assert await field_b.input_value() == "B's note, still being written."
 
     run_browser(scenario())
     assert store.load_paper("paper-a")["notes"] == "A's note."
-    assert store.load_paper("paper-b")["notes"] == ""
+    assert store.load_paper("paper-b")["notes"] == "B's note, still being written."
 
 
 @pytest.mark.browser
@@ -6241,7 +6236,7 @@ _REFUSED_ACTIONS = {
     "find-agreements": ("**/api/agreements", "Could not start the pass: Disk full"),
     "synthesize": ("**/api/syntheses", "Could not start the synthesis: Disk full"),
     "save-synth": ("**/api/syntheses/recovery", "Could not save the synthesis: Disk full"),
-    "save-note": ("**/api/papers/paper-a", "Could not save the note: Disk full"),
+    "save-note": ("**/api/papers/paper-a", "Couldn’t save. Disk full"),
 }
 
 
@@ -6317,7 +6312,6 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     await page.locator('#papers [data-paper="paper-a"]').click()
                     field = page.locator('textarea[data-note="paper-a"]')
                     await field.fill("Worth reading for the method.")
-                    await page.locator('[data-act="save-note"]').click()
                 await page.locator("#content .warn", has_text=message).wait_for(timeout=10000)
                 if field is not None:
                     # Handed back, with what was typed, for the save to be retried.

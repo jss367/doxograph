@@ -487,6 +487,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return confirmInterruption(.quit, uploading: uploading, reading: 0)
                 ? .terminateNow : .terminateCancel
         }
+        // Writing saves itself a moment after typing stops, so the last words
+        // typed before a quit may still be waiting. Save them first; only
+        // writing that could not be saved is worth a question.
+        window.saveDrafts { saved in
+            if !saved, !self.confirmQuitWithUnsavedWriting() {
+                self.relaunchAfterQuit = false
+                NSApp.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            self.probeBeforeQuitting()
+        }
+        return .terminateLater
+    }
+
+    private func probeBeforeQuitting() {
         // Count the uploads on both sides of the question, because either
         // reading alone can miss work the other sees. The server answers a POST
         // only once it has staged the file and made the job, so an upload that
@@ -511,7 +526,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if !quitting { self.relaunchAfterQuit = false }
             NSApp.reply(toApplicationShouldTerminate: quitting)
         }
-        return .terminateLater
     }
 
     /// What is about to cut the server's work short. Quitting and restarting
@@ -647,6 +661,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             """
         alert.addButton(withTitle: "Quit Anyway")
         alert.addButton(withTitle: "Keep Updating")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Asks whether to quit with writing the page could not save. True means
+    /// quit. The page keeps the writing and says why on screen, so staying
+    /// is a way back to it.
+    private func confirmQuitWithUnsavedWriting() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Some of your writing couldn’t be saved."
+        alert.informativeText = "Quitting now loses it. Stay to see what needs attention."
+        alert.addButton(withTitle: "Quit Anyway")
+        alert.addButton(withTitle: "Don’t Quit")
         return alert.runModal() == .alertFirstButtonReturn
     }
 

@@ -14,6 +14,10 @@ async def ready(page):
     await page.wait_for_function("document.querySelector('#research-notes').getAttribute('aria-busy') !== 'true'")
 
 
+async def settled(page):
+    await page.wait_for_function("document.querySelector('#notes-status').textContent === 'Saved'")
+
+
 @pytest.mark.browser
 @pytest.mark.parametrize('engine',['chromium','webkit'])
 def test_same_note_image_can_be_retried_and_inserted_twice(engine, tmp_path):
@@ -54,8 +58,7 @@ def test_same_note_image_can_be_retried_and_inserted_twice(engine, tmp_path):
                             arg=attempt - 1, timeout=5000)
                     await ready(page)
                     assert attempts == attempt
-                await dialog.get_by_role('button',name='Save note',exact=True).click()
-                await ready(page)
+                await settled(page)
                 saved = httpx.get(url+'/api/research-notes').json()['notes'][0]
                 assert saved['id'] == note['id']
                 assert saved['body'].count('![figure.png](') == 2
@@ -127,8 +130,7 @@ $$
                 await ready(page)
                 await page.locator('#note-link-results').get_by_role('button',name='Paper A study of recovery').click()
                 await ready(page)
-                await dialog.get_by_role('button',name='Save note',exact=True).click()
-                await ready(page)
+                await settled(page)
                 saved_body = httpx.get(url+'/api/research-notes').json()['notes'][0]['body']
                 await dialog.get_by_role('button',name='New note',exact=True).click()
                 await _answer(page,'Create note','Intervention design')
@@ -138,23 +140,30 @@ $$
                 await ready(page)
                 await page.locator('#note-link-results').get_by_role('button',name='Note Why recovery differs').click()
                 await ready(page)
-                await dialog.get_by_role('button',name='Save note',exact=True).click()
-                await ready(page)
+                await settled(page)
                 await page.locator('#note-preview a').click()
                 await ready(page)
                 assert await page.locator('#note-title').input_value() == 'Why recovery differs'
                 assert await page.locator('#note-backlinks').get_by_role('button',name='Intervention design',exact=True).count() == 1
-                # An unsaved draft survives canceled note navigation.
+                # Moving to another note saves the one being written, at once.
+                await page.locator('#note-title').fill('Saved by leaving')
+                await page.locator('#notes-list').get_by_role('button',name='Intervention design').click()
+                await ready(page)
+                assert await page.locator('#note-title').input_value() == 'Intervention design'
+                first = next(n for n in httpx.get(url+'/api/research-notes').json()['notes'] if n['id'] == first_id)
+                assert first['title'] == 'Saved by leaving'
+                await page.locator('#notes-list').get_by_role('button',name='Saved by leaving').click()
+                await ready(page)
+                # A second writer changes the same note; the draft must stay intact.
+                httpx.put(url+'/api/research-notes/'+first_id,json={'title':'Another window title','body':'Another window text','revision':first['revision']}).raise_for_status()
                 await page.locator('#note-title').fill('My unsaved argument')
+                await page.wait_for_function("document.querySelector('#notes-status').textContent.includes('another window')")
+                assert await page.locator('#notes-status').get_attribute('class') == 'warn'
+                assert await page.locator('#note-title').input_value() == 'My unsaved argument'
+                # A draft that could not save survives canceled note navigation.
                 await page.locator('#notes-list').get_by_role('button',name='Intervention design').click()
                 await _answer(page,'Cancel')
                 await ready(page)
-                assert await page.locator('#note-title').input_value() == 'My unsaved argument'
-                # A second writer changes the same note; the draft must stay intact.
-                httpx.put(url+'/api/research-notes/'+first_id,json={'title':'Another window title','body':'Another window text','revision':2}).raise_for_status()
-                await dialog.get_by_role('button',name='Save note',exact=True).click()
-                await ready(page)
-                assert 'another window' in await page.locator('#notes-status').inner_text()
                 assert await page.locator('#note-title').input_value() == 'My unsaved argument'
                 async with page.expect_download() as download:
                     await dialog.get_by_role('button',name='Export Markdown',exact=True).click()
@@ -177,8 +186,7 @@ $$
                 await page.locator('#note-title').fill('Why recovery differs')
                 rich_body = saved_body.replace('<script>window.noteUnsafe = true</script>','').replace('[Unsafe](javascript:alert(1))','').replace('![Remote](https://example.invalid/tracking.png)','')
                 await page.locator('#note-body').fill(rich_body)
-                await dialog.get_by_role('button',name='Save note',exact=True).click()
-                await ready(page)
+                await settled(page)
                 await page.locator('#note-body').evaluate('(field) => field.scrollTop = 0')
                 await page.wait_for_function('document.fonts.status === "loaded"')
                 if engine == 'chromium':
@@ -237,35 +245,30 @@ def test_note_workspace_navigation_and_writing_tools(engine):
                 await dialog.get_by_role('button',name='Heading',exact=True).click()
                 await ready(page)
                 assert await page.locator('#note-body').is_visible()
+                # The shortcut saves without waiting for the pause in typing.
                 await page.locator('#note-body').press('Control+s')
-                await ready(page)
-                assert 'Saved.' in await page.locator('#notes-status').inner_text()
+                await settled(page)
+                assert '## Heading' in httpx.get(url+'/api/research-notes',headers={'X-Doxograph-Workspace':workspace['id']}).json()['notes'][0]['body']
                 await page.locator('#note-image').set_input_files({'name':'figure.png','mimeType':'image/png','buffer':image_bytes()})
                 await ready(page)
                 assert 'workspace='+workspace['id'] in await page.locator('#note-body').input_value()
-                await dialog.get_by_role('button',name='Save note',exact=True).click()
-                await ready(page)
+                await settled(page)
                 await page.reload()
                 await dialog.wait_for(state='visible')
                 await ready(page)
                 assert await page.locator('#note-title').input_value() == 'Replication protocol'
                 await page.wait_for_function("document.querySelector('#note-preview img')?.complete")
                 assert await page.locator('#note-preview img').evaluate('(img) => img.naturalWidth') == 80
-                await page.locator('#note-title').fill('Unsaved protocol')
+                # Switching workspaces mid-sentence saves the sentence first.
                 # Workspace navigation can also arrive from browser history.
+                await page.locator('#note-title').fill('Retitled protocol')
                 await page.evaluate("void switchWorkspace('default')")
-                await _answer(page,'Cancel')
-                await ready(page)
-                assert await page.locator('#note-title').input_value() == 'Unsaved protocol'
-                assert await page.locator('#workspace').input_value() == workspace['id']
-                await page.evaluate("void switchWorkspace('default')")
-                await _answer(page,'Discard changes')
                 await dialog.wait_for(state='hidden')
                 await page.wait_for_function("workspaceClient.workspaceId === 'default'")
                 await page.get_by_role('button',name='Research notes',exact=True).click()
                 await ready(page)
                 assert await page.locator('#notes-list button').count() == 0
-                assert httpx.get(url+'/api/research-notes',headers={'X-Doxograph-Workspace':workspace['id']}).json()['notes'][0]['title'] == 'Replication protocol'
+                assert httpx.get(url+'/api/research-notes',headers={'X-Doxograph-Workspace':workspace['id']}).json()['notes'][0]['title'] == 'Retitled protocol'
 
     run_browser(scenario())
 
@@ -293,15 +296,19 @@ def test_notes_view_keeps_the_library_usable_and_the_draft_across_navigation(eng
                 assert await page.locator('#side').is_visible()
                 assert not await page.locator('#panes').is_visible()
                 assert await page.locator('dialog[open]').count() == 0
-                await page.locator('#note-body').fill('An unsaved paragraph.')
+                # Leaving for a paper saves without waiting for the pause in typing.
+                await page.locator('#note-body').fill('A paragraph in progress.')
                 await page.locator('#papers').get_by_text('Evaluation study').click()
                 await view.wait_for(state='hidden')
                 assert 'paper=study' in page.url
+                await page.wait_for_function("!ResearchNotes.hasUnsavedChanges()")
+                assert httpx.get(url+'/api/research-notes').json()['notes'][0]['body'] == 'A paragraph in progress.'
                 await page.go_back()
                 await view.wait_for(state='visible')
                 await ready(page)
-                assert await page.locator('#note-body').input_value() == 'An unsaved paragraph.'
-                assert 'Unsaved changes' in await page.locator('#notes-status').inner_text()
+                assert await page.locator('#note-body').input_value() == 'A paragraph in progress.'
+                assert await page.locator('#notes-status').inner_text() == 'Saved'
+                await page.locator('#note-body').fill('An unsaved paragraph.')
                 # The sidebar entry also returns to the note last open.
                 await page.locator('#papers').get_by_text('Evaluation study').click()
                 await view.wait_for(state='hidden')

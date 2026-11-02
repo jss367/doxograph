@@ -335,18 +335,16 @@ function paperNote(key) {
   if (draft !== undefined && !isRemoving(key)) V.noteEditing = key;
   if (V.noteEditing === key || (!(paper.notes || '').trim() && !isRemoving(key))) {
     const text = draft !== undefined ? draft : (paper.notes || '');
-    // Frozen from state rather than from the elements, so a redraw during the
-    // save cannot hand back an editor whose request is still running.
-    const busy = V.noteSaving === key ? ' disabled' : '';
-    return `<div class="note editing${busy ? ' saving' : ''}">
+    const status = noteAutosaves.get(noteSession(key))?.describe() || '';
+    return `<div class="note editing">
       <label class="who" for="paper-note-${esc(key)}">my note</label>
-      <textarea id="paper-note-${esc(key)}" data-note="${esc(key)}" rows="4"${busy}
+      <textarea id="paper-note-${esc(key)}" data-note="${esc(key)}" rows="4"
         placeholder="What you make of this paper: what to read it for, what it gets wrong, what to do about it.">${esc(text)}</textarea>
       <div class="smeta">
-        <span class="hint">Yours. Nothing sends it to a model.</span>
+        <span class="hint">Yours. Nothing sends it to a model. Saves as you write.</span>
+        <span class="hint" data-note-status="${esc(key)}">${esc(status)}</span>
         <span class="cact" style="margin-left:auto">
-          <button type="button" data-act="save-note" data-paper="${esc(key)}" class="primary"${busy}>Save</button>
-          <button type="button" data-act="cancel-note" data-paper="${esc(key)}"${busy}>Cancel</button>
+          <button type="button" data-act="done-note" data-paper="${esc(key)}"${V.noteEditing === key ? '' : ' hidden'}>Done</button>
         </span>
       </div>
     </div>`;
@@ -358,64 +356,83 @@ function paperNote(key) {
     </span></div>`);
 }
 
-// Keep what was typed, close the editor — as `parkSynthEditor` does, and for
-// the same reason: the header goes with the paper, so leaving it must not
-// leave `V.noteEditing` pointing at a textarea nobody can see, which would
+// A note saves itself a moment after typing stops. Each paper has its own
+// autosave, so moving on to another paper's note leaves the first one saving.
+// One is keyed by workspace too: the same paper key can be in two corpora.
+const noteAutosaves = new Map();
+const noteSession = (key, workspace = workspaceClient.workspaceId) => workspace + '\n' + key;
+const storedNote = (key) => S.papers.find((x) => x.key === key)?.notes || '';
+
+function noteAutosave(key) {
+  const id = noteSession(key), workspace = workspaceClient.workspaceId;
+  if (noteAutosaves.has(id)) return noteAutosaves.get(id);
+  const session = { key, workspace };
+  const autosave = createAutosave({
+    current: () => (workspaceClient.workspaceId === workspace ? session : null),
+    dirty: () => V.noteDrafts[key] !== undefined && V.noteDrafts[key] !== storedNote(key),
+    // The PATCH landing first would report a note saved that the DELETE
+    // behind it throws away; landing second it is a 404.
+    blocked: () => (isRemoving(key) ? 'That paper is being removed.' : ''),
+    async write() {
+      const text = V.noteDrafts[key];
+      await api(`/api/papers/${encodeURIComponent(key)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: text }),
+      });
+      if (workspaceClient.workspaceId !== workspace) return;
+      // Polls hold while the note is open, so the page keeps what it wrote
+      // until the next one brings the same text back.
+      const paper = S.papers.find((x) => x.key === key);
+      if (paper) paper.notes = text;
+      if (V.noteDrafts[key] === text) delete V.noteDrafts[key];
+    },
+    changed() {
+      const label = document.querySelector(`[data-note-status="${CSS.escape(key)}"]`);
+      if (!label || workspaceClient.workspaceId !== workspace) return;
+      label.textContent = autosave.describe();
+      label.className = autosave.failure ? 'warn' : 'hint';
+    },
+  });
+  noteAutosaves.set(id, autosave);
+  return autosave;
+}
+
+// Resolves true when no paper note is left unsaved in this workspace.
+async function flushPaperNotes() {
+  const keys = Object.keys(V.noteDrafts);
+  return (await Promise.all(keys.map((key) => noteAutosave(key).flush()))).every(Boolean);
+}
+
+function paperNotesSaving() {
+  return [...noteAutosaves.values()].some((autosave) => autosave.saving);
+}
+
+// Close the editor and save what was typed, as `parkSynthEditor` keeps it,
+// and for the same reason: the header goes with the paper, so leaving it must
+// not leave `V.noteEditing` pointing at a textarea nobody can see, which would
 // also stop the background poll.
 function parkNoteEditor() {
   if (!V.noteEditing) return;
-  const field = document.querySelector(`textarea[data-note="${CSS.escape(V.noteEditing)}"]`);
-  if (field) V.noteDrafts[V.noteEditing] = field.value;
+  const key = V.noteEditing;
+  const field = document.querySelector(`textarea[data-note="${CSS.escape(key)}"]`);
+  if (field && field.value !== storedNote(key)) V.noteDrafts[key] = field.value;
   V.noteEditing = null;
+  if (V.noteDrafts[key] !== undefined) void noteAutosave(key).flush();
 }
 
-function cancelNoteEdit() {
+// Done saves at once and closes the editor. A note that could not save stays
+// open with the reason beside it.
+async function closeNoteEditor() {
+  const key = V.noteEditing;
+  if (!key) return;
+  const field = document.querySelector(`textarea[data-note="${CSS.escape(key)}"]`);
+  if (field && field.value !== storedNote(key)) V.noteDrafts[key] = field.value;
+  if (!await noteAutosave(key).flush()) return;
   // A claim editor open alongside holds its text in the DOM until it is read,
   // and the redraw below rebuilds it from the draft on file.
   captureOpenEditor();
-  if (V.noteEditing) delete V.noteDrafts[V.noteEditing];   // discard only this paper's draft
-  V.noteEditing = null;
+  if (V.noteEditing === key) V.noteEditing = null;
   renderContent();
-}
-
-async function saveNote(key) {
-  if (V.noteSaving) {
-    // One at a time, as a synthesis is. Another paper's Save is drawn enabled
-    // — the freeze is keyed to the paper being written — so it says why
-    // rather than doing nothing.
-    if (V.noteSaving !== key) toast('Wait for the note being saved to finish.', { tone: 'warn' });
-    return;
-  }
-  // The header stands until the removal comes back, so this is still
-  // clickable. The PATCH landing first would report a note saved that the
-  // DELETE behind it throws away; landing second it is a 404.
-  if (refuseWhileRemoving(key, 'the note')) return;
-  const field = document.querySelector(`textarea[data-note="${CSS.escape(key)}"]`);
-  const text = field ? field.value : (V.noteDrafts[key] || '');
-  V.error = null;
-  captureOpenEditor();        // as on cancel: a claim editor's text is only in the DOM
-  V.noteDrafts[key] = text;   // the redraw draws the editor from the draft
-  V.noteSaving = key;
-  renderContent();
-  try {
-    await api(`/api/papers/${encodeURIComponent(key)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: text }),
-    });
-    // Only this paper's editor. The save is slow enough to move to another
-    // paper and open its note meanwhile, and closing that one would take the
-    // reader out of a note they are still writing.
-    if (V.noteEditing === key) V.noteEditing = null;
-    delete V.noteDrafts[key];
-  } catch (error) {
-    V.noteDrafts[key] = text;   // keep what was typed so the save can be retried
-    V.error = `Could not save the note: ${error.message}`;
-  } finally {
-    // In the `finally`, as the synthesis save is: a failure leaves the editor
-    // frozen otherwise, with nothing left to hand it back.
-    V.noteSaving = null;
-    await refreshAllShowingError();
-  }
 }
 
 const titleEdits = new Set();
