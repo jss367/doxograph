@@ -1393,7 +1393,7 @@ async function boot() {
     V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.q = ''; V.kind = '';
     V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
     $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
-    scheduleTextSearch(); renderAll(); syncHash(true);
+    scheduleTextSearch(); syncHash(true); renderAll();
   }, (id) => { V.dataset = id; syncHash(); });
   $('btn-datasets').addEventListener('click', () => {
     if (V.view === 'datasets') return;

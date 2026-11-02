@@ -168,6 +168,40 @@ def test_dataset_navigation_ignores_a_superseded_discard_prompt(engine, answer):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('target', ['paper', 'claim'])
+def test_following_dataset_evidence_preserves_history_and_draft(engine, target):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+    claim = store.add_claim('study', {'text': 'The linked finding'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                item = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'papers': ['study'],
+                    'claims': [{'paper': 'study', 'claim': claim['id']}]}).json()
+                await page.goto(url + '/#view=datasets&dataset=' + item['id'])
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await view.get_by_label('Version', exact=True).fill('My unsaved version')
+                await page.locator('#dataset-research').get_by_role('button',
+                    name='Evaluation study' if target == 'paper' else claim['text'], exact=True).click()
+                await view.wait_for(state='hidden')
+                assert 'paper=study' in page.url
+                if target == 'claim':
+                    assert f'sel={claim["id"]}' in page.url
+                await page.go_back()
+                await view.wait_for(state='visible', timeout=5000)
+                await ready(page)
+                assert f'dataset={item["id"]}' in page.url
+                assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_dataset_editor_and_linked_research(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))
