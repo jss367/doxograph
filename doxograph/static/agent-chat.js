@@ -246,10 +246,13 @@ function renderAskScope(chat) {
     : scope.papers.length > 1 ? ['Compare methods', 'Where do their findings differ?'] : ['Explain the main result', 'What are the limitations?'];
   $('agent-starters').innerHTML = chat.messages.length ? '' : starters.map(text => `<button type="button" data-starter="${esc(text)}" ${chat.busy ? 'disabled' : ''}>${esc(text)}</button>`).join('');
 }
-let askOpener = null;
+let askOpener = null, askOpenerSelector = '';
 async function openAsk(scope, opener = document.activeElement) {
   if (!$('library-agent').contains(opener)) {
     askOpener = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+    askOpenerSelector = askOpener?.id ? `#${CSS.escape(askOpener.id)}`
+      : askOpener?.dataset.askClaim ? `[data-ask-claim="${CSS.escape(askOpener.dataset.askClaim)}"][data-paper="${CSS.escape(askOpener.dataset.paper)}"]`
+      : askOpener?.dataset.paperChat ? `[data-paper-chat="${CSS.escape(askOpener.dataset.paperChat)}"]` : '';
   }
   askCatalogs.set(workspaceClient.workspaceId, {papers: structuredClone(S.papers), claims: S.claims.map(c => ({paper:c.paper, id:c.id, text:c.text, quote:c.quote, locator:c.locator, tags:c.tags, reviewed:c.reviewed}))});
   const opening = agentChats.open(workspaceClient.workspaceId, null, scope ? {fresh: true, scope} : {});
@@ -273,8 +276,10 @@ function closeAsk() {
   fitAskPane();
   $('btn-agent').setAttribute('aria-expanded', 'false');
   if (restoreFocus) {
-    const target = askOpener?.isConnected && !askOpener.disabled && askOpener.getClientRects().length
-      ? askOpener : $('btn-agent');
+    const available = control => control?.isConnected && !control.disabled && control.getClientRects().length;
+    const opener = available(askOpener) ? askOpener : askOpenerSelector
+      ? [...document.querySelectorAll(askOpenerSelector)].find(available) : null;
+    const target = opener || $('btn-agent');
     target.focus({preventScroll: true});
     if (document.activeElement !== target) $('btn-agent').focus({preventScroll: true});
   }
