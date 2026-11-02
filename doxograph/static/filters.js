@@ -146,8 +146,7 @@ function queryMatcher() {
 function queryHighlighter() {
   const query = fold(V.q.trim());
   if (!query) return esc;
-  const phrase = queryIsPhrase(query);
-  const patterns = phrase ? [] : queryPatterns(query);
+  const patterns = queryPatterns(query);
   return (value) => {
     const text = String(value ?? '');
     let folded = '', offset = 0;
@@ -164,7 +163,9 @@ function queryHighlighter() {
       offset += char.length;
     }
     const spans = [];
-    if (phrase) {
+    // A matching phrase may span fields or adjacent authors in the haystack.
+    // If the display splits it, highlight the individual query words instead.
+    if (folded.includes(query)) {
       for (let at = folded.indexOf(query); at >= 0; at = folded.indexOf(query, at + query.length)) {
         spans.push([starts[at], ends[at + query.length - 1]]);
       }

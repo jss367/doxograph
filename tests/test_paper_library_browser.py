@@ -387,6 +387,8 @@ def test_library_search_highlights_and_prioritizes_authors_and_titles(engine):
                 for query, marked in [("storf sim", ["Simon", "Storf"]),
                                       ("storf monitoring", ["Storf"]),
                                       ("ELODIE STRASSE", ["Élodie Straße"]),
+                                      ("storf elodie", ["Storf", "Élodie"]),
+                                      ("monitoring simon", ["Simon"]),
                                       ("strasse elodie", ["Élodie", "Straße"]),
                                       ("lab", ["Lab"])]:
                     await page.locator("#q").fill(query)
