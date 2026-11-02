@@ -52,6 +52,14 @@ const ChatThreads = (() => {
       if ((thread.draft || thread.draftAttachments?.length || thread.reading) && !target.threads.includes(thread)) target.threads.unshift(thread);
     }
 
+    function selectAfterArchive(target, thread) {
+      if (thread.archived && target.active === thread) target.active = target.threads.find(t => !t.archived) || blank();
+      else if (!thread.archived) {
+        keepDraft(target);
+        target.active = thread;
+      }
+    }
+
     function renderThreadList(element, threads) {
       const focused = element.contains(document.activeElement) ? document.activeElement : null;
       const focusId = focused?.dataset.threadOpen || focused?.dataset.threadArchive;
@@ -369,18 +377,17 @@ const ChatThreads = (() => {
         thread.revision = saved.revision;
         thread.unconfirmed = [];
         thread.savedAt = ++clock;
-        if (thread.archived && target.active === thread) target.active = target.threads.find(t => !t.archived) || blank();
-        else if (!thread.archived) {
-          keepDraft(target);
-          target.active = thread;
-        }
+        selectAfterArchive(target, thread);
       } catch (error) {
         thread.archiveError = `Could not ${thread.archived ? 'restore' : 'archive'} this conversation: ${error.message}`;
         // A response can be lost after the change reached disk; reload its latest state.
         thread.archiving = false;
         try {
           await refresh(target);
-          if (thread.archived === archived) thread.archiveError = '';
+          if (thread.archived === archived) {
+            thread.archiveError = '';
+            selectAfterArchive(target, thread);
+          }
         } catch (_) { /* keep the error beside the conversation */ }
       } finally {
         thread.archiving = false;

@@ -152,6 +152,61 @@ def test_archive_failure_and_lost_response_keep_saved_conversations(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('other_active', [True, False], ids=['other-active', 'last-active'])
+def test_lost_active_archive_response_selects_a_usable_conversation(engine, other_active):
+    async def scenario(url, original):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
+            await page.locator('#agent-question').fill('Keep the archived conversation draft')
+
+            async def lose_response(route):
+                if route.request.method == 'PATCH':
+                    await route.fetch()
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/chats/*', lose_response)
+            await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
+            active = page.locator('#agent-thread [aria-current="true"]')
+            await expect(active).to_have_count(1)
+            await expect(active).not_to_have_attribute('data-thread-open', 'a' * 32)
+            await expect(page.locator('#agent-question')).to_be_enabled()
+            if other_active:
+                await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(2)
+            else:
+                await expect(active).to_have_text('New conversation')
+                await expect(page.locator('#agent-messages')).to_be_empty()
+            saved = httpx.get(url + '/api/chats').json()['chats']
+            assert len(saved) == 3
+            first = next(chat for chat in saved if chat['id'] == 'a' * 32)
+            assert first['archived'] and first['messages'] == original['messages']
+            assert await page.locator('.chat-thread-error').count() == 0
+            # Recovery also selects a restored row after its response is lost.
+            await page.locator('#agent-archive summary').click()
+            await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
+            await expect(active).to_have_attribute('data-thread-open', 'a' * 32)
+            await expect(page.locator('#agent-question')).to_have_value('Keep the archived conversation draft')
+            await expect(page.locator('#agent-question')).to_be_enabled()
+            assert await page.locator('.chat-thread-error').count() == 0
+            assert not errors
+
+    with _server() as url:
+        seed_conversations(url)
+        if not other_active:
+            for letter in ['b', 'c']:
+                assert httpx.patch(f'{url}/api/chats/{letter * 32}', json={'revision': 1, 'archived': True}).status_code == 200
+        original = next(chat for chat in httpx.get(url + '/api/chats').json()['chats'] if chat['id'] == 'a' * 32)
+        run_browser(scenario(url, original))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('action', ['save', 'missing-note'])
 def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
     async def scenario(url, original):
