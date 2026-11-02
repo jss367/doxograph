@@ -1,10 +1,15 @@
-/* Reader-owned workflows. Stored with the active workspace; never sent to a model. */
+/* Reader-owned workflows. Stored with the active workspace; never sent to a model.
+   The tools are a view in the main pane: leaving it keeps unsaved edits for the next visit. */
 const ResearchTools = (() => {
-  let client;
+  let client, navigate, select;
+  // The tab and board the URL names, the ones on screen, and the library view
+  // a saved search is taken from.
+  let shown = false, wanted = null, loaded = null, origin = 'library';
+  const TABS = ['compare', 'boards', 'questions', 'connections', 'reading', 'marks', 'searches'];
+  const tabKey = target => target && `${target.tab}\u0000${target.board || ''}`;
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
-  let epoch = 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
   // it stays up while the research tools are opened and closed over it.
   let reader = null, readerEpoch = 0, mountSeq = 0;
@@ -41,6 +46,7 @@ const ResearchTools = (() => {
     try { sessionStorage.setItem(`doxograph-selection:${workspace}`, JSON.stringify({claims:[...claims], papers:[...papers]})); } catch (_) { /* optional */ }
   }
   function sync() {
+    if (['library', 'claims'].includes(V.view)) origin = V.view;
     if (workspace !== client.workspaceId) {
       workspace = client.workspaceId;
       // The switch has happened: an editor open on a mark of the workspace
@@ -123,30 +129,64 @@ const ResearchTools = (() => {
     await refreshAll();
     message('Saved.');
   }
-  async function close({duringOperation = false} = {}) {
-    if (busy && !duringOperation) return;
-    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
-    epoch++;
-    dirty = false; connectionDraft = false;
-    el('research-tools').close();
-  }
-  async function open(next = 'compare', requestedBoard = null) {
-    if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return false; }
-    sync();
-    modalWorkspace = workspace;
-    tab = next;
-    el('research-tools').showModal();
-    el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
-    message('');
-    if (next === 'reading') await flushReadingProgress();
-    notebook = await request();
-    if (requestedBoard !== null) {
-      boardId = requestedBoard;
-      if (!currentBoard()) throw new Error('That board no longer exists.');
+  // Brings the tab the URL names on screen. Unsaved board edits live in the
+  // notebook and stay through a change of tab; a connection being written
+  // lives only in its form, so leaving its tab asks first.
+  async function load() {
+    const target = wanted, same = tabKey(target) === tabKey(loaded);
+    if (same && notebook && modalWorkspace === client.workspaceId && unsaved()) return;
+    if (!same && connectionDraft) {
+      if (!await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) {
+        if (wanted === target && loaded) { wanted = loaded; select(loaded.tab, loaded.board); }
+        return;
+      }
+      connectionDraft = false;
     }
-    dirty = false;
+    if (wanted !== target) return;
+    loaded = target;
+    if (!await WorkspaceNotes.flush()) {
+      notebook = null;
+      el('research-tabs').innerHTML = '';
+      el('research-body').innerHTML = `<p class="warn">Your workspace notes could not be saved, so the research tools stay closed until they are. ${button('reload', 'Try again')}</p>`;
+      return;
+    }
+    sync();
+    const keep = dirty && notebook && modalWorkspace === workspace;
+    modalWorkspace = workspace;
+    tab = target.tab === 'history' && !historyData ? 'compare' : target.tab;
+    if (!keep) {
+      el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
+      message('');
+      // Leaving a paper for the tools saves its reading progress on the way
+      // out. Read the notebook after that save, or the next save conflicts.
+      await flushReadingProgress();
+      notebook = await request();
+      dirty = false;
+    }
+    if (target.board) {
+      boardId = target.board;
+      if (!currentBoard()) { boardId = null; message('That board no longer exists.', true); }
+    }
     render();
-    return true;
+  }
+  function show(next, requestedBoard = null) {
+    const target = {tab: TABS.includes(next) || next === 'history' ? next : 'compare', board: requestedBoard || null};
+    if (shown && tabKey(target) === tabKey(wanted)) return;
+    wanted = target;
+    shown = true;
+    el('research-tools').hidden = false;
+    // Work already running drains the newest target when it finishes.
+    if (!busy) void run(load);
+  }
+  function hide() {
+    shown = false;
+    el('research-tools').hidden = true;
+  }
+  // The URL follows a tab or board chosen here without asking for a reload.
+  function syncLocation() {
+    const board = ['boards', 'questions'].includes(tab) ? boardId : null;
+    wanted = loaded = {tab, board};
+    select(tab, board);
   }
   function citation(row) {
     return `${(row.paper_authors || []).join(', ') || row.paper} · ${row.paper_year || 'year unknown'} · ${row.locator || 'no page recorded'}`;
@@ -163,6 +203,7 @@ const ResearchTools = (() => {
       ${button('source', 'Open source', `data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}`;
   }
   function render() {
+    if (!notebook) return;
     const labels = {compare:'Compare & organize', boards:'Evidence boards', questions:'Research questions', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
     el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : tab === 'questions' ? 'Research questions' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
@@ -174,6 +215,7 @@ const ResearchTools = (() => {
     if (tab === 'marks') renderMarks();
     if (tab === 'searches') renderSearches();
     if (tab === 'history') renderHistory();
+    syncLocation();
   }
   function renderCompare() {
     el('research-body').innerHTML = `<p class="hint">Selections stay pinned while you browse other papers or topics. Select claims or papers using their checkboxes.</p>
@@ -303,7 +345,7 @@ const ResearchTools = (() => {
     const response = await client.response(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':ws}});
     await saveFile(response, `${paper}-annotated.pdf`);
     const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
-    (el('research-tools').open ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
+    (shown ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
   }
   async function showHistory(paper, claim = null) {
     historyPaper = paper; historyClaim = claim;
@@ -1070,7 +1112,7 @@ const ResearchTools = (() => {
     V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
     V.selectedId = claim;
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
-    scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
+    scheduleTextSearch(); syncHash(true); renderAll(); scrollToSelected();
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
     'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
@@ -1129,19 +1171,26 @@ const ResearchTools = (() => {
     // joins it and a queued one is marked as being read; a finished one is
     // left as it is.
     if (name === 'reader') {
-      const navigation = navigationVersion(), ws = client.workspaceId;
-      if (el('research-tools').open) {
-        if (!await discardDrafts()) return;
-        await close({duringOperation:true});
-        if (el('research-tools').open) return;
-      }
+      const ws = client.workspaceId;
       const paper = data.paper;
-      const saved = await mutateNotebook(ws, n => {
+      const resume = () => mutateNotebook(ws, n => {
         const entry = n.reading.find(r => r.paper === paper);
         if (!entry) { n.reading.push({paper, status:'reading', page:1, bookmarks:[]}); return; }
         if (entry.status !== 'queued') return false;
         entry.status = 'reading';
       }, {history:false});
+      // From the tools, the paper takes their place at once, at the page the
+      // queue on screen names; the queue records the resume afterwards.
+      if (shown) {
+        const page = Number(data.page) || notebook?.reading.find(r => r.paper === paper)?.page || 1;
+        askPage(paper, ws, page, data.mark || null);
+        if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
+        goToPaper(paper);
+        await resume();
+        return;
+      }
+      const navigation = navigationVersion();
+      const saved = await resume();
       // Moved on while the request was out: the paper chosen since stands.
       if (client.workspaceId !== ws || navigationVersion() !== navigation) return;
       const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
@@ -1247,11 +1296,11 @@ const ResearchTools = (() => {
   }
   async function action(name, target) {
     const data = target.dataset;
-    if (name === 'close') { await close({duringOperation:true}); return; }
-    if (name === 'tab' || name === 'reload') {
+    if (name === 'tab') { navigate(data.tab, null); await load(); return; }
+    if (name === 'reload') {
+      if (!notebook) { loaded = null; await load(); return; }
       if (!await discardDrafts()) return;
-      const nextTab = data.tab || (tab === 'history' ? 'compare' : tab);
-      epoch++;
+      const nextTab = tab === 'history' ? 'compare' : tab;
       if (nextTab === 'reading') {
         el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
         await flushReadingProgress();
@@ -1261,11 +1310,7 @@ const ResearchTools = (() => {
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
     if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
-    if (name === 'source') {
-      if (!await discardDrafts()) return;
-      await close({duringOperation:true}); if (el('research-tools').open) return;
-      goToPaper(data.paper, data.claim || null); return;
-    }
+    if (name === 'source') { goToPaper(data.paper, data.claim || null); return; }
     if (name === 'bulk') {
       const values = el('bulk-values').value.split(',').map(s=>s.trim()).filter(Boolean);
       const mode = el('bulk-mode').value;
@@ -1337,15 +1382,14 @@ const ResearchTools = (() => {
     if (name === 'save-search') {
       const title = await promptDialog('Name this saved search', '', {ok:'Save search'});
       if (!title?.trim()) return;
-      const search = {id:uid(),name:title.trim(),view:V.view === 'library' ? 'library' : 'claims'};
+      const search = {id:uid(),name:title.trim(),view:origin};
       for (const field of ['q','paper','tag','label','facet','kind','unreviewed','unverified','group']) search[field] = V[field];
       notebook.searches.push(search); await save(); tab = 'searches'; render(); return;
     }
     if (['apply-search','rename-search','delete-search'].includes(name)) {
       const id = target.closest('[data-search]').dataset.search, search = notebook.searches.find(s=>s.id === id);
       if (name === 'apply-search') {
-        if (!await discardDrafts()) return;
-        await close({duringOperation:true}); if (el('research-tools').open) return; captureOpenEditor();
+        captureOpenEditor();
         const params = new URLSearchParams();
         params.set('view', search.view || 'claims');
         if (workspace !== 'default') params.set('ws',workspace);
@@ -1378,8 +1422,12 @@ const ResearchTools = (() => {
     if (busy) return;
     setBusy(true);
     try { await task(); }
-    catch (error) { message(error.message,true); if (!el('research-tools').open) toast(error.message,{tone:'warn'}); }
-    finally { setBusy(false); }
+    catch (error) { message(error.message,true); if (!shown) toast(error.message,{tone:'warn'}); }
+    finally {
+      setBusy(false);
+      // Hash navigation can arrive during other work. Drain the latest target.
+      if (shown && tabKey(wanted) !== tabKey(loaded)) void run(load);
+    }
   }
   document.addEventListener('selectionchange', trackSelection);
   document.addEventListener('pointerdown', event => {
@@ -1430,9 +1478,13 @@ const ResearchTools = (() => {
     if (name === 'notes') { WorkspaceNotes.open(); return; }
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
-      if (!el('research-tools').open) {
-        if (!await open(['boards','questions','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare')) return;
-        if (['boards','questions','reading','marks','searches','connections','compare'].includes(name)) return;
+      // A tab, or a tool used from the library, opens the research tools first.
+      if (TABS.includes(name) || !shown) {
+        // An unsaved workspace note would be hidden by the tools; keep it on screen.
+        if (!shown && !await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
+        navigate(TABS.includes(name) ? name : shown ? tab : 'compare', null);
+        await load();
+        if (TABS.includes(name) || !notebook) return;
       }
       await action(name,target);
     });
@@ -1464,7 +1516,7 @@ const ResearchTools = (() => {
     if (target.id === 'marks-filter') { marksFilter = target.value; renderMarks(); }
     if (target.matches('[data-highlight-question]')) run(async () => {
       const id = target.dataset.highlightQuestion, question = target.checked;
-      if (el('research-tools').open) {
+      if (shown && notebook) {
         notebook.highlights.find(h => h.id === id).question = question;
         await save(); return;
       }
@@ -1486,22 +1538,17 @@ const ResearchTools = (() => {
     if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
     if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
   });
-  document.addEventListener('DOMContentLoaded', () => {
-    el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
-  });
   window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
     // A reader action waiting on the notebook would finish in the workspace
     // it started in and open its paper over the one switched to.
     if (busy) {
       const text = 'Finish the current operation before switching workspaces.';
-      if (el('research-tools').open) message(text, true); else toast(text, {tone:'warn'});
+      if (shown) message(text, true); else toast(text, {tone:'warn'});
       return false;
     }
-    if (el('research-tools').open) {
-      await close();
-      if (el('research-tools').open) return false;
-    }
+    // A later guard may still refuse. Only committed selection clears drafts.
+    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return false;
     // A highlight note being written in the rail is state app.js cannot see;
     // the switch would hide its editor and the next edit would overwrite it.
     if (highlightDrafting()) {
@@ -1518,12 +1565,18 @@ const ResearchTools = (() => {
       if (mark) markEditor.text = markEditor.saved = mark.note;
       else markEditor = null;
     }
-    if (el('research-tools').open && !unsaved()) { notebook = await request(); render(); }
+    if (shown && notebook && !unsaved()) { notebook = await request(); render(); }
     redrawContent();
   }
   return {selection: () => ({papers: selectedPapers(), focus: refs().map(r => ({paper: r.paper, claim: r.claim}))}),
     historyChanged,
-    connect(value) { client = value; }, sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+    connect(value, {open: opening, selected}) { client = value; navigate = opening; select = selected; }, show, hide,
+    resetWorkspace() {
+      hide();
+      notebook = null; dirty = false; connectionDraft = false; historyData = null; boardId = null;
+      wanted = loaded = null; modalWorkspace = null;
+    },
+    sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     hasUnsavedChanges: () => Boolean(unsaved() || busy),
-    openBoard: id => run(() => open('boards', id))};
+    openBoard: id => navigate('boards', id)};
 })();

@@ -98,11 +98,11 @@ def test_resume_cannot_override_navigation_away_and_back(engine):
                     await route.continue_()
                 await page.route('**/api/notebook', hold_get)
                 await page.locator('#research-tools').get_by_role('button', name='Resume at page 2', exact=True).click()
+                # The paper takes the tools' place at once; the queue update follows.
+                await page.locator('.paperhead h2', has_text='Paper').wait_for()
                 await asyncio.wait_for(held.wait(), timeout=10)
-                # The initiating view is Second. Navigate away and then Back,
-                # returning to the exact same paper/view while Resume waits.
-                await page.locator('#papers li[data-paper="paper"]').click()
-                await page.go_back()
+                # Navigating on while Resume waits: the paper chosen since stands.
+                await page.locator('#papers li[data-paper="second"]').click()
                 await page.locator('.paperhead h2', has_text='Second').wait_for()
                 release.set()
                 await ready(page)

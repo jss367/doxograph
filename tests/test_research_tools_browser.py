@@ -87,13 +87,15 @@ def test_research_tools_workflow(engine, uuid_available):
                 await dialog.locator('[data-reading-status]').first.select_option('finished')
                 await ready(page)
                 assert httpx.get(url+'/api/notebook').json()['reading'][0]['status'] == 'finished'
-                await dialog.get_by_role('button',name='Close research tools').click()
+                # The tools are a page of their own; the sidebar leads back to the library.
+                await page.locator('#papers').get_by_text('All papers', exact=True).click()
                 await dialog.wait_for(state='hidden', timeout=5000)
                 await page.locator('#q').fill('Steering')
                 await page.get_by_role('button',name='Save this search',exact=True).click()
                 await _answer(page,'Save search','Steering evidence')
                 await ready(page)
-                await dialog.get_by_role('button',name='Close research tools').click()
+                await page.go_back()
+                await dialog.wait_for(state='hidden', timeout=5000)
                 await page.reload()
                 await page.locator('#q').fill('unrelated')
                 await page.locator('.research-tools-nav').get_by_role('button',name='Saved searches').click()
@@ -648,7 +650,7 @@ def test_history_restore_and_notebook_conflict(engine):
                 await _answer(page,'Restore version')
                 await ready(page)
                 assert httpx.get(url+'/api/state').json()['claims'][0]['text'] == 'Recovery is conditional.'
-                await dialog.get_by_role('button',name='Close research tools').click()
+                await page.go_back()
                 await dialog.wait_for(state='hidden', timeout=5000)
                 httpx.delete(url+f"/api/papers/paper/claims/{claim['id']}")
                 await page.locator(".paper-actions > summary").click()
@@ -776,7 +778,7 @@ def test_figure_marks_questions_and_annotated_pdf(engine):
                 assert await dialog.locator('.empty').count() == 1
                 await page.locator('#marks-filter').select_option('all')
                 assert await dialog.locator('.marks-paper .highlight-entry').count() == 1
-                await dialog.get_by_role('button', name='Close research tools').click()
+                await page.go_back()
                 await dialog.wait_for(state='hidden', timeout=5000)
                 # Escape leaves figure mode without a mark.
                 await page.get_by_role('button', name='Mark a figure', exact=True).click()
@@ -1494,4 +1496,65 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 assert await page.locator('#reader').is_hidden()
                 await page.unroute('**/api/notebook')
                 assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_tools_view_keeps_the_library_usable_and_board_drafts_across_navigation(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(url)
+                await page.locator('.research-tools-nav').get_by_role('button', name='Evidence boards', exact=True).click()
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert 'view=tools' in page.url and 'tool=boards' in page.url and 'board=b1' in page.url
+                nav = page.locator('.research-tools-nav')
+                assert await nav.get_by_role('button', name='Evidence boards', exact=True).get_attribute('aria-current') == 'page'
+                assert await page.locator('#side').is_visible()
+                assert not await page.locator('#panes').is_visible()
+                assert await page.locator('dialog[open]').count() == 0
+                await page.locator('#board-title').fill('Unsaved board title')
+                # Another tab, then a paper, then Back twice: the draft is still there.
+                await view.get_by_role('button', name='Reading queue', exact=True).click()
+                await ready(page)
+                assert 'tool=reading' in page.url
+                assert await nav.get_by_role('button', name='Reading queue', exact=True).get_attribute('aria-current') == 'page'
+                await page.locator('#papers li[data-paper="study"]').click()
+                await view.wait_for(state='hidden')
+                assert 'paper=study' in page.url
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert 'tool=reading' in page.url
+                await page.go_back()
+                await ready(page)
+                assert 'tool=boards' in page.url
+                assert await page.locator('#board-title').input_value() == 'Unsaved board title'
+                assert httpx.get(url + '/api/notebook').json()['boards'][0]['title'] == 'First board'
+                await view.get_by_role('button', name='Save board', exact=True).click()
+                await ready(page)
+                assert httpx.get(url + '/api/notebook').json()['boards'][0]['title'] == 'Unsaved board title'
+                # A reload returns to the same tab and board.
+                await page.reload()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'Unsaved board title'
+                if engine == 'chromium':
+                    Path('.context').mkdir(exist_ok=True)
+                    await page.screenshot(path='.context/research-tools-view.png')
+                assert not errors
+
     run_browser(scenario())

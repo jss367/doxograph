@@ -597,7 +597,7 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
    what is left of #main below the header, so the whole graph is on screen. */
 #main:has(.graph-wrap) { padding: 1.25rem; }
 #main:has(.graph-wrap) > .library-heading { display: none; }
-/* A page view (datasets, research notes) takes the main pane to itself. */
+/* A page view (datasets, research notes, research tools) takes the main pane to itself. */
 .page-view #main > :not(.main-page, .storage-warning) { display: none; }
 :root { --map-cite: #2563b8; --map-conflict: #c52b3d; --map-other: #7951b0; }
 :root[style*="color-scheme: dark"] {

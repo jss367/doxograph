@@ -73,7 +73,7 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('entry', ['direct', 'tab', 'reload'])
+@pytest.mark.parametrize('entry', ['direct', 'tab'])
 def test_reading_queue_waits_for_pending_page_saves(engine, entry):
     config.set_ai_enabled(False)
     for key in ['one', 'two']:
@@ -90,10 +90,6 @@ def test_reading_queue_waits_for_pending_page_saves(engine, entry):
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="one"]').click()
                 await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
-                if entry == 'reload':
-                    await page.get_by_role('button', name='Reading queue', exact=True).click()
-                    await ready(page)
-                    await expect(page.locator('#research-body [data-tool="reader"]')).to_have_text('Resume at page 1')
                 held, release = asyncio.Event(), asyncio.Event()
 
                 async def hold_progress(route):
@@ -104,26 +100,14 @@ def test_reading_queue_waits_for_pending_page_saves(engine, entry):
 
                 await page.route('**/api/notebook', hold_progress)
                 try:
-                    if entry == 'reload':
-                        # Layout changes can move the reader behind an open
-                        # dialog. Exercise its ordinary scroll/progress path.
-                        await page.evaluate("""() => {
-                            const scroller = document.getElementById('pdf-scroll');
-                            scroller.scrollTop = scroller.querySelector('[data-page="2"]').offsetTop - 8;
-                        }""")
-                    else:
-                        await page.get_by_role('button', name='Next page', exact=True).click()
-                        await ready(page)
+                    await page.get_by_role('button', name='Next page', exact=True).click()
+                    await ready(page)
                     await expect(page.locator('#reader-page')).to_have_value('2')
-                    if entry != 'reload':
-                        await page.locator('#papers li[data-paper="two"]').click()
+                    await page.locator('#papers li[data-paper="two"]').click()
                     await asyncio.wait_for(held.wait(), timeout=10)
+                    # Every tab reads the notebook after the save leaving the paper made.
                     if entry == 'tab':
                         await page.locator('.research-tools-nav [data-tool="boards"]').click()
-                        await ready(page)
-                        await page.locator('#research-tabs [data-tab="reading"]').click()
-                    elif entry == 'reload':
-                        await page.locator('#research-tabs [data-tool="reload"]').click()
                     else:
                         await page.get_by_role('button', name='Reading queue', exact=True).click()
                     await _poll(page)
@@ -133,6 +117,9 @@ def test_reading_queue_waits_for_pending_page_saves(engine, entry):
                 finally:
                     release.set()
                 await ready(page)
+                if entry == 'tab':
+                    await page.locator('#research-tabs [data-tab="reading"]').click()
+                    await ready(page)
                 await page.locator('#research-body').get_by_role('button', name='Resume at page 2').click()
                 await ready(page)
                 await expect(page.locator('.paperhead h2')).to_have_text('One')

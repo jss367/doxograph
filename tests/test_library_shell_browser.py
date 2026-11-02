@@ -62,7 +62,8 @@ def test_library_menus_selection_and_keyboard(engine, width):
                 await page.locator('[data-tool="compare"]').click()
                 await expect(page.locator("#research-tools")).to_be_visible()
                 await expect(page.locator(".comparison-card")).to_contain_text("Understanding model oversight")
-                await page.get_by_role("button", name="Close research tools").click()
+                await page.go_back()
+                await expect(page.locator("#research-tools")).to_be_hidden()
 
                 # Both menus fit narrow windows, including with a dark palette.
                 await page.locator("#btn-settings").click()
