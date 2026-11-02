@@ -1558,3 +1558,59 @@ def test_tools_view_keeps_the_library_usable_and_board_drafts_across_navigation(
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_held_board_edits_stay_out_of_other_saves_and_merge_on_save_board(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                notebook['reading'] = [{'paper': 'study', 'status': 'queued', 'page': 1, 'bookmarks': []}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=boards&board=b1')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await page.locator('#board-title').fill('Unsaved board title')
+                # A save on another tab saves only what it changed.
+                await view.get_by_role('button', name='Reading queue', exact=True).click()
+                await ready(page)
+                await page.locator('[data-reading-status="study"]').select_option('finished')
+                await ready(page)
+                saved = httpx.get(url + '/api/notebook').json()
+                assert saved['reading'][0]['status'] == 'finished'
+                assert saved['boards'][0]['title'] == 'First board'
+                # The notebook changes while a paper is open: the board edit is
+                # still there on return, and Save board keeps both changes.
+                await page.locator('#papers li[data-paper="study"]').click()
+                await view.wait_for(state='hidden')
+                changed = httpx.get(url + '/api/notebook').json()
+                changed['searches'] = [{'id': 's1', 'name': 'Saved meanwhile', 'view': 'library', 'q': 'study'}]
+                assert httpx.put(url + '/api/notebook', json=changed).status_code == 200
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                await page.go_back()
+                await ready(page)
+                assert 'tool=boards' in page.url
+                assert await page.locator('#board-title').input_value() == 'Unsaved board title'
+                await view.get_by_role('button', name='Save board', exact=True).click()
+                await ready(page)
+                assert await page.locator('#research-message').inner_text() == 'Saved.'
+                saved = httpx.get(url + '/api/notebook').json()
+                assert saved['boards'][0]['title'] == 'Unsaved board title'
+                assert saved['reading'][0]['status'] == 'finished'
+                assert [s['name'] for s in saved['searches']] == ['Saved meanwhile']
+                assert not errors
+
+    run_browser(scenario())

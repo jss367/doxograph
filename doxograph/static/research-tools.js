@@ -10,6 +10,13 @@ const ResearchTools = (() => {
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
+  // Edits to boards and to connection explanations not yet saved. They are
+  // held apart from the notebook, so a save made for anything else, such as a
+  // reading status or a saved search, cannot carry them, and the notebook can
+  // be read again around them when the reader comes back from a paper.
+  // `dirty` is the notebook itself differing from the saved one: a failed save.
+  let edits = {boards:{}, notes:{}};
+  const editing = () => Object.keys(edits.boards).length + Object.keys(edits.notes).length > 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
   // it stays up while the research tools are opened and closed over it.
   let reader = null, readerEpoch = 0, mountSeq = 0;
@@ -34,7 +41,7 @@ const ResearchTools = (() => {
   // page asks first, as it does for a board or a connection being edited.
   const highlightDrafting = () => Boolean(markEditor) && markEditor.text !== markEditor.saved;
   const markEditorOn = paper => markEditor?.workspace === client.workspaceId && markEditor.paper === paper;
-  const unsaved = () => dirty || connectionDraft || highlightDrafting();
+  const unsaved = () => dirty || editing() || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
   const resolve = ref => client.state.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
@@ -122,19 +129,35 @@ const ResearchTools = (() => {
     el('research-tools').classList.toggle('is-busy', value);
     el('research-tools').setAttribute('aria-busy', String(value));
   }
-  async function save() {
-    dirty = true;
-    notebook = await request('', 'PUT', notebook);
+  // Saves the notebook. `board` or `notes` also saves those held edits, merged
+  // into the notebook as last read, so whatever changed there meanwhile stays.
+  async function save({board = null, notes = false} = {}) {
+    const merging = Boolean(board && edits.boards[board]) || (notes && Object.keys(edits.notes).length > 0);
+    let next = notebook;
+    if (merging) {
+      next = structuredClone(notebook);
+      if (board && edits.boards[board]) {
+        const i = next.boards.findIndex(b => b.id === board);
+        if (i < 0) next.boards.push(edits.boards[board]); else next.boards[i] = edits.boards[board];
+      }
+      if (notes) for (const [id, note] of Object.entries(edits.notes)) {
+        const connection = next.connections.find(c => c.id === id);
+        if (connection) connection.note = note;
+      }
+    } else dirty = true;
+    notebook = await request('', 'PUT', next);
     dirty = false;
+    if (board) delete edits.boards[board];
+    if (notes) edits.notes = {};
     await refreshAll();
     message('Saved.');
   }
-  // Brings the tab the URL names on screen. Unsaved board edits live in the
-  // notebook and stay through a change of tab; a connection being written
-  // lives only in its form, so leaving its tab asks first.
+  // Brings the tab the URL names on screen. Unsaved board edits are held
+  // beside the notebook and stay through a change of tab; a connection being
+  // written lives only in its form, so leaving its tab asks first.
   async function load() {
     const target = wanted, same = tabKey(target) === tabKey(loaded);
-    if (same && notebook && modalWorkspace === client.workspaceId && unsaved()) return;
+    if (same && notebook && modalWorkspace === client.workspaceId && (dirty || connectionDraft)) return;
     if (!same && connectionDraft) {
       if (!await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) {
         if (wanted === target && loaded) { wanted = loaded; select(loaded.tab, loaded.board); }
@@ -251,10 +274,21 @@ const ResearchTools = (() => {
       }).join('') : '<p class="hint">No evidence assigned yet.</p>'}</div>`;
     }).join('')}</section>`;
   }
-  function currentBoard() { return notebook.boards.find(b => b.id === boardId); }
+  // The boards as they stand on screen: saved ones with their held edits, and
+  // an edited board removed elsewhere meanwhile, which Save board puts back.
+  function boards() {
+    const listed = notebook.boards.map(b => edits.boards[b.id] || b);
+    return listed.concat(Object.values(edits.boards).filter(b => !notebook.boards.some(n => n.id === b.id)));
+  }
+  function currentBoard() { return boards().find(b => b.id === boardId); }
+  // The board on screen, to be changed: a copy held until Save board.
+  function editBoard() {
+    if (!edits.boards[boardId]) edits.boards[boardId] = structuredClone(currentBoard());
+    return edits.boards[boardId];
+  }
   function renderBoards() {
     const questioning = tab === 'questions';
-    const available = notebook.boards.filter(b => !questioning || isQuestion(b));
+    const available = boards().filter(b => !questioning || isQuestion(b));
     if (!available.some(b => b.id === boardId)) boardId = available[0]?.id || null;
     const board = currentBoard();
     el('research-body').innerHTML = `<div class="tool-actions"><label>${questioning ? 'Question' : 'Board'}<select id="board-picker"><option value="">${questioning ? 'Choose a question' : 'Choose a board'}</option>${available.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
@@ -281,7 +315,7 @@ const ResearchTools = (() => {
       ${area('Your explanation', 'connection-note')}${button('create-connection','Create connection', claims.size < 2 ? 'disabled' : '')}</fieldset>
       ${notebook.connections.map(c => `<article class="board-entry" data-connection="${html(c.id)}"><strong>${html(c.relation)}</strong>
         <div class="connection-pair"><div>${claimSummary(c.source)}</div><div>${claimSummary(c.target)}</div></div>
-        <label>Your explanation<textarea data-connection-note="${html(c.id)}">${html(c.note)}</textarea></label>
+        <label>Your explanation<textarea data-connection-note="${html(c.id)}">${html(edits.notes[c.id] ?? c.note)}</textarea></label>
         ${button('save-connection','Save explanation')}${button('delete-connection','Remove connection')}</article>`).join('')}`;
     if (el('connection-target')?.options.length > 1) el('connection-target').selectedIndex = 1;
   }
@@ -328,7 +362,7 @@ const ResearchTools = (() => {
     await save();
   }
   async function download(format, board = null) {
-    if (dirty) await save();
+    if (board && edits.boards[board]) await save({board});
     if (!board && !claims.size && !papers.size) throw new Error('Select claims or papers to export first.');
     const response = await client.response('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
       body:JSON.stringify({format,board,claims:refs(),papers:[...papers]})});
@@ -1289,8 +1323,9 @@ const ResearchTools = (() => {
     }
   }
   async function discardDrafts() {
-    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
+    if ((dirty || editing() || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
     if (dirty) { notebook = await request(); dirty = false; }
+    edits = {boards:{}, notes:{}};
     connectionDraft = false;
     return true;
   }
@@ -1334,43 +1369,45 @@ const ResearchTools = (() => {
     if (name === 'add-board') { tab = 'boards'; render(); message('Choose or create a board, then add the selected claims.'); return; }
     if (name === 'board-add-selection') {
       if (!claims.size) throw new Error('Select claims in the library first.');
-      const board = currentBoard();
+      const board = editBoard();
       for (const reference of refs()) if (!board.entries.some(e => e.reference && refKey(e.reference) === refKey(reference))) board.entries.push({id:uid(),kind:'claim',reference,text:''});
-      await save(); renderBoards(); return;
+      await save({board:boardId}); renderBoards(); return;
     }
     if (name === 'board-heading' || name === 'board-note') {
-      currentBoard().entries.push({id:uid(),kind:name === 'board-heading' ? 'heading' : 'note',text:'',reference:null}); dirty = true; renderBoards(); return;
+      editBoard().entries.push({id:uid(),kind:name === 'board-heading' ? 'heading' : 'note',text:'',reference:null}); renderBoards(); return;
     }
     if (name === 'question-board') {
-      const board = currentBoard();
-      board.kind = 'question'; board.question ||= board.title; dirty = true;
-      await save(); renderBoards(); return;
+      const board = editBoard();
+      board.kind = 'question'; board.question ||= board.title;
+      await save({board:boardId}); renderBoards(); return;
     }
-    if (name === 'save-board' || name === 'save-connection') { await save(); return; }
+    if (name === 'save-board') { await save({board:boardId}); return; }
+    if (name === 'save-connection') { await save({notes:true}); return; }
     if (name === 'delete-board') {
       if (!await confirmDialog('Delete this evidence board? Source claims will remain in the library.',{ok:'Delete board'})) return;
-      notebook.boards = notebook.boards.filter(b=>b.id !== boardId); await save(); renderBoards(); return;
+      const id = boardId;
+      notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id]; renderBoards(); return;
     }
     if (name.startsWith('entry-')) {
-      const entries = currentBoard().entries, id = target.closest('[data-entry]').dataset.entry;
+      const entries = editBoard().entries, id = target.closest('[data-entry]').dataset.entry;
       const i = entries.findIndex(e=>e.id === id);
       if (name === 'entry-remove') entries.splice(i,1);
       else { const j = i + (name === 'entry-up' ? -1 : 1); if (j >= 0 && j < entries.length) [entries[i],entries[j]] = [entries[j],entries[i]]; }
-      dirty = true; renderBoards(); return;
+      renderBoards(); return;
     }
     if (name === 'create-connection') {
       const from = JSON.parse(el('connection-source').value), to = JSON.parse(el('connection-target').value);
       if (JSON.stringify(from) === JSON.stringify(to)) throw new Error('Choose two different claims.');
       const relation = el('connection-relation').value;
       const existing = notebook.connections.find(c => refKey(c.source) === JSON.stringify(from) && refKey(c.target) === JSON.stringify(to) && c.relation === relation);
-      if (existing) existing.note = el('connection-note').value;
+      if (existing) { existing.note = el('connection-note').value; delete edits.notes[existing.id]; }
       else notebook.connections.push({id:uid(),source:{paper:from[0],claim:from[1]},target:{paper:to[0],claim:to[1]},relation,note:el('connection-note').value});
       await save(); connectionDraft = false; renderConnections(); return;
     }
     if (name === 'delete-connection') {
       const id = target.closest('[data-connection]').dataset.connection;
       if (!await confirmDialog('Remove this manual connection?',{ok:'Remove connection'})) return;
-      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); renderConnections(); return;
+      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); delete edits.notes[id]; renderConnections(); return;
     }
     if (name.startsWith('reading-')) {
       const key = target.closest('[data-reading]').dataset.reading, items = notebook.reading;
@@ -1503,8 +1540,7 @@ const ResearchTools = (() => {
       boardId = next; renderBoards();
     });
     if (target.matches('[data-entry-stance]')) {
-      currentBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
-      dirty = true;
+      editBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
       const overview = el('research-body').querySelector('.question-overview');
       if (overview) { const summary = overview.previousElementSibling; summary.insertAdjacentHTML('beforebegin', questionOverview(currentBoard())); summary.remove(); overview.remove(); }
     }
@@ -1534,9 +1570,9 @@ const ResearchTools = (() => {
     }
     if (!el('research-tools')?.contains(target)) return;
     if (target.id.startsWith('connection-')) connectionDraft = true;
-    if (target.id.startsWith('board-') && ['title','question','conclusion','open_questions'].includes(target.id.slice(6))) { currentBoard()[target.id.slice(6)] = target.value; dirty = true; }
-    if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
-    if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
+    if (target.id.startsWith('board-') && ['title','question','conclusion','open_questions'].includes(target.id.slice(6))) editBoard()[target.id.slice(6)] = target.value;
+    if (target.dataset.entryText) editBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value;
+    if (target.dataset.connectionNote) edits.notes[target.dataset.connectionNote] = target.value;
   });
   window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
@@ -1548,7 +1584,7 @@ const ResearchTools = (() => {
       return false;
     }
     // A later guard may still refuse. Only committed selection clears drafts.
-    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return false;
+    if ((dirty || editing() || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return false;
     // A highlight note being written in the rail is state app.js cannot see;
     // the switch would hide its editor and the next edit would overwrite it.
     if (highlightDrafting()) {
@@ -1573,7 +1609,7 @@ const ResearchTools = (() => {
     connect(value, {open: opening, selected}) { client = value; navigate = opening; select = selected; }, show, hide,
     resetWorkspace() {
       hide();
-      notebook = null; dirty = false; connectionDraft = false; historyData = null; boardId = null;
+      notebook = null; dirty = false; edits = {boards:{}, notes:{}}; connectionDraft = false; historyData = null; boardId = null;
       wanted = loaded = null; modalWorkspace = null;
     },
     sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
