@@ -70,6 +70,7 @@ files = [
     "doxograph/job_queue.py", "doxograph/papers_api.py", "doxograph/chat_api.py",
     "doxograph/chat_attachments.py",
     "doxograph/datasets.py",
+    "doxograph/loupe.py",
     "doxograph/analysis_api.py",
 ]
 strict = true
