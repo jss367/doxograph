@@ -731,11 +731,11 @@ function drawContent() {
   document.body.classList.toggle('datasets-view', V.view === 'datasets');
   if (V.view === 'datasets') $('btn-datasets').setAttribute('aria-current', 'page');
   else $('btn-datasets').removeAttribute('aria-current');
+  if (V.view !== 'datasets') Datasets.hide();
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   // The catalog keeps its own page, and its draft while the reader is away.
   if (V.view === 'datasets') { $('content').innerHTML = ''; Datasets.show(V.dataset); return; }
-  Datasets.hide();
   if (library) { renderLibrary(); return; }
   if (V.view === 'tensions') { renderTensions(); return; }
   if (V.view === 'research') { renderResearch(); return; }

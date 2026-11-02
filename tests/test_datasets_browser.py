@@ -307,6 +307,14 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
                 assert 'Unsaved changes' in await page.locator('#datasets-status').inner_text()
                 assert httpx.get(url + '/api/datasets').json()['datasets'][0]['version'] == 'Saved'
+                # Opening the map also leaves the catalog and keeps its draft.
+                await page.locator('#graph-nav [data-view="graph"]').click()
+                await view.wait_for(state='hidden')
+                assert 'view=graph' in page.url
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
                 # Keys typed in the catalog stay with it.
                 await view.get_by_role('button', name='Save dataset', exact=True).focus()
                 await page.keyboard.press('Escape')
