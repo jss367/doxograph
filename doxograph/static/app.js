@@ -461,6 +461,7 @@ function renderWorkspacePicker() {
   $('btn-workspace-delete').title = selected?.id === 'default' ? 'The default workspace cannot be deleted.' : '';
   document.title = selected ? `${selected.name} — Doxograph` : 'Doxograph';
   window.doxographWorkspaceId = workspaceClient.workspaceId || 'default';
+  if (typeof syncAskWorkspace === 'function') syncAskWorkspace();
 }
 
 function resetWorkspaceView() {
@@ -519,7 +520,11 @@ const workspaceController = createWorkspaceController(workspaceClient, {
                                            { ok: 'Discard and switch' });
   },
   beforeLeave: flushTrash,
-  beforeSelect: () => WorkspaceNotes.beforeWorkspaceSwitch(),
+  async beforeSelect() {
+    if (!await WorkspaceNotes.beforeWorkspaceSwitch()) return false;
+    if (typeof rememberAskCatalog === 'function') rememberAskCatalog();
+    return true;
+  },
   async enter() {
     resetWorkspaceView();
     // Selection cleared the client snapshot. Retire the previous workspace's

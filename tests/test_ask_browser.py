@@ -588,3 +588,318 @@ def test_large_source_roster_saves_a_bounded_note(engine):
                 assert saved['messages'][0]['scope']['papers'] == keys
                 assert await page.evaluate("boundedNoteText('x'.repeat(2100000), 1900000, 'Note').length") < 2_000_000
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_library_pane_keeps_workspace_interactive_while_answering(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            held, release = asyncio.Event(), asyncio.Event()
+            requests, errors = [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            async def respond(route):
+                requests.append((route.request.headers['x-doxograph-workspace'], route.request.post_data_json))
+                held.set()
+                await release.wait()
+                await route.fulfill(json={'answer': 'The studies report improved recovery.', 'assistant': 'ChatGPT',
+                    'scope': {**route.request.post_data_json['scope'], 'papers': ['a', 'b', 'c']}})
+
+            await page.route('**/api/ask', respond)
+            with _server() as url:
+                other = httpx.post(url + '/api/workspaces', json={'name': 'Other workspace'}).json()['workspace']['id']
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await expect(page.locator('#btn-agent')).to_have_attribute('aria-expanded', 'true')
+                assert not await page.locator('dialog[open]').count()
+                pane = await page.locator('#library-agent').bounding_box()
+                main = await page.locator('#main').bounding_box()
+                assert pane['x'] >= main['x'] + main['width'] - 1
+                assert abs(pane['x'] + pane['width'] - 1440) <= 1
+                await page.locator('#agent-question').fill('What do these papers show?')
+                await page.locator('#agent-send').click()
+                await asyncio.wait_for(held.wait(), 5)
+                try:
+                    # Real clicks must reach navigation while the answer is pending.
+                    await page.locator('#papers li[data-paper="a"]').click()
+                    await expect(page.locator('#reader')).to_be_visible()
+                    await page.locator('#papers li[data-paper="b"]').click()
+                    await expect(page.locator('#paperhead')).to_contain_text('Recovery under intervention')
+                    await expect(page.locator('#library-agent')).to_be_visible()
+                    await expect(page.locator('#agent-status')).to_contain_text('Looking through')
+                    await page.locator('#content [data-act="edit"]').first.click()
+                    draft = page.locator('form[data-form] textarea[name="note"]')
+                    await draft.fill('A note made while the agent answers.')
+                    await expect(draft).to_have_value('A note made while the agent answers.')
+                    await page.locator('form[data-form] [data-act="cancel"]').click()
+                finally:
+                    release.set()
+                await expect(page.locator('#agent-messages')).to_contain_text('The studies report improved recovery.')
+                await page.wait_for_function('workspaceClient.pendingMutations === 0')
+                await page.locator('#workspace').select_option(other)
+                await expect(page.locator('#workspace')).to_have_value(other)
+                await expect(page.locator('#agent-workspace')).not_to_contain_text('Other workspace')
+                await page.locator('#agent-question').fill('Keep this follow-up')
+                # Pane keyboard input cannot navigate or review claims behind it.
+                await page.locator('#agent-close').focus()
+                await page.keyboard.press('/')
+                await expect(page.locator('#agent-close')).to_be_focused()
+                await page.keyboard.press('Escape')
+                await expect(page.locator('#library-agent')).to_be_hidden()
+                await expect(page.locator('#btn-agent')).to_be_focused()
+                await expect(page.locator('#btn-agent')).to_have_attribute('aria-expanded', 'false')
+                await page.locator('#workspace').select_option('default')
+                await page.locator('#btn-agent').click()
+                await expect(page.locator('#agent-question')).to_have_value('Keep this follow-up')
+                await expect(page.locator('#agent-messages')).to_contain_text('improved recovery')
+                send = await page.locator('#agent-send').bounding_box()
+                assert send['y'] + send['height'] <= 1000
+                if engine == 'chromium':
+                    Path('.context').mkdir(exist_ok=True)
+                    await page.screenshot(path='.context/ask-library-right-pane.png')
+                assert requests[0][0] == 'default'
+                assert requests[0][1]['scope']['mode'] == 'library'
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_ask_docks_before_a_wide_sidebar_squeezes_the_workspace(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 900, 'height': 1000})
+            await page.add_init_script("localStorage.setItem('doxograph-side-width', '450')")
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await expect(page.locator('body')).to_have_class(re.compile(r'agent-docked'))
+                main = await page.locator('#main').bounding_box()
+                pane = await page.locator('#library-agent').bounding_box()
+                assert main['width'] >= 449
+                assert pane['y'] >= main['y'] + main['height'] - 1
+                await page.locator('#papers li[data-paper="a"]').click()
+                await expect(page.locator('#reader')).to_be_visible()
+                await page.locator('#content [data-act="edit"]').first.click()
+                draft = page.locator('form[data-form] textarea[name="note"]')
+                await draft.fill('Editing beside a docked conversation.')
+                # A wider window restores the right pane and keeps both drafts.
+                await page.set_viewport_size({'width': 1800, 'height': 1000})
+                await expect(page.locator('body')).not_to_have_class(re.compile(r'agent-docked'))
+                await expect(draft).to_have_value('Editing beside a docked conversation.')
+                main = await page.locator('#main').bounding_box()
+                pane = await page.locator('#library-agent').bounding_box()
+                assert main['width'] >= 560
+                assert pane['x'] >= main['x'] + main['width'] - 1
+                assert await page.evaluate("localStorage.getItem('doxograph-side-width')") == '450'
+                # Resizing the sidebar can also dock and undock without a window resize.
+                await page.set_viewport_size({'width': 1440, 'height': 1000})
+                await expect(page.locator('body')).to_have_class(re.compile(r'agent-docked'))
+                await page.locator('#side-resize').focus()
+                await page.keyboard.press('Home')
+                await expect(page.locator('body')).not_to_have_class(re.compile(r'agent-docked'))
+                await expect(draft).to_have_value('Editing beside a docked conversation.')
+                assert not errors
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_ask_owner_name_tracks_registry_updates_without_changing_conversation(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                other = httpx.post(url + '/api/workspaces', json={'name': 'Other workspace'}).json()['workspace']['id']
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill('Keep the same conversation')
+                await page.locator('#workspace-actions > summary').click()
+                await page.locator('#btn-workspace-rename').click()
+                await page.locator('#ask-input').fill('Renamed library')
+                await page.locator('#ask-ok').click()
+                await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Renamed library')
+                await page.wait_for_function('workspaceClient.pendingMutations === 0')
+                await page.locator('#workspace').select_option(other)
+                await expect(page.locator('#workspace')).to_have_value(other)
+                await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Renamed library')
+                # Refreshing metadata for the originating workspace while viewing another
+                # workspace must still label the original conversation, not the selection.
+                response = httpx.patch(url + '/api/workspaces/default', json={'name': 'Recovery library'})
+                response.raise_for_status()
+                await page.evaluate('loadWorkspaces()')
+                await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Recovery library')
+                await expect(page.locator('#agent-question')).to_have_value('Keep the same conversation')
+                assert await page.evaluate('agentChats.workspace') == 'default'
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_job_notifications_do_not_cover_the_ask_composer(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            calls = []
+
+            async def answer(route):
+                calls.append(route.request.post_data_json)
+                await route.fulfill(json={'answer': 'You can ask while papers import.', 'assistant': 'ChatGPT',
+                    'scope': {**calls[-1]['scope'], 'papers': ['a', 'b', 'c']}})
+
+            await page.route('**/api/ask', answer)
+            await page.route('**/api/jobs', lambda route: route.fulfill(json={'jobs': [{
+                'id': 'running', 'kind': 'import', 'state': 'fetching', 'label': 'An active import',
+                'workspace': 'default', 'detail': '',
+            }]}))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.evaluate("""() => toast('A persistent workspace warning', {timeout:0, tone:'warn',
+                    actions:[{label:'Undo', onClick:() => { window.toastUndoUsed = true; }}]})""")
+                for width in [1440, 900, 390]:
+                    await page.set_viewport_size({'width': width, 'height': 1000})
+                    if width <= 900:
+                        await expect(page.locator('body')).to_have_class(re.compile(r'agent-docked'))
+                    else:
+                        await expect(page.locator('body')).not_to_have_class(re.compile(r'agent-docked'))
+                    await expect(page.locator('#jobs .job')).to_be_visible()
+                    jobs = await page.locator('#jobs').bounding_box()
+                    pane = await page.locator('#library-agent').bounding_box()
+                    notice = await page.locator('#toasts').bounding_box()
+                    if width == 1440:
+                        assert jobs['x'] + jobs['width'] <= pane['x']
+                    else:
+                        assert jobs['y'] + jobs['height'] <= pane['y']
+                        assert notice['y'] + notice['height'] <= pane['y']
+                        assert notice['x'] + notice['width'] <= jobs['x']
+                    await page.locator('#agent-question').fill(f'Question at {width}px')
+                    # A real click checks stacking and hit targets as well as box geometry.
+                    await page.locator('#agent-send').click()
+                    await expect(page.locator('#agent-question')).to_be_enabled()
+                assert len(calls) == 3
+                await page.locator('#toasts').get_by_role('button', name='Undo', exact=True).click()
+                assert await page.evaluate('window.toastUndoUsed') is True
+                await page.set_viewport_size({'width': 900, 'height': 1000})
+                await page.locator('#agent-close').click()
+                jobs = await page.locator('#jobs').bounding_box()
+                assert jobs['x'] + jobs['width'] == 884
+                assert jobs['y'] + jobs['height'] == 984
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_removing_an_ask_source_disables_send_and_explains_the_repair(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                other = httpx.post(url + '/api/workspaces', json={'name': 'Other workspace'}).json()['workspace']['id']
+                await page.goto(url + '/#paper=a')
+                await page.locator('[data-paper-chat="a"]').first.click()
+                await page.locator('#agent-question').fill('Keep my question after removing this paper')
+                await expect(page.locator('#agent-send')).to_be_enabled()
+                await page.locator('#papers li[data-paper="a"] .pmenu').click()
+                await page.locator('#ctxmenu [data-act="del-paper"]').click()
+                await page.locator('#ask-ok').click()
+                await expect(page.locator('#papers li[data-paper="a"]')).to_have_count(0)
+                await expect(page.locator('#agent-send')).to_be_disabled()
+                await expect(page.locator('#agent-status')).to_have_text('Source unavailable. Repair the selection before asking another question.')
+                await expect(page.locator('#agent-question')).to_have_value('Keep my question after removing this paper')
+                # Leaving the owner must cache its latest corpus, not revive a removed source.
+                await page.wait_for_function('workspaceClient.pendingMutations === 0')
+                await page.locator('#workspace').select_option(other)
+                await expect(page.locator('#workspace')).to_have_value(other)
+                await page.wait_for_function('workspace => S.workspace?.id === workspace', arg=other)
+                await expect(page.locator('#agent-send')).to_be_disabled()
+                await expect(page.locator('#agent-status')).to_have_text('Source unavailable. Repair the selection before asking another question.')
+                assert await page.evaluate('agentChats.workspace') == 'default'
+                # The existing repair controls remain usable without reopening Ask.
+                await page.locator('[data-remove-source="a"]').click()
+                await page.locator('#agent-add').click()
+                await page.locator('[data-source-paper="b"]').check()
+                await page.locator('#source-apply').click()
+                await expect(page.locator('#agent-scope')).to_contain_text('Recovery under intervention')
+                await expect(page.locator('#agent-send')).to_be_enabled()
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_closing_contextual_ask_restores_the_opener_or_falls_back(engine):
+    seed()
+    claim = store.load_paper('a')['claims'][0]
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url + '/#paper=a')
+                for selector in ['[data-paper-chat="a"]', f'[data-ask-claim="{claim["id"]}"]']:
+                    opener = page.locator(selector).first
+                    await opener.click()
+                    await expect(page.locator('#agent-question')).to_be_focused()
+                    await page.keyboard.press('Escape')
+                    await expect(opener).to_be_focused()
+                    # A saved edit replaces the button's DOM node but keeps its action.
+                    await opener.click()
+                    await page.locator('#content [data-act="edit"]').first.click()
+                    form = page.locator('form[data-form]')
+                    await form.locator('textarea[name="note"]').fill('Saved while asking from ' + selector)
+                    await form.locator('button[type="submit"]').click()
+                    await expect(form).to_have_count(0)
+                    await page.locator('#agent-question').focus()
+                    await page.keyboard.press('Escape')
+                    await expect(opener).to_be_focused()
+                await page.locator('#btn-back-library').click()
+                await page.locator('[data-select-paper="a"]').first.check()
+                await page.locator('#ask-selection').click()
+                await page.keyboard.press('Escape')
+                await expect(page.locator('#ask-selection')).to_be_focused()
+                # Navigation can retire a contextual opener while Ask remains open.
+                await page.locator('#papers li[data-paper="a"]').click()
+                await page.locator('[data-paper-chat="a"]').first.click()
+                await page.locator('#papers li[data-paper="b"]').click()
+                await page.locator('#agent-question').focus()
+                await page.keyboard.press('Escape')
+                await expect(page.locator('#btn-agent')).to_be_focused()
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_conversation_refresh_during_input_preserves_the_question(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            await page.route('**/api/ask', lambda route: route.fulfill(json={'answer': 'The question was kept.', 'assistant': 'ChatGPT'}))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                # A conversation-list response can render between native input listeners.
+                await page.evaluate("""() => document.addEventListener('input', event => {
+                    if (event.target.id === 'agent-question') agentChats.sync();
+                }, true)""")
+                await page.locator('#agent-question').fill('Keep this question through a refresh')
+                await expect(page.locator('#agent-question')).to_have_value('Keep this question through a refresh')
+                await page.locator('#agent-send').click()
+                await expect(page.locator('#agent-messages')).to_contain_text('Keep this question through a refresh')
+                await expect(page.locator('#agent-messages')).to_contain_text('The question was kept.')
+    run_browser(scenario())

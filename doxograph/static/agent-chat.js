@@ -102,7 +102,7 @@ $('agent-messages').addEventListener('click', async (event) => {
         await switchWorkspace(workspace);
         if (workspaceClient.workspaceId !== workspace) return;
       }
-      $('library-agent').close();
+      closeAsk();
       await ResearchNotes.open(message.saved_note);
     } catch (error) { message.saveError = `Could not open this note: ${error.message}`; }
     finally {
@@ -152,14 +152,17 @@ function syncAgentChatControls() {
   $('agent-status').textContent = chat.archived ? 'Archived conversation. Restore it to ask another question.' : chat.archiving ? 'Saving conversation…' : chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
 }
 
-$('btn-agent').addEventListener('click', () => {
-  openAsk(null);
+$('btn-agent').addEventListener('click', event => {
+  openAsk(null, event.currentTarget);
 });
 sendOnEnter($('agent-question'));
-$('agent-question').addEventListener('input', () => { if (activeAgentChat()) activeAgentChat().draft = $('agent-question').value; });
-$('agent-close').addEventListener('click', () => $('library-agent').close());
+// Save native input before a refresh can render between capture-phase listeners.
+window.addEventListener('input', event => {
+  if (event.target === $('agent-question') && activeAgentChat()) activeAgentChat().draft = event.target.value;
+}, true);
+$('agent-close').addEventListener('click', () => closeAsk());
 $('agent-settings').addEventListener('click', () => {
-  $('library-agent').close();
+  closeAsk();
   openSettings();
   $('ai-enabled').focus();
 });
@@ -182,6 +185,10 @@ $('agent-form').addEventListener('submit', (event) => {
 // workspace is now open behind the dialog. Never include personal note fields.
 const askCatalogs = new Map();
 let picker = null;
+function rememberAskCatalog() {
+  if (S.workspace?.id !== workspaceClient.workspaceId) return;
+  askCatalogs.set(workspaceClient.workspaceId, {papers: structuredClone(S.papers), claims: S.claims.map(c => ({paper:c.paper, id:c.id, text:c.text, quote:c.quote, locator:c.locator, tags:c.tags, reviewed:c.reviewed}))});
+}
 function catalog(workspace = agentChats.workspace) {
   if (workspace === workspaceClient.workspaceId) return S;
   return askCatalogs.get(workspace) || {papers: [], claims: []};
@@ -243,13 +250,54 @@ function renderAskScope(chat) {
     : scope.papers.length > 1 ? ['Compare methods', 'Where do their findings differ?'] : ['Explain the main result', 'What are the limitations?'];
   $('agent-starters').innerHTML = chat.messages.length ? '' : starters.map(text => `<button type="button" data-starter="${esc(text)}" ${chat.busy ? 'disabled' : ''}>${esc(text)}</button>`).join('');
 }
-async function openAsk(scope) {
-  askCatalogs.set(workspaceClient.workspaceId, {papers: structuredClone(S.papers), claims: S.claims.map(c => ({paper:c.paper, id:c.id, text:c.text, quote:c.quote, locator:c.locator, tags:c.tags, reviewed:c.reviewed}))});
+let askOpener = null, askOpenerSelector = '';
+async function openAsk(scope, opener = document.activeElement) {
+  if (!$('library-agent').contains(opener)) {
+    askOpener = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+    askOpenerSelector = askOpener?.id ? `#${CSS.escape(askOpener.id)}`
+      : askOpener?.dataset.askClaim ? `[data-ask-claim="${CSS.escape(askOpener.dataset.askClaim)}"][data-paper="${CSS.escape(askOpener.dataset.paper)}"]`
+      : askOpener?.dataset.paperChat ? `[data-paper-chat="${CSS.escape(askOpener.dataset.paperChat)}"]` : '';
+  }
+  rememberAskCatalog();
   const opening = agentChats.open(workspaceClient.workspaceId, null, scope ? {fresh: true, scope} : {});
-  if (!$('library-agent').open) $('library-agent').showModal();
+  $('library-agent').hidden = false;
+  document.body.classList.add('agent-open');
+  $('btn-agent').setAttribute('aria-expanded', 'true');
+  fitAskPane();
+  syncAskWorkspace();
   $('agent-question').focus();
   await opening;
 }
+function syncAskWorkspace() {
+  const owner = agentChats.workspace;
+  const workspace = workspaceClient.workspaces.find(workspace => workspace.id === owner);
+  $('agent-workspace').textContent = owner ? `Conversation in ${workspace?.name || owner}` : '';
+}
+function closeAsk() {
+  const restoreFocus = $('library-agent').contains(document.activeElement);
+  $('library-agent').hidden = true;
+  document.body.classList.remove('agent-open');
+  fitAskPane();
+  $('btn-agent').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) {
+    const available = control => control?.isConnected && !control.disabled && control.getClientRects().length;
+    const opener = available(askOpener) ? askOpener : askOpenerSelector
+      ? [...document.querySelectorAll(askOpenerSelector)].find(available) : null;
+    const target = opener || $('btn-agent');
+    target.focus({preventScroll: true});
+    if (document.activeElement !== target) $('btn-agent').focus({preventScroll: true});
+  }
+}
+// This pane owns its keyboard, while shortcuts elsewhere still work.
+$('library-agent').addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !document.querySelector('dialog[open]')) {
+    event.preventDefault();
+    closeAsk();
+    event.stopPropagation();
+    return;
+  }
+  if (!(event.metaKey || event.ctrlKey || event.altKey)) event.stopPropagation();
+});
 async function changeAskScope(scope) {
   const chat = activeAgentChat();
   if (!chat || chat.archived || chat.archiving) return false;
@@ -287,11 +335,11 @@ $('agent-starters').addEventListener('click', async event => {
 });
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-ask-claim]');
-  if (button) openAsk({mode:'paper', papers:[button.dataset.paper], focus:[{paper:button.dataset.paper, claim:button.dataset.askClaim}]});
+  if (button) openAsk({mode:'paper', papers:[button.dataset.paper], focus:[{paper:button.dataset.paper, claim:button.dataset.askClaim}]}, button);
 });
-$('ask-selection').addEventListener('click', () => {
+$('ask-selection').addEventListener('click', event => {
   const selection = ResearchTools.selection();
-  if (selection.papers.length) openAsk({mode: selection.papers.length === 1 ? 'paper' : 'selected', ...selection});
+  if (selection.papers.length) openAsk({mode: selection.papers.length === 1 ? 'paper' : 'selected', ...selection}, event.currentTarget);
 });
 function renderSourcePicker() {
   const q = $('source-search').value.trim().toLocaleLowerCase();

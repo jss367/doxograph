@@ -655,22 +655,56 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
   color: var(--ink); padding: 1rem; width: min(30rem, calc(100vw - 2rem));
   box-shadow: 0 10px 40px rgba(0, 0, 0, .3); }
 .sheet::backdrop { background: rgba(0, 0, 0, .35); }
-.paper-chat { width: min(46rem, 92vw); max-width: 46rem; }
-#agent-messages { max-height: 45vh; overflow-y: auto; margin: 1rem 0; }
-/* Keep the question and actions visible while reading a long library answer. */
-#library-agent { width: min(72rem, 94vw); max-width: 72rem; height: min(60rem, calc(100dvh - 2rem));
-  max-height: calc(100dvh - 2rem); overflow: hidden; }
-#library-agent[open] { display: grid; grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
-  grid-template-rows: repeat(4, auto) auto minmax(0, 1fr) auto; column-gap: 1.25rem; }
-#library-agent > .row, #library-agent > .hint, #agent-form { flex-shrink: 0; }
-#library-agent > .row:first-child, #library-agent > .hint { grid-column: 1 / -1; }
-#library-agent > .row:first-child { grid-row: 1; }
-#library-agent > .chat-threads { grid-column: 2; grid-row: 5; }
-#library-agent > .chat-conversations { grid-column: 1; grid-row: 5 / 8; overflow-y: auto;
-  border-right: 1px solid var(--line); padding-right: 1rem; }
-#agent-messages { grid-column: 2; grid-row: 6; }
-#agent-form { grid-column: 2; grid-row: 7; min-width: 0; }
-#agent-messages { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: .5rem; }
+/* Ask stays beside the library so the workspace remains interactive. */
+#library-agent { flex: 0 0 min(36vw, 34rem); min-width: 0; height: 100%;
+  display: flex; flex-direction: column; padding: 1rem; border-left: 1px solid var(--line);
+  background: var(--bg); overflow: hidden; }
+#library-agent[hidden] { display: none; }
+#library-agent h2 { font-size: 1rem; margin: 0; }
+#library-agent > .row, #library-agent > .hint, .agent-guidance { flex-shrink: 0; }
+#library-agent > .row:first-child { margin-top: 0; }
+#agent-workspace { margin: 0 0 .5rem; overflow-wrap: anywhere; }
+.agent-guidance { font-size: .78rem; max-height: 25%; overflow-y: auto; }
+.agent-guidance summary { cursor: pointer; color: var(--muted); }
+#library-agent > .chat-conversations { flex: 0 1 auto; min-height: 0;
+  max-height: min(18dvh, 10rem); overflow-y: auto; }
+#library-agent .chat-threads { gap: .4rem; font-size: .8rem; }
+#library-agent .chat-threads label { width: 100%; }
+#library-agent .chat-threads select { flex: 1; min-width: 0; max-width: 100%; width: 0; }
+#agent-messages { flex: 1 1 auto; min-height: 6rem; overflow-y: auto;
+  overscroll-behavior: contain; margin: .75rem 0 0; padding-right: .25rem; }
+#library-agent #agent-form { flex: 0 0 auto; min-height: 0; max-height: 60%; overflow-y: auto;
+  margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--line); }
+#library-agent #agent-form > .row { flex-wrap: wrap; }
+#library-agent #agent-scope { margin: .25rem 0; font-size: .8rem; }
+#library-agent #agent-scope p { margin: .25rem 0; }
+#library-agent #agent-starters { margin: .5rem 0; }
+#library-agent #agent-form button { font-size: .8rem; }
+#library-agent .chat-attachment-picker .hint { font-size: .72rem; }
+#library-agent #agent-question { min-height: 3rem; }
+#btn-agent[aria-expanded="true"] { background: var(--sel); border-color: var(--accent); }
+/* Notifications stay visible without covering the conversation composer. */
+body.agent-open:not(.agent-docked) .jobs { right: calc(min(36vw, 34rem) + 1rem); }
+body.agent-docked :is(.jobs, .toasts) { bottom: calc(50dvh + 1rem);
+  width: min(22rem, calc(50vw - 1.5rem)); max-height: calc(50dvh - 2rem); overflow-y: auto; }
+body.agent-docked #layout { margin-bottom: 50dvh; }
+body.agent-docked #library-agent { position: fixed; z-index: 10; bottom: 0; right: 0; width: 100%;
+  height: 50dvh; border-left: 0; border-top: 1px solid var(--line); }
+body.agent-docked #library-agent { display: block; overflow-y: auto; }
+body.agent-docked #library-agent > .row:first-child { position: sticky; top: -1rem; z-index: 1;
+  background: var(--bg); padding-block: .5rem; }
+body.agent-docked #library-agent #agent-messages { overflow: visible; }
+body.agent-docked #library-agent #agent-form { max-height: none; overflow: visible; }
+body.agent-docked #library-agent .agent-guidance { max-height: none; }
+/* Short panes scroll as a whole so every control remains reachable. */
+@media (max-height: 700px) {
+  #library-agent { display: block; overflow-y: auto; }
+  #library-agent > .row:first-child { position: sticky; top: -1rem; z-index: 1;
+    background: var(--bg); padding-block: .5rem; }
+  #library-agent #agent-messages { overflow: visible; }
+  #library-agent #agent-form { max-height: none; overflow: visible; }
+  #library-agent .agent-guidance { max-height: none; }
+}
 .agent-message { padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 9px; margin-bottom: .8rem; }
 .agent-question { background: var(--panel); }
 .agent-message-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-bottom: .65rem; }
@@ -773,30 +807,6 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4p
 
 .source-result input[type="checkbox"] { width:auto; margin:0 .5rem 0 0; }
 #agent-form > .row { flex-wrap:wrap; }
-#agent-messages:not(:empty) { min-height:0; }
-#library-agent { overflow-y:auto; }
-@media (max-width:800px), (max-height:700px) {
-  #library-agent[open] { display:block; }
-  #library-agent > .chat-conversations { border-right:0; padding-right:0; max-height:14rem; }
-  #agent-messages { overflow:visible; max-height:none; }
-  .chat-threads select { max-width:100%; }
-  .chat-threads label { width:100%; }
-  .chat-threads label select { flex:1; min-width:0; }
-}
-
-@media (min-width:561px) and (max-width:800px) and (min-height:701px) {
-  #library-agent[open] { display:flex; flex-direction:column; }
-  #library-agent > .chat-conversations { flex:0 0 auto; max-height:7rem; }
-  #agent-messages { overflow-y:auto; }
-  .chat-threads label { width:auto; flex:1; }
-  #agent-messages:not(:empty) { min-height:0; }
-  #library-agent > .hint { font-size:.75rem; }
-  #agent-scope { margin:.5rem 0; }
-  #agent-scope p { margin:.25rem 0; }
-  #agent-form { margin-top:.5rem; }
-  #agent-form .chat-attachment-picker { flex-wrap:nowrap; }
-  #agent-form textarea { min-height:3rem; height:3rem; }
-}
 /* Files travel with both paper and library conversations. */
 .chat-attachment-picker { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin-top: .5rem; }
 .chat-attachments { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }

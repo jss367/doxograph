@@ -1,6 +1,6 @@
 'use strict';
 
-// Saved conversations for a chat dialog: each paper's, and the library's, per workspace.
+// Saved conversations for a chat panel: each paper's, and the library's, per workspace.
 // Each conversation keeps its own agent. The page asks the model, then saves the whole
 // conversation with the revision it last saw. Unsaved answers stay in this tab until a save works.
 // If another window changed or deleted the conversation first, this tab's version becomes its own.
@@ -316,24 +316,24 @@ const ChatThreads = (() => {
       box.active.draftAttachments.splice(Number(button.dataset.removeAttachment), 1);
       sync();
     });
-    const dialog = $(`${prefix}-form`).closest('dialog');
-    for (const type of ['dragenter', 'dragover']) dialog.addEventListener(type, (event) => {
+    const panel = $(`${prefix}-form`).closest('.paper-chat');
+    for (const type of ['dragenter', 'dragover']) panel.addEventListener(type, (event) => {
       if (!Array.from(event.dataTransfer.types).includes('Files')) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = box?.active.busy ? 'none' : 'copy';
-      dialog.classList.add('chat-file-drag');
+      panel.classList.add('chat-file-drag');
     });
-    dialog.addEventListener('dragleave', (event) => { if (!dialog.contains(event.relatedTarget)) dialog.classList.remove('chat-file-drag'); });
-    dialog.addEventListener('drop', (event) => {
+    panel.addEventListener('dragleave', (event) => { if (!panel.contains(event.relatedTarget)) panel.classList.remove('chat-file-drag'); });
+    panel.addEventListener('drop', (event) => {
       if (!Array.from(event.dataTransfer.types).includes('Files')) return;
       event.preventDefault();
       event.stopPropagation();
-      dialog.classList.remove('chat-file-drag');
+      panel.classList.remove('chat-file-drag');
       document.body.classList.remove('dragging');
       addFiles(Array.from(event.dataTransfer.files));
     });
-    dialog.addEventListener('click', (event) => {
+    panel.addEventListener('click', (event) => {
       const link = event.target.closest('a[data-chat-download]');
       if (!link) return;
       event.preventDefault();
@@ -454,7 +454,7 @@ const ChatThreads = (() => {
         box.active.draftAttachments = structuredClone(draftAttachments || []);
         sync();
       },
-      // Save into the chat the conversation belongs to, even after the dialog moved on.
+      // Save into the chat the conversation belongs to, even after the panel moved on.
       save: (thread) => save([...boxes.values()].find(b => b.threads.includes(thread)) || box, thread),
       get active() { return box?.active || null; },
       get workspace() { return box?.workspace; },

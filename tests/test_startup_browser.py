@@ -1,5 +1,7 @@
 """A broken startup identifies the failing layer and offers explicit recovery."""
 
+import asyncio
+
 import pytest
 from playwright.async_api import expect
 
@@ -114,4 +116,37 @@ def test_initial_refresh_failure_requires_full_reload_before_refresh_only_retry(
                 store.save_paper(store.new_paper("newsource", title="A newly imported source"))
                 await expect(page.locator('#papers [data-paper="newsource"]')).to_be_visible(timeout=10000)
 
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_library_starts_while_the_chat_script_is_delayed(engine):
+    _paper("oversight", "Understanding model oversight")
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            release = asyncio.Event()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            async def delayed_chat(route):
+                await release.wait()
+                await route.continue_()
+
+            await page.route("**/agent-chat.js*", delayed_chat)
+            with _server() as url:
+                await page.goto(url, wait_until='commit')
+                try:
+                    await expect(page.locator('#content .library-paper')).to_contain_text('Understanding model oversight')
+                    await expect(page.locator('#startup-error')).to_be_hidden()
+                    assert await page.evaluate("typeof syncAskWorkspace") == 'undefined'
+                    assert not errors
+                finally:
+                    release.set()
+                await page.wait_for_load_state('load')
+                await page.locator('#btn-agent:enabled').click()
+                await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Default workspace')
+                assert not errors
     run_browser(scenario())

@@ -93,12 +93,15 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 if engine == 'chromium':
                     Path('.context').mkdir(exist_ok=True)
                     await page.screenshot(path='.context/library-answer.png')
-                # The composer stays inside smaller windows while only answers scroll.
+                send_box = await page.locator('#agent-send').bounding_box()
+                assert send_box['y'] + send_box['height'] <= 1100
+                # A narrow window docks the pane below the workspace; its controls remain reachable.
                 await page.set_viewport_size({'width': 640, 'height': 720})
+                await page.locator('#agent-send').scroll_into_view_if_needed()
                 send_box = await page.locator('#agent-send').bounding_box()
                 assert send_box['y'] + send_box['height'] <= 720
                 assert await page.locator('#library-agent').evaluate('el => el.scrollWidth <= el.clientWidth')
-                assert await page.locator('#agent-messages').evaluate('el => getComputedStyle(el).overflowY') == 'auto'
+                assert await page.locator('#library-agent').evaluate('el => getComputedStyle(el).overflowY') == 'auto'
                 assert (await page.locator('.chat-conversations').bounding_box())['height'] > 40
                 if engine == 'chromium':
                     await page.screenshot(path='.context/library-answer-small.png')

@@ -39,6 +39,7 @@ function setReadingLibrary(collapsed) {
   document.body.classList.toggle('library-collapsed', collapsed);
   $('btn-reader-library').textContent = collapsed ? 'Show library' : 'Hide library';
   $('btn-reader-library').setAttribute('aria-expanded', String(!collapsed));
+  fitAskPane();
   fitClaimsWidth();
 }
 
@@ -54,6 +55,18 @@ function setReadingClaims(collapsed) {
 function setReadingFilters(open) {
   document.body.classList.toggle('reading-filters-open', open);
   $('btn-reader-filters').setAttribute('aria-expanded', String(open));
+}
+
+// Dock below the workspace whenever the library, reader/editor, and Ask
+// cannot fit side by side. Keep the user's requested sidebar width intact.
+function fitAskPane() {
+  const open = document.body.classList.contains('agent-open');
+  const chatWidth = Math.min(window.innerWidth * .36,
+    34 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16));
+  const sidebarWidth = $('side').getBoundingClientRect().width;
+  const docked = open && (window.innerWidth <= 800
+    || $('layout').clientWidth - sidebarWidth - chatWidth < 560);
+  document.body.classList.toggle('agent-docked', docked);
 }
 
 // --- the width of the side pane -------------------------------------------
@@ -118,6 +131,7 @@ function fitSideWidth() {
   handle.setAttribute('aria-valuenow', String(width));
   handle.setAttribute('aria-valuemin', String(sideWidthMin()));
   handle.setAttribute('aria-valuemax', String(sideWidthMax()));
+  fitAskPane();
   return width;
 }
 
