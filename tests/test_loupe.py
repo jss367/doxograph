@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import socket
 import sys
 import threading
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -177,6 +178,18 @@ def test_launch_obeys_origin_and_workspace_guards(tmp_path, monkeypatch):
                        headers={'Origin': 'https://untrusted.example'}).status_code == 403
     assert client.post('/api/datasets/loupe', json={'source': str(path)},
                        headers={'X-Doxograph-Workspace': 'missing'}).status_code == 404
+
+
+@pytest.mark.parametrize('platform', [SimpleNamespace(name='nt'), SimpleNamespace(name='posix')])
+def test_unsupported_platform_is_rejected_before_reading_or_launching(monkeypatch, platform):
+    monkeypatch.setattr(loupe, 'os', platform)
+    monkeypatch.setattr(loupe, 'source_path', lambda _: pytest.fail('Must reject before reading data'))
+    monkeypatch.setattr(loupe.subprocess, 'Popen', lambda *a, **kw: pytest.fail('Must reject before launch'))
+    client = TestClient(server.app, base_url='http://127.0.0.1:8765')
+    response = client.post('/api/datasets/loupe', json={'source': 'C:\\data\\runs.jsonl'})
+    assert response.status_code == 501
+    assert 'macOS and Linux' in response.json()['detail']
+    assert 'start Loupe separately' in response.json()['detail']
 
 
 @pytest.mark.parametrize('survey', [False, True])

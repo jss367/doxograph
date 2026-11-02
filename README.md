@@ -596,6 +596,9 @@ writing space are stored locally in `note-images/`.
   JSON exports, and Gloom directories containing both `gloom-train.parquet` and
   `gloom-test.parquet` (either file can also be selected). Use an absolute path,
   a `~/` path, or a local `file://` URL. Download remote datasets first.
+  The integrated launcher is available on macOS and Linux. On Windows or other
+  unsupported platforms, start Loupe separately and save its URL as the dataset
+  source; **Open source** opens the viewer.
   Install [Loupe](https://github.com/jss367/loupe) at `~/git/loupe`, or set
   `DOXOGRAPH_LOUPE_DIR` to its checkout before starting Doxograph. The launcher
   uses Loupe's `.venv/bin/python` when available, otherwise `python3` from PATH;

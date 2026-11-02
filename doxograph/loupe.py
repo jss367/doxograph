@@ -115,6 +115,8 @@ atexit.register(close)
 
 
 def open_dataset(source: str) -> str:
+    if os.name != "posix" or not hasattr(os, "pread"):
+        raise HTTPException(501, "Opening datasets in Loupe from Doxograph is supported on macOS and Linux. On this platform, start Loupe separately and use its URL as the dataset source.")
     try:
         path, mode, files = dataset_mode(source_path(source))
         signature = tuple((file.stat().st_mtime_ns, file.stat().st_size) for file in files)
