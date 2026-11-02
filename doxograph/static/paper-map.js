@@ -280,6 +280,7 @@ function graphData() {
 // around the middle, and nodes that are gone are dropped. Returns whether the
 // set of nodes or edges changed, which is what warrants reheating.
 function graphSync() {
+  const hoveredNoteText = GRAPH.hover?.type === 'note' ? GRAPH.hover.text : null;
   const { nodes, edges, maxShared, minShared } = graphData();
   const signature = JSON.stringify([V.graph.xAxis, nodes.map((n) => [n.id, n.n, n.topic, n.color, n.year]),
     edges.map((e) => [e.type, e.a, e.b, e.w, e.n, e.open, e.relation])]);
@@ -304,6 +305,9 @@ function graphSync() {
   GRAPH.minShared = minShared;
   graphTimeline();
   if (GRAPH.hover && !GRAPH.nodes.has(GRAPH.hover.id)) { GRAPH.hover = null; graphTip(null); }
+  // A poll updates node objects in place, but the preview is separate HTML.
+  // Hide changed text until the next pointer move builds a fresh preview.
+  else if (GRAPH.hover?.type === 'note' && GRAPH.hover.text !== hoveredNoteText) graphTip(null);
   if (GRAPH.hoverEdge) {
     const old = GRAPH.hoverEdge;
     GRAPH.hoverEdge = GRAPH.edges.find((e) => e.type === old.type && e.a === old.a

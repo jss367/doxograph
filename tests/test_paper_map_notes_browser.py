@@ -71,6 +71,54 @@ def test_map_notes_toggle_preview_filters_timeline_and_navigation(engine):
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_map_hides_changed_note_preview_without_pointer_movement(engine):
+    _paper("paper-a", "Paper A", "recovery")
+    paper = store.load_paper("paper-a")
+    paper["notes"] = "First saved note."
+    store.save_paper(paper)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#view=graph")
+                await page.get_by_role("checkbox", name="my notes", exact=True).check()
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                node = next(n for n in graph["nodes"] if n["id"] == "n:paper-a")
+                box = await page.locator(".graph-wrap canvas").bounding_box()
+                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
+                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
+                await page.mouse.move(sx, sy)
+                tip = page.locator(".graph-tip")
+                await tip.wait_for(state="visible")
+                assert await tip.locator(".graph-note-preview").inner_text() == "First saved note."
+                await _poll(page)
+                assert await tip.is_visible()
+
+                # Another window saves while this pointer stays over the node.
+                paper = store.load_paper("paper-a")
+                paper["notes"] = "Updated note.\n<script>still inert</script>"
+                store.save_paper(paper)
+                await _poll(page)
+                assert await tip.is_hidden()
+
+                await page.mouse.move(sx + 1, sy)
+                await tip.wait_for(state="visible")
+                assert await tip.locator(".graph-note-preview").inner_text() == paper["notes"]
+                assert await tip.locator("script").count() == 0
+
+                paper["notes"] = ""
+                store.save_paper(paper)
+                await _poll(page)
+                assert await tip.is_hidden()
+                assert not await page.evaluate("GRAPH.nodes.has('n:paper-a')")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_map_notes_follow_saved_updates_and_reset_between_workspaces():
     _paper("shared", "Default paper", "recovery")
     other = config.create_workspace("Other")
