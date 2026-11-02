@@ -185,7 +185,7 @@ function addedLabel(p) {
   return `<time datetime="${esc(p.added)}" title="added ${esc(p.added)}">${esc(day)}</time>`;
 }
 
-let importWorkspace = null, importPaperCount = 0;
+let importWorkspace = null, importPaperCount = 0, papersHTML = null;
 function renderPapers() {
   if (!$('refs').value.trim()) {
     if (importWorkspace !== workspaceClient.workspaceId) $('paper-import').open = S.papers.length === 0;
@@ -211,7 +211,7 @@ function renderPapers() {
   const all = `<li class="${(claims || V.view === 'library') && V.paper === null ? 'active' : ''}" data-paper="">
     <span class="pt">All papers</span>
     <span class="pm">${meta}</span></li>`;
-  $('papers').innerHTML = all + sortedPapers(shown, V.paperSort).map((p) => `
+  const html = all + sortedPapers(shown, V.paperSort).map((p) => `
     <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
       ${ResearchTools.paperCheckbox(p)}<span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
@@ -222,6 +222,11 @@ function renderPapers() {
       <button type="button" class="pmenu" data-menu="${esc(p.key)}"
         aria-label="Actions for ${esc(p.title || p.key)}" title="Actions">⋯</button>
     </li>`).join('');
+  // A text-search result can arrive between pointerdown and pointerup.
+  // Keep unchanged rows mounted so that the click still reaches its target.
+  if (html === papersHTML) return;
+  papersHTML = html;
+  $('papers').innerHTML = html;
 }
 
 function paperHeader(key, reading = false) {
