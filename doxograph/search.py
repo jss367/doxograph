@@ -20,7 +20,9 @@ import os
 import re
 import threading
 import unicodedata
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 from . import config, quotes, store
 
@@ -53,7 +55,7 @@ except ValueError:
     TEXT_BUDGET = 64_000_000
 
 
-def _query_words(text: str):
+def _query_words(text: str) -> Iterator[str]:
     r"""The words of a query, counting a mark as part of the word it sits on.
 
     `\w` does not match a combining mark, and in a script whose vowels are
@@ -100,7 +102,7 @@ def fold(text: str) -> str:
     return fold_with_offsets(text)[0]
 
 
-def fold_with_offsets(text: str) -> tuple[str, array.array]:
+def fold_with_offsets(text: str) -> tuple[str, array.array[int]]:
     """`fold(text)`, with the index in `text` each folded character came from.
 
     Folding is not one character in, one out: ß folds to ss, İ to an i and a
@@ -135,7 +137,7 @@ def fold_with_offsets(text: str) -> tuple[str, array.array]:
     return "".join(folded), offsets
 
 
-def _stored(key: str):
+def _stored(key: str) -> tuple[Path, os.stat_result] | None:
     """The file holding a paper's text and its identity, reading the PDF when
     there is no text or the text is older than it. None when there is nothing
     to read.
@@ -155,7 +157,7 @@ def _stored(key: str):
         fresh = stored is not None and stored.st_mtime_ns > store.pdf_path(key).stat().st_mtime_ns
     except OSError:
         fresh = stored is not None      # no PDF for it to be older than
-    if not fresh:
+    if not fresh or stored is None:     # fresh implies stored; this says so to mypy
         if quotes.paper_text(store.pdf_path(key), path, lambda: store.paper_lock(key)) is None:
             return None
         try:
@@ -269,7 +271,7 @@ _IN_WORD = rf"[\w{_MARKS}]"
 _IN_WORD_CHAR = re.compile(_IN_WORD)
 
 
-def _pattern(term: str) -> re.Pattern:
+def _pattern(term: str) -> re.Pattern[str]:
     """A term matches from the start of a word, where words have starts.
 
     Both the term and the paper are folded before they meet, so case is
@@ -288,7 +290,7 @@ def _pattern(term: str) -> re.Pattern:
     return re.compile(rf"(?<!{_IN_WORD})({folded}{_IN_WORD}*)", re.UNICODE)
 
 
-def search_papers(query: str, limit: int = 20, offset: int = 0, paper_keys: list[str] | None = None) -> list[dict]:
+def search_papers(query: str, limit: int = 20, offset: int = 0, paper_keys: list[str] | None = None) -> list[dict[str, Any]]:
     """The papers whose text holds every term, best first.
 
     Each hit carries where the terms are: a couple of passages with the page
@@ -352,7 +354,7 @@ def search_papers(query: str, limit: int = 20, offset: int = 0, paper_keys: list
     ]
 
 
-def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
+def _passages(raw: str, patterns: list[re.Pattern[str]]) -> list[dict[str, Any]]:
     """A few places in the paper where the terms are, in the paper's own words.
 
     The earliest occurrences, dropping one that lands inside a passage already
@@ -367,7 +369,7 @@ def _passages(raw: str, patterns: list[re.Pattern]) -> list[dict]:
     found = [pattern.finditer(text) for pattern in patterns]
     taken: list[list[tuple[int, int]]] = [[] for _ in patterns]
 
-    def place(which: int, nth: int):
+    def place(which: int, nth: int) -> tuple[int, int] | None:
         """The `nth` match of a term, or None once they run out."""
         while len(taken[which]) <= nth:
             match = next(found[which], None)
@@ -477,10 +479,10 @@ def _inside(raw: str, at: int) -> bool:
     if left == right or not raw[left:right].strip("\u00ad"):
         return True
     joined = quotes.LINE_HYPHEN.match(raw, left)
-    return bool(joined) and joined.end() == right
+    return joined is not None and joined.end() == right
 
 
-def _parts(shown: str, patterns: list[re.Pattern]) -> list[dict]:
+def _parts(shown: str, patterns: list[re.Pattern[str]]) -> list[dict[str, Any]]:
     """A passage as alternating pieces: `{"text": ..., "mark": bool}`.
 
     The marked ones are where the terms are. Overlapping matches are merged,
@@ -505,7 +507,7 @@ def _parts(shown: str, patterns: list[re.Pattern]) -> list[dict]:
             merged[-1][1] = max(merged[-1][1], span[1])
         else:
             merged.append(span)
-    parts: list[dict] = []
+    parts: list[dict[str, Any]] = []
     last = 0
     for begin, end in merged:
         if begin > last:

@@ -19,9 +19,10 @@ import time
 import unicodedata
 import html as html_module
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -214,7 +215,7 @@ def _arxiv_back_off(seconds: float) -> None:
         _arxiv_gate.notify_all()
 
 
-def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
+def query_arxiv(params: dict[str, Any], client: httpx.Client) -> httpx.Response:
     """Query the arXiv API, waiting out a refusal rather than raising it."""
     for attempt in range(ARXIV_ATTEMPTS):
         _arxiv_turn()
@@ -234,7 +235,7 @@ def query_arxiv(params: dict, client: httpx.Client) -> httpx.Response:
         f"over {waited} seconds; it is rate-limiting us. Try again shortly.")
 
 
-def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict:
+def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict[str, Any]:
     bare = re.sub(r"v\d+$", "", arxiv_id)
     response = query_arxiv({"id_list": bare, "max_results": 1}, client)
     entry = ET.fromstring(response.text).find(f"{ATOM}entry")
@@ -270,7 +271,7 @@ def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict:
     }
 
 
-def fetch_crossref(doi: str, client: httpx.Client) -> dict:
+def fetch_crossref(doi: str, client: httpx.Client) -> dict[str, Any]:
     # Crossref answers 404 for an arXiv DOI. One can still arrive here from a
     # landing page's metadata or a PDF's, and arXiv has the record.
     arxiv = re.fullmatch(ARXIV_DOI_RE, doi, re.I)
@@ -330,7 +331,7 @@ def _meta_content(html: str, *names: str) -> str | None:
     """
     tags = []
     for tag in _META_TAG.findall(html):
-        attributes = {}
+        attributes: dict[str, str] = {}
         for key, value in _TAG_ATTRIBUTE.findall(tag):
             if value[:1] in "\"'":
                 value = value[1:-1]
@@ -362,7 +363,7 @@ def _head(html: str) -> str:
     """
     start = _HEAD_OPEN.search(html)
     end = start and _HEAD_CLOSE.search(html, start.start())
-    return html[start.start():end.end()] if end else html[:20_000]
+    return html[start.start():end.end()] if start and end else html[:20_000]
 
 
 def _elements(tag: str, html: str) -> list[str]:
@@ -429,7 +430,7 @@ def _bibtex_entries(text: str) -> list[dict[str, str]]:
     return entries
 
 
-def _live_starts(text: str):
+def _live_starts(text: str) -> Iterator[re.Match[str]]:
     """Each `@name{` in `text` that is not commented out.
 
     A page may keep a stale entry, identifier and all, on a line commented out
@@ -447,7 +448,7 @@ def _live_starts(text: str):
         line = text.rfind("\n", seen, start.start()) + 1
         if line or not seen:
             # The indent stops at this entry's `@` at the latest.
-            commented = text.startswith("%", _LINE_INDENT.match(text, line).end())
+            commented = text.startswith("%", _LINE_INDENT.match(text, line).end())  # type: ignore[union-attr]  # `[ \t]*` matches anywhere
         seen = start.start()
         if seen < hidden or commented:
             continue
@@ -467,7 +468,7 @@ def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:
     entry, is what keeps `url={https://example.org/?eprint=2510.09023}` from
     also reading as an eprint field naming some other paper.
     """
-    fields = {}
+    fields: dict[str, str] = {}
     while field := _BIBTEX_FIELD.search(text, i, end):
         # A `%` between fields comments out the rest of its line, and a field
         # commented out that way is often a stale identifier kept for the
@@ -487,6 +488,7 @@ def _bibtex_fields(text: str, i: int, end: int) -> dict[str, str]:
             value, i = text[i + 1:close], close + 1
         else:
             bare = _BIBTEX_BARE.match(text, i, end)
+            assert bare is not None  # `[^,}]*` matches anywhere, if only emptily
             value, i = bare.group(0), bare.end()
         fields.setdefault(field.group(1).lower(), value.strip())
     return fields
@@ -820,7 +822,7 @@ def title_is_in_the_front_matter(title: str, text: str) -> bool:
     return needle[:60] in haystack
 
 
-def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = None) -> dict:
+def guess_from_pdf(path: Path, client: httpx.Client, display_name: str | None = None) -> dict[str, Any]:
     """Try arXiv ID, then DOI, then fall back to the filename as a title.
 
     Both identifiers have to come from the file's own front matter rather than
@@ -910,7 +912,7 @@ def pdf_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def pdf_fingerprint(path: Path) -> dict:
+def pdf_fingerprint(path: Path) -> dict[str, Any]:
     """What identifies a PDF on disk: the stat that says whether it changed,
     and the hash that says which paper it is.
 
@@ -953,7 +955,8 @@ def stored_digest(key: str) -> str:
         fresh = pdf_fingerprint(path)
         paper["pdf_file"] = fresh
         store.save_paper(paper)
-        return fresh["sha256"]
+        sha256: str = fresh["sha256"]
+        return sha256
 
 
 def find_by_digest(digest: str) -> str | None:
@@ -1038,7 +1041,7 @@ def _ssl_context() -> ssl.SSLContext:
     `urllib` does, and the CDN serves it.
     """
     context = httpx.create_ssl_context()
-    context.set_alpn_protocols = lambda protocols: None
+    context.set_alpn_protocols = lambda protocols: None  # type: ignore[method-assign, assignment]  # disabled on purpose
     return context
 
 
@@ -1047,7 +1050,7 @@ def _client() -> httpx.Client:
         timeout=TIMEOUT, verify=_ssl_context(), headers={"User-Agent": USER_AGENT})
 
 
-def source_identity(source: dict) -> tuple[str, str] | None:
+def source_identity(source: dict[str, Any]) -> tuple[str, str] | None:
     """A comparable identity for a source, with arXiv versions collapsed.
 
     `fetch_arxiv` already treats 2602.06941, v1 and v2 as one record, so
@@ -1070,19 +1073,21 @@ def source_identity(source: dict) -> tuple[str, str] | None:
     return (kind, value.lower())
 
 
-def find_existing(meta: dict) -> str | None:
+def find_existing(meta: dict[str, Any]) -> str | None:
     """Match on arXiv ID or DOI so re-pasting a reference does not duplicate it."""
     identity = source_identity(meta.get("source") or {})
     doi = normalize_doi(meta.get("doi") or "").lower()
     for paper in store.all_papers():
         if identity and source_identity(paper.get("source") or {}) == identity:
-            return paper["key"]
+            key: str = paper["key"]
+            return key
         if doi and normalize_doi(paper.get("doi") or "").lower() == doi:
-            return paper["key"]
+            key = paper["key"]
+            return key
     return None
 
 
-def ref_source(ref: Ref) -> dict:
+def ref_source(ref: Ref) -> dict[str, Any]:
     """The `source` this reference would be stored under, before any lookup.
 
     An arXiv ID, a DOI, a direct PDF link and a forum post each state an
@@ -1163,7 +1168,8 @@ def ingest_ref(ref: Ref, client: httpx.Client | None = None) -> tuple[str, bool]
             """Download or set this paper's PDF and attach it. False if the paper went away."""
             if post_html is not None:
                 return publish_pdf(key, posts.render_to_staging(meta, post_html, client))
-            return download_pdf(pdf_url, key, client)
+            # Called only when `has_pdf`, so without post HTML there is a PDF URL.
+            return download_pdf(pdf_url, key, client)  # type: ignore[arg-type]
 
         with store.claim_lock():
             existing = find_existing(meta)

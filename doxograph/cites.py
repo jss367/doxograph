@@ -18,6 +18,8 @@ import re
 import threading
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from . import quotes, search, store
 
@@ -63,7 +65,7 @@ _HEADING_LETTERS = 40
 # citation of it; twenty letters does not.
 _TITLE_FLOOR = 20
 
-_cache: dict[str, list[dict]] = {}
+_cache: dict[str, list[dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
 
 
@@ -112,7 +114,7 @@ _BARE = re.compile(r"\d{1,3}")
 _DIGITS = re.compile(r"\d+")
 
 
-def _marks(listing: str) -> list[re.Match]:
+def _marks(listing: str) -> list[re.Match[str]]:
     """Where a list numbers its entries, the pages' own numbers left out.
 
     A bare number at the head or the foot of a page may be the folio: nothing
@@ -129,7 +131,7 @@ def _marks(listing: str) -> list[re.Match]:
     # and no counting can tell a folio that happens to fall where the next
     # marker would from the marker itself.
     delimited = any(not _BARE.fullmatch(mark.group().strip()) for mark in found)
-    kept: list[re.Match] = []
+    kept: list[re.Match[str]] = []
     for mark in found:
         if _BARE.fullmatch(mark.group().strip()):
             if delimited:
@@ -142,12 +144,14 @@ def _marks(listing: str) -> list[re.Match]:
     return kept
 
 
-def _numbered(mark: re.Match) -> int:
+def _numbered(mark: re.Match[str]) -> int:
     """The number a marker carries."""
-    return int(_DIGITS.search(mark.group()).group())
+    number = _DIGITS.search(mark.group())
+    assert number is not None  # every entry marker holds digits
+    return int(number.group())
 
 
-def _at_a_page_edge(listing: str, mark: re.Match) -> bool:
+def _at_a_page_edge(listing: str, mark: re.Match[str]) -> bool:
     """Whether a marker has nothing but a page break on one side of it."""
     before = listing.rfind(quotes.PAGE_BREAK, 0, mark.start())
     after = listing.find(quotes.PAGE_BREAK, mark.end())
@@ -233,7 +237,7 @@ def _points_at_a_page(lines: list[str], start: int, page: int) -> bool:
         if not line.strip():
             continue
         number = _PAGE_NUMBER.match(line.rstrip("\n\r\f"))
-        return bool(number) and int(number.group(1)) > page
+        return number is not None and int(number.group(1)) > page
     return False
 
 
@@ -289,7 +293,7 @@ def _reads_as_heading(letters: str) -> bool:
             or ("cited" in said and any(word in _CITED_ANCHORS for word in said)))
 
 
-def title_mark(paper: dict) -> str:
+def title_mark(paper: dict[str, Any]) -> str:
     """The squashed title, where it is long enough to name a paper on its own.
 
     Empty for a short title, and a paper left with nothing but its identifiers
@@ -324,7 +328,7 @@ class Names:
         return list(dict.fromkeys(mark for mark in (*self.identifiers, self.title) if mark))
 
 
-def names(paper: dict) -> Names:
+def names(paper: dict[str, Any]) -> Names:
     """What to look for in a reference list to find this paper named.
 
     An arXiv id and a DOI are near enough unique on their own. A title is not,
@@ -343,7 +347,7 @@ def names(paper: dict) -> Names:
     written += [str(value) for value in
                 (paper.get("doi"), source.get("id") if source.get("kind") == "doi" else "")
                 if value]
-    printed = {}
+    printed: dict[str, str] = {}
     for value in written:
         mark = quotes.squash(value)
         if mark:
@@ -352,19 +356,19 @@ def names(paper: dict) -> Names:
                  identifiers=tuple(printed), printed=printed)
 
 
-def fingerprints(paper: dict) -> list[str]:
+def fingerprints(paper: dict[str, Any]) -> list[str]:
     """Every mark a paper can be found by, identifiers first."""
     return names(paper).all
 
 
-def edges(papers: list[dict] | None = None) -> list[dict]:
+def edges(papers: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Every `{"from": key, "to": key}` where one paper's references name another.
 
     The answer is cached against the corpus and the extracted text, both of
     which it is read from, so the map can ask for it on every opening.
     """
     given = papers is not None
-    papers = papers if given else store.all_papers()
+    papers = papers if papers is not None else store.all_papers()
     named = _named_signature(papers)
     with _cache_lock:
         hit = _cache.get(f"{named}:{_read_signature(
@@ -372,7 +376,7 @@ def edges(papers: list[dict] | None = None) -> list[dict]:
     if hit is not None:
         return hit
     marks = {paper["key"]: names(paper) for paper in papers}
-    read: dict[str, tuple | None] = {}
+    read: dict[str, tuple[_Stat, _Stat] | None] = {}
     found = []
     for paper in papers:
         # The state each paper's text was in when it was read. A PDF arriving
@@ -457,7 +461,7 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
     claims: dict[str, tuple[list[int], int, int]] = {}
     covers: dict[str, list[tuple[int, int]]] = {}
     fallbacks: dict[str, tuple[list[int], int]] = {}
-    where: dict[tuple, list[int]] = {}
+    where: dict[tuple[str, bool, bool, str], list[int]] = {}
 
     def places(mark: str, identifier: bool, versioned: bool = False,
                printed: str = "") -> list[int]:
@@ -546,34 +550,34 @@ def _cited_in(key: str, entry: quotes.Text, marks: dict[str, Names],
 
     # A paper whose every title printing is inside somebody else's title is
     # still cited where the entry names it by an identifier.
-    for other, (places, width) in fallbacks.items():
+    for other, (spots, width) in fallbacks.items():
         if all(swallowed(other, at, claims[other][1]) for at in claims[other][0]):
-            claims[other] = (places, width, 1)
+            claims[other] = (spots, width, 1)
 
     cited: set[str] = set()
     twins: dict[tuple[int, int], list[str]] = {}
-    for other, (places, width, _) in claims.items():
-        for at in places:
+    for other, (spots, width, _) in claims.items():
+        for at in spots:
             # Inside a longer claim of somebody else's: part of that citation.
             if swallowed(other, at, width):
                 continue
             twins.setdefault((at, width), []).append(other)
-    for named_by in twins.values():
-        best = max(claims[other][2] for other in named_by)
+    for claimants in twins.values():
+        best = max(claims[other][2] for other in claimants)
         # An identifier says which of two same-titled papers an entry means —
         # unless this stretch is a whole bibliography that could not be cut
         # into entries, where the identifier sits beside one printing of the
         # title and we cannot see which. As many printings as claimants means
         # each of them has one, and all are cited.
-        printings = min(len(claims[other][0]) for other in named_by)
-        spoken_for = sum(1 for other in named_by if claims[other][2] == best)
+        printings = min(len(claims[other][0]) for other in claimants)
+        spoken_for = sum(1 for other in claimants if claims[other][2] == best)
         if printings > spoken_for:
             # More printings of the title than there are papers an identifier
             # accounts for: the rest cite one of the others, and nothing here
             # says which, so none of them is dropped.
-            cited |= set(named_by)
+            cited |= set(claimants)
         else:
-            cited |= {other for other in named_by if claims[other][2] == best}
+            cited |= {other for other in claimants if claims[other][2] == best}
     return cited
 
 
@@ -760,7 +764,7 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     # for either ending. Where it finishes with a letter, what follows is the
     # entry's own punctuation — a full stop or a comma — except for the marks
     # no sentence ends with, which say the identifier went on.
-    finish = _FINISH.search(printed).group() if printed else ""
+    finish = _FINISH.search(printed).group() if printed else ""  # type: ignore[union-attr]  # `_FINISH` matches any string at its end
     if finish:
         if _shape(rest[:len(finish)]) != _shape(finish):
             return False
@@ -776,8 +780,8 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
     # punctuation that is: `.bar` of `10.1234/foo.bar`, `/(2)` of
     # `10.1234/foo/(2)`. The run stops at the comma or the space an entry goes
     # on with, so a DOI at the end of what it is cited by reads whole.
-    run = _IDENTIFIER_RUN.match(rest)
-    if run and any(char.isalnum() for char in run.group()):
+    more = _IDENTIFIER_RUN.match(rest)
+    if more and any(char.isalnum() for char in more.group()):
         return False
     begin = entry.offsets[at]
     lead = entry.raw[:begin]
@@ -820,7 +824,7 @@ def _whole(entry: quotes.Text, at: int, width: int, versioned: bool = False,
 
 def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
     """Where a mark falls in a stretch of a reference list, up to `cap` places."""
-    places = []
+    places: list[int] = []
     at = entry.find(mark)
     while at >= 0 and len(places) < cap:
         places.append(at)
@@ -828,7 +832,7 @@ def _occurrences(entry: str, mark: str, cap: int = 20) -> list[int]:
     return places
 
 
-def _named_signature(papers: list[dict]) -> str:
+def _named_signature(papers: list[dict[str, Any]]) -> str:
     """The names every paper can be cited by, and nothing else.
 
     Half of what the citations are read from; `_read_signature` is the other
@@ -850,7 +854,11 @@ def _named_signature(papers: list[dict]) -> str:
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def _identity(key: str) -> tuple:
+#: A file's size, time and inode, or `()` where there is no file.
+_Stat = tuple[()] | tuple[int, int, int]
+
+
+def _identity(key: str) -> tuple[_Stat, _Stat]:
     """A paper's stored text and the PDF behind it, each as it stands now.
 
     The PDF as well as the text, because a hit answers without reading a
@@ -861,7 +869,7 @@ def _identity(key: str) -> tuple:
     return (_stat(store.text_path(key)), _stat(store.pdf_path(key)))
 
 
-def _stat(path) -> tuple:
+def _stat(path: Path) -> _Stat:
     """A file as it stands, or nothing where there is no file."""
     try:
         st = path.stat()
@@ -870,7 +878,7 @@ def _stat(path) -> tuple:
     return (st.st_size, st.st_mtime_ns, st.st_ino)
 
 
-def _read_signature(read: dict) -> str:
+def _read_signature(read: dict[str, Any]) -> str:
     """The text a scan read, named by what each paper's text was at the time.
 
     What the citations were read from, and the other half of the cache key.

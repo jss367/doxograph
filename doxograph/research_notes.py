@@ -6,7 +6,7 @@ import io
 import re
 import uuid
 import warnings
-from typing import Annotated
+from typing import Annotated, Any
 from collections.abc import Callable
 from urllib.parse import urljoin
 
@@ -50,7 +50,7 @@ class RevisionCounters(RootModel[dict[NoteId, Annotated[int, Field(ge=1)]]]):
     root: dict[NoteId, Annotated[int, Field(ge=1)]] = Field(default_factory=dict)
 
 
-def remember_revisions(notes: list[dict]) -> None:
+def remember_revisions(notes: list[dict[str, Any]]) -> None:
     """Keep revision floors for notes that deletion or restoration can remove."""
     with store.document_lock('research-notes'):
         path = config.data_dir() / REVISION_FILE
@@ -67,36 +67,37 @@ def next_revision(note_id: str, floor: int = 0) -> int:
     with store.document_lock('research-notes'):
         path = config.data_dir() / REVISION_FILE
         counters = storage.read_model(path, RevisionCounters).model_dump()
-        revision = max(counters.get(note_id, 0), floor) + 1
+        revision: int = max(counters.get(note_id, 0), floor) + 1
         counters[note_id] = revision
         store.write_json(path, counters)
         return revision
 
 
-def load() -> list[dict]:
-    return storage.read_model(config.data_dir() / "research-notes.json", SavedNotes).model_dump()
+def load() -> list[dict[str, Any]]:
+    notes: list[dict[str, Any]] = storage.read_model(config.data_dir() / "research-notes.json", SavedNotes).model_dump()
+    return notes
 
 
-def find(notes: list[dict], note_id: str) -> dict:
+def find(notes: list[dict[str, Any]], note_id: str) -> dict[str, Any]:
     note = next((n for n in notes if n["id"] == note_id), None)
     if note is None:
         raise HTTPException(404, "This research note no longer exists.")
     return note
 
 
-def check_revision(note: dict, revision: int) -> None:
+def check_revision(note: dict[str, Any], revision: int) -> None:
     if note["revision"] != revision:
         raise HTTPException(409, "This note changed in another window. Your writing is still here. Reload the saved version to compare before saving.")
 
 
 @router.get("")
-def list_notes() -> dict:
+def list_notes() -> dict[str, Any]:
     return {"notes": load()}
 
 
 @router.post("", status_code=201)
 def create_note(body: NoteBody,
-                operation_id: Annotated[NoteId | None, Header(alias="Idempotency-Key")] = None) -> dict:
+                operation_id: Annotated[NoteId | None, Header(alias="Idempotency-Key")] = None) -> dict[str, Any]:
     if not body.title.strip():
         raise HTTPException(422, "Give your note a title.")
     with store.document_lock("research-notes"):
@@ -115,7 +116,7 @@ def create_note(body: NoteBody,
 
 
 @router.put("/{note_id}")
-def update_note(note_id: NoteId, body: NoteUpdate) -> dict:
+def update_note(note_id: NoteId, body: NoteUpdate) -> dict[str, Any]:
     if not body.title.strip():
         raise HTTPException(422, "Give your note a title.")
     with store.document_lock("research-notes"):
@@ -129,7 +130,7 @@ def update_note(note_id: NoteId, body: NoteUpdate) -> dict:
 
 
 @router.delete("/{note_id}")
-def delete_note(note_id: NoteId, revision: Annotated[int, Query(ge=1)]) -> dict:
+def delete_note(note_id: NoteId, revision: Annotated[int, Query(ge=1)]) -> dict[str, Any]:
     with store.document_lock("research-notes"):
         notes = load()
         check_revision(find(notes, note_id), revision)
@@ -150,16 +151,17 @@ def rewrite_research_links(body: str, transform: Callable[[str], str]) -> str:
         r"|(?P<prefix>\]\([ \t]*<?|^[ ]{0,3}\[[^\]\n]+\]:[ \t]*<?)"
         r"(?P<url>/(?:api/research-notes/images/|pdf/|[?#])[^\s)>]*)", re.MULTILINE)
 
-    def replace(match):
+    def replace(match: re.Match[str]) -> str:
         if match.group("code") is not None:
             return match.group()
         return match.group("prefix") + transform(match.group("url"))
 
-    output, prose = [], []
-    fence = None
-    list_indents = []
+    output: list[str] = []
+    prose: list[str] = []
+    fence: str | None = None
+    list_indents: list[int] = []
 
-    def flush():
+    def flush() -> None:
         output.append(destinations.sub(replace, "".join(prose)))
         prose.clear()
 
@@ -217,7 +219,7 @@ def export_draft(body: NoteBody, request: Request) -> Response:
 
 
 @router.post("/images", status_code=201)
-async def upload_image(file: UploadFile) -> dict:
+async def upload_image(file: UploadFile) -> dict[str, Any]:
     content = await file.read(MAX_IMAGE_BYTES + 1)
     if len(content) > MAX_IMAGE_BYTES:
         raise HTTPException(413, "Choose an image smaller than 10 MB.")
@@ -225,7 +227,7 @@ async def upload_image(file: UploadFile) -> dict:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(content)) as image:
-                extension = {"PNG": "png", "JPEG": "jpg", "GIF": "gif", "WEBP": "webp"}.get(image.format)
+                extension = {"PNG": "png", "JPEG": "jpg", "GIF": "gif", "WEBP": "webp"}.get(image.format or "")
                 if not extension:
                     raise ValueError("Unsupported image format")
                 image.verify()

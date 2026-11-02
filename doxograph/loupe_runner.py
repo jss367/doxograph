@@ -7,12 +7,14 @@ and embedded documents retain Loupe's original request checks.
 import importlib.util
 from pathlib import Path
 import sys
+from typing import Any
 from urllib.parse import urlsplit
 
 
-def navigation_handler(base, root, survey):
-    class Handler(base):
-        def do_GET(self):
+def navigation_handler(base: type[Any], root: Path, survey: bool) -> type[Any]:
+    # `base` is the handler class Loupe's untyped server builds at runtime.
+    class Handler(base):  # type: ignore[misc]
+        def do_GET(self) -> Any:
             if (urlsplit(self.path).path in {'/', '/index.html'}
                     and self.headers.get('Sec-Fetch-Mode') == 'navigate'
                     and self.headers.get('Sec-Fetch-Dest') == 'document'
@@ -26,7 +28,7 @@ def navigation_handler(base, root, survey):
     return Handler
 
 
-def main():
+def main() -> None:
     server = Path(sys.argv[1])
     sys.argv = sys.argv[1:]
     sys.path.insert(0, str(server.parent))
@@ -38,10 +40,10 @@ def main():
     spec.loader.exec_module(module)
     make_handler = module.make_handler
 
-    def linked_handler(*args, **kwargs):
+    def linked_handler(*args: Any, **kwargs: Any) -> type[Any]:
         return navigation_handler(make_handler(*args, **kwargs), server.parent, '--survey' in sys.argv)
 
-    module.make_handler = linked_handler
+    module.make_handler = linked_handler  # type: ignore[attr-defined]  # Loupe's module, loaded from a path
     module.main()
 
 

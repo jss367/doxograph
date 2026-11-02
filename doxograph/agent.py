@@ -12,6 +12,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from . import ask_context, claude_code, codex_cli, config
 from .model_errors import InputTooLargeError, ModelSetupError
@@ -59,7 +60,7 @@ def library_server(url: str, workspace: str, *, paper: str | None = None) -> cod
     # Run the same code as this server, not whichever `doxograph` the environment finds first.
     capture = ask_context.active.get()
     extra = ["--papers", paper] if paper else []
-    enabled = TOOLS
+    enabled: tuple[str, ...] = TOOLS
     if paper:
         enabled = tuple(t for t in TOOLS if t != "list_topics")
     if capture:
@@ -89,7 +90,7 @@ def command(binary: str, url: str, workspace: str, focus: str | None) -> list[st
             "--no-session-persistence"]
 
 
-def activity(events: list[dict]) -> list[str]:
+def activity(events: list[dict[str, Any]]) -> list[str]:
     """One short line per library operation the agent made, in order."""
     prefix = f"mcp__{SERVER}__"
     lines = []
@@ -116,7 +117,7 @@ def activity(events: list[dict]) -> list[str]:
     return lines
 
 
-def _activity_detail(tool: str, args: dict) -> str:
+def _activity_detail(tool: str, args: dict[str, Any]) -> str:
     if tool == "update_paper_labels":
         # Failed validation still appears in the provider's tool-call events.
         def names(field: str) -> str:
@@ -128,7 +129,7 @@ def _activity_detail(tool: str, args: dict) -> str:
 
 
 @config.bind_model_access
-def answer(messages: list[dict], callback_url: Callable[[], str], focus: str | None = None) -> dict:
+def answer(messages: list[dict[str, Any]], callback_url: Callable[[], str], focus: str | None = None) -> dict[str, Any]:
     """`callback_url` is called once the cheap checks pass, since it probes the running app."""
     config.require_ai_enabled()
     if config.ai_provider() not in ("claude_code", "codex"):
@@ -163,7 +164,7 @@ def answer(messages: list[dict], callback_url: Callable[[], str], focus: str | N
             raise ValueError("Expected JSON objects")
     except ValueError as exc:
         raise RuntimeError("Claude Code returned an unreadable response. Update Claude Code and retry.") from exc
-    final = next((e for e in reversed(events) if e.get("type") == "result"), {})
+    final: dict[str, Any] = next((e for e in reversed(events) if e.get("type") == "result"), {})
     text = final.get("result")
     if result.returncode or final.get("is_error") or not isinstance(text, str) or not text.strip():
         detail = final.get("result") or "; ".join(final.get("errors") or [])

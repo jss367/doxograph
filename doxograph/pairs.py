@@ -18,6 +18,7 @@ import os
 import re
 import unicodedata
 from collections.abc import Iterable
+from typing import Any
 
 from .store import STOPWORDS
 
@@ -33,6 +34,8 @@ def _floor(setting: str | None) -> float:
     that every pair is alike, above it none is, and `nan` compares false with
     everything, so a corpus would come back with no suggestions and nothing to
     say why."""
+    if setting is None:
+        return _DEFAULT_FLOOR
     try:
         wanted = float(setting)
     except (TypeError, ValueError):
@@ -127,7 +130,7 @@ def _undoubled(word: str) -> str:
     return word
 
 
-def words(row: dict) -> frozenset[str]:
+def words(row: dict[str, Any]) -> frozenset[str]:
     """The content words of a claim: its text and its evidence, stemmed.
 
     Evidence is in because it names the models, datasets and metrics, which is
@@ -151,7 +154,7 @@ def words(row: dict) -> frozenset[str]:
     return frozenset(found)
 
 
-def weights(rows: Iterable[dict]) -> dict[str, float]:
+def weights(rows: Iterable[dict[str, Any]]) -> dict[str, float]:
     """How much each word counts: rarer across the corpus, worth more.
 
     Over the whole corpus rather than one topic, so a word that is everywhere
@@ -191,8 +194,8 @@ def similarity(a: frozenset[str], b: frozenset[str], weight: dict[str, float]) -
     return sum(weight.get(word, 1.0) ** 2 for word in shared) / (_norm(a, weight) * _norm(b, weight))
 
 
-def similar_to(claim_id: str, rows: list[dict], weight: dict[str, float] | None = None,
-               limit: int = 5, floor: float = FLOOR) -> list[dict]:
+def similar_to(claim_id: str, rows: list[dict[str, Any]], weight: dict[str, float] | None = None,
+               limit: int = 5, floor: float = FLOOR) -> list[dict[str, Any]]:
     """The claims from other papers that most resemble one claim.
 
     This is a suggestion and nothing more. It does not decide what the tensions

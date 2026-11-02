@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from . import posts, store
 
@@ -77,7 +78,7 @@ def author_field(authors: list[str] | None) -> str:
     ) or "Unknown"
 
 
-def entry(paper: dict) -> str:
+def entry(paper: dict[str, Any]) -> str:
     source = paper.get("source") or {}
     fields = [
         ("title", escape(paper.get("title", ""))),
@@ -110,7 +111,7 @@ def entry(paper: dict) -> str:
     return f"@{kind}{{{paper['key']},\n{body}\n}}"
 
 
-def render(papers: list[dict] | None = None) -> str:
+def render(papers: list[dict[str, Any]] | None = None) -> str:
     papers = papers if papers is not None else store.all_papers()
     papers = sorted(papers, key=lambda p: p["key"])
     return "\n\n".join(entry(p) for p in papers) + "\n"
