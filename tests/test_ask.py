@@ -226,7 +226,7 @@ def test_ask_captures_model_before_resolving_sources(monkeypatch):
         config.save_codex_model('later-model')
         return resolve(scope)
     monkeypatch.setattr(ask_context, 'resolve_scope', changed_settings)
-    monkeypatch.setattr(chat, 'answer', lambda key, messages: {'answer':'Answer', 'model':config.model()})
+    monkeypatch.setattr(chat, 'answer', lambda key, messages, **kwargs: {'answer':'Answer', 'model':config.model()})
     with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
         result = client.post('/api/ask', json={'agent':'codex', 'scope':{'mode':'paper', 'papers':['a']},
             'messages':[{'role':'user', 'content':'Question'}]})

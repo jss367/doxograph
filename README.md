@@ -211,13 +211,21 @@ and multiple-paper retrieval require **Claude subscription (Claude Code)** or
 you explicitly choose a supported one; Doxograph never switches billing modes
 for you. All Ask requests require AI analysis to be enabled.
 
-The assistant searches through the read-only [MCP server](#query-doxograph-from-agents),
-with no shell, file, web, or write tools. It can retrieve metadata, claims,
-PDF passages, and existing analyses. A selected-paper connection enforces its
-paper list before ranking, counts, and pagination; it omits library-wide topics
+Claude and Codex assistants search through the [MCP server](#query-doxograph-from-agents)
+and can add, remove, or replace paper labels when asked. For example: “Label papers
+about activation steering based on their content.” They read the sources before
+classifying papers and add labels by default, preserving existing ones. The chat's
+**Library activity** lists label-edit requests alongside lookups. Single-paper chat
+keeps its full-paper input and can label that paper; API-based paper chat answers
+questions without editing labels.
+
+The agents have no shell, file, or web tools and cannot edit claims or notes. They
+can retrieve metadata, claims, PDF passages, and existing analyses. A selected-paper
+connection enforces its paper list before ranking, counts, and pagination; it omits library-wide topics
 and syntheses and excludes agreements or tensions with outside dependencies.
 Whole-library requests retain topic and synthesis access within their captured
-paper membership. Searching the library does not mean reading every paper.
+paper membership. Label edits obey the same workspace and paper membership.
+Searching the library does not mean reading every paper.
 
 Retrieval captures the workspace and available papers when you send the question.
 Answers return to that conversation even if you switch workspaces. Both subscription
@@ -685,7 +693,7 @@ API key in `~/.credentials` rather than exporting it in `.zshrc`.
 
 ## Query Doxograph from agents
 
-Doxograph includes a read-only **Model Context Protocol (MCP)** server, so an
+Doxograph includes a **Model Context Protocol (MCP)** server, read-only by default, so an
 agent can discover your workspaces, find papers and claims, and read their
 sources without learning the web API. It uses stdio: your agent client launches
 `doxograph mcp`, which queries the running local app over HTTP. It does not
@@ -721,6 +729,13 @@ another port when 8765 is occupied. `--url` accepts local HTTP origins only,
 and defaults to `http://127.0.0.1:8765`. No API key is needed. The adapter does
 not open or initialize a separate corpus, so `DOXOGRAPH_DATA` belongs on the
 HTTP server, not on the MCP command.
+
+To enable paper labeling for an external agent, add `--allow-labels --workspace <id>`.
+This registers `update_paper_labels`, which accepts `papers`, `labels`, and a `mode`
+of `add` (the default), `remove`, or `replace`. It edits up to 200 papers per call;
+`replace` with an empty label list clears their labels. `--papers <key> ...` further
+restricts both reading and labeling to those papers. Label edits cannot cross the
+bound workspace. In-app Claude and Codex chats enable labeling automatically.
 
 Add `--without-notes` to leave out the note tools and the personal fields of the
 other tools: paper notes, claim notes, and links from claims to your own claims.
@@ -877,18 +892,19 @@ than re-reading them and leaves hand-edited claim text alone.
 
 ### Labels on papers
 
-A topic is about a claim and comes out of the model. A label is about the
-paper and is put on by hand: that it is open source, that a model of it is on
-HuggingFace, that it is worth rereading. **Labels** in a paper's header opens
+A topic is about a claim and comes out of extraction. A label is about the
+paper and can be added by hand or by asking the chat agent: that it is open source,
+that a model of it is on HuggingFace, that it is worth rereading. **Labels** in a paper's header opens
 a field for them, separated by commas, and they appear as a Labels
 list in the sidebar that filters the corpus to the papers carrying one.
 
 They are deliberately not part of the topic vocabulary. The vocabulary goes
 into the extraction prompt as the list of things to look for in a paper's
 text, and nothing in a paper's text says it is on your reading list. So no
-pass writes a label, `retag` cannot take one off, and labelling a paper does
-not stale its syntheses. Labels can contain spaces, such as `open source` or
-`reading list`. They are stored in lowercase with extra whitespace removed.
+extraction or retagging pass writes a label, `retag` cannot take one off, and labeling
+a paper does not stale its syntheses. Agents can assign content-based labels when
+you request it. Labels can contain spaces, such as `open source` or `reading list`.
+They preserve capitalization with extra whitespace removed and match without regard to case.
 Commas separate labels in the editor and cannot be part of a label's name.
 Existing hyphenated labels keep their names. Topics still use hyphenated slugs.
 

@@ -1,6 +1,6 @@
 'use strict';
 
-// Shared Ask panel: direct paper input or scoped read-only retrieval.
+// Shared Ask panel: direct paper input or scoped retrieval and paper labeling.
 // Conversations and their evidence stay in their originating workspace.
 // Answers can be kept as workspace-local research notes.
 // Loaded after app.js, which owns `$`, `api`, `esc`, and `S`, and papers.js, which owns `paragraphs` and `sendOnEnter`.
@@ -24,7 +24,7 @@ function renderAgentChat(chat) {
       </div>` : ''}</div>
       ${m.saveError ? `<p class="warn" role="alert">${esc(m.saveError)}</p>` : ''}
       <div class="agent-content ${assistant ? 'note-prose' : ''}"></div>
-      ${(m.activity || []).length ? `<details class="activity"><summary>Library lookups (${m.activity.length})</summary><ul>${m.activity.map(a => `<li>${esc(a)}</li>`).join('')}</ul></details>` : ''}`;
+      ${(m.activity || []).length ? `<details class="activity"><summary>Library activity (${m.activity.length})</summary><ul>${m.activity.map(a => `<li>${esc(a)}</li>`).join('')}</ul></details>` : ''}`;
     const content = message.querySelector('.agent-content');
     if (assistant) {
       content.replaceChildren(NoteWriting.render(answerMarkdown(m), agentChats.workspace));
@@ -60,7 +60,7 @@ function libraryAnswerNote(chat, index, workspace) {
   const question = chat.messages[index - 1]?.content || chat.messages[index - 1]?.attachments?.[0]?.name || 'Library synthesis';
   const title = Array.from(question.replace(/\s+/g, ' ').trim()).slice(0, 160).join('');
   const lookups = (message.activity || []).length
-    ? `\n\n## Library lookups\n\n${message.activity.map(a => `- ${a}`).join('\n')}` : '';
+    ? `\n\n## Library activity\n\n${message.activity.map(a => `- ${a}`).join('\n')}` : '';
   const evidence = (message.evidence || []).map(e => `- ${e.title || e.paper} · ${e.kind}${e.page ? ` · PDF page ${e.page}` : ''}${e.carried ? ` · from turn ${e.turn}` : ''}${e.stale ? ' · stale analysis' : ''}${e.status ? ` · ${e.status}` : ''}\n\n${e.text || e.quote || ''}`).join('\n\n');
   const scope = message.scope || chat.messages[index - 1]?.scope;
   const members = scope ? `\n\nAvailable papers at submission (${scope.papers.length} total):\n${scope.papers.slice(0, 200).map(key => {

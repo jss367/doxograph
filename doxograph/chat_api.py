@@ -89,11 +89,12 @@ def _chat_agent(agent: str | None) -> contextlib.AbstractContextManager[None]:
 
 
 @router.post("/api/papers/{key}/chat")
-def paper_chat(key: str, body: ChatBody) -> dict[str, Any]:
+def paper_chat(key: str, body: ChatBody, request: Request) -> dict[str, Any]:
     job_queue._require_analysis()
     with _chat_errors("Paper chat"), _chat_agent(body.agent):
         try:
-            return chat.answer(key, [message.model_dump(exclude={"attachments"} if not message.attachments else set()) for message in body.messages])
+            options = {"callback_url": lambda: _callback_url(request)} if config.ai_provider() in ("claude_code", "codex") else {}
+            return chat.answer(key, [message.model_dump(exclude={"attachments"} if not message.attachments else set()) for message in body.messages], **options)
         except KeyError:
             raise HTTPException(404, f"no paper {key}") from None
 
@@ -187,7 +188,8 @@ def ask(body: AskBody, request: Request) -> dict[str, Any]:
             token = ask_context.active.set(capture)
             try:
                 messages = [message.model_dump() for message in body.messages]
-                result = (chat.answer(scope.papers[0], messages) if scope.mode == "paper"
+                options = {"callback_url": lambda: _callback_url(request)} if config.ai_provider() in ("claude_code", "codex") else {}
+                result = (chat.answer(scope.papers[0], messages, **options) if scope.mode == "paper"
                           else agent.answer(messages, lambda: _callback_url(request)))
                 current = capture.direct + ask_context.read_log(capture.log)
             finally:
