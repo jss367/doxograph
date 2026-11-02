@@ -605,7 +605,9 @@ writing space are stored locally in `note-images/`.
   review and quote-verification filters, and grouping. Opening one runs those
   filters against the current corpus, so new matching claims appear naturally.
 - **Datasets**, under Library, catalogs the data your project uses or produces.
-  Add a record with a name, description, source URL or local path, version,
+  The catalog opens in the main pane with the sidebar still beside it, so you
+  can follow a linked paper or claim and come back with **Back**; an unsaved
+  draft waits for you. Each record has its own link. Add a record with a name, description, source URL or local path, version,
   license, access notes, and roles (training, evaluation, reference, or project
   output). Add **Labels** separated by commas, such as `open source` or
   `needs review`; labels appear in the inventory and are included in dataset

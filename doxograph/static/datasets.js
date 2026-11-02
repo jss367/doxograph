@@ -1,7 +1,9 @@
-/* Workspace dataset inventory, including links to the evidence that uses it. */
+/* Workspace dataset inventory, including links to the evidence that uses it.
+   A view in the main pane: leaving it keeps the draft for the next visit. */
 const Datasets = (() => {
-  let client, navigate, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false;
+  let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
+  let requested = null, revealed = null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
@@ -34,13 +36,10 @@ const Datasets = (() => {
     finally {
       setBusy(false);
       if (focusName) { el('dataset-name')?.focus(); focusName = false; }
+      // Hash navigation can arrive during a load, save, or discard prompt.
+      // Drain the latest target once that work releases the editor.
+      if (shown && loaded && requested !== revealed) void run(revealRequested);
     }
-  }
-  function updateURL(id) {
-    const url = new URL(location.href);
-    if (id) url.searchParams.set('dataset', id);
-    else url.searchParams.delete('dataset');
-    history.replaceState(null, '', url);
   }
   function renderList() {
     const query = el('datasets-search').value.toLowerCase().trim();
@@ -181,23 +180,52 @@ const Datasets = (() => {
   function choose(item) {
     inspectedRevision = undefined;
     saved = structuredClone(item); draft = structuredClone(item);
-    updateURL(item.id); renderList(); renderDocument(); status('');
+    select(item.id); renderList(); renderDocument(); status('');
   }
-  async function open(id) {
-    if (el('datasets-sheet').open) return;
-    workspace = client.workspaceId; items = []; draft = saved = null; loaded = false;
-    el('datasets-search').value = ''; renderList(); renderDocument(); status('Loading datasets…');
-    el('datasets-sheet').showModal();
+  function reset() {
+    workspace = client.workspaceId; items = []; draft = saved = null; loaded = false; inspectedRevision = undefined;
+    el('datasets-search').value = '';
+  }
+  // The record a URL names, or else the one last open, or else the first.
+  async function reveal(id, current) {
+    if (dirty() && (!id || id === draft.id)) { renderList(); status('Unsaved changes'); return; }
+    if (id && id !== draft?.id && !await discard()) {
+      if (current()) select(saved?.id || null);
+      return;
+    }
+    if (!current()) return;
+    const item = items.find(item => item.id === (id || draft?.id)) || (!id && [...items].sort((a,b) => a.name.localeCompare(b.name))[0]);
+    if (item) choose(item);
+    else {
+      draft = saved = null; select(null); renderList(); renderDocument();
+      status(id ? 'This dataset record no longer exists.' : 'Add a dataset to this workspace.');
+    }
+  }
+  async function revealRequested() {
+    if (!shown) return;
+    const target = requested;
+    try { await reveal(target.id, () => shown && requested === target); }
+    finally { revealed = target; }
+  }
+  async function show(id) {
+    const changed = !shown || requested?.id !== id;
+    if (changed) requested = {id};
+    if (shown) {
+      if (changed && loaded) await run(revealRequested);
+      return;
+    }
+    shown = true;
+    el('datasets-sheet').hidden = false;
+    if (workspace !== client.workspaceId) reset();
+    renderList(); renderDocument(); status(dirty() ? 'Unsaved changes' : 'Loading datasets…');
     await run(async () => {
-      items = (await request()).datasets; loaded = true; renderList();
-      const item = id ? items.find(item => item.id === id) : [...items].sort((a,b) => a.name.localeCompare(b.name))[0];
-      if (item) choose(item);
-      else status(id ? 'This dataset record no longer exists.' : 'Add a dataset to this workspace.');
+      items = (await request()).datasets; loaded = true;
+      await revealRequested();
     });
   }
-  async function close() {
-    if (busy || !await discard()) return false;
-    draft = saved = null; updateURL(null); el('datasets-sheet').close(); return true;
+  function hide() {
+    shown = false;
+    el('datasets-sheet').hidden = true;
   }
   async function save() {
     if (!draft?.name.trim()) throw new Error('Give your dataset a name before saving.');
@@ -213,7 +241,7 @@ const Datasets = (() => {
       inspectedRevision = undefined;
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
       draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',roles:[],labels:[],facet_values:[],papers:[],claims:[]};
-      updateURL(null); renderList(); renderDocument(); status('New dataset · Unsaved changes');
+      select(null); renderList(); renderDocument(); status('New dataset · Unsaved changes');
       focusName = true;
     } else if (name === 'open') {
       if (draft?.id === target.dataset.id || !await discard()) return;
@@ -239,28 +267,24 @@ const Datasets = (() => {
       }
       if (!await discard()) return;
       if (version) choose(version);
-      else { draft = saved = null; updateURL(null); renderList(); renderDocument(); status('This dataset record has been deleted.'); }
+      else { draft = saved = null; select(null); renderList(); renderDocument(); status('This dataset record has been deleted.'); }
     } else if (name === 'delete') {
       if (!await confirmDialog(`Delete the dataset record “${saved.name}”? Its source files and research stay in place.`,{ok:'Delete record'})) return;
       await request('/' + saved.id + '?' + new URLSearchParams({revision:saved.revision}),'DELETE');
       items = items.filter(item => item.id !== saved.id); draft = saved = null;
-      updateURL(null); renderList(); renderDocument(); status('Dataset record deleted.');
+      select(null); renderList(); renderDocument(); status('Dataset record deleted.');
     } else if (name === 'follow') {
-      if (!await discard()) return;
       const {paper,claim} = target.dataset;
-      draft = saved = null; updateURL(null); el('datasets-sheet').close(); navigate(paper,claim);
+      navigate(paper,claim);
     }
   }
-  el('btn-datasets').addEventListener('click', () => open());
   el('datasets-sheet').addEventListener('click', event => {
     const target = event.target.closest('[data-dataset-action]');
     if (!target) return;
     event.preventDefault();
-    if (target.dataset.datasetAction === 'close') { close(); return; }
     if (target.dataset.datasetAction === 'loupe') { openInLoupe(); return; }
     run(() => action(target.dataset.datasetAction,target));
   });
-  el('datasets-sheet').addEventListener('cancel', event => { event.preventDefault(); close(); });
   el('datasets-sheet').addEventListener('submit', event => { event.preventDefault(); run(save); });
   el('datasets-search').addEventListener('input', renderList);
   el('datasets-sheet').addEventListener('input', event => {
@@ -296,7 +320,11 @@ const Datasets = (() => {
   window.addEventListener('beforeunload', event => {
     if (dirty() || busy) { event.preventDefault(); event.returnValue = ''; }
   });
-  return {connect(value, follow) { client = value; navigate = follow; }, open,
+  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide,
+    resetWorkspace() { hide(); reset(); },
     hasUnsavedChanges:() => dirty() || busy,
-    beforeWorkspaceSwitch:async () => !el('datasets-sheet').open || await close()};
+    async beforeWorkspaceSwitch() {
+      // A later guard may still refuse. Only committed selection clears drafts.
+      return !busy && await discard();
+    }};
 })();
