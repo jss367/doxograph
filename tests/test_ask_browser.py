@@ -665,3 +665,48 @@ def test_library_pane_keeps_workspace_interactive_while_answering(engine):
                 assert requests[0][1]['scope']['mode'] == 'library'
                 assert not errors
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_ask_docks_before_a_wide_sidebar_squeezes_the_workspace(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 900, 'height': 1000})
+            await page.add_init_script("localStorage.setItem('doxograph-side-width', '450')")
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await expect(page.locator('body')).to_have_class(re.compile(r'agent-docked'))
+                main = await page.locator('#main').bounding_box()
+                pane = await page.locator('#library-agent').bounding_box()
+                assert main['width'] >= 449
+                assert pane['y'] >= main['y'] + main['height'] - 1
+                await page.locator('#papers li[data-paper="a"]').click()
+                await expect(page.locator('#reader')).to_be_visible()
+                await page.locator('#content [data-act="edit"]').first.click()
+                draft = page.locator('form[data-form] textarea[name="note"]')
+                await draft.fill('Editing beside a docked conversation.')
+                # A wider window restores the right pane and keeps both drafts.
+                await page.set_viewport_size({'width': 1800, 'height': 1000})
+                await expect(page.locator('body')).not_to_have_class(re.compile(r'agent-docked'))
+                await expect(draft).to_have_value('Editing beside a docked conversation.')
+                main = await page.locator('#main').bounding_box()
+                pane = await page.locator('#library-agent').bounding_box()
+                assert main['width'] >= 560
+                assert pane['x'] >= main['x'] + main['width'] - 1
+                assert await page.evaluate("localStorage.getItem('doxograph-side-width')") == '450'
+                # Resizing the sidebar can also dock and undock without a window resize.
+                await page.set_viewport_size({'width': 1440, 'height': 1000})
+                await expect(page.locator('body')).to_have_class(re.compile(r'agent-docked'))
+                await page.locator('#side-resize').focus()
+                await page.keyboard.press('Home')
+                await expect(page.locator('body')).not_to_have_class(re.compile(r'agent-docked'))
+                await expect(draft).to_have_value('Editing beside a docked conversation.')
+                assert not errors
+    run_browser(scenario())
+

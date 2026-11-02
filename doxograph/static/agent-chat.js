@@ -248,6 +248,7 @@ async function openAsk(scope) {
   $('library-agent').hidden = false;
   document.body.classList.add('agent-open');
   $('btn-agent').setAttribute('aria-expanded', 'true');
+  fitAskPane();
   const workspace = currentWorkspace();
   $('agent-workspace').textContent = `Conversation in ${workspace?.name || workspaceClient.workspaceId}`;
   $('agent-question').focus();
@@ -257,6 +258,7 @@ function closeAsk() {
   const restoreFocus = $('library-agent').contains(document.activeElement);
   $('library-agent').hidden = true;
   document.body.classList.remove('agent-open');
+  fitAskPane();
   $('btn-agent').setAttribute('aria-expanded', 'false');
   if (restoreFocus) $('btn-agent').focus({preventScroll: true});
 }
