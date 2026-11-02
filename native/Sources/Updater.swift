@@ -204,7 +204,7 @@ enum Updater {
             return .success(Outcome(changes: "", appRebuilt: false))
         }
         let range = "\(base)..\(head)"
-        let changes = summarize(git(["log", "--format=%s", range]).output.trimmed)
+        let changes = summarize(git(["log", "--format=%h %s", range]).output.trimmed)
         // Everything below keys off this list, and a failure here would read as
         // "nothing changed" and record the update as installed. Refuse instead.
         // Without --no-renames a file moved out of native/ shows up only under
@@ -250,14 +250,20 @@ enum Updater {
         return .success(Outcome(changes: changes, appRebuilt: appRebuilt))
     }
 
-    /// The newest few commit subjects as a bulleted list, then a count of the
-    /// rest. An update that skips several releases brings in dozens of commits,
-    /// and listing them all runs the alert off the screen.
+    /// The newest few commits of `git log --format='%h %s'` as a bulleted list
+    /// of subjects, then a count of the rest. An update that skips several
+    /// releases brings in dozens of commits, and listing them all runs the alert
+    /// off the screen. A commit with no subject keeps its hash, so a range of
+    /// such commits still reads as an update rather than as nothing new.
     static func summarize(_ log: String, limit: Int = 5) -> String {
-        let subjects = log.split(separator: "\n").map(String.init)
-        var lines = subjects.prefix(limit).map { "• \($0)" }
-        if subjects.count > limit {
-            lines.append("…and \(subjects.count - limit) more.")
+        let commits = log.split(separator: "\n").map { line -> String in
+            let parts = line.split(separator: " ", maxSplits: 1)
+            let subject = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+            return subject.isEmpty ? "Commit \(parts.first ?? "")" : subject
+        }
+        var lines = commits.prefix(limit).map { "• \($0)" }
+        if commits.count > limit {
+            lines.append("…and \(commits.count - limit) more.")
         }
         return lines.joined(separator: "\n")
     }
