@@ -19,7 +19,7 @@ function renderAgentChat(chat) {
     message.className = `agent-message ${assistant ? 'agent-answer' : 'agent-question'}`;
     message.innerHTML = `<div class="agent-message-head"><span class="who">${assistant ? esc(m.assistant || 'Assistant') : 'You'}</span>
       ${assistant ? `<div class="agent-answer-actions">
-        <button type="button" data-agent-action="${m.saved_note ? 'open' : 'save'}" data-message="${index}" ${m.saving ? 'disabled' : ''}>${m.saved_note ? 'Open saved note' : m.saving ? 'Saving…' : 'Save as research note'}</button>
+        <button type="button" data-agent-action="${m.saved_note ? 'open' : 'save'}" data-message="${index}" ${m.saving || chat.archiving ? 'disabled' : ''}>${m.saved_note ? 'Open saved note' : m.saving ? 'Saving…' : 'Save as research note'}</button>
         <span class="hint" role="status">${m.saved_note ? 'Saved in Research notes' : ''}</span>
       </div>` : ''}</div>
       ${m.saveError ? `<p class="warn" role="alert">${esc(m.saveError)}</p>` : ''}
@@ -80,7 +80,7 @@ function libraryAnswerNote(chat, index, workspace) {
 $('agent-messages').addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-agent-action]');
   const chat = activeAgentChat(), workspace = agentChats.workspace;
-  if (!button || !chat) return;
+  if (!button || !chat || chat.archiving) return;
   const index = Number(button.dataset.message);
   const message = chat.messages[index];
   if (message?.role !== 'assistant' || message.saving) return;
