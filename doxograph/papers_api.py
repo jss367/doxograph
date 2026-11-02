@@ -60,6 +60,7 @@ class ClaimPatch(BaseModel):
     stored and shown as a blank badge.
     """
 
+    expected_revision: str | None = Field(default=None, exclude=True, pattern=r"^[0-9a-f]{64}$")
     text: str | None = None
     kind: str | None = None
     strength: str | None = None
@@ -125,6 +126,7 @@ class PaperPatch(BaseModel):
     them instead. The defaults are never written, since only sent fields are.
     """
 
+    expected_revision: str | None = Field(default=None, exclude=True, pattern=r"^[0-9a-f]{64}$")
     title: str = ""
     authors: list[str] = []
     year: int | None = None
@@ -227,9 +229,10 @@ async def api_upload(files: list[UploadFile], extract_now: bool = True) -> dict[
 
 
 @router.get("/api/papers/{key}")
-def get_paper(key: str) -> dict[str, Any]:
+def get_paper(key: str, with_revision: bool = False) -> dict[str, Any]:
     try:
-        return store.load_paper(key)
+        paper = store.load_paper(key)
+        return {"paper": paper, "revision": store.paper_revision(paper)} if with_revision else paper
     except KeyError:
         raise HTTPException(404, f"no paper {key}") from None
 
@@ -246,6 +249,7 @@ def patch_paper(key: str, patch: PaperPatch) -> dict[str, Any]:
             paper = store.load_paper(key)
         except KeyError:
             raise HTTPException(404, f"no paper {key}") from None
+        store.check_paper_revision(paper, patch.expected_revision)
         # Correcting a year must not leave an older full date on the timeline.
         if "year" in fields and "publication_date" not in fields and fields["year"] != paper.get("year"):
             fields["publication_date"] = None
@@ -399,7 +403,7 @@ def create_claim(key: str, patch: ClaimPatch | None = None) -> dict[str, Any]:
 @router.patch("/api/papers/{key}/claims/{claim_id}")
 def patch_claim(key: str, claim_id: str, patch: ClaimPatch) -> dict[str, Any]:
     try:
-        return store.update_claim(key, claim_id, patch.fields())
+        return store.update_claim(key, claim_id, patch.fields(), expected_revision=patch.expected_revision)
     except KeyError:
         raise HTTPException(404, f"no claim {claim_id} on {key}") from None
 

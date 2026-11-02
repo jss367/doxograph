@@ -111,14 +111,17 @@ function createEditHistory() {
     try {
       const body = typeof options.body === 'string' ? JSON.parse(options.body) : null;
       const match = path.match(/^\/api\/papers\/([^/]+)(?:\/claims\/([^/]+))?$/);
-      let previous;
+      let previous, revision;
       if (options.history !== false && method === 'PATCH' && match) {
-        const paper = await raw(`/api/papers/${match[1]}`);
+        const snapshot = await raw(`/api/papers/${match[1]}?with_revision=true`);
+        const paper = snapshot.paper;
+        revision = snapshot.revision;
         previous = match[2] ? paper.claims.find(c => c.id === decodeURIComponent(match[2])) : paper;
         if (!previous) throw new Error('This item no longer exists.');
       }
       const baseline = path === '/api/notebook' && method === 'PUT' ? notebooks.get(snapshotKey(body.revision)) : null;
-      const result = await raw(path, options);
+      const result = await raw(path, previous ? {...options,
+        body: JSON.stringify({...body, expected_revision: body.expected_revision ?? revision})} : options);
       if (path === '/api/notebook' || path === '/api/notebook/notes') remember(result);
       if (!writing || options.history === false) return result;
       let entry;
@@ -143,7 +146,7 @@ function createEditHistory() {
         const restore = async (notes, previous) => remember(await write(path, 'PUT', {notes, previous}));
         entry = {undo: () => restore(body.previous, result.notes), redo: () => restore(result.notes, body.previous)};
       } else if (previous) {
-        const keys = Object.keys(body);
+        const keys = Object.keys(body).filter(key => key !== 'expected_revision');
         if (!match[2] && (keys.includes('year') || keys.includes('publication_date'))) keys.push('year', 'publication_date');
         const defaults = {labels: [], tags: [], facets: {}, ledger_links: [], reviewed: false,
           kind: 'finding', strength: 'supporting', evidence_relationship: 'unassessed'};
@@ -151,10 +154,13 @@ function createEditHistory() {
         const before = pick(previous), after = pick(result);
         if (!equal(before, after)) {
           const restore = async (expected, wanted) => {
-            const paper = await raw(`/api/papers/${match[1]}`);
+            const snapshot = await raw(`/api/papers/${match[1]}?with_revision=true`);
+            const paper = snapshot.paper;
             const current = match[2] ? paper.claims.find(c => c.id === decodeURIComponent(match[2])) : paper;
             if (!current) throw new Error('This item no longer exists.');
             const patch = merge(expected, wanted, pick(current));
+            // The revision is compared atomically under the server's write lock.
+            patch.expected_revision = snapshot.revision;
             if (match[2] && patch.facets) {
               // Claim PATCH merges named facets; omission keeps a value. Undo
               // must name removed keys explicitly, without rewriting others.

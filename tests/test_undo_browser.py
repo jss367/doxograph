@@ -195,3 +195,50 @@ def test_added_claim_facets_clear_on_undo_and_return_on_redo(engine):
                 assert stored['facets'] == {'method': ['survey'], 'model': ['GPT']}
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('target', ['paper', 'claim'])
+def test_undo_rejects_a_write_interposed_after_its_read(engine, target):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Original'))
+    claim = store.add_claim('paper', {'text': 'Original'})
+    path = '/api/papers/paper' if target == 'paper' else f'/api/papers/paper/claims/{claim["id"]}'
+    field = 'title' if target == 'paper' else 'text'
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f'{url}/#view=claims&paper=paper')
+                await page.locator('.claim').wait_for()
+                await page.evaluate('''async ({path,field}) => {
+                  await api(path, {method:'PATCH',headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({[field]:'Saved'})});
+                  await refreshAll();
+                }''', {'path': path, 'field': field})
+                interposed = False
+
+                async def newer_write(route):
+                    nonlocal interposed
+                    if route.request.method == 'PATCH' and not interposed:
+                        interposed = True
+                        httpx.patch(url + path, json={field: 'Other window'}).raise_for_status()
+                    await route.continue_()
+
+                await page.route('**' + path, newer_write)
+                await page.keyboard.press('Meta+z')
+                await page.locator('#toasts .toast', has_text='changed in another window').wait_for()
+                current = httpx.get(url + '/api/papers/paper').json()
+                assert (current if target == 'paper' else current['claims'][0])[field] == 'Other window'
+                # A rejected write must leave history retryable. Reconcile the
+                # conflict explicitly, then retry the same Undo and Redo.
+                httpx.patch(url + path, json={field: 'Saved'}).raise_for_status()
+                await page.keyboard.press('Meta+z')
+                expression = 'S.papers[0].title' if target == 'paper' else 'S.claims[0].text'
+                await page.wait_for_function(expression + ' === "Original"')
+                await page.keyboard.press('Meta+Shift+z')
+                await page.wait_for_function(expression + ' === "Saved"')
+
+    run_browser(scenario())

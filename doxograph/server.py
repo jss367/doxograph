@@ -89,6 +89,11 @@ async def topic_conflict_error(request: Request, exc: store.TopicConflictError) 
     return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
+@app.exception_handler(store.EditConflictError)
+async def edit_conflict_error(request: Request, exc: store.EditConflictError) -> JSONResponse:
+    return JSONResponse({"detail": str(exc)}, status_code=409)
+
+
 @app.exception_handler(storage.StorageReadError)
 async def storage_read_error(request: Request, exc: storage.StorageReadError) -> JSONResponse:
     return JSONResponse({"detail": str(exc)}, status_code=503)

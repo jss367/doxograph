@@ -5,7 +5,8 @@ const {resolve} = require('node:path');
 const load = (file, name) => new Function(`${readFileSync(resolve(__dirname, '../../doxograph/static', file), 'utf8')}\nreturn ${name};`)();
 const createHistory = load('edit-history.js', 'createEditHistory');
 const createClient = load('workspace-client.js', 'createWorkspaceClient');
-const copy = value => structuredClone(value);
+const {createHash} = require('node:crypto');
+const revision = paper => createHash('sha256').update(JSON.stringify(paper)).digest('hex');
 
 function setup() {
   const history = createHistory();
@@ -24,11 +25,19 @@ function setup() {
         notebooks[ws] = {...body, revision: body.revision + 1};
       }
       result = notebooks[ws];
+    } else if (path === '/api/papers/paper?with_revision=true') {
+      result = {paper: papers[ws], revision: revision(papers[ws])};
     } else if (path === '/api/papers/paper') {
-      if (method === 'PATCH') Object.assign(papers[ws], body);
+      if (method === 'PATCH') {
+        if (body.expected_revision && body.expected_revision !== revision(papers[ws])) return new Response('{"detail":"Revision conflict"}', {status: 409});
+        const {expected_revision, ...fields} = body;
+        Object.assign(papers[ws], fields);
+      }
       result = papers[ws];
     } else if (path === '/api/papers/paper/claims/claim') {
-      Object.assign(papers[ws].claims[0], body);
+      if (body.expected_revision && body.expected_revision !== revision(papers[ws])) return new Response('{"detail":"Revision conflict"}', {status: 409});
+      const {expected_revision, ...fields} = body;
+      Object.assign(papers[ws].claims[0], fields);
       result = papers[ws].claims[0];
     } else { throw new Error(`Unexpected path ${path}`); }
     return new Response(JSON.stringify(result));
