@@ -601,6 +601,10 @@ writing space are stored locally in `note-images/`.
   source; **Open source** opens the viewer.
   Install [Loupe](https://github.com/jss367/loupe) at `~/git/loupe`, or set
   `DOXOGRAPH_LOUPE_DIR` to its checkout before starting Doxograph. The launcher
+  requires a compatible Loupe version; the verified baseline is
+  [`bb7d2b4`](https://github.com/jss367/loupe/commit/bb7d2b4e351587b61e3505d11649e71c4574f3b5)
+  or newer, which includes both `--conversations` and `--survey`. Update older
+  checkouts before using these modes. The launcher
   uses Loupe's `.venv/bin/python` when available, otherwise `python3` from PATH;
   `DOXOGRAPH_LOUPE_PYTHON` overrides the interpreter. Install Loupe's dependencies
   in that interpreter for conversation/Gloom support. Running viewers are reused,
