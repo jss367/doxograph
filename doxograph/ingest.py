@@ -26,7 +26,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from . import config, fingerprint, posts, search, store
+from . import config, fingerprint, posts, publication_dates, search, store
 
 
 class InvalidPDFUpload(ValueError):
@@ -257,6 +257,7 @@ def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict:
             for a in entry.findall(f"{ATOM}author")
         ],
         "year": int(published[:4]) if published[:4].isdigit() else None,
+        "publication_date": publication_dates.from_timestamp(published),
         "abstract": text_of(f"{ATOM}summary"),
         "venue": (journal_node.text or "").strip() if journal_node is not None else "arXiv",
         "doi": (doi_node.text or "").strip() if doi_node is not None else "",
@@ -298,6 +299,7 @@ def fetch_crossref(doi: str, client: httpx.Client) -> dict:
             for a in work.get("author", [])
         ],
         "year": parts[0][0] if parts and parts[0] else None,
+        "publication_date": publication_dates.from_parts(parts[0]) if parts else None,
         "abstract": re.sub(r"<[^>]+>", "", work.get("abstract", "")).strip(),
         "venue": containers[0] if containers else work.get("type", ""),
         "doi": work.get("DOI", doi),

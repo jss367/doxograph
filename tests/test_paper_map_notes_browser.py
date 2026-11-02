@@ -9,11 +9,13 @@ from test_browser import _paper, _poll, _server
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_map_notes_toggle_preview_filters_timeline_and_navigation(engine):
+@pytest.mark.parametrize("publication_date", [None, "2020-06", "2020-06-15"])
+def test_map_notes_toggle_preview_filters_timeline_and_navigation(engine, publication_date):
     _paper("paper-a", "Paper A", "recovery", year=2020)
     _paper("paper-b", "Paper B", "gait")
     paper = store.load_paper("paper-a")
     paper["notes"] = "Check the control condition.\n<script>never execute</script>"
+    paper["publication_date"] = publication_date
     store.save_paper(paper)
     paper = store.load_paper("paper-b")
     paper["notes"] = "  \n "
@@ -35,7 +37,7 @@ def test_map_notes_toggle_preview_filters_timeline_and_navigation(engine):
                 assert [(e["type"], e["a"], e["b"]) for e in graph["edges"]] == [("note", "p:paper-a", "n:paper-a")]
                 assert await page.locator("[data-graph-count]").inner_text() == "2 papers · 1 note · 1 link"
 
-                # A note follows its paper's filter and publication year.
+                # A note follows its paper's filter and publication date precision.
                 await page.evaluate("V.tag = 'gait'; renderGraph()")
                 assert await page.evaluate("window.doxographGraph().nodes.find(n => n.type === 'note').dimmed")
                 await page.evaluate("V.tag = null; renderGraph()")
@@ -44,6 +46,8 @@ def test_map_notes_toggle_preview_filters_timeline_and_navigation(engine):
                 graph = await page.evaluate("window.doxographGraph()")
                 nodes = {n["id"]: n for n in graph["nodes"]}
                 assert nodes["n:paper-a"]["year"] == 2020
+                assert nodes["n:paper-a"]["date"] == (publication_date or "2020")
+                assert nodes["n:paper-a"]["time"] == nodes["p:paper-a"]["time"]
                 assert nodes["n:paper-a"]["x"] == nodes["p:paper-a"]["x"]
 
                 box = await page.locator(".graph-wrap canvas").bounding_box()

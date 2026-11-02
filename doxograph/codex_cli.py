@@ -147,7 +147,7 @@ class Client:
                         raise ModelInputError("Codex requires extracted paper text. Choose Claude for PDF images.")
                     prompt.append(block["text"])
             stdin = "\n\n".join(prompt)
-            if len(stdin) > 600_000:
+            if len(stdin.encode("utf-8")) + len(kwargs["system"].encode("utf-8")) > 600_000:
                 raise InputTooLargeError("This paper and conversation are too long for Codex. Use a shorter paper or Claude.")
             instructions = Path(cwd) / "instructions.txt"
             instructions.write_text(kwargs["system"], encoding="utf-8")

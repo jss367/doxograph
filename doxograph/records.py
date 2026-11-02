@@ -8,6 +8,8 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .publication_dates import PublicationDate
+
 
 class StorageIssue(TypedDict):
     path: str
@@ -95,6 +97,7 @@ class Paper(Document):
     # readers deliberately treat that as an empty list.
     authors: list[str] | None = None
     year: int | None = None
+    publication_date: PublicationDate | None = None
     venue: str | None = None
     doi: str | None = None
     abstract: str = ""

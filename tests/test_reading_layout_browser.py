@@ -393,3 +393,31 @@ def test_palette_reveals_reading_search_and_import(engine, width):
                 assert await page.evaluate('originalPage === document.querySelector("#reader .pdf-page")')
                 assert await page.locator('#q').input_value() == 'searchable'
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_sidebar_paper_click_survives_search_refresh(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Paper to open'))
+    store.add_claim('paper', {'text': 'A claim to read.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator("#q").fill("Paper")
+                await page.wait_for_function("V.textSearch?.loading === false")
+                title = page.locator('#papers li[data-paper="paper"] .pt')
+                await expect(title).to_be_visible()
+                box = await title.bounding_box()
+                await page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                await page.mouse.down()
+                # Completing a text search must not replace an unchanged
+                # sidebar between a user's press and release.
+                await page.evaluate("runTextSearch('Paper', true)")
+                await page.mouse.up()
+                await expect(page.locator('#paperhead')).to_contain_text('Paper to open')
+                await expect(page.locator('#papers li[data-paper="paper"]')).to_have_class('active')
+    run_browser(scenario())

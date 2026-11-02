@@ -1202,6 +1202,42 @@ def test_map_timeline_uses_publication_year_and_keeps_it_when_dragging_or_pollin
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_map_plots_exact_dates_within_a_year_and_updates_when_the_date_changes(engine):
+    for key, value in [("first", "2026-01-02"), ("next", "2026-01-03"), ("last", "2026-01-10"),
+                       ("month", "2026-02"), ("year", None), ("unknown", None)]:
+        store.save_paper(store.new_paper(key, title=f"Paper {key}",
+                                        year=None if key == "unknown" else 2026,
+                                        publication_date=value))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(timezone_id="America/Los_Angeles")
+            with _server() as url:
+                await page.goto(f"{url}/#view=graph")
+                await page.get_by_label("X axis", exact=True).select_option(label="Publication date")
+                await page.wait_for_function("window.doxographGraph().alpha === 0")
+                graph = await page.evaluate("window.doxographGraph()")
+                nodes = {n["key"]: n for n in graph["nodes"]}
+                x = {key: n["x"] for key, n in nodes.items()}
+                assert x["first"] < x["next"] < x["last"] < x["month"] < x["year"] < x["unknown"]
+                assert x["last"] - x["first"] == pytest.approx(8 * (x["next"] - x["first"]))
+                assert nodes["first"]["date"] == "2026-01-02"
+                for key, label in [("first", "Jan 2, 2026"), ("month", "Feb 2026 (month only)"),
+                                   ("year", "2026 (year only)"), ("unknown", "Publication date unknown")]:
+                    await page.evaluate("key => graphTip(GRAPH.nodes.get(`p:${key}`), 10, 10)", key)
+                    assert label in await page.locator('.graph-tip').inner_text()
+                # Updating only the day still invalidates the graph signature.
+                response = await page.request.patch(f"{url}/api/papers/next", data={"publication_date": "2026-01-09"})
+                assert response.status == 200
+                await _poll(page)
+                updated = {n["key"]: n for n in (await page.evaluate("window.doxographGraph()"))["nodes"]}
+                assert updated["next"]["x"] - updated["first"]["x"] == pytest.approx(7 * (x["next"] - x["first"]))
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 @pytest.mark.parametrize("years", [[], [None, None], [2020], [2020, 2020]])
 def test_map_timeline_handles_empty_undated_and_single_year_corpora(years):
     for i, year in enumerate(years):
@@ -3546,7 +3582,7 @@ def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engin
                         try { graphDraw(); } finally { GRAPH.ctx.fillText = original; }
                         return labels;
                     }""")
-                    assert {"2000", "2020", "Undated", "Publication year →", "contradicts"} <= set(labels)
+                    assert {"2000", "2020", "Undated", "Publication date →", "contradicts"} <= set(labels)
                 tip = page.locator('.graph-tip')
                 for node in points["nodes"]:
                     if node["id"] != "p:paper-a":

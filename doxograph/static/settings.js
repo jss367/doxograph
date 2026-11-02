@@ -28,12 +28,6 @@ function syncAnalysisControls() {
     codex: 'Uses your ChatGPT account through Codex and its plan limits or credits. Run codex login in Terminal first. Includes your global Codex instructions along with extracted PDF text. Figures and scanned pages inside PDFs are unavailable; images attached to chats are sent directly. API billing is never used as a fallback.',
   };
   $('ai-access-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
-  const chatAgent = activeChat()?.agent || S.ai_provider;
-  $('chat-access-help').textContent = chatAgent === 'codex'
-    ? 'ChatGPT receives page-labeled PDF text and your global Codex instructions. Choose Claude to omit that global guidance. PDF figures and scanned pages are unavailable; attached images are included.'
-    : chatAgent === 'api' && S.provider !== 'anthropic'
-      ? 'The selected API or local model receives page-labeled PDF text and attached images. Use a model that supports images; PDF figures and scanned pages are unavailable.'
-      : 'Claude receives the PDF, including its page images.';
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
   $('codex-model-form').hidden = S.ai_provider !== 'codex';
   $('codex-model').disabled = savingCodexModel;
@@ -41,14 +35,12 @@ function syncAnalysisControls() {
   $('codex-model-save').disabled = savingCodexModel || savingProviderSetting;
   $('codex-model-refresh').disabled = loadingCodexModels;
   $('codex-current-model').textContent = `Current model: ${S.codex_model || 'Codex default (automatic)'}`;
-  $('chat-send').disabled = !enabled || Boolean(activeChat()?.busy || activeChat()?.reading);
   $('ai-action-status').hidden = enabled;
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;
   $('import-analysis-status').hidden = S.ai_enabled !== false;
   document.querySelectorAll('[data-ai-action]').forEach((button) => {
-    button.disabled = !enabled || (button.hasAttribute('data-paper-chat')
-      && !S.papers.some(p => p.key === button.dataset.paperChat && p.has_pdf));
+    button.disabled = !enabled;
   });
   if (typeof syncAgentChatControls === 'function') syncAgentChatControls();
 }

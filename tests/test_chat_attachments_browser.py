@@ -15,8 +15,9 @@ from test_chat_attachments import image_attachment
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('prefix', ['chat', 'agent'])
-def test_chat_files_retry_reopen_followup_and_download(engine, prefix):
+@pytest.mark.parametrize('entry', ['paper', 'library'])
+def test_chat_files_retry_reopen_followup_and_download(engine, entry):
+    prefix = 'agent'
     config.set_ai_provider('codex')
     config.set_ai_enabled(True)
     store.save_paper(store.new_paper('study', title='A study of recovery'))
@@ -37,17 +38,19 @@ def test_chat_files_retry_reopen_followup_and_download(engine, prefix):
                 else:
                     await route.fulfill(json={'answer': 'I read the chart and the data.', 'assistant': 'ChatGPT'})
 
-            endpoint = '**/api/agent/chat' if prefix == 'agent' else '**/api/papers/study/chat'
+            endpoint = '**/api/ask'
             await page.route(endpoint, answer)
             with _server() as url:
-                await page.goto(url + ('/#paper=study' if prefix == 'chat' else ''))
+                await page.goto(url + ('/#paper=study' if entry == 'paper' else ''))
 
                 async def open_chat():
-                    if prefix == 'agent':
+                    if entry == 'library':
                         await page.locator('#btn-agent:enabled').click()
                     else:
                         await page.locator('[data-paper-chat="study"]:visible').click()
                     await expect(page.locator(f'#{prefix}-attach')).to_be_enabled()
+                    if entry == 'paper' and len(requests) > 1:
+                        await page.locator('#agent-thread').select_option(index=1)
 
                 await open_chat()
                 async with page.expect_file_chooser() as chooser:
@@ -67,7 +70,7 @@ def test_chat_files_retry_reopen_followup_and_download(engine, prefix):
                 await expect(page.locator(f'#{prefix}-attachments .chat-attachment')).to_have_count(0)
                 await expect(page.locator(f'#{prefix}-delete')).to_be_visible()
                 assert requests[1]['messages'][0]['attachments'][0] == image
-                saved_url = url + '/api/chats' + ('?paper=study' if prefix == 'chat' else '')
+                saved_url = url + '/api/chats' + ('?paper=study' if entry == 'paper' else '')
                 saved = httpx.get(saved_url).json()['chats'][0]
                 assert len(saved['messages'][0]['attachments']) == 2
                 async with page.expect_download() as download:

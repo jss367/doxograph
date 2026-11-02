@@ -113,6 +113,7 @@ def test_a_post_is_filed_with_its_own_metadata_and_a_pdf_of_its_text(forum):
     assert paper["title"] == "Reproducing steering against evaluation awareness"
     assert paper["authors"] == ["Thomas Read", "Joseph Bloom"]
     assert paper["year"] == 2026
+    assert paper["publication_date"] == "2026-04-10"
     assert paper["venue"] == "LessWrong"
     assert paper["source"] == {"kind": "lesswrong", "id": POST_ID, "url": LW_URL, "pdf_url": ""}
     assert not paper.get("error")
