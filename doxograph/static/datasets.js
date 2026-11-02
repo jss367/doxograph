@@ -3,6 +3,7 @@
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
+  let requested = null, revealed = null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
@@ -35,6 +36,9 @@ const Datasets = (() => {
     finally {
       setBusy(false);
       if (focusName) { el('dataset-name')?.focus(); focusName = false; }
+      // Hash navigation can arrive during a load, save, or discard prompt.
+      // Drain the latest target once that work releases the editor.
+      if (shown && loaded && requested !== revealed) void run(revealRequested);
     }
   }
   function renderList() {
@@ -183,9 +187,13 @@ const Datasets = (() => {
     el('datasets-search').value = '';
   }
   // The record a URL names, or else the one last open, or else the first.
-  async function reveal(id) {
+  async function reveal(id, current) {
     if (dirty() && (!id || id === draft.id)) { renderList(); status('Unsaved changes'); return; }
-    if (id && id !== draft?.id && !await discard()) { select(saved?.id || null); return; }
+    if (id && id !== draft?.id && !await discard()) {
+      if (current()) select(saved?.id || null);
+      return;
+    }
+    if (!current()) return;
     const item = items.find(item => item.id === (id || draft?.id)) || (!id && [...items].sort((a,b) => a.name.localeCompare(b.name))[0]);
     if (item) choose(item);
     else {
@@ -193,9 +201,17 @@ const Datasets = (() => {
       status(id ? 'This dataset record no longer exists.' : 'Add a dataset to this workspace.');
     }
   }
+  async function revealRequested() {
+    if (!shown) return;
+    const target = requested;
+    try { await reveal(target.id, () => shown && requested === target); }
+    finally { revealed = target; }
+  }
   async function show(id) {
+    const changed = !shown || requested?.id !== id;
+    if (changed) requested = {id};
     if (shown) {
-      if (id && loaded && id !== draft?.id) await run(() => reveal(id));
+      if (changed && loaded) await run(revealRequested);
       return;
     }
     shown = true;
@@ -204,7 +220,7 @@ const Datasets = (() => {
     renderList(); renderDocument(); status(dirty() ? 'Unsaved changes' : 'Loading datasets…');
     await run(async () => {
       items = (await request()).datasets; loaded = true;
-      await reveal(id);
+      await revealRequested();
     });
   }
   function hide() {

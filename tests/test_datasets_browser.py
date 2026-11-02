@@ -1,4 +1,5 @@
 """Exercise dataset editing and linked evidence in Chromium and native WebKit."""
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -72,6 +73,95 @@ def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
                 await source.fill('javascript:alert(1)')
                 assert await page.locator('#dataset-source-link').inner_text() == ''
                 assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('pending', ['load', 'save', 'failed_save'])
+def test_dataset_navigation_uses_the_latest_target_while_busy(engine, pending):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                first, second, third = [httpx.post(url + '/api/datasets', json={'name': name}).json()
+                                        for name in ['First corpus', 'Second corpus', 'Third corpus']]
+                held, release = asyncio.Event(), asyncio.Event()
+
+                async def hold_request(route):
+                    held.set()
+                    await release.wait()
+                    if pending == 'failed_save':
+                        await route.fulfill(status=409, json={'detail': 'The dataset changed in another window.'})
+                    else:
+                        await route.continue_()
+
+                if pending == 'load':
+                    await page.route('**/api/datasets', hold_request)
+                await page.goto(url + '/#view=datasets&dataset=' + first['id'])
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                if pending != 'load':
+                    await ready(page)
+                    await view.get_by_label('Version', exact=True).fill('My changed version')
+                    await page.route('**/api/datasets/' + first['id'], hold_request)
+                    await view.get_by_role('button', name='Save dataset', exact=True).click()
+                await asyncio.wait_for(held.wait(), timeout=5)
+                # New hash targets and Back must win over the older pending work.
+                for item in [second, third]:
+                    await page.evaluate('id => { location.hash = "view=datasets&dataset=" + id; }', item['id'])
+                    await page.wait_for_function('id => V.dataset === id', arg=item['id'])
+                await page.go_back()
+                await page.wait_for_function('id => V.dataset === id', arg=second['id'])
+                release.set()
+                if pending == 'failed_save':
+                    await _answer(page, 'Cancel')
+                    await ready(page)
+                    assert await view.get_by_label('Dataset name', exact=True).input_value() == 'First corpus'
+                    assert await view.get_by_label('Version', exact=True).input_value() == 'My changed version'
+                    assert f'dataset={first["id"]}' in page.url
+                else:
+                    await page.wait_for_function("document.querySelector('#dataset-name')?.value === 'Second corpus'", timeout=5000)
+                    await ready(page)
+                    assert f'dataset={second["id"]}' in page.url
+                    if pending == 'save':
+                        saved = httpx.get(url + '/api/datasets').json()['datasets']
+                        assert next(item for item in saved if item['id'] == first['id'])['version'] == 'My changed version'
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('answer', ['Cancel', 'Discard changes'])
+def test_dataset_navigation_ignores_a_superseded_discard_prompt(engine, answer):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                first, second, third = [httpx.post(url + '/api/datasets', json={'name': name}).json()
+                                        for name in ['First corpus', 'Second corpus', 'Third corpus']]
+                await page.goto(url + '/#view=datasets&dataset=' + first['id'])
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await view.get_by_label('Version', exact=True).fill('My unsaved version')
+                await page.evaluate('id => { location.hash = "view=datasets&dataset=" + id; }', second['id'])
+                await page.locator('#ask').wait_for(state='visible')
+                # History cancels the old prompt; only the newest target may proceed.
+                await page.evaluate('id => { location.hash = "view=datasets&dataset=" + id; }', third['id'])
+                await page.wait_for_function('id => V.dataset === id', arg=third['id'])
+                await _answer(page, answer)
+                await ready(page)
+                expected = first if answer == 'Cancel' else third
+                assert f'dataset={expected["id"]}' in page.url
+                assert await view.get_by_label('Dataset name', exact=True).input_value() == expected['name']
+                assert await view.get_by_label('Version', exact=True).input_value() == ('My unsaved version' if answer == 'Cancel' else '')
 
     run_browser(scenario())
 
