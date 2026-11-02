@@ -170,5 +170,7 @@ jobs:
           swiftc -typecheck -swift-version 5 \
             -target "$(uname -m)-apple-macosx13.0" \
             -framework AppKit -framework WebKit native/Sources/*.swift
+      - name: Test the update summary
+        run: bash native/test-updater.sh
       - name: Test quitting and relaunching
         run: bash native/test-quit.sh
