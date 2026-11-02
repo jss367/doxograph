@@ -97,6 +97,20 @@ def test_map_hides_changed_note_preview_without_pointer_movement(engine):
                 await _poll(page)
                 assert await tip.is_visible()
 
+                # A title-only correction changes the preview heading too.
+                paper = store.load_paper("paper-a")
+                paper["title"] = "Corrected title <script>still inert</script>"
+                store.save_paper(paper)
+                await _poll(page)
+                assert await tip.is_hidden()
+                await page.mouse.move(sx + 1, sy)
+                await tip.wait_for(state="visible")
+                assert await tip.locator("strong").inner_text() == "My note on " + paper["title"]
+                assert await tip.locator(".graph-note-preview").inner_text() == "First saved note."
+                assert await tip.locator("script").count() == 0
+                await _poll(page)
+                assert await tip.is_visible()
+
                 # Another window saves while this pointer stays over the node.
                 paper = store.load_paper("paper-a")
                 paper["notes"] = "Updated note.\n<script>still inert</script>"
@@ -104,7 +118,7 @@ def test_map_hides_changed_note_preview_without_pointer_movement(engine):
                 await _poll(page)
                 assert await tip.is_hidden()
 
-                await page.mouse.move(sx + 1, sy)
+                await page.mouse.move(sx + 2, sy)
                 await tip.wait_for(state="visible")
                 assert await tip.locator(".graph-note-preview").inner_text() == paper["notes"]
                 assert await tip.locator("script").count() == 0
