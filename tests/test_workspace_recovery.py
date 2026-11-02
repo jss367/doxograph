@@ -80,6 +80,65 @@ def test_portable_archive_has_local_assets_checksums_and_no_other_workspace():
             assert json.loads(archive.read('data/papers/study.json'))['claims'][0]['text'] == 'A finding'
 
 
+def test_archive_renders_claims_highlights_boards_and_dataset_links_readably():
+    root = config.data_dir()
+    note_id = 'a' * 32
+    store.write_json(root / 'research-notes.json', [dict(id=note_id, title='My argument', body='See [study](/#paper=study)',
+                                                         revision=1, created=store.now(), updated=store.now())])
+    store.save_paper(store.new_paper('study', title='Monitoring study', authors=['Ada Example', 'Bo Example'], year=2026,
+                                     source={'url': 'https://example.org/study'},
+                                     summary=f'Builds on [my note](/?note={note_id})', notes='Check the appendix'))
+    store.add_facet('dataset', 'Datasets used')
+    claim = store.add_claim('study', {'text': 'A finding', 'quote': 'Line one\nline two', 'locator': 'p. 2',
+                                      'evidence': 'A trial', 'limitations': 'One dataset', 'note': 'Convincing'})
+    store.update_claim('study', claim['id'], {'facets': {'dataset': ['EVAL corpus']}})
+    store.pdf_path('study').write_bytes(minimal_pdf('A finding'))
+    store.save_paper(store.new_paper('bare'))
+    notebook.save_notebook(notebook.Notebook.model_validate({**notebook.load(), 'highlights': [
+        {'id': 'mark', 'paper': 'study', 'page': 2, 'text': 'Marked\ntext', 'note': 'Compare later',
+         'rects': [{'x': .1, 'y': .2, 'w': .5, 'h': .02}]},
+        {'id': 'fig', 'paper': 'study', 'page': 3, 'kind': 'figure', 'question': True,
+         'rects': [{'x': .1, 'y': .1, 'w': .4, 'h': .3}]}],
+        'boards': [{'id': 'board', 'title': 'Evidence board', 'entries': [
+            {'id': 'claim', 'kind': 'claim', 'reference': {'paper': 'study', 'claim': claim['id']}}]}]}))
+    # A dataset keeps links to sources removed after it was saved.
+    store.write_json(root / 'datasets.json', [{
+        'id': 'c' * 32, 'revision': 'd' * 32, 'created': store.now(), 'updated': store.now(),
+        'name': 'Eval corpus', 'description': 'Held-out set', 'source': '', 'version': '2', 'license': '',
+        'access_notes': '', 'roles': ['evaluation', 'project-output'], 'labels': [], 'facet_values': [],
+        'papers': ['bare', 'gone'], 'claims': [{'paper': 'study', 'claim': 'missing-claim'}]}])
+    path = workspace_archive.build()
+    try:
+        with zipfile.ZipFile(path) as archive:
+            read = lambda name: archive.read(name).decode()
+            note = f'../notes/my-argument-{note_id}.md'
+            assert read('papers/study.md') == '\n'.join([
+                '# Monitoring study', '', 'Ada Example; Bo Example (2026)', '',
+                '[Source PDF](../data/pdfs/study.pdf)', '', 'Source: https://example.org/study', '',
+                '## Summary', '', f'Builds on [my note]({note})', '', '## My paper notes', '', 'Check the appendix', '',
+                '## A finding', '', '> Line one', '> line two', '', f'Reference: study / {claim["id"]}', '',
+                'Location: p. 2', '', 'Human review: reviewed', '', 'Quote match: not checked', '',
+                'Evidence: A trial', '', 'Limitations: One dataset', '', 'My note: Convincing', '',
+                '## Highlights and questions', '',
+                '### Passage on page 2', '', '> Marked', '> text', '', 'Compare later', '', 'Open question: no', '',
+                '[Open source page](../data/pdfs/study.pdf#page=2)', '',
+                '### Figure mark on page 3', '', '> ', '', '', '', 'Open question: yes', '',
+                '[Open source page](../data/pdfs/study.pdf#page=3)', ''])
+            assert read('papers/bare.md') == '# bare\n\n (year unknown)\n'
+            assert read('datasets.md').endswith('\n'.join([
+                'Roles: evaluation, project output', '',
+                '- [bare](papers/bare.md)', '- Missing paper: gone', '- [Monitoring study](papers/study.md)',
+                '  - Missing claim: missing-claim', '  - A finding', '']))
+            [board] = [name for name in archive.namelist() if name.startswith('boards/')]
+            assert read(board).endswith('\n\n## Local sources\n\n- [Monitoring study](../papers/study.md)')
+            assert read('index.md') == '\n'.join([
+                '# Default workspace', '', '[Project datasets](datasets.md)', '',
+                '- [bare](papers/bare.md)', '- [Monitoring study](papers/study.md)', '',
+                '## Research notes', '', f'- [My argument](notes/my-argument-{note_id}.md)'])
+    finally:
+        path.unlink()
+
+
 def test_archive_links_do_not_redirect_another_workspaces_paper():
     link = '[Other workspace](/#ws=another&paper=study)'
     assert workspace_archive.portable_links(link, {}) == link

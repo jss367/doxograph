@@ -58,9 +58,7 @@ select = ["E9", "F", "B"]
 
 [tool.mypy]
 python_version = "3.13"
-# Every module in the package is checked strictly except mcp_server.py and
-# workspace_archive.py, which are still being annotated. Add them here once
-# they pass, then this list can become the whole package.
+# Every module in the package is checked strictly.
 files = [
     "doxograph/__init__.py", "doxograph/__main__.py",
     "doxograph/storage.py", "doxograph/records.py", "doxograph/publication_dates.py", "doxograph/workspace_metadata.py",
@@ -81,6 +79,7 @@ files = [
     "doxograph/loupe_runner.py", "doxograph/notebook.py", "doxograph/pairs.py",
     "doxograph/posts.py", "doxograph/query.py", "doxograph/quotes.py",
     "doxograph/research_notes.py", "doxograph/search.py",
+    "doxograph/mcp_server.py", "doxograph/workspace_archive.py",
 ]
 strict = true
 follow_imports = "silent"

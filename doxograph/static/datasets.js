@@ -208,6 +208,9 @@ const Datasets = (() => {
     finally { revealed = target; }
   }
   async function show(id) {
+    // The URL catching up with a record picked here is not a new destination,
+    // and must not rebuild the editor under the cursor.
+    if (shown && id && id === draft?.id) { requested = revealed = {id}; return; }
     const changed = !shown || requested?.id !== id;
     if (changed) requested = {id};
     if (shown) {

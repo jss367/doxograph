@@ -235,7 +235,7 @@ def test_workspace_switch_hides_dataset_before_destination_refresh(engine, faile
                 try:
                     assert await page.locator('#workspace').input_value() == other['id']
                     assert not await view.is_visible()
-                    assert not await page.locator('body').evaluate("node => node.classList.contains('datasets-view')")
+                    assert not await page.locator('body').evaluate("node => node.classList.contains('page-view')")
                 finally:
                     release.set()
                 await page.wait_for_function('workspaceController.pending === null')
@@ -507,6 +507,7 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
                 item = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'version': 'Saved'}).json()
+                second = httpx.post(url + '/api/datasets', json={'name': 'Second corpus'}).json()
                 await page.goto(url)
                 await page.get_by_role('button', name='Datasets', exact=True).click()
                 view = page.locator('#datasets-sheet')
@@ -543,7 +544,16 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 assert await view.is_visible()
                 await view.get_by_role('button', name='Save dataset', exact=True).click()
                 await ready(page)
-                assert httpx.get(url + '/api/datasets').json()['datasets'][0]['version'] == 'My unsaved version'
+                saved = {d['id']: d for d in httpx.get(url + '/api/datasets').json()['datasets']}
+                assert saved[item['id']]['version'] == 'My unsaved version'
+                # Picking a record moves the URL; a redraw that follows leaves the editor alone.
+                await page.locator('#datasets-list').get_by_role('button', name='Second corpus').click()
+                await ready(page)
+                assert f'dataset={second["id"]}' in page.url
+                await view.get_by_label('Description', exact=True).focus()
+                await page.evaluate('render(); new Promise(resolve => setTimeout(resolve, 100))')
+                await ready(page)
+                assert await page.evaluate('document.activeElement.id') == 'dataset-description'
                 if engine == 'chromium':
                     screenshot = Path(__file__).parents[1] / '.context' / 'datasets-view.png'
                     screenshot.parent.mkdir(exist_ok=True)

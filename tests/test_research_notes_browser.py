@@ -203,7 +203,6 @@ $$
                 await page.locator('#notes-list').get_by_role('button',name='Intervention design').click()
                 await ready(page)
                 assert await page.locator('#note-preview .note-missing-link').count() == 1
-                await dialog.get_by_role('button',name='Close research notes',exact=True).click()
                 assert not errors and not external
 
     run_browser(scenario())
@@ -267,5 +266,68 @@ def test_note_workspace_navigation_and_writing_tools(engine):
                 await ready(page)
                 assert await page.locator('#notes-list button').count() == 0
                 assert httpx.get(url+'/api/research-notes',headers={'X-Doxograph-Workspace':workspace['id']}).json()['notes'][0]['title'] == 'Replication protocol'
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine',['chromium','webkit'])
+def test_notes_view_keeps_the_library_usable_and_the_draft_across_navigation(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study',title='Evaluation study'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':900})
+            errors = []
+            page.on('pageerror',lambda error: errors.append(str(error)))
+            with _server() as url:
+                note = httpx.post(url+'/api/research-notes', json={'title':'Working argument'}).json()
+                # Older links, including the ones written into notes, name the note in the query.
+                await page.goto(url+'/?note='+note['id'])
+                view = page.locator('#research-notes')
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert '?note=' not in page.url and 'view=notes' in page.url and 'note='+note['id'] in page.url
+                assert await page.locator('#btn-research-notes').get_attribute('aria-current') == 'page'
+                assert await page.locator('#side').is_visible()
+                assert not await page.locator('#panes').is_visible()
+                assert await page.locator('dialog[open]').count() == 0
+                await page.locator('#note-body').fill('An unsaved paragraph.')
+                await page.locator('#papers').get_by_text('Evaluation study').click()
+                await view.wait_for(state='hidden')
+                assert 'paper=study' in page.url
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert await page.locator('#note-body').input_value() == 'An unsaved paragraph.'
+                assert 'Unsaved changes' in await page.locator('#notes-status').inner_text()
+                # The sidebar entry also returns to the note last open.
+                await page.locator('#papers').get_by_text('Evaluation study').click()
+                await view.wait_for(state='hidden')
+                await page.get_by_role('button',name='Research notes',exact=True).click()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert await page.locator('#note-body').input_value() == 'An unsaved paragraph.'
+                await page.locator('#note-body').press('Control+s')
+                await ready(page)
+                assert httpx.get(url+'/api/research-notes').json()['notes'][0]['body'] == 'An unsaved paragraph.'
+                # Picking a note moves the URL; a redraw that follows leaves the editor alone.
+                await view.get_by_role('button',name='New note',exact=True).click()
+                await _answer(page,'Create note','Second argument')
+                await ready(page)
+                await page.evaluate('render(); new Promise(resolve => setTimeout(resolve, 100))')
+                await ready(page)
+                await page.locator('#notes-list').get_by_role('button',name='Working argument').click()
+                await ready(page)
+                assert 'note='+note['id'] in page.url
+                await page.locator('#note-body').focus()
+                await page.evaluate('render(); new Promise(resolve => setTimeout(resolve, 100))')
+                await ready(page)
+                assert await page.evaluate('document.activeElement.id') == 'note-body'
+                if engine == 'chromium':
+                    Path('.context').mkdir(exist_ok=True)
+                    await page.screenshot(path='.context/research-notes-view.png')
+                assert not errors
 
     run_browser(scenario())
