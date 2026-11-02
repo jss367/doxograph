@@ -249,10 +249,14 @@ async function openAsk(scope) {
   document.body.classList.add('agent-open');
   $('btn-agent').setAttribute('aria-expanded', 'true');
   fitAskPane();
-  const workspace = currentWorkspace();
-  $('agent-workspace').textContent = `Conversation in ${workspace?.name || workspaceClient.workspaceId}`;
+  syncAskWorkspace();
   $('agent-question').focus();
   await opening;
+}
+function syncAskWorkspace() {
+  const owner = agentChats.workspace;
+  const workspace = workspaceClient.workspaces.find(workspace => workspace.id === owner);
+  $('agent-workspace').textContent = owner ? `Conversation in ${workspace?.name || owner}` : '';
 }
 function closeAsk() {
   const restoreFocus = $('library-agent').contains(document.activeElement);

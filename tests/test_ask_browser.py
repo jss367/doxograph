@@ -710,3 +710,35 @@ def test_ask_docks_before_a_wide_sidebar_squeezes_the_workspace(engine):
                 assert not errors
     run_browser(scenario())
 
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_ask_owner_name_tracks_registry_updates_without_changing_conversation(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                other = httpx.post(url + '/api/workspaces', json={'name': 'Other workspace'}).json()['workspace']['id']
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator('#agent-question').fill('Keep the same conversation')
+                await page.locator('#workspace-actions > summary').click()
+                await page.locator('#btn-workspace-rename').click()
+                await page.locator('#ask-input').fill('Renamed library')
+                await page.locator('#ask-ok').click()
+                await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Renamed library')
+                await page.wait_for_function('workspaceClient.pendingMutations === 0')
+                await page.locator('#workspace').select_option(other)
+                await expect(page.locator('#workspace')).to_have_value(other)
+                await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Renamed library')
+                # Refreshing metadata for the originating workspace while viewing another
+                # workspace must still label the original conversation, not the selection.
+                response = httpx.patch(url + '/api/workspaces/default', json={'name': 'Recovery library'})
+                response.raise_for_status()
+                await page.evaluate('loadWorkspaces()')
+                await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Recovery library')
+                await expect(page.locator('#agent-question')).to_have_value('Keep the same conversation')
+                assert await page.evaluate('agentChats.workspace') == 'default'
+    run_browser(scenario())
