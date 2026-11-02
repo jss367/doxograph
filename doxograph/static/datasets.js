@@ -68,7 +68,7 @@ const Datasets = (() => {
       <div class="dataset-actions">${button('save','Save dataset','class="primary"')}${saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel','Cancel')}</div>
       <div class="dataset-fields">${input('name','Dataset name')}${input('version','Version')}
       ${input('description','Description',true,'',20000)}
-      ${input('source','Source URL or local path',false,'A reference to the data’s location.',4000)}
+      ${input('source','Source URL or local path',false,'Use a local conversation JSON/JSONL file, survey export, or Gloom directory to inspect it in Loupe.',4000)}
       ${input('license','License',false,'',1000)}
       ${input('access_notes','Access notes',true,'Permissions, download instructions, or other requirements.',20000)}</div>
       <fieldset class="dataset-roles"><legend>Role in this project</legend>${Object.entries(roles).map(([value,label]) => `<label><input type="checkbox" data-role="${value}" ${draft.roles.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</fieldset>
@@ -86,6 +86,10 @@ const Datasets = (() => {
   function renderSource() {
     const container = el('dataset-source-link');
     container.replaceChildren();
+    if (/^(\/|~\/|file:)/.test(draft.source.trim())) {
+      container.innerHTML = button('loupe', 'Open in Loupe');
+      return;
+    }
     try {
       const url = new URL(draft.source);
       if (!['http:','https:'].includes(url.protocol)) return;
@@ -93,6 +97,28 @@ const Datasets = (() => {
       link.href = url.href; link.textContent = 'Open source'; link.target = '_blank'; link.rel = 'noopener noreferrer';
       container.append(link);
     } catch (_) { /* Local paths remain available as editable text. */ }
+  }
+  function openInLoupe() {
+    if (busy) return;
+    // Reserve the viewer during the click so browsers allow the new window.
+    const viewer = window.open('about:blank', '_blank');
+    if (viewer) viewer.opener = null;
+    run(async () => {
+      status('Starting Loupe…');
+      try {
+        const result = await request('/loupe', 'POST', {source:draft.source});
+        const url = new URL(result.url);
+        if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) throw new Error('Loupe returned an invalid local address.');
+        if (viewer && !viewer.closed) viewer.location.replace(url.href);
+        status(dirty() ? 'Loupe is ready. Your dataset edits are still unsaved. ' : 'Loupe is ready. ');
+        const link = document.createElement('a');
+        link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open viewer';
+        el('datasets-status').append(link);
+      } catch (error) {
+        if (viewer && !viewer.closed) viewer.close();
+        throw error;
+      }
+    });
   }
   function renderSavedVersion(item) {
     if (!item) return '<p>This dataset record has been deleted.</p>';
@@ -230,6 +256,7 @@ const Datasets = (() => {
     if (!target) return;
     event.preventDefault();
     if (target.dataset.datasetAction === 'close') { close(); return; }
+    if (target.dataset.datasetAction === 'loupe') { openInLoupe(); return; }
     run(() => action(target.dataset.datasetAction,target));
   });
   el('datasets-sheet').addEventListener('cancel', event => { event.preventDefault(); close(); });

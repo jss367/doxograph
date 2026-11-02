@@ -590,6 +590,29 @@ writing space are stored locally in `note-images/`.
   Workspace archives include the original records and a readable `datasets.md`
   inventory. Source references point to your data; adding a record does not
   upload, download, or copy dataset files.
+  For a local source, **Open in Loupe** starts the dataset viewer in a separate
+  window, including before you save the record. Supported sources are conversation
+  JSON/JSONL files with a `messages` array per record, `loupe.survey.v1` survey
+  JSON exports, and Gloom directories containing both `gloom-train.parquet` and
+  `gloom-test.parquet` (either file can also be selected). Use an absolute path,
+  a `~/` path, or a local `file://` URL. Download remote datasets first.
+  The integrated launcher is available on macOS and Linux. On Windows or other
+  unsupported platforms, start Loupe separately and save its URL as the dataset
+  source; **Open source** opens the viewer.
+  Install [Loupe](https://github.com/jss367/loupe) at `~/git/loupe`, or set
+  `DOXOGRAPH_LOUPE_DIR` to its checkout before starting Doxograph. The launcher
+  requires a compatible Loupe version; the verified baseline is
+  [`bb7d2b4`](https://github.com/jss367/loupe/commit/bb7d2b4e351587b61e3505d11649e71c4574f3b5)
+  or newer, which includes both `--conversations` and `--survey`. Update older
+  checkouts before using these modes. The launcher
+  uses Loupe's `.venv/bin/python` when available, otherwise `python3` from PATH;
+  `DOXOGRAPH_LOUPE_PYTHON` overrides the interpreter. Install Loupe's dependencies
+  in that interpreter for conversation/Gloom support. Running viewers are reused,
+  reloaded when source files change, and stopped when Doxograph shuts down.
+  Each source path uses a stable local port so Loupe's browser-local notes remain
+  available across restarts. Keep using the same browser and source path and
+  export reviews before moving files. An occupied port reports an error; it
+  never opens an unrelated server. Dataset files stay unchanged.
 - **Research notes** are a separate writing space for arguments, literature
   reviews, derivations, and experiment plans. Open **Research notes** in the
   sidebar to create, search, rename, and write notes in Markdown with a live

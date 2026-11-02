@@ -15,6 +15,69 @@ async def ready(page):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1100, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Dataset name', exact=True).fill('Conversation examples')
+                source = dialog.get_by_label('Source URL or local path', exact=True)
+                await source.fill('/data/Conversation examples.jsonl')
+                launches = []
+
+                async def launch(route):
+                    launches.append(route.request.post_data_json)
+                    await route.fulfill(json={'url': url + '/?loupe-viewer'})
+
+                await page.route('**/api/datasets/loupe', launch)
+                async with page.expect_popup() as opened:
+                    await dialog.get_by_role('button', name='Open in Loupe', exact=True).click()
+                viewer = await opened.value
+                await viewer.wait_for_url(url + '/?loupe-viewer')
+                await ready(page)
+                assert await viewer.evaluate('window.opener === null')
+                assert launches == [{'source': '/data/Conversation examples.jsonl'}]
+                assert 'still unsaved' in await page.locator('#datasets-status').inner_text()
+                assert httpx.get(url + '/api/datasets').json() == {'datasets': []}
+                assert await source.input_value() == '/data/Conversation examples.jsonl'
+                await viewer.close()
+
+                # A blocked popup still leaves a normal, usable viewer link.
+                await page.evaluate('window.open = () => null')
+                await dialog.get_by_role('button', name='Open in Loupe', exact=True).click()
+                await ready(page)
+                assert await page.get_by_role('link', name='Open viewer', exact=True).get_attribute('href') == url + '/?loupe-viewer'
+
+                await page.unroute('**/api/datasets/loupe', launch)
+                await page.route('**/api/datasets/loupe', lambda route: route.fulfill(
+                    status=422, json={'detail': 'This dataset format is not supported by Loupe.'}))
+                await dialog.get_by_role('button', name='Open in Loupe', exact=True).click()
+                await ready(page)
+                assert 'not supported' in await page.locator('#datasets-status').inner_text()
+                assert await source.input_value() == '/data/Conversation examples.jsonl'
+                assert await dialog.get_by_role('button', name='Open in Loupe', exact=True).is_enabled()
+                await source.fill('https://example.org/dataset.json')
+                assert await dialog.get_by_role('button', name='Open in Loupe', exact=True).count() == 0
+                assert await dialog.get_by_role('link', name='Open source', exact=True).get_attribute('href') == 'https://example.org/dataset.json'
+                await source.fill('javascript:alert(1)')
+                assert await page.locator('#dataset-source-link').inner_text() == ''
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_dataset_editor_and_linked_research(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))

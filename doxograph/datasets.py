@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal, Self
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from . import config, storage, store
+from . import config, loupe, storage, store
 from .notebook import PaperKey, Reference
 
 router = APIRouter(prefix="/api/datasets")
@@ -52,6 +52,16 @@ class DatasetBody(BaseModel):
 
 class DatasetUpdate(DatasetBody):
     revision: Token
+
+
+class LoupeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/loupe")
+def open_in_loupe(body: LoupeBody) -> dict[str, str]:
+    return {"url": loupe.open_dataset(body.source)}
 
 
 class SavedDataset(DatasetBody):
