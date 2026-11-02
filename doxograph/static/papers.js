@@ -751,7 +751,7 @@ $('papers').addEventListener('click', (event) => {
 // Paper actions open the shared Ask panel with a fresh, explicit scope.
 document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-paper-chat]');
-  if (button && !button.disabled) openAsk({mode: 'paper', papers: [button.dataset.paperChat], focus: []});
+  if (button && !button.disabled) openAsk({mode: 'paper', papers: [button.dataset.paperChat], focus: []}, button);
 });
 // Chat boxes send on Enter and take Shift+Enter as a new line, like other chat apps.
 // Enter that confirms an IME composition belongs to the composition, not the form;

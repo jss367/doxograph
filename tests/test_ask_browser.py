@@ -821,3 +821,34 @@ def test_removing_an_ask_source_disables_send_and_explains_the_repair(engine):
                 await expect(page.locator('#agent-send')).to_be_enabled()
     run_browser(scenario())
 
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_closing_contextual_ask_restores_the_opener_or_falls_back(engine):
+    seed()
+    claim = store.load_paper('a')['claims'][0]
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url + '/#paper=a')
+                for selector in ['[data-paper-chat="a"]', f'[data-ask-claim="{claim["id"]}"]']:
+                    opener = page.locator(selector).first
+                    await opener.click()
+                    await expect(page.locator('#agent-question')).to_be_focused()
+                    await page.keyboard.press('Escape')
+                    await expect(opener).to_be_focused()
+                await page.locator('#btn-back-library').click()
+                await page.locator('[data-select-paper="a"]').first.check()
+                await page.locator('#ask-selection').click()
+                await page.keyboard.press('Escape')
+                await expect(page.locator('#ask-selection')).to_be_focused()
+                # Navigation can retire a contextual opener while Ask remains open.
+                await page.locator('#papers li[data-paper="a"]').click()
+                await page.locator('[data-paper-chat="a"]').first.click()
+                await page.locator('#papers li[data-paper="b"]').click()
+                await page.locator('#agent-question').focus()
+                await page.keyboard.press('Escape')
+                await expect(page.locator('#btn-agent')).to_be_focused()
+    run_browser(scenario())

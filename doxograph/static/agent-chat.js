@@ -152,8 +152,8 @@ function syncAgentChatControls() {
   $('agent-status').textContent = chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
 }
 
-$('btn-agent').addEventListener('click', () => {
-  openAsk(null);
+$('btn-agent').addEventListener('click', event => {
+  openAsk(null, event.currentTarget);
 });
 sendOnEnter($('agent-question'));
 $('agent-question').addEventListener('input', () => { if (activeAgentChat()) activeAgentChat().draft = $('agent-question').value; });
@@ -242,7 +242,11 @@ function renderAskScope(chat) {
     : scope.papers.length > 1 ? ['Compare methods', 'Where do their findings differ?'] : ['Explain the main result', 'What are the limitations?'];
   $('agent-starters').innerHTML = chat.messages.length ? '' : starters.map(text => `<button type="button" data-starter="${esc(text)}" ${chat.busy ? 'disabled' : ''}>${esc(text)}</button>`).join('');
 }
-async function openAsk(scope) {
+let askOpener = null;
+async function openAsk(scope, opener = document.activeElement) {
+  if (!$('library-agent').contains(opener)) {
+    askOpener = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+  }
   askCatalogs.set(workspaceClient.workspaceId, {papers: structuredClone(S.papers), claims: S.claims.map(c => ({paper:c.paper, id:c.id, text:c.text, quote:c.quote, locator:c.locator, tags:c.tags, reviewed:c.reviewed}))});
   const opening = agentChats.open(workspaceClient.workspaceId, null, scope ? {fresh: true, scope} : {});
   $('library-agent').hidden = false;
@@ -264,7 +268,12 @@ function closeAsk() {
   document.body.classList.remove('agent-open');
   fitAskPane();
   $('btn-agent').setAttribute('aria-expanded', 'false');
-  if (restoreFocus) $('btn-agent').focus({preventScroll: true});
+  if (restoreFocus) {
+    const target = askOpener?.isConnected && !askOpener.disabled && askOpener.getClientRects().length
+      ? askOpener : $('btn-agent');
+    target.focus({preventScroll: true});
+    if (document.activeElement !== target) $('btn-agent').focus({preventScroll: true});
+  }
 }
 // This pane owns its keyboard, while shortcuts elsewhere still work.
 $('library-agent').addEventListener('keydown', event => {
@@ -313,11 +322,11 @@ $('agent-starters').addEventListener('click', async event => {
 });
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-ask-claim]');
-  if (button) openAsk({mode:'paper', papers:[button.dataset.paper], focus:[{paper:button.dataset.paper, claim:button.dataset.askClaim}]});
+  if (button) openAsk({mode:'paper', papers:[button.dataset.paper], focus:[{paper:button.dataset.paper, claim:button.dataset.askClaim}]}, button);
 });
-$('ask-selection').addEventListener('click', () => {
+$('ask-selection').addEventListener('click', event => {
   const selection = ResearchTools.selection();
-  if (selection.papers.length) openAsk({mode: selection.papers.length === 1 ? 'paper' : 'selected', ...selection});
+  if (selection.papers.length) openAsk({mode: selection.papers.length === 1 ? 'paper' : 'selected', ...selection}, event.currentTarget);
 });
 function renderSourcePicker() {
   const q = $('source-search').value.trim().toLocaleLowerCase();
