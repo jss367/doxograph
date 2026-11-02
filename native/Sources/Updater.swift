@@ -18,7 +18,7 @@ enum Updater {
     static let updatedShaDefaultsKey = "DoxographUpdatedSha"
 
     struct Outcome {
-        /// `git log --oneline` for what the update brought in; empty when nothing did.
+        /// A short list of what the update brought in; empty when nothing did.
         let changes: String
         /// True when `native/` changed and the running bundle was replaced.
         let appRebuilt: Bool
@@ -204,7 +204,7 @@ enum Updater {
             return .success(Outcome(changes: "", appRebuilt: false))
         }
         let range = "\(base)..\(head)"
-        let changes = git(["log", "--oneline", "--no-decorate", range]).output.trimmed
+        let changes = summarize(git(["log", "--format=%s", range]).output.trimmed)
         // Everything below keys off this list, and a failure here would read as
         // "nothing changed" and record the update as installed. Refuse instead.
         // Without --no-renames a file moved out of native/ shows up only under
@@ -248,6 +248,18 @@ enum Updater {
 
         UserDefaults.standard.set(head, forKey: Self.installedKey(for: repository))
         return .success(Outcome(changes: changes, appRebuilt: appRebuilt))
+    }
+
+    /// The newest few commit subjects as a bulleted list, then a count of the
+    /// rest. An update that skips several releases brings in dozens of commits,
+    /// and listing them all runs the alert off the screen.
+    static func summarize(_ log: String, limit: Int = 5) -> String {
+        let subjects = log.split(separator: "\n").map(String.init)
+        var lines = subjects.prefix(limit).map { "• \($0)" }
+        if subjects.count > limit {
+            lines.append("…and \(subjects.count - limit) more.")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Put the freshly built bundle where the running one is. When the app is
