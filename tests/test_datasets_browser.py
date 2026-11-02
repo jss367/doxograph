@@ -201,7 +201,6 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
                 await page.get_by_role('button', name='Datasets', exact=True).click()
                 await ready(page)
                 assert await page.locator('#datasets-list button').count() == 0
-                await dialog.get_by_role('button', name='Close datasets', exact=True).click()
                 await page.locator('#workspace').select_option('default')
                 await page.get_by_role('button', name='Datasets', exact=True).click()
                 await ready(page)
@@ -269,5 +268,56 @@ def test_replacing_dataset_draft_requires_inspecting_intervening_changes(engine,
                 else:
                     assert await page.locator('#dataset-form').count() == 0
                     assert expected in await page.locator('#datasets-status').inner_text()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                item = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'version': 'Saved'}).json()
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert 'view=datasets' in page.url and f'dataset={item["id"]}' in page.url
+                assert await page.locator('#btn-datasets').get_attribute('aria-current') == 'page'
+                assert not await page.locator('#panes').is_visible()
+                # The rest of the app stays live beside the catalog.
+                assert await page.locator('#side').is_visible()
+                assert await page.locator('dialog[open]').count() == 0
+                await view.get_by_label('Version', exact=True).fill('My unsaved version')
+                await page.locator('#papers').get_by_text('Evaluation study').click()
+                await view.wait_for(state='hidden')
+                assert 'paper=study' in page.url
+                assert await page.locator('#btn-datasets').get_attribute('aria-current') is None
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
+                assert 'Unsaved changes' in await page.locator('#datasets-status').inner_text()
+                assert httpx.get(url + '/api/datasets').json()['datasets'][0]['version'] == 'Saved'
+                # Keys typed in the catalog stay with it.
+                await view.get_by_role('button', name='Save dataset', exact=True).focus()
+                await page.keyboard.press('Escape')
+                assert await view.is_visible()
+                await view.get_by_role('button', name='Save dataset', exact=True).click()
+                await ready(page)
+                assert httpx.get(url + '/api/datasets').json()['datasets'][0]['version'] == 'My unsaved version'
+                if engine == 'chromium':
+                    screenshot = Path(__file__).parents[1] / '.context' / 'datasets-view.png'
+                    screenshot.parent.mkdir(exist_ok=True)
+                    await page.screenshot(path=str(screenshot))
+                assert not errors
 
     run_browser(scenario())

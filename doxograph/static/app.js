@@ -61,7 +61,7 @@ const NEW_CLAIM_ID = '__new__';
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
 const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
-            drafts: {}, error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+            drafts: {}, error: null, view: 'library', dataset: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
             graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false }, paperSort: null,
@@ -142,7 +142,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph'];
+const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph', 'datasets'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -162,6 +162,7 @@ function currentHash() {
   if (V.unverified) params.set('unverified', '1');
   if (!V.group) params.set('group', '0');
   if (V.view === 'claims' && V.selectedId) params.set('sel', V.selectedId);
+  if (V.view === 'datasets' && V.dataset) params.set('dataset', V.dataset);
   if (V.tensionStatus) params.set('tstatus', V.tensionStatus);
   if (V.agreementStatus) params.set('astatus', V.agreementStatus);
   return params.toString();
@@ -265,6 +266,7 @@ function applyHash() {
   V.unverified = params.get('unverified') === '1';
   V.group = params.get('group') !== '0';
   V.selectedId = params.get('sel') || null;
+  V.dataset = params.get('dataset') || null;
   V.tensionStatus = readStatus(params.get('tstatus'));
   V.agreementStatus = readStatus(params.get('astatus'));
   V.editing = null;
@@ -467,7 +469,7 @@ function resetWorkspaceView() {
   Object.assign(V, {
     paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
-    error: null, view: 'library', tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+    error: null, view: 'library', dataset: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
     graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false },
@@ -638,7 +640,7 @@ function renderStorageWarnings() {
 
 function showView(view) {
   const destination = {library: 'papers', claims: 'papers', graph: 'graph-nav', research: 'research-nav',
-    tensions: 'tensions-nav', agreements: 'agreements-nav'}[view];
+    tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets'}[view];
   if (destination) revealSidebar($(destination));
   if (view === V.view) return;
   if (V.view === 'research') captureResearchDraft();
@@ -726,8 +728,14 @@ function drawContent() {
   $('btn-claims-view').setAttribute('aria-pressed', String(V.view === 'claims'));
   $('q').placeholder = library ? 'Search papers…' : 'Search claims, quotes, and papers…';
   if (V.view !== 'claims') $('paperhead').innerHTML = '';
+  document.body.classList.toggle('datasets-view', V.view === 'datasets');
+  if (V.view === 'datasets') $('btn-datasets').setAttribute('aria-current', 'page');
+  else $('btn-datasets').removeAttribute('aria-current');
   if (V.view === 'graph') { renderGraph(); return; }
   graphStop();   // leaving the map, or never on it: no animation loop off screen
+  // The catalog keeps its own page, and its draft while the reader is away.
+  if (V.view === 'datasets') { $('content').innerHTML = ''; Datasets.show(V.dataset); return; }
+  Datasets.hide();
   if (library) { renderLibrary(); return; }
   if (V.view === 'tensions') { renderTensions(); return; }
   if (V.view === 'research') { renderResearch(); return; }
@@ -1386,6 +1394,10 @@ async function boot() {
     V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
     $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
     scheduleTextSearch(); renderAll(); syncHash(true);
+  }, (id) => { V.dataset = id; syncHash(); });
+  $('btn-datasets').addEventListener('click', () => {
+    if (V.view === 'datasets') return;
+    showView('datasets'); syncHash(true); renderAll();
   });
   ResearchTools.connect(workspaceClient);
   window.FocusedReview.connect(workspaceClient);
@@ -1393,6 +1405,15 @@ async function boot() {
   AppStartup.phase('connection');
   await loadWorkspaces();
   applyHash();
+  const noteId = new URLSearchParams(location.search).get('note');
+  // Older links name a dataset in the query string, from when it opened in a sheet.
+  const datasetId = new URLSearchParams(location.search).get('dataset');
+  if (datasetId) {
+    const url = new URL(location.href);
+    url.searchParams.delete('dataset');
+    history.replaceState(null, '', url);
+    if (!noteId) Object.assign(V, {view: 'datasets', paper: null, dataset: datasetId});
+  }
   const changed = await pull();
   AppStartup.phase('interface');
   if (changed) corpusChanged();
@@ -1412,10 +1433,7 @@ async function boot() {
   // URL naming Research — a bookmark, or a reload of the page while on it —
   // with an active nav entry and a blank main pane. Draw it once here.
   if (V.view === 'research') renderContent();
-  const noteId = new URLSearchParams(location.search).get('note');
   if (noteId) await ResearchNotes.open(noteId);
-  const datasetId = new URLSearchParams(location.search).get('dataset');
-  if (datasetId && !noteId) await Datasets.open(datasetId);
   libraryInitialized = true;
   $('btn-refresh-library').disabled = false;
   poller.start();
