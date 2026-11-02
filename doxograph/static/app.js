@@ -6,7 +6,9 @@ try {
   initialWorkspaceId = new URLSearchParams(location.hash.slice(1)).get('ws')
     || localStorage.getItem('doxograph-workspace') || 'default';
 } catch (_) { /* storage may be unavailable */ }
+const editHistory = createEditHistory();
 const workspaceClient = createWorkspaceClient({
+  history: editHistory,
   workspaceId: initialWorkspaceId,
   fetch: (...args) => fetch(...args),
   rememberWorkspace(id) {

@@ -98,8 +98,8 @@ const ResearchTools = (() => {
   function paperCheckbox(p) {
     return `<input type="checkbox" class="paper-selection" aria-label="Select paper: ${html(p.title || p.key)}" data-select-paper="${html(p.key)}" ${papers.has(p.key) ? 'checked' : ''}>`;
   }
-  async function request(path = '', method = 'GET', body, ws = modalWorkspace || workspace) {
-    return client.request('/api/notebook' + path, {method, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':ws},
+  async function request(path = '', method = 'GET', body, ws = modalWorkspace || workspace, history = true) {
+    return client.request('/api/notebook' + path, {method, history, headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':ws},
       ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   }
   function message(text, error = false) {
@@ -886,7 +886,7 @@ const ResearchTools = (() => {
       // page is the one to keep, so this save stands down.
       const successor = reader && reader !== active && reader.key === key ? reader : null;
       if (successor) { if (successor.wantedPage !== successor.savedPage) queueProgressSave(successor); return; }
-      await mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === number) return false; r.page = number; }, {refresh:false});
+      await mutateNotebook(ws, n => { const r = n.reading.find(r => r.paper === paper); if (!r || r.page === number) return false; r.page = number; }, {refresh:false, history:false});
       active.savedPage = number;
       // What the queue and the Continue card show until the next poll.
       if (ws === client.workspaceId) {
@@ -995,10 +995,10 @@ const ResearchTools = (() => {
   // Read, change, write: the saved notebook rather than a copy held since the
   // modal last opened, so a highlight made here cannot overwrite a board saved
   // there. `fn` returns false to leave the notebook as it is.
-  async function mutateNotebook(ws, fn, {refresh = true} = {}) {
+  async function mutateNotebook(ws, fn, {refresh = true, history = true} = {}) {
     const latest = await request('', 'GET', undefined, ws);
     if (fn(latest) === false) return latest;
-    const saved = await request('', 'PUT', latest, ws);
+    const saved = await request('', 'PUT', latest, ws, history);
     if (refresh) await refreshAll();
     return saved;
   }
@@ -1141,7 +1141,7 @@ const ResearchTools = (() => {
         if (!entry) { n.reading.push({paper, status:'reading', page:1, bookmarks:[]}); return; }
         if (entry.status !== 'queued') return false;
         entry.status = 'reading';
-      });
+      }, {history:false});
       // Moved on while the request was out: the paper chosen since stands.
       if (client.workspaceId !== ws || navigationVersion() !== navigation) return;
       const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
@@ -1512,7 +1512,17 @@ const ResearchTools = (() => {
     // switch leaves the note where it was.
     return true;
   }
+  async function historyChanged() {
+    if (markEditor && !highlightDrafting()) {
+      const mark = client.state.notebook?.highlights.find(h => h.id === markEditor.id);
+      if (mark) markEditor.text = markEditor.saved = mark.note;
+      else markEditor = null;
+    }
+    if (el('research-tools').open && !unsaved()) { notebook = await request(); render(); }
+    redrawContent();
+  }
   return {selection: () => ({papers: selectedPapers(), focus: refs().map(r => ({paper: r.paper, claim: r.claim}))}),
+    historyChanged,
     connect(value) { client = value; }, sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     hasUnsavedChanges: () => Boolean(unsaved() || busy),
     openBoard: id => run(() => open('boards', id))};

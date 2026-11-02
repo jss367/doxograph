@@ -121,7 +121,7 @@ class SelectWorkspace:
         # registry needs to be reported in the UI.
         if scope.get("path") in {
             "/", "/app.css", "/app.js", "/appearance.js", "/paper-map.js",
-            "/workspace-client.js", "/workspace-controller.js", "/poller.js",
+            "/edit-history.js", "/workspace-client.js", "/workspace-controller.js", "/poller.js",
             "/favicon.png", "/api/health", "/api/code",
             "/api/workspaces",
         }:

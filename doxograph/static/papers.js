@@ -462,29 +462,29 @@ async function editPaperTitle(key) {
 async function editLabels(key) {
   const paper = S.papers.find((x) => x.key === key);
   if (!paper) return;
+  const workspace = workspaceClient.workspaceId;
   // The paper's own spelling of a label wins over the sidebar's.
   const inUse = [...(paper.labels || []), ...Object.keys(S.label_counts || {})
     .filter((name) => findLabel(paper.labels, name) === undefined)]
     .sort((a, b) => compareText(labelKey(a), labelKey(b)) || compareText(a, b));
-  const answer = await askText(`Labels for ${paper.title || key}`, {
+  const answer = await askDialog({
+    title: `Labels for ${paper.title || key}`,
     note: (inUse.length ? 'Click a label to add or remove it. ' : '')
       + 'Type new labels separated by commas. Spaces are allowed within a label.',
-    placeholder: 'open source, reading list',
-    value: (paper.labels || []).join(', '),
+    input: {placeholder: 'open source, reading list', value: (paper.labels || []).join(', ')},
     labelChoices: inUse,
+    async onSubmit(text) {
+      try {
+        await api(`/api/papers/${encodeURIComponent(key)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+          body: JSON.stringify({ labels: parseLabels(text) }),
+        });
+        return null;
+      } catch (error) { return `Could not save the labels: ${error.message}`; }
+    },
   });
   if (answer === null) return;   // cancelled: not the same as clearing them
-  const labels = parseLabels(answer);
-  try {
-    await api(`/api/papers/${encodeURIComponent(key)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ labels }),
-    });
-  } catch (e) {
-    toast(`Could not save the labels: ${e.message}`);
-    return;
-  }
   // `refreshAll` rather than `refresh`: the chips are part of the paper's
   // header, which `render` leaves alone while a claim editor is open, and the
   // labels would not appear until that editor was closed. The draft in it is

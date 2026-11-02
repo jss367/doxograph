@@ -426,6 +426,15 @@ Shortcuts button in the header. A paper that arrives with a dozen claims you
 have read in one go has "Mark N reviewed" in its header; the notice that
 follows offers to take it back, and takes back only what that click changed.
 
+`Command-Z` or `Ctrl-Z` undoes saved document titles, labels and
+notes, claim edits and review decisions, PDF highlights and their colors, and
+saved changes to boards, bookmarks, connections, and searches. Add Shift to
+redo. Each workspace keeps its own history for the current session; reloading
+starts a new history. While typing, the shortcut edits the text. A new
+highlight's automatically opened note leaves Undo with the highlight until you
+type. Pending deletions can also be undone until their notice expires. Imports,
+AI runs, and permanent removals cannot be undone with this history.
+
 **Focused review**, above the claims, puts one claim beside its source PDF.
 It starts with the claims matching your current filters and keeps that set
 throughout the session, so marking a claim reviewed does not remove your place

@@ -4,6 +4,51 @@
 
 // --- keyboard -------------------------------------------------------------
 
+// A new highlight opens an empty note automatically. Until the reader types,
+// Undo still belongs to the highlight that was just made.
+const editedTextFields = new WeakSet();
+document.addEventListener('input', event => editedTextFields.add(event.target), true);
+function textOwnsUndo() {
+  const field = document.activeElement;
+  if (field?.matches('[data-highlight-note]') && !editedTextFields.has(field)
+      && !ResearchTools.markDraftOn(V.paper)) return false;
+  return Boolean(field?.isContentEditable || field?.matches('textarea, input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="email"], input[type="password"], input[type="number"]'));
+}
+
+async function undoEdit(redo = false, entry = null, workspace = workspaceClient.workspaceId) {
+  try {
+    const reviews = new Map(S.claims.map(c => [c.id, c.reviewed]));
+    if (workspaceClient.pendingMutations || editHistory.busy) throw new Error('Wait for the current change to finish, then try again.');
+    if (!await editHistory.apply(workspace, redo, entry)) {
+      toast(redo ? 'Nothing to redo.' : 'Nothing to undo.');
+      return;
+    }
+    await refreshAll();
+    if (workspace === workspaceClient.workspaceId) {
+      // An open review editor must learn the restored flag before it can save.
+      const changed = S.claims.filter(c => reviews.has(c.id) && reviews.get(c.id) !== c.reviewed);
+      syncDraftReviews(changed.filter(c => c.reviewed).map(c => c.id), true);
+      syncDraftReviews(changed.filter(c => !c.reviewed).map(c => c.id), false);
+      await ResearchTools.historyChanged();
+    }
+  } catch (error) { toast(`Could not ${redo ? 'redo' : 'undo'}: ${error.message}`, {tone: 'warn'}); }
+}
+
+// Called by the native Edit menu, which consumes Command-Z before WebKit's
+// keydown handler. False asks AppKit to perform its regular text undo instead.
+window.doxographUndo = (redo = false) => {
+  if (textOwnsUndo() || document.querySelector('#ask[open]')) return false;
+  void undoEdit(redo);
+  return true;
+};
+document.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'z'
+      && window.doxographUndo(event.shiftKey)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, true);
+
 function selectedRow(rows) {
   return rows.find((row) => row.id === V.selectedId) || rows[0] || null;
 }
