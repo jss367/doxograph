@@ -1614,3 +1614,61 @@ def test_held_board_edits_stay_out_of_other_saves_and_merge_on_save_board(engine
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_choosing_or_creating_a_board_updates_the_url_and_history(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': board, 'kind': 'board', 'title': title, 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}
+                                      for board, title in [('b1', 'First board'), ('b2', 'Second board')]]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=boards&board=b1')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await page.locator('#board-picker').select_option('b2')
+                await ready(page)
+                assert 'board=b2' in page.url
+                assert await page.locator('#board-title').input_value() == 'Second board'
+                await page.reload()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'Second board'
+                await page.go_back()
+                await ready(page)
+                assert 'board=b1' in page.url
+                assert await page.locator('#board-title').input_value() == 'First board'
+                # Refusing to discard an edit keeps the board and its URL.
+                await page.locator('#board-title').fill('Unsaved board title')
+                await page.locator('#board-picker').select_option('b2')
+                await _answer(page, 'Cancel')
+                await ready(page)
+                assert 'board=b1' in page.url
+                assert await page.locator('#board-picker').input_value() == 'b1'
+                assert await page.locator('#board-title').input_value() == 'Unsaved board title'
+                await view.get_by_role('button', name='Save board', exact=True).click()
+                await ready(page)
+                # A new board is a new destination too.
+                await view.get_by_role('button', name='New board', exact=True).click()
+                await _answer(page, 'Create board', 'Third board')
+                await ready(page)
+                created = next(b for b in httpx.get(url + '/api/notebook').json()['boards'] if b['title'] == 'Third board')
+                assert f"board={created['id']}" in page.url
+                assert await page.locator('#board-title').input_value() == 'Third board'
+                await page.go_back()
+                await ready(page)
+                assert 'board=b1' in page.url
+                assert await page.locator('#board-title').input_value() == 'Unsaved board title'
+                assert not errors
+
+    run_browser(scenario())

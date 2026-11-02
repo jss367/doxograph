@@ -205,6 +205,13 @@ const ResearchTools = (() => {
     shown = false;
     el('research-tools').hidden = true;
   }
+  // A board chosen here is a destination of its own, as a tab is: the URL
+  // names it and Back returns to the board before.
+  function chooseBoard(id) {
+    boardId = id || null;
+    navigate(tab, boardId);
+    render();
+  }
   // The URL follows a tab or board chosen here without asking for a reload.
   function syncLocation() {
     const board = ['boards', 'questions'].includes(tab) ? boardId : null;
@@ -1364,7 +1371,7 @@ const ResearchTools = (() => {
       const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
       if (!title?.trim()) return;
       const board = {id:uid(),kind:asking ? 'question' : 'board',title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
-      notebook.boards.push(board); boardId = board.id; await save(); renderBoards(); return;
+      notebook.boards.push(board); boardId = board.id; await save(); chooseBoard(board.id); return;
     }
     if (name === 'add-board') { tab = 'boards'; render(); message('Choose or create a board, then add the selected claims.'); return; }
     if (name === 'board-add-selection') {
@@ -1386,7 +1393,9 @@ const ResearchTools = (() => {
     if (name === 'delete-board') {
       if (!await confirmDialog('Delete this evidence board? Source claims will remain in the library.',{ok:'Delete board'})) return;
       const id = boardId;
-      notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id]; renderBoards(); return;
+      notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id];
+      // The URL stops naming the board deleted.
+      render(); return;
     }
     if (name.startsWith('entry-')) {
       const entries = editBoard().entries, id = target.closest('[data-entry]').dataset.entry;
@@ -1537,7 +1546,7 @@ const ResearchTools = (() => {
     if (target.id === 'board-picker') run(async () => {
       const next = target.value;
       if (!await discardDrafts()) { target.value = boardId || ''; return; }
-      boardId = next; renderBoards();
+      chooseBoard(next);
     });
     if (target.matches('[data-entry-stance]')) {
       editBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
