@@ -249,6 +249,57 @@ def test_workspace_switch_hides_dataset_before_destination_refresh(engine, faile
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('new_dataset', [False, True])
+def test_dataset_draft_survives_a_later_workspace_guard_refusal(engine, new_dataset):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+    other = config.create_workspace('Another project')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                item = httpx.post(url + '/api/datasets', json={'name': 'Corpus'}).json()
+                await page.goto(url + '/#view=datasets&dataset=' + item['id'])
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                if new_dataset:
+                    await view.get_by_role('button', name='Add dataset', exact=True).click()
+                    await ready(page)
+                    await view.get_by_label('Dataset name', exact=True).fill('New corpus')
+                await view.get_by_label('Version', exact=True).fill('My unsaved version')
+                await page.locator('#papers').get_by_text('Evaluation study', exact=True).click()
+                await view.wait_for(state='hidden')
+                # Simulate the later research guard vetoing an otherwise accepted leave.
+                await page.evaluate('''() => {
+                    window.originalResearchGuard = ResearchTools.beforeWorkspaceSwitch;
+                    ResearchTools.beforeWorkspaceSwitch = async () => false;
+                }''')
+                await page.evaluate('id => { void switchWorkspace(id); }', other['id'])
+                await _answer(page, 'Discard changes')
+                assert await page.locator('#workspace').input_value() == 'default'
+                assert await page.evaluate('Datasets.hasUnsavedChanges()')
+                await page.locator('#btn-datasets').click()
+                await ready(page)
+                assert await view.get_by_label('Dataset name', exact=True).input_value() == ('New corpus' if new_dataset else 'Corpus')
+                assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
+                # Once every guard agrees, committed selection retires the old draft.
+                await page.evaluate('ResearchTools.beforeWorkspaceSwitch = window.originalResearchGuard')
+                await page.evaluate('id => { void switchWorkspace(id); }', other['id'])
+                await _answer(page, 'Discard changes')
+                await page.wait_for_function('id => workspaceClient.workspaceId === id && !workspaceController.pending', arg=other['id'])
+                assert not await view.is_visible()
+                assert not await page.evaluate('Datasets.hasUnsavedChanges()')
+                await page.locator('#btn-datasets').click()
+                await ready(page)
+                assert await page.locator('#datasets-list button').count() == 0
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_dataset_editor_and_linked_research(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))

@@ -321,11 +321,10 @@ const Datasets = (() => {
     if (dirty() || busy) { event.preventDefault(); event.returnValue = ''; }
   });
   return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide,
+    resetWorkspace() { hide(); reset(); },
     hasUnsavedChanges:() => dirty() || busy,
     async beforeWorkspaceSwitch() {
-      if (busy || !await discard()) return false;
-      // The next visit reads the catalog of whichever workspace is open then.
-      draft = saved = null; loaded = false; workspace = null; shown = false;
-      return true;
+      // A later guard may still refuse. Only committed selection clears drafts.
+      return !busy && await discard();
     }};
 })();
