@@ -358,7 +358,9 @@ topics, and reading status, including papers without extracted claims. Click a
 card to open the paper. Reading status comes from the reading queue: papers
 start **Unread**, then show **Queued**, **Reading**, or **Finished**. Search
 matches paper metadata, summaries, claims, and PDF text; matching passages stay
-under their paper. The sidebar's sort order also controls the cards.
+under their paper. Matching titles and author names are highlighted, and those
+papers appear before matches elsewhere. The sidebar's sort order also controls
+the cards, including the order within each search group.
 Choose **Extracted claims** to browse and review claims across papers, or
 **Papers** to return to the library. Saved searches remember this choice.
 

@@ -99,6 +99,7 @@ $('continue-reading').addEventListener('click', (event) => {
 let libraryHTML = null;
 function renderLibrary() {
   const papers = visiblePapers();
+  const highlight = queryHighlighter();
   const topics = new Map();
   for (const claim of S.claims) {
     if (!topics.has(claim.paper)) topics.set(claim.paper, new Set());
@@ -117,10 +118,10 @@ function renderLibrary() {
     return `<article class="library-paper" data-library-paper="${esc(p.key)}">
       <div class="library-paper-heading">
         ${ResearchTools.paperCheckbox(p)}
-        <h3><a class="library-paper-link" href="#${esc(params.toString())}" data-act="library-open-paper" data-paper="${esc(p.key)}">${esc(p.title || p.key)}</a></h3>
+        <h3><a class="library-paper-link" href="#${esc(params.toString())}" data-act="library-open-paper" data-paper="${esc(p.key)}">${highlight(p.title || p.key)}</a></h3>
         <span class="reading-status ${esc(entry?.status || 'unread')}">${status}</span>
       </div>
-      <p class="library-paper-meta">${esc((p.authors || []).join(', ') || 'Authors unknown')} · ${esc(p.year || 'Year unknown')}${entry?.status === 'reading' && entry.page ? ` · Page ${esc(entry.page)}` : ''}</p>
+      <p class="library-paper-meta">${highlight((p.authors || []).join(', ') || 'Authors unknown')} · ${esc(p.year || 'Year unknown')}${entry?.status === 'reading' && entry.page ? ` · Page ${esc(entry.page)}` : ''}</p>
       <p class="library-paper-summary${p.summary ? '' : ' hint'}">${esc(p.summary || 'No summary yet.')}</p>
       <div class="library-paper-topics" aria-label="Topics">${tags.length
         ? tags.map(tag => `<button type="button" class="tag" data-tag="${esc(tag)}">${esc(tag)}</button>`).join(' ')
@@ -211,7 +212,7 @@ function renderPapers() {
   const all = `<li class="${(claims || V.view === 'library') && V.paper === null ? 'active' : ''}" data-paper="">
     <span class="pt">All papers</span>
     <span class="pm">${meta}</span></li>`;
-  const html = all + sortedPapers(shown, V.paperSort).map((p) => `
+  const html = all + searchSortedPapers(shown).map((p) => `
     <li class="${claims && V.paper === p.key ? 'active' : ''}" data-paper="${esc(p.key)}">
       ${ResearchTools.paperCheckbox(p)}<span class="pt"><span class="dot ${esc(p.status)}"></span>${esc(p.title || p.key)}</span>
       <span class="pm">${esc((p.authors || [])[0] ? p.authors[0].split(' ').pop() : '?')}
