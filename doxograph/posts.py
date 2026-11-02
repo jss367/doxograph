@@ -16,6 +16,7 @@ import re
 import socket
 import tempfile
 import zlib
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -24,6 +25,7 @@ from queue import Queue
 from threading import BoundedSemaphore, Lock, Thread
 from time import monotonic
 from urllib.parse import urlsplit
+from typing import Any
 
 import httpx
 from fpdf import FPDF
@@ -66,7 +68,8 @@ query ($id: String) {
 IMAGE_BYTES = 8_000_000
 IMAGE_PIXELS = 16_000_000
 IMAGE_SECONDS = 30.0
-IMAGE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+IMAGE_READ_SECONDS = 20.0
+IMAGE_CONNECT_SECONDS = 10.0
 IMAGE_DECODE_CHUNK = 65536
 POST_IMAGES = 40
 POST_IMAGE_BYTES = 32_000_000
@@ -87,14 +90,14 @@ def parse_url(url: str) -> tuple[str, str] | None:
     return (kind, match.group(1)) if match else None
 
 
-def fetch_post(kind: str, post_id: str, client: httpx.Client) -> dict:
+def fetch_post(kind: str, post_id: str, client: httpx.Client) -> dict[str, Any]:
     """The post as the forum's API returns it."""
     response = client.post(API[kind], json={"query": QUERY, "variables": {"id": post_id}})
     response.raise_for_status()
     body = response.json()
     if body.get("errors"):
         raise ValueError(f"{API[kind]} refused post {post_id}: {body['errors'][0].get('message', '')}")
-    post = ((body.get("data") or {}).get("post") or {}).get("result")
+    post: dict[str, Any] | None = ((body.get("data") or {}).get("post") or {}).get("result")
     if not post:
         raise ValueError(f"{venue_of(kind, False)} has no post {post_id}")
     return post
@@ -106,7 +109,7 @@ def venue_of(kind: str, af: bool) -> str:
     return "AI Alignment Forum" if af else "LessWrong"
 
 
-def metadata(kind: str, post: dict) -> dict:
+def metadata(kind: str, post: dict[str, Any]) -> dict[str, Any]:
     """The paper record for a post, in the shape `fetch_arxiv` returns."""
     posted = post.get("postedAt") or ""
     names = [post.get("user") or {}] + list(post.get("coauthors") or [])
@@ -158,7 +161,7 @@ class _Reader(HTMLParser):
         self.block = Block()
         self.bold = self.italic = 0
         self.links: list[str] = []
-        self.lists: list[list] = []      # [ordered, next number] per open list
+        self.lists: list[list[int]] = []  # [ordered, next number] per open list
         self.quotes = 0
         self.cells = 0                   # open table cells
         self.row_has_cell = False
@@ -195,8 +198,8 @@ class _Reader(HTMLParser):
 
     # Parser callbacks
 
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
         if self.skip:
             if tag == self.skip[-1]:
                 self.skip.append(tag)
@@ -204,19 +207,20 @@ class _Reader(HTMLParser):
         if tag in SKIPPED or tag.startswith("mjx-"):
             self.skip.append(tag)
             return
-        classes = (attrs.get("class") or "").split()
+        classes = (attributes.get("class") or "").split()
         if "mjx-math" in classes:
             # MathJax spells each glyph out in its own span; the label is the
             # formula as one line of text.
-            self._text(f" {attrs.get('aria-label') or ''} ")
+            self._text(f" {attributes.get('aria-label') or ''} ")
             self.skip.append(tag)
             return
         if self.cells:
             if tag in ("br", "p", "div", "li"):
                 self._text(" ")
             elif tag == "img":
-                self._text(f" [image{': ' + attrs['alt'] if attrs.get('alt') else ''}] ")
-            self._inline(tag, attrs)
+                alt = attributes.get("alt")
+                self._text(f" [image{': ' + alt if alt else ''}] ")
+            self._inline(tag, attributes)
             return
         if tag in ("td", "th"):
             if self.row_has_cell:
@@ -238,7 +242,7 @@ class _Reader(HTMLParser):
             return
         if tag == "li":
             if self.lists and self.lists[-1][0]:
-                number = attrs.get("value")
+                number = attributes.get("value")
                 if number and number.isdigit():
                     self.lists[-1][1] = int(number)
                 prefix = f"{self.lists[-1][1]}. "
@@ -250,11 +254,11 @@ class _Reader(HTMLParser):
             self.block.indent = max(self._indent() - 1, 0)
             return
         if tag == "img":
-            src = attrs.get("src") or ""
+            src = attributes.get("src") or ""
             if src.startswith(("http://", "https://")):
                 self._flush()
                 self.block.style, self.block.src = "img", src
-                self.block.runs = [(attrs.get("alt") or "", "", "")]
+                self.block.runs = [(attributes.get("alt") or "", "", "")]
                 self._flush()
             return
         if tag == "br":
@@ -281,9 +285,9 @@ class _Reader(HTMLParser):
         if tag in BLOCK_TAGS:
             self._open()
             return
-        self._inline(tag, attrs)
+        self._inline(tag, attributes)
 
-    def _inline(self, tag, attrs):
+    def _inline(self, tag: str, attrs: dict[str, str | None]) -> None:
         if tag in ("b", "strong"):
             self.bold += 1
         elif tag in ("i", "em"):
@@ -292,7 +296,7 @@ class _Reader(HTMLParser):
             href = attrs.get("href") or ""
             self.links.append(href if href.startswith(("http://", "https://")) else "")
 
-    def handle_startendtag(self, tag, attrs):
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         # A void element written `<br/>` never gets an end tag; no others do.
         self.handle_starttag(tag, attrs)
         if tag not in ("img", "br", "hr") and not self.skip:
@@ -300,7 +304,7 @@ class _Reader(HTMLParser):
         elif self.skip and tag == self.skip[-1]:
             self.skip.pop()
 
-    def handle_endtag(self, tag):
+    def handle_endtag(self, tag: str) -> None:
         if self.skip:
             if tag == self.skip[-1]:
                 self.skip.pop()
@@ -336,7 +340,7 @@ class _Reader(HTMLParser):
         elif tag in BLOCK_TAGS:
             self._flush()
 
-    def handle_data(self, data):
+    def handle_data(self, data: str) -> None:
         if self.skip:
             return
         if not self.pre:
@@ -344,7 +348,7 @@ class _Reader(HTMLParser):
         if data:
             self._text(data)
 
-    def close(self) -> list[Block]:
+    def close(self) -> list[Block]:  # type: ignore[override]  # answers with the blocks; only `blocks_of` closes a reader
         super().close()
         self._flush()
         return self.blocks
@@ -371,6 +375,12 @@ FALLBACKS = [
 ]
 
 
+#: One answer from `socket.getaddrinfo`: family, type, protocol, name, address.
+_AddressInfo = tuple[socket.AddressFamily, socket.SocketKind, int, str,
+                     tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]]
+_Resolver = Callable[..., Sequence[_AddressInfo]]
+
+
 def _clean(text: str) -> str:
     # Control characters other than the line breaks a <br> leaves have no
     # glyph in any font.
@@ -385,14 +395,15 @@ class _ImageResolver:
     No executor context or shutdown waits for a late resolver answer.
     """
 
-    def __init__(self, workers: int = 2):
-        self.jobs = Queue(maxsize=workers)
+    def __init__(self, workers: int = 2) -> None:
+        self.jobs: Queue[tuple[Future[Sequence[_AddressInfo]], _Resolver, str, int, float] | None] = Queue(
+            maxsize=workers)
         self.slots = BoundedSemaphore(workers)
         self.threads = [Thread(target=self._run, daemon=True, name="post-image-dns") for _ in range(workers)]
         for thread in self.threads:
             thread.start()
 
-    def _run(self):
+    def _run(self) -> None:
         while True:
             job = self.jobs.get()
             if job is None:
@@ -412,11 +423,11 @@ class _ImageResolver:
                 self.slots.release()
                 self.jobs.task_done()
 
-    def resolve(self, resolver, host: str, port: int, deadline: float):
+    def resolve(self, resolver: _Resolver, host: str, port: int, deadline: float) -> Sequence[_AddressInfo]:
         _image_remaining(deadline)
         if not self.slots.acquire(blocking=False):
             raise ValueError("image DNS workers are occupied")
-        future = Future()
+        future: Future[Sequence[_AddressInfo]] = Future()
         try:
             self.jobs.put_nowait((future, resolver, host, port, deadline))
         except BaseException:
@@ -429,11 +440,11 @@ class _ImageResolver:
             raise
 
 
-_image_resolver = None
+_image_resolver: _ImageResolver | None = None
 _image_resolver_lock = Lock()
 
 
-def _resolve(host: str, port: int, deadline: float):
+def _resolve(host: str, port: int, deadline: float) -> Sequence[_AddressInfo]:
     global _image_resolver
     with _image_resolver_lock:
         if _image_resolver is None:
@@ -467,7 +478,7 @@ class _PostImageBudget:
         self.images_left -= 1
         return min(self.deadline, monotonic() + IMAGE_SECONDS)
 
-    def consume(self, amount: int, *, received: bool = False):
+    def consume(self, amount: int, *, received: bool = False) -> None:
         field_name = "received_left" if received else "bytes_left"
         remaining = getattr(self, field_name)
         setattr(self, field_name, max(0, remaining - amount))
@@ -504,7 +515,8 @@ def _image_remaining(deadline: float) -> float:
     return remaining
 
 
-def _image_body(response, deadline: float, budget, received_by_trace: bool) -> bytes | None:
+def _image_body(response: httpx.Response, deadline: float, budget: _PostImageBudget | None,
+                received_by_trace: bool) -> bytes | None:
     """Read raw HTTP bytes and bound each decompression allocation first.
 
     Never use HTTPX's iter_bytes/content decoder here: its decompress call
@@ -514,7 +526,7 @@ def _image_body(response, deadline: float, budget, received_by_trace: bool) -> b
         # Mock/custom transports may supply an already-buffered decoded body.
         # Do not decode it again or make a second unbounded copy.
         content = memoryview(response.content)
-        raw_chunks = (content[i:i + IMAGE_DECODE_CHUNK] for i in range(0, len(content), IMAGE_DECODE_CHUNK))
+        raw_chunks: Iterable[bytes | memoryview] = (content[i:i + IMAGE_DECODE_CHUNK] for i in range(0, len(content), IMAGE_DECODE_CHUNK))
         encoding = "identity"
     else:
         encoding = response.headers.get("content-encoding", "identity").strip().lower()
@@ -526,14 +538,14 @@ def _image_body(response, deadline: float, budget, received_by_trace: bool) -> b
     decoder = None
     prefix = b""
 
-    def output_limit():
+    def output_limit() -> int:
         remaining = IMAGE_BYTES - len(data)
         if budget is not None:
             remaining = min(remaining, budget.bytes_left)
         # A single sentinel byte detects overflow without expanding the rest.
         return max(1, min(IMAGE_DECODE_CHUNK, remaining + 1))
 
-    def append(chunk):
+    def append(chunk: bytes | memoryview) -> None:
         _image_remaining(deadline)
         if budget is not None:
             budget.consume(len(chunk))
@@ -608,15 +620,16 @@ class _ImageTrace:
     and is closed afterward; do not reuse an unguarded or multiplexed stream.
     """
 
-    def __init__(self, deadline: float, budget=None, *, hostname=None, target_host=None):
+    def __init__(self, deadline: float, budget: _PostImageBudget | None = None, *,
+                 hostname: str | None = None, target_host: str | None = None) -> None:
         self.hostname = hostname
         self.target_host = target_host
-        self.connected_host = None
+        self.connected_host: str | bytes | None = None
         self.deadline = deadline
         self.guarded = False
         self.budget = budget
 
-    def __call__(self, event: str, info: dict):
+    def __call__(self, event: str, info: dict[str, Any]) -> None:
         operations = ("connect_tcp", "connect_unix_socket", "start_tls")
         if any(event.endswith(f"{operation}.started") for operation in operations):
             remaining = _image_remaining(self.deadline)
@@ -643,19 +656,19 @@ class _ImageTrace:
                 _image_remaining(self.deadline)
                 original_read, original_write = stream.read, stream.write
 
-                def bounded_read(max_bytes, timeout=None):
+                def bounded_read(max_bytes: int, timeout: float | None = None) -> bytes:
                     remaining = _image_remaining(self.deadline)
                     if self.budget is not None:
                         if self.budget.received_left <= 0:
                             self.budget.consume(1, received=True)
                         max_bytes = min(max_bytes, self.budget.received_left)
-                    data = original_read(max_bytes, timeout=remaining if timeout is None else min(timeout, remaining))
+                    data: bytes = original_read(max_bytes, timeout=remaining if timeout is None else min(timeout, remaining))
                     _image_remaining(self.deadline)
                     if self.budget is not None:
                         self.budget.consume(len(data), received=True)
                     return data
 
-                def bounded_write(data, timeout=None):
+                def bounded_write(data: bytes, timeout: float | None = None) -> None:
                     remaining = _image_remaining(self.deadline)
                     original_write(data, timeout=remaining if timeout is None else min(timeout, remaining))
                     _image_remaining(self.deadline)
@@ -692,8 +705,8 @@ def _image(src: str, client: httpx.Client, until: float = float("inf"), *,
             for target in targets:
                 remaining = _image_remaining(deadline)
                 timeout = httpx.Timeout(
-                    min(IMAGE_TIMEOUT.read, remaining),
-                    connect=min(IMAGE_TIMEOUT.connect, remaining),
+                    min(IMAGE_READ_SECONDS, remaining),
+                    connect=min(IMAGE_CONNECT_SECONDS, remaining),
                 )
                 trace = _ImageTrace(deadline, budget, hostname=url.host, target_host=target.host)
                 try:
@@ -718,13 +731,14 @@ def _image(src: str, client: httpx.Client, until: float = float("inf"), *,
                     continue
             else:
                 return None
+        return None  # not reached: the last hop returns rather than redirect again
     except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError, zlib.error):
         if budget is not None and monotonic() >= budget.deadline:
             budget.reason = "post image time budget exhausted"
         return None
 
 
-def render(meta: dict, html: str, client: httpx.Client) -> bytes:
+def render(meta: dict[str, Any], html: str, client: httpx.Client) -> bytes:
     """The post as a PDF: a title block, then the body."""
     pdf = FPDF(format="letter")
     pdf.set_auto_page_break(True, margin=18)
@@ -794,14 +808,16 @@ def render(meta: dict, html: str, client: httpx.Client) -> bytes:
     # fpdf2 records unsupported characters while writing, but otherwise only
     # warns and omits them from the PDF. Never publish that loss as a success,
     # including on systems where no broad-script fallback font is available.
-    missing = sorted({codepoint for font in pdf.fonts.values() for codepoint in font.missing_glyphs})
+    # Every face added above is a TrueType one, the only kind that records missing glyphs.
+    missing = sorted({codepoint for font in pdf.fonts.values()
+                      for codepoint in font.missing_glyphs})  # type: ignore[union-attr]
     if missing:
         codes = ", ".join(f"U+{codepoint:04X}" for codepoint in missing[:10])
         raise ValueError(f"could not preserve post text: available PDF fonts lack {codes}")
     return bytes(pdf.output())
 
 
-def _placed(pdf, data: bytes, width: float) -> bool:
+def _placed(pdf: FPDF, data: bytes, width: float) -> bool:
     """Draw an image at its own size, shrunk to fit the page.
 
     False for what Pillow cannot open, an SVG or a truncated file, before
@@ -829,7 +845,7 @@ def _placed(pdf, data: bytes, width: float) -> bool:
     return True
 
 
-def render_to_staging(meta: dict, html: str, client: httpx.Client) -> Path:
+def render_to_staging(meta: dict[str, Any], html: str, client: httpx.Client) -> Path:
     """Render a post into its own staging file beside the PDFs and return the path."""
     config.pdfs_dir().mkdir(parents=True, exist_ok=True)
     handle, staged = tempfile.mkstemp(dir=config.pdfs_dir(), prefix=".render-", suffix=".pdf")

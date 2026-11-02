@@ -11,6 +11,7 @@ import html
 import json
 import re
 from pathlib import Path
+from typing import Any, cast
 
 from . import config, store
 
@@ -116,7 +117,7 @@ apply();
 """
 
 
-def _e(value) -> str:
+def _e(value: object) -> str:
     return html.escape(str(value or ""))
 
 
@@ -131,11 +132,11 @@ def _authors(authors: list[str]) -> str:
 _CITE = re.compile(r"\[([^\[\]]+)\]")
 
 
-def _synthesis_html(record: dict, rows_by_id: dict[str, dict]) -> str:
+def _synthesis_html(record: dict[str, Any], rows_by_id: dict[str, dict[str, Any]]) -> str:
     """The synthesis with its citations turned into author-year markers that
     show the cited claim on hover. A bracket that does not hold claim ids is
     left as written."""
-    def cite(match):
+    def cite(match: re.Match[str]) -> str:
         ids = [i for i in re.split(r"[,\s]+", match.group(1).strip()) if i]
         if not ids or not all(i in rows_by_id for i in ids):
             return _e(match.group(0))
@@ -148,7 +149,8 @@ def _synthesis_html(record: dict, rows_by_id: dict[str, dict]) -> str:
         return "[" + ", ".join(marks) + "]"
     paragraphs = [p.strip() for p in (record.get("text") or "").split("\n\n") if p.strip()]
     body = "".join(
-        "<p>" + "".join(_e(piece) if n % 2 == 0 else cite(_CITE.fullmatch(piece))
+        # Odd pieces are whole `_CITE` matches from `_split_cites`, so each fullmatches.
+        "<p>" + "".join(_e(piece) if n % 2 == 0 else cite(cast(re.Match[str], _CITE.fullmatch(piece)))
                         for n, piece in enumerate(_split_cites(p))) + "</p>"
         for p in paragraphs
     )
@@ -182,7 +184,7 @@ def _note_html(text: str, label: str) -> str:
     return f'<div class="note"><span class="who">{_e(label)}</span>{body}</div>'
 
 
-def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
+def _claim_html(row: dict[str, Any], ledger_by_id: dict[str, dict[str, Any]]) -> str:
     hay = " ".join([
         row.get("text", ""), row.get("evidence", ""), row.get("quote", ""),
         row.get("note", ""), row.get("paper_notes", ""),

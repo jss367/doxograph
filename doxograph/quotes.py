@@ -24,8 +24,10 @@ import re
 import tempfile
 import threading
 import unicodedata
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from . import fingerprint
 
@@ -83,7 +85,7 @@ class Text:
 
     raw: str
     squashed: str
-    offsets: array.array
+    offsets: array.array[int]
 
     @property
     def pages(self) -> int:
@@ -135,11 +137,15 @@ def _extract(path: Path) -> str:
 
 
 @contextlib.contextmanager
-def _unguarded():
+def _unguarded() -> Iterator[None]:
     yield
 
 
-def paper_text(path: Path, cache: Path | None = None, guard=None) -> Text | None:
+#: A paper's lock, or anything else to hold while its text is read.
+Guard = Callable[[], contextlib.AbstractContextManager[object]]
+
+
+def paper_text(path: Path, cache: Path | None = None, guard: Guard | None = None) -> Text | None:
     """The paper's text. None if it cannot be read, or if it has no text: a
     scanned paper opens fine but every page comes back empty, and there is
     nothing to check a quote against.
@@ -229,7 +235,7 @@ def _write_cached(cache: Path | None, raw: str) -> None:
             staged.unlink(missing_ok=True)
 
 
-def pdf_text(path: Path, cache: Path | None = None, guard=None) -> str | None:
+def pdf_text(path: Path, cache: Path | None = None, guard: Guard | None = None) -> str | None:
     """The whole paper's text, squashed. None when there is none to read."""
     text = paper_text(path, cache, guard)
     return text.squashed if text else None
@@ -282,11 +288,11 @@ def _align(quote: str, haystack: str, size: int) -> tuple[float, int, int]:
     # it are tried, and those are the ones that find a quote whose start the
     # paper repeats. The cap is still on the whole alignment, so the work stays
     # bounded however long the quote and however repetitive the paper.
-    pending = [(k, quote[k:k + size]) for k in range(0, n - size + 1, size)]
-    pending = [(k, anchor, haystack.find(anchor)) for k, anchor in pending]
+    anchors = [(k, quote[k:k + size]) for k in range(0, n - size + 1, size)]
+    pending = [(k, anchor, haystack.find(anchor)) for k, anchor in anchors]
     pending = [site for site in pending if site[2] >= 0]
     while pending:
-        following = []
+        following: list[tuple[int, str, int]] = []
         for k, anchor, at in pending:
             # Where the quote would start if this anchor sits where it does in
             # the quote, with a margin either side for an inserted word.
@@ -311,7 +317,7 @@ def _align(quote: str, haystack: str, size: int) -> tuple[float, int, int]:
     return best
 
 
-def verify(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> bool | None:
+def verify(pdf: Path, quote: str, cache: Path | None = None, guard: Guard | None = None) -> bool | None:
     """Whether `quote` is in the paper at `pdf`.
 
     None when there is nothing to check: no quote, or no readable PDF.
@@ -320,7 +326,7 @@ def verify(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> bool
     return None if found is None else found["found"]
 
 
-def locate(pdf: Path, quote: str, cache: Path | None = None, guard=None) -> dict | None:
+def locate(pdf: Path, quote: str, cache: Path | None = None, guard: Guard | None = None) -> dict[str, Any] | None:
     """Where `quote` sits in the paper at `pdf`, in the paper's own words.
 
     None when there is nothing to check: no quote, or no readable PDF. A quote
@@ -532,7 +538,7 @@ def tidy(text: str) -> str:
 _WORD = re.compile(r"\S+\s*")
 
 
-def word_diff(quote: str, paper: str) -> list[dict]:
+def word_diff(quote: str, paper: str) -> list[dict[str, Any]]:
     """How a claim's quote differs from the paper's wording, word by word.
 
     Compared on letters and digits, so case, punctuation and hyphenation drift
@@ -544,7 +550,7 @@ def word_diff(quote: str, paper: str) -> list[dict]:
     matcher = difflib.SequenceMatcher(
         None, [squash(w) for w in mine], [squash(w) for w in theirs], autojunk=False
     )
-    parts: list[dict] = []
+    parts: list[dict[str, Any]] = []
 
     def add(op: str, text: str) -> None:
         if not text:

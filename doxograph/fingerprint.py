@@ -31,6 +31,7 @@ import sys
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 PACKAGE = Path(__file__).resolve().parent
 
@@ -83,7 +84,7 @@ def source_fingerprint(package: Path = PACKAGE) -> str:
         return ""
 
 
-def imported_files(modules: dict | None = None) -> tuple[str, ...]:
+def imported_files(modules: dict[str, Any] | None = None) -> tuple[str, ...]:
     """The files behind everything imported from outside this package.
 
     FastAPI, Pydantic, HTTPX and what they pull in are code this server runs as
@@ -141,7 +142,7 @@ def _record(readings: dict[str, str]) -> dict[str, str]:
         return {path: _as_loaded[path] for path in readings}
 
 
-def snapshot(modules: dict | None = None) -> None:
+def snapshot(modules: dict[str, Any] | None = None) -> None:
     """Remember every dependency file not recorded yet, as it is right now.
 
     Called once when `server` finishes importing, and again beside each import
@@ -159,7 +160,7 @@ def snapshot(modules: dict | None = None) -> None:
     _record({path: _reading(path) for path in imported_files(modules)})
 
 
-def dependency_state(modules: dict | None = None) -> tuple[str, str]:
+def dependency_state(modules: dict[str, Any] | None = None) -> tuple[str, str]:
     """The dependency half, as this process loaded it and as it is on disk now.
 
     Both sides are over the same set of files — one walk, not two — and that set

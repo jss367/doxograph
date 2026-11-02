@@ -12,7 +12,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -42,7 +42,7 @@ class Message(BaseModel):
     scope: Scope | None = None
     evidence: list[Evidence] | None = Field(default=None, max_length=500)
     # A 200,000-character answer can contain at most this many distinct [[e:x]] tokens.
-    citations: list[dict] = Field(default_factory=list, max_length=200_000 // 7)
+    citations: list[dict[str, Any]] = Field(default_factory=list, max_length=200_000 // 7)
     saved_note: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
     # The research note's idempotency key, saved before the note is posted.
     note_operation: Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")] | None = None
@@ -57,7 +57,7 @@ class Conversation(BaseModel):
 
     @field_validator("messages")
     @classmethod
-    def answered(cls, messages):
+    def answered(cls, messages: list[Message]) -> list[Message]:
         check_attachments(messages)
         if any(m.role != ("user" if i % 2 == 0 else "assistant") for i, m in enumerate(messages)) \
                 or messages[-1].role != "assistant":
@@ -92,11 +92,11 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
-def chats_dir():
+def chats_dir() -> Path:
     return config.data_dir() / "chats"
 
 
-def _path(chat_id: str):
+def _path(chat_id: str) -> Path:
     return chats_dir() / f"{chat_id}.json"
 
 
@@ -111,19 +111,19 @@ def files() -> list[Path]:
             if re.fullmatch(r"[a-f0-9]{32}\.json", path.name) and _regular(path)]
 
 
-def _load(chat_id: str) -> dict | None:
+def _load(chat_id: str) -> dict[str, Any] | None:
     path = _path(chat_id)
     return storage.read_model(path, SavedChat).model_dump() if _regular(path) else None
 
 
-def _shown(chat: dict) -> dict:
+def _shown(chat: dict[str, Any]) -> dict[str, Any]:
     question = re.sub(r"\s+", " ", chat["messages"][0]["content"]).strip() or next(
         (a["name"] for a in chat["messages"][0].get("attachments", [])), "New conversation")
     return dict(chat, title=question if len(question) <= 80 else question[:79].rstrip() + "…")
 
 
 @router.get("")
-def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None, all_scopes: bool = False) -> dict:
+def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None, all_scopes: bool = False) -> dict[str, Any]:
     """A paper's conversations, or the library's when no paper is given, newest first."""
     chats, issues = [], []
     # Deletion holds this lock, so no file listed here vanishes before it is read.
@@ -144,7 +144,7 @@ def list_chats(paper: Annotated[str | None, Query(max_length=200)] = None, all_s
 
 
 @router.put("/{chat_id}")
-def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict:
+def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict[str, Any]:
     """Create a conversation at revision 0, or replace the revision the page last saw."""
     if body.scope is None and body.paper is None and body.agent not in LIBRARY_AGENTS:
         raise HTTPException(422, "Ask the library needs Claude subscription or ChatGPT subscription.")
@@ -168,7 +168,7 @@ def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict:
 
 
 @router.patch("/{chat_id}")
-def archive_chat(chat_id: ChatId, body: ArchiveUpdate) -> dict:
+def archive_chat(chat_id: ChatId, body: ArchiveUpdate) -> dict[str, Any]:
     """Archive or restore without replacing messages or accepting a stale revision."""
     with store.document_lock("chats"):
         saved = _load(chat_id)
@@ -183,7 +183,7 @@ def archive_chat(chat_id: ChatId, body: ArchiveUpdate) -> dict:
 
 
 @router.delete("/{chat_id}")
-def delete_chat(chat_id: ChatId, revision: Annotated[int, Query(ge=1)]) -> dict:
+def delete_chat(chat_id: ChatId, revision: Annotated[int, Query(ge=1)]) -> dict[str, Any]:
     with store.document_lock("chats"):
         saved = _load(chat_id)
         if saved is None:

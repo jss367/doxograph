@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from . import bib, cites, config, export, extract, ingest, search, storage, store
 
 
 @config.bind_model_access
-def cmd_add(args) -> int:
+def cmd_add(args: argparse.Namespace) -> int:
     """Add papers. Exits nonzero if any requested reference did not go through."""
     config.ensure_dirs()
     failures = 0
@@ -77,7 +79,7 @@ def _read(key: str) -> int:
     return 0
 
 
-def _run_pass(items: list, work, report) -> int:
+def _run_pass[T](items: list[T], work: Callable[[T], object], report: Callable[[T, Any], object]) -> int:
     """Run `work` over `items` a few at a time, printing each result as it
     lands and each failure to stderr. Returns the number of failures."""
     failures = 0
@@ -90,7 +92,7 @@ def _run_pass(items: list, work, report) -> int:
     return failures
 
 
-def cmd_extract(args) -> int:
+def cmd_extract(args: argparse.Namespace) -> int:
     keys = args.keys or [
         p["key"] for p in store.all_papers()
         if args.all or not p.get("claims")
@@ -102,13 +104,13 @@ def cmd_extract(args) -> int:
     return 1 if failures else 0
 
 
-def cmd_retag(args) -> int:
+def cmd_retag(args: argparse.Namespace) -> int:
     keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
     failures = _run_pass(keys, extract.retag_paper, lambda key, _paper: print(f"retagged {key}"))
     return 1 if failures else 0
 
 
-def cmd_fill_facets(args) -> int:
+def cmd_fill_facets(args: argparse.Namespace) -> int:
     facets = store.load_facets()
     if not facets:
         print("no facets defined; add one with `doxograph facet NAME DESCRIPTION`", file=sys.stderr)
@@ -120,7 +122,7 @@ def cmd_fill_facets(args) -> int:
     return 1 if failures else 0
 
 
-def cmd_verify(args) -> int:
+def cmd_verify(args: argparse.Namespace) -> int:
     """Check every claim's quote against its paper's PDF."""
     keys = args.keys or [p["key"] for p in store.all_papers() if p.get("claims")]
     failures = 0
@@ -146,7 +148,7 @@ def cmd_verify(args) -> int:
     return 1 if failures else 0
 
 
-def cmd_search(args) -> int:
+def cmd_search(args: argparse.Namespace) -> int:
     """Find the query in the papers' own text, without calling the model."""
     shown = 0
     for hit in search.search_papers(" ".join(args.words), limit=args.limit):
@@ -164,7 +166,7 @@ def cmd_search(args) -> int:
     return 0
 
 
-def cmd_cites(args) -> int:
+def cmd_cites(args: argparse.Namespace) -> int:
     """Show which papers in the corpus cite which, from their reference lists."""
     papers = store.all_papers()
     titles = {p["key"]: p.get("title", "") for p in papers}
@@ -181,7 +183,7 @@ def cmd_cites(args) -> int:
     return 0
 
 
-def cmd_tensions(args) -> int:
+def cmd_tensions(args: argparse.Namespace) -> int:
     """Find, or list, claims from different papers that disagree."""
     if not args.list:
         topics = args.topics or store.tension_topics()
@@ -216,7 +218,7 @@ def cmd_tensions(args) -> int:
     return 0
 
 
-def cmd_agreements(args) -> int:
+def cmd_agreements(args: argparse.Namespace) -> int:
     """Find, or list, claims from different papers that assert the same finding."""
     if not args.list:
         topics = args.topics or store.tension_topics()
@@ -251,7 +253,7 @@ def cmd_agreements(args) -> int:
     return 0
 
 
-def cmd_synthesize(args) -> int:
+def cmd_synthesize(args: argparse.Namespace) -> int:
     """Write, or list, what the papers hold on each topic."""
     if not args.list:
         topics = args.topics or store.synthesis_topics()
@@ -261,7 +263,7 @@ def cmd_synthesize(args) -> int:
         rows, tags = store.claim_rows(), store.load_tags()
         unwritten = []
 
-        def report(topic, result):
+        def report(topic: str, result: dict[str, Any]) -> None:
             if result["written"]:
                 print(f"{topic}: written from {result['claims']} claims in {result['papers']} papers")
             elif result["skipped"]:
@@ -288,7 +290,7 @@ def cmd_synthesize(args) -> int:
     return 0
 
 
-def cmd_list(args) -> int:
+def cmd_list(args: argparse.Namespace) -> int:
     papers = store.all_papers()
     for paper in papers:
         summary = store.summarize(paper)
@@ -300,7 +302,7 @@ def cmd_list(args) -> int:
     return 0
 
 
-def cmd_tags(args) -> int:
+def cmd_tags(args: argparse.Namespace) -> int:
     counts = store.tag_counts(store.claim_rows())
     declared = {t["name"]: t.get("description", "") for t in store.load_tags()}
     for name, count in counts.items():
@@ -312,7 +314,7 @@ def cmd_tags(args) -> int:
     return 0
 
 
-def cmd_label(args) -> int:
+def cmd_label(args: argparse.Namespace) -> int:
     """Read or set the labels on a paper, or list the ones in use.
 
     One command rather than three, because they are one question asked at
@@ -343,7 +345,7 @@ def cmd_label(args) -> int:
     return 0
 
 
-def cmd_facet(args) -> int:
+def cmd_facet(args: argparse.Namespace) -> int:
     """List the facets, show one facet's values, or define one.
 
     As `label`, one command asked at three depths: what facets there are,
@@ -387,13 +389,13 @@ def cmd_facet(args) -> int:
     return 0
 
 
-def cmd_export(args) -> int:
+def cmd_export(args: argparse.Namespace) -> int:
     path = export.write(Path(args.out).expanduser() if args.out else None, title=args.title)
     print(path)
     return 0
 
 
-def cmd_bibtex(args) -> int:
+def cmd_bibtex(args: argparse.Namespace) -> int:
     text = bib.render()
     if args.out:
         Path(args.out).expanduser().write_text(text, encoding="utf-8")
@@ -403,7 +405,7 @@ def cmd_bibtex(args) -> int:
     return 0
 
 
-def cmd_serve(args) -> int:
+def cmd_serve(args: argparse.Namespace) -> int:
     from .server import serve
 
     print(f"doxograph on http://{args.host}:{args.port}  (data in {config.data_dir()})")
@@ -411,7 +413,7 @@ def cmd_serve(args) -> int:
     return 0
 
 
-def cmd_mcp(args) -> int:
+def cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import run
 
     try:
@@ -572,21 +574,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    command: Callable[[argparse.Namespace], int] = args.func
     # The MCP adapter reads only over HTTP. It must not initialize or recover
     # a separate local corpus, and stdout belongs exclusively to the protocol.
-    if args.func == cmd_mcp:
-        return args.func(args)
+    if command == cmd_mcp:
+        return command(args)
     config.ensure_dirs()
     # The server must still start when recovery needs attention, so its library
     # can display the problem. Other commands must not work on a partial rename.
-    if args.func != cmd_serve:
+    if command != cmd_serve:
         try:
             store.recover_storage()
         except store.StorageRecoveryError as exc:
             print(str(exc), file=sys.stderr)
             return 1
     try:
-        return args.func(args)
+        return command(args)
     except storage.StorageReadError as exc:
         print(str(exc), file=sys.stderr)
         return 1
