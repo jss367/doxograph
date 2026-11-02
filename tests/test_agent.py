@@ -58,7 +58,8 @@ def test_without_notes_no_notes_tools_are_registered():
     names = lambda without: {t.name for t in asyncio.run(mcp_server.create_server(without_notes=without).list_tools())}
     assert {"list_notes", "read_note"} <= names(False)
     assert not {"list_notes", "read_note"} & names(True)
-    assert set(agent.TOOLS) <= names(True)
+    assert set(agent.TOOLS) - {"update_paper_labels"} <= names(True)
+    assert "update_paper_labels" not in names(True)
 
 
 def test_command_allows_only_library_tools_and_runs_this_codes_server():
@@ -152,7 +153,7 @@ def test_codex_library_uses_selected_model_and_only_the_notes_free_library_tools
     overrides = tomllib.loads("\n".join(args[i + 1] for i, arg in enumerate(args) if arg == "-c"))
     entry = overrides["mcp_servers"]["doxograph"]
     assert entry["command"] == sys.executable
-    assert entry["args"] == ["-m", "doxograph", "mcp", "--url", "http://127.0.0.1:9000",
+    assert entry["args"] == ["-m", "doxograph", "mcp", "--allow-labels", "--url", "http://127.0.0.1:9000",
                              "--without-notes", "--workspace", other["id"]]
     assert entry["enabled_tools"] == list(agent.TOOLS) and entry["required"]
     assert Path(entry["env"]["PYTHONPATH"], "doxograph", "agent.py").is_file()

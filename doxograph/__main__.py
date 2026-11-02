@@ -416,7 +416,8 @@ def cmd_mcp(args) -> int:
 
     try:
         run(args.url, without_notes=args.without_notes, workspace=args.workspace,
-            papers=args.papers, papers_file=args.papers_file, evidence_log=args.evidence_log, library_snapshot=args.library_snapshot, evidence_limit=args.evidence_limit)
+            papers=args.papers, papers_file=args.papers_file, evidence_log=args.evidence_log, library_snapshot=args.library_snapshot, evidence_limit=args.evidence_limit,
+            allow_labels=args.allow_labels)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -460,13 +461,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="doxograph", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("mcp", help="read-only stdio MCP server for the running local app")
+    p = sub.add_parser("mcp", help="stdio MCP server for the running local app (read-only by default)")
     p.add_argument("--url", default="http://127.0.0.1:8765", help="local Doxograph server URL")
     p.add_argument("--without-notes", action="store_true",
                    help="leave out personal notes, claim notes, and links to your own claims")
     p.add_argument("--workspace", help="restrict all tools to this workspace ID")
+    p.add_argument("--allow-labels", action="store_true", help="allow paper label edits (requires --workspace)")
     source_scope = p.add_mutually_exclusive_group()
-    source_scope.add_argument("--papers", nargs="+", help="restrict reads to these paper keys (requires --workspace)")
+    source_scope.add_argument("--papers", nargs="+", help="restrict tools to these paper keys (requires --workspace)")
     source_scope.add_argument("--papers-file", help=argparse.SUPPRESS)
     p.add_argument("--evidence-log", help=argparse.SUPPRESS)
     p.add_argument("--evidence-limit", type=int, default=500, help=argparse.SUPPRESS)
