@@ -5,6 +5,8 @@ const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
   let requested = null, revealed = null;
+  // The new draft whose create has gone out at least once.
+  let posted = null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
@@ -21,7 +23,17 @@ const Datasets = (() => {
     blocked: () => draft.name.trim() ? '' : 'Give your dataset a name.',
     async write(target) {
       const sent = body(target), first = !saved;
-      const item = first ? await request('','POST',sent) : await request('/' + saved.id,'PUT',{...sent,revision:saved.revision});
+      let item;
+      if (first) {
+        const retry = posted === target;
+        posted = target;
+        item = await request('','POST',sent);
+        // A create retried after its answer was lost finds the first attempt
+        // stored, and the server answers with that record, not this draft.
+        // Save the draft over it so edits made since are not dropped.
+        if (retry && draft === target && JSON.stringify(body(item)) !== JSON.stringify(sent))
+          item = await request('/' + item.id,'PUT',{...sent,revision:item.revision});
+      } else item = await request('/' + saved.id,'PUT',{...sent,revision:saved.revision});
       if (draft !== target) return;
       saved = structuredClone(item);
       // Take the stored spelling (a trimmed name, merged labels) unless the

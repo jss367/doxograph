@@ -570,3 +570,58 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_retried_create_keeps_edits_made_after_its_answer_was_lost(engine):
+    """The server answers a repeated create with the record it stored first,
+    so taking that answer as saved would drop what was typed since."""
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            creates = []
+
+            async def lose_first_answer(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                creates.append(route.request.post_data_json)
+                if len(creates) == 1:
+                    # The create is stored, but its answer never arrives.
+                    await route.fetch()
+                    await route.fulfill(status=503, json={'detail': 'The connection dropped.'})
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/datasets', lose_first_answer)
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Dataset name', exact=True).fill('Evaluation corpus')
+                await page.wait_for_function(
+                    "document.querySelector('#datasets-status').textContent.includes('connection dropped')")
+                [stored] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert stored['description'] == ''
+
+                await dialog.get_by_label('Description', exact=True).fill('Written after the answer was lost.')
+                await settled(page)
+                assert len(creates) == 2
+                [saved] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert saved['id'] == stored['id']
+                assert saved['description'] == 'Written after the answer was lost.'
+                field = dialog.get_by_label('Description', exact=True)
+                assert await field.input_value() == 'Written after the answer was lost.'
+                # Once saved, the record's actions replace the new draft's.
+                await dialog.get_by_role('button', name='Delete record', exact=True).wait_for()
+                assert not errors
+
+    run_browser(scenario())
