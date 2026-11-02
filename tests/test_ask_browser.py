@@ -767,24 +767,32 @@ def test_job_notifications_do_not_cover_the_ask_composer(engine):
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#btn-agent:enabled').click()
-                for width in [1440, 900]:
+                await page.evaluate("""() => toast('A persistent workspace warning', {timeout:0, tone:'warn',
+                    actions:[{label:'Undo', onClick:() => { window.toastUndoUsed = true; }}]})""")
+                for width in [1440, 900, 390]:
                     await page.set_viewport_size({'width': width, 'height': 1000})
-                    if width == 900:
+                    if width <= 900:
                         await expect(page.locator('body')).to_have_class(re.compile(r'agent-docked'))
                     else:
                         await expect(page.locator('body')).not_to_have_class(re.compile(r'agent-docked'))
                     await expect(page.locator('#jobs .job')).to_be_visible()
                     jobs = await page.locator('#jobs').bounding_box()
                     pane = await page.locator('#library-agent').bounding_box()
+                    notice = await page.locator('#toasts').bounding_box()
                     if width == 1440:
                         assert jobs['x'] + jobs['width'] <= pane['x']
                     else:
                         assert jobs['y'] + jobs['height'] <= pane['y']
+                        assert notice['y'] + notice['height'] <= pane['y']
+                        assert notice['x'] + notice['width'] <= jobs['x']
                     await page.locator('#agent-question').fill(f'Question at {width}px')
                     # A real click checks stacking and hit targets as well as box geometry.
                     await page.locator('#agent-send').click()
                     await expect(page.locator('#agent-question')).to_be_enabled()
-                assert len(calls) == 2
+                assert len(calls) == 3
+                await page.locator('#toasts').get_by_role('button', name='Undo', exact=True).click()
+                assert await page.evaluate('window.toastUndoUsed') is True
+                await page.set_viewport_size({'width': 900, 'height': 1000})
                 await page.locator('#agent-close').click()
                 jobs = await page.locator('#jobs').bounding_box()
                 assert jobs['x'] + jobs['width'] == 884

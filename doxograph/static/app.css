@@ -683,9 +683,10 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 #library-agent .chat-attachment-picker .hint { font-size: .72rem; }
 #library-agent #agent-question { min-height: 3rem; }
 #btn-agent[aria-expanded="true"] { background: var(--sel); border-color: var(--accent); }
-/* Job notices stay visible without covering the conversation composer. */
+/* Notifications stay visible without covering the conversation composer. */
 body.agent-open:not(.agent-docked) .jobs { right: calc(min(36vw, 34rem) + 1rem); }
-body.agent-docked .jobs { bottom: calc(50dvh + 1rem); max-height: calc(50dvh - 2rem); }
+body.agent-docked :is(.jobs, .toasts) { bottom: calc(50dvh + 1rem);
+  width: min(22rem, calc(50vw - 1.5rem)); max-height: calc(50dvh - 2rem); overflow-y: auto; }
 body.agent-docked #layout { margin-bottom: 50dvh; }
 body.agent-docked #library-agent { position: fixed; z-index: 10; bottom: 0; right: 0; width: 100%;
   height: 50dvh; border-left: 0; border-top: 1px solid var(--line); }
