@@ -294,3 +294,106 @@ def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
         })
         assert response.status_code == 200
         run_browser(scenario(url, response.json()))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('other_active', [True, False], ids=['other-active', 'last-active'])
+def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive_views(engine, other_active):
+    async def scenario(url):
+        async with browser_session(engine) as browser:
+            reader, archiver = await browser.new_page(), await browser.new_page()
+            errors = []
+            reader.on('pageerror', lambda error: errors.append(str(error)))
+            archiver.on('pageerror', lambda error: errors.append(str(error)))
+            for page in [reader, archiver]:
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
+            await reader.locator('#agent-question').fill('Keep this draft after another window archives it')
+            await reader.locator('#agent-close').click()
+            for letter in ['a', 'b', 'c'] if not other_active else ['a']:
+                await archiver.locator(f'[data-thread-archive="{letter * 32}"]').click()
+                await expect(archiver.locator(f'#agent-thread [data-thread-open="{letter * 32}"]')).to_have_count(0)
+            await reader.locator('#btn-agent').click()
+            active = reader.locator('#agent-thread [aria-current="true"]')
+            await expect(active).to_have_count(1)
+            await expect(active).not_to_have_attribute('data-thread-open', 'a' * 32)
+            await expect(reader.locator('#agent-question')).to_be_enabled()
+            if not other_active:
+                await expect(active).to_have_text('New conversation')
+                await expect(reader.locator('#agent-messages')).to_be_empty()
+            # Explicit archive browsing remains stable when the dialog is reopened.
+            await reader.locator('#agent-archive summary').click()
+            await reader.locator(f'#agent-archived [data-thread-open="{"a" * 32}"]').click()
+            await expect(reader.locator('#agent-question')).to_be_disabled()
+            await expect(reader.locator('#agent-question')).to_have_value('Keep this draft after another window archives it')
+            await reader.locator('#agent-close').click()
+            await reader.locator('#btn-agent').click()
+            await expect(reader.locator('#agent-archived [aria-current="true"]')).to_have_attribute('data-thread-open', 'a' * 32)
+            await expect(reader.locator('#agent-messages')).to_contain_text('improved recovery')
+            # Restoration in the second window returns the original draft to use.
+            await reader.locator('#agent-close').click()
+            await archiver.locator('#agent-archive summary').click()
+            await archiver.locator(f'[data-thread-archive="{"a" * 32}"]').click()
+            await expect(archiver.locator('#agent-thread [aria-current="true"]')).to_have_attribute('data-thread-open', 'a' * 32)
+            await reader.locator('#btn-agent').click()
+            await expect(active).to_have_attribute('data-thread-open', 'a' * 32)
+            await expect(reader.locator('#agent-question')).to_be_enabled()
+            await expect(reader.locator('#agent-question')).to_have_value('Keep this draft after another window archives it')
+            assert len(httpx.get(url + '/api/chats').json()['chats']) == 3
+            assert not errors
+
+    with _server() as url:
+        seed_conversations(url)
+        run_browser(scenario(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_lost_archive_reconciliation_keeps_note_actions_blocked_when_reopened(engine):
+    async def scenario(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
+            held, release = asyncio.Event(), asyncio.Event()
+            writes = []
+            page.on('request', lambda request: writes.append(request.url)
+                    if request.method in ('POST', 'PUT') and '/api/' in request.url else None)
+
+            async def lose_patch(route):
+                if route.request.method == 'PATCH':
+                    await route.fetch()
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            async def hold_lists(route):
+                held.set()
+                await release.wait()
+                await route.continue_()
+
+            await page.route('**/api/chats/*', lose_patch)
+            await page.route('**/api/chats?all_scopes=true', hold_lists)
+            await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
+            await asyncio.wait_for(held.wait(), timeout=10)
+            try:
+                # Reopening redraws controls while recovery is still waiting on its list.
+                await page.locator('#agent-close').click()
+                await page.locator('#btn-agent').click()
+                button = page.locator('[data-agent-action]')
+                await expect(button).to_be_disabled()
+                await button.dispatch_event('click')
+                assert writes == []
+                assert await page.evaluate('Boolean(activeAgentChat().archiving)')
+            finally:
+                release.set()
+            await expect(page.locator('#agent-thread [aria-current="true"]')).not_to_have_attribute('data-thread-open', 'a' * 32)
+            await expect(page.locator('#agent-question')).to_be_enabled()
+            assert len(httpx.get(url + '/api/chats').json()['chats']) == 3
+
+    with _server() as url:
+        seed_conversations(url)
+        run_browser(scenario(url))

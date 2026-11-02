@@ -102,13 +102,14 @@ const ChatThreads = (() => {
       }
     }
 
-    async function refresh(target) {
+    async function refresh(target, archivePending = null) {
       const started = ++clock;
       target.listing = started;
       const response = await api(`/api/chats${unified ? '?all_scopes=true' : target.paper ? `?paper=${encodeURIComponent(target.paper)}` : ''}`,
         { headers: { 'X-Doxograph-Workspace': target.workspace } });
       // A later list already answered or will answer; this one may predate what it loaded.
-      if (target.listing !== started) return;
+      if (target.listing !== started) return false;
+      const activeBefore = target.active, wasArchived = activeBefore.archived;
       const local = new Map(target.threads.map(t => [t.id, t]));
       // Keep what this tab is still writing, has not saved, or holds as new as disk (a list that
       // began loading before a save finished is older). Take newer versions from disk, and keep an
@@ -118,7 +119,7 @@ const ChatThreads = (() => {
         // A list read before this tab deleted a conversation must not bring it back.
         if (target.deleted.has(saved.id)) continue;
         let thread = local.get(saved.id);
-        if (thread && (writing(thread) || (thread.dirty ? ahead(thread, saved) : saved.revision <= thread.revision))) {
+        if (thread && ((writing(thread) && thread !== archivePending) || (thread.dirty ? ahead(thread, saved) : saved.revision <= thread.revision))) {
           threads.push(thread);
           continue;
         }
@@ -147,7 +148,10 @@ const ChatThreads = (() => {
       // Reopen the latest conversation, unless a question was started while the list loaded.
       if (!target.loaded && !target.active.draft && !target.active.draftAttachments?.length && !target.active.reading && !target.active.busy && !target.active.messages.length) target.active = threads.find(t => !t.archived) || target.active;
       else if (!threads.includes(target.active) && target.active.revision) target.active = blank();
+      // Move off a newly archived selection, but keep a deliberately opened archive readable.
+      if (target.active === activeBefore && !wasArchived && activeBefore.archived) selectAfterArchive(target, activeBefore);
       target.loaded = true;
+      return true;
     }
 
     async function open(workspace, paper, options = {}) {
@@ -381,9 +385,10 @@ const ChatThreads = (() => {
       } catch (error) {
         thread.archiveError = `Could not ${thread.archived ? 'restore' : 'archive'} this conversation: ${error.message}`;
         // A response can be lost after the change reached disk; reload its latest state.
-        thread.archiving = false;
         try {
-          await refresh(target);
+          // Load the saved archive state while note actions remain blocked.
+          // Reopening may supersede this list; retry until recovery applies a current one.
+          while (!await refresh(target, thread)) { /* keep archive actions blocked */ }
           if (thread.archived === archived) {
             thread.archiveError = '';
             selectAfterArchive(target, thread);
