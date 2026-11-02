@@ -132,11 +132,15 @@ def evidence(kind: Literal["agreements", "tensions", "syntheses"], topic: str = 
     claims = store.claim_rows(saved)
     readers = {"agreements": store.agreement_rows, "tensions": store.tension_rows,
                "syntheses": store.synthesis_rows}
-    rows = readers[kind](claims)
+    selected = set(paper_keys) if paper_keys is not None else None
     if paper_keys is not None:
         papers_and_issues(paper_keys)  # Fail explicitly if a bound source vanished.
+    # Synthesis counts and staleness must use the captured roster too: a
+    # newly added paper cannot change metadata shown to a scoped conversation.
+    basis = [c for c in claims if c["paper"] in selected] if kind == "syntheses" and selected is not None else claims
+    rows = readers[kind](basis)
+    if selected is not None:
         counts = Counter(c["id"] for c in claims)
-        selected = set(paper_keys)
         allowed_pairs = {(c["paper"], c["id"]) for c in claims if c["paper"] in selected}
         # Persisted analyses identify claims by ID alone. A legacy/restored ID
         # shared by multiple claims cannot establish which source supported it.

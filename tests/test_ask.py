@@ -207,6 +207,9 @@ def test_library_snapshot_keeps_topics_and_records_analysis_without_admitting_ne
     assert call(mcp, 'search_papers')['total'] == 2
     result = call(mcp, 'read_evidence', kind='syntheses')
     assert result['items'][0]['text'] == 'Both improve under these conditions.'
+    assert result['items'][0]['n_claims'] == 2
+    assert result['items'][0]['n_papers'] == 2
+    assert result['items'][0]['stale'] is False
     evidence = result['evidence'][0]
     assert evidence['kind'] == 'analysis' and evidence['sources'] == ['a', 'b']
     assert 'new-paper' not in json.dumps(result)
