@@ -738,6 +738,20 @@ class TopicConflictError(ValueError):
     """A manual edit still names a topic that was renamed or deleted."""
 
 
+class EditConflictError(ValueError):
+    """The document changed after a guarded editor read it."""
+
+
+def paper_revision(paper: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(paper, sort_keys=True).encode()).hexdigest()
+
+
+def check_paper_revision(paper: dict[str, Any], expected_revision: str | None) -> None:
+    # Call inside the same paper lock as the update, including claim edits.
+    if expected_revision is not None and paper_revision(paper) != expected_revision:
+        raise EditConflictError("This paper changed in another window. Refresh it before trying again.")
+
+
 @contextlib.contextmanager
 def _claim_edit_lock(key: str, patch: dict[str, Any]) -> Iterator[None]:
     # Topic edits share the vocabulary lock with renames, before taking the
@@ -760,9 +774,11 @@ def _claim_edit_lock(key: str, patch: dict[str, Any]) -> Iterator[None]:
             yield
 
 
-def update_claim(key: str, claim_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+def update_claim(key: str, claim_id: str, patch: dict[str, Any], *,
+                 expected_revision: str | None = None) -> dict[str, Any]:
     with _claim_edit_lock(key, patch):
         paper = load_paper(key)
+        check_paper_revision(paper, expected_revision)
         claim: dict[str, Any]
         for claim in paper.get("claims", []):
             if claim.get("id") == claim_id:

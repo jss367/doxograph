@@ -224,6 +224,8 @@ On macOS, `native/test-downloads.sh` checks exports with the real WebKit
 navigation and download handlers, including replacement, cancellation, and
 interrupted transfers. It uses a temporary local server and files, without
 opening save dialogs. `native/test-quit.sh` checks quit and relaunch behavior.
+`native/test-undo.sh` checks the Edit menu's app undo/redo bridge and native text
+undo/redo in a real WebKit view.
 
 ## Layout
 

@@ -72,6 +72,20 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         window.makeKeyAndOrderFront(nil)
     }
 
+    func performUndo(redo: Bool) {
+        // Auxiliary PDF windows and native controls keep their own undo chain.
+        guard window.isKeyWindow, let responder = window.firstResponder as? NSView,
+              responder === webView || responder.isDescendant(of: webView) else {
+            NSApp.sendAction(Selector((redo ? "redo:" : "undo:")), to: nil, from: nil)
+            return
+        }
+        webView.evaluateJavaScript("window.doxographUndo?.(\(redo ? "true" : "false")) || false") { handled, _ in
+            if (handled as? Bool) != true {
+                NSApp.sendAction(Selector((redo ? "redo:" : "undo:")), to: nil, from: nil)
+            }
+        }
+    }
+
     func load(_ url: URL) {
         host = url.host
         hideStatus()

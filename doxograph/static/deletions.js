@@ -225,6 +225,7 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
   if (trash.has(token)) return;
   const workspace = workspaceClient.workspaceId || 'default';
   let notice = null;
+  let undoEntry = null;
   // The entry stays in the trash until the request settles, so the row does not
   // flash back on screen between the notice fading and the server answering.
   // That leaves it visible to a second caller — the notice running out while an
@@ -236,6 +237,9 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
     const entry = trash.get(token);
     if (!entry) return Promise.resolve();   // already sent, or undone
     if (entry.sending) return entry.sending;
+    // Once committed, this deletion remains the latest action rather than
+    // letting Command-Z silently skip it and undo an older edit.
+    undoEntry.undo = null;
     if (notice) notice.close();
     // Resolves to whether the row is really gone. A delete that failed leaves
     // it on file, and the callers waiting on this — an export, a retag, a model
@@ -254,11 +258,13 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
         // that comes with it costs nothing.
         await api(path, {
           method: 'DELETE',
+          history: false,
           keepalive: true,
           headers: { 'X-Doxograph-Workspace': workspace },
         });
       } catch (error) {
         sent = false;
+        editHistory.forget(workspace, undoEntry);
         toast(`Could not delete ${label}: ${error.message}`, { tone: 'warn', timeout: 0 });
       } finally {
         trash.delete(token);
@@ -270,6 +276,13 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
     return entry.sending;
   };
   trash.set(token, { path, workspace, paper, send, sending: null });
+  const undo = async () => {
+    if (!trash.has(token) || trash.get(token).sending) throw new Error('That delete has already been sent.');
+    notice?.close();
+    trash.delete(token);
+    forgetStateTag();
+  };
+  undoEntry = editHistory.add(workspace, {undo});
   forgetStateTag();
   pruneTrashed();
   // `pruneTrashed` only takes the row out of the state the page holds; what is
@@ -309,9 +322,7 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
               toast(`That delete has already been sent; ${label} is gone.`, { tone: 'warn' });
               return;
             }
-            trash.delete(token);
-            forgetStateTag();
-            await refreshAll();
+            await undoEdit(false, undoEntry, workspace);
           },
         }],
       });
