@@ -101,6 +101,8 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 send_box = await page.locator('#agent-send').bounding_box()
                 assert send_box['y'] + send_box['height'] <= 720
                 assert await page.locator('#library-agent').evaluate('el => el.scrollWidth <= el.clientWidth')
+                assert await page.locator('#library-agent').evaluate('el => getComputedStyle(el).overflowY') == 'auto'
+                assert (await page.locator('.chat-conversations').bounding_box())['height'] > 40
                 if engine == 'chromium':
                     await page.screenshot(path='.context/library-answer-small.png')
                 await page.set_viewport_size({'width': 1440, 'height': 1100})
@@ -126,7 +128,7 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 await page.get_by_role('button', name='Close research notes', exact=True).click()
                 await page.locator('#btn-agent').click()
                 await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
-                assert await page.locator('#agent-thread option').all_text_contents() == [QUESTION]
+                assert await page.locator('#agent-thread [data-thread-open]').all_text_contents() == [QUESTION]
                 assert not errors and not external
 
     run_browser(scenario())

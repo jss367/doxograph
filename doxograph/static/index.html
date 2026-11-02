@@ -411,8 +411,15 @@
       <p class="hint" id="agent-input-format"></p>
       <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
     </details>
+    <nav class="chat-conversations" aria-label="Conversations">
+      <h3>Conversations</h3>
+      <ul id="agent-thread" class="chat-thread-list"></ul>
+      <details id="agent-archive" hidden>
+        <summary id="agent-archive-label">Archived conversations</summary>
+        <ul id="agent-archived" class="chat-thread-list" aria-label="Archived conversations"></ul>
+      </details>
+    </nav>
     <div class="row chat-threads">
-      <label>Conversation <select id="agent-thread"></select></label>
       <label>Agent <select id="agent-agent"></select></label>
       <button type="button" id="agent-delete" hidden>Delete</button>
     </div>
@@ -470,6 +477,7 @@
   </div>
   <dl class="keys">
     <dt><kbd>⌘K</kbd> / <kbd>Ctrl K</kbd></dt><dd>jump to a paper, topic, board, or action</dd>
+    <dt><kbd>⌘Z</kbd> / <kbd>Ctrl Z</kbd></dt><dd>undo the last edit; add Shift to redo</dd>
     <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>move down and up the claims</dd>
     <dt><kbd>r</kbd></dt><dd>mark the claim reviewed and move to the next one</dd>
     <dt><kbd>n</kbd></dt><dd>jump to the next claim nobody has reviewed</dd>
@@ -561,6 +569,7 @@
 <script src="/vendor/marked.umd.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script src="/vendor/katex.min.js"></script>
+<script src="/edit-history.js"></script>
 <script src="/workspace-client.js"></script>
 <script src="/workspace-controller.js"></script>
 <script src="/poller.js"></script>

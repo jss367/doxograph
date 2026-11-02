@@ -151,8 +151,11 @@ Extraction, quote checks, and **Add claim by hand** are under **Paper actions**.
 open the same Ask panel with the relevant sources already selected. A claim
 stays in focus while its originating paper supplies evidence. Use the existing
 paper and claim checkboxes to prepare a comparison of up to 200 papers; filters alone do not select
-sources. Contextual actions start a fresh conversation, and **Conversation**
-lets you return to earlier ones in this workspace.
+sources. Contextual actions start a fresh conversation, and **Conversations**
+lists conversations in this workspace so you can switch between them. Each row
+has an **Archive** button to put a finished conversation aside. Expand **Archived
+conversations** to read it again or **Restore** it to the active list. Archiving
+keeps its history, evidence, and attachments, including in workspace exports.
 
 Single-paper chat sends the PDF or extracted page-numbered text to the selected
 API, local, Claude subscription, or ChatGPT subscription provider. Native Claude
@@ -440,6 +443,15 @@ editor or leaves the view you are in. `?` lists all of this, and so does the
 Shortcuts button in the header. A paper that arrives with a dozen claims you
 have read in one go has "Mark N reviewed" in its header; the notice that
 follows offers to take it back, and takes back only what that click changed.
+
+`Command-Z` or `Ctrl-Z` undoes saved document titles, labels and
+notes, claim edits and review decisions, PDF highlights and their colors, and
+saved changes to boards, bookmarks, connections, and searches. Add Shift to
+redo. Each workspace keeps its own history for the current session; reloading
+starts a new history. While typing, the shortcut edits the text. A new
+highlight's automatically opened note leaves Undo with the highlight until you
+type. Pending deletions can also be undone until their notice expires. Imports,
+AI runs, and permanent removals cannot be undone with this history.
 
 **Focused review**, above the claims, puts one claim beside its source PDF.
 It starts with the claims matching your current filters and keeps that set

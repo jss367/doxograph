@@ -463,10 +463,16 @@ async function reviewWholePaper(paper) {
   // undoing the delete would bring it back reviewed.
   const wanted = S.claims.filter((row) => row.paper === paper && !row.reviewed).map((row) => row.id);
   let changed = [];
+  let historyEntry = null;
+  let reviewNotice = null;
   try {
     const result = await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reviewed: true, claims: wanted }),
+      onHistory: entry => {
+        historyEntry = entry;
+        entry.onApply = () => reviewNotice?.close();
+      },
     });
     changed = result.changed || [];
   } catch (error) {
@@ -496,11 +502,7 @@ async function reviewWholePaper(paper) {
     const held = mine ? changed : [];
     held.forEach((id) => markSaving(id, true));
     try {
-      await api(`/api/papers/${encodeURIComponent(paper)}/review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-        body: JSON.stringify({ reviewed: false, claims: changed }),
-      });
+      await editHistory.apply(workspace, false, historyEntry);
       // Only where the decision was taken. An editor open on the same claim id
       // in another corpus is a different claim, and correcting its checkbox
       // would unreview it when that form is saved.
@@ -514,7 +516,7 @@ async function reviewWholePaper(paper) {
   }
 
   function offerUndo() {
-    toast(`${changed.length} ${changed.length === 1 ? 'claim' : 'claims'} marked reviewed.`,
+    reviewNotice = toast(`${changed.length} ${changed.length === 1 ? 'claim' : 'claims'} marked reviewed.`,
           { actions: [{ label: 'Undo', onClick: undo }] });
   }
 

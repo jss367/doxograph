@@ -3,7 +3,7 @@
 // Owns transport and corpus identity. Rendering and editor drafts stay with
 // the UI; features receive this interface instead of reading app.js globals.
 function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalThis.fetch,
-  rememberWorkspace = () => {}, onWorkspaceChange = () => {}, readTimeout = 15000 } = {}) {
+  rememberWorkspace = () => {}, onWorkspaceChange = () => {}, readTimeout = 15000, history = null } = {}) {
   const emptyState = () => ({ papers: [], claims: [], tags: [], tag_counts: {}, label_counts: {}, label_keys: {},
     ledger: [], context: '', tensions: [], agreements: [], syntheses: [], kinds: [],
     strengths: [], relations: [], jobs: [], has_key: true });
@@ -34,7 +34,10 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
   }
 
   const readJSON = async response => response.status === 204 ? null : await response.json();
-  const request = (path, options = {}) => perform(path, options, readJSON);
+  const rawRequest = (path, options = {}) => perform(path, options, readJSON);
+  const request = (path, options = {}) => history
+    ? history.request(path, options, rawRequest, new Headers(options.headers || {}).get('X-Doxograph-Workspace') || workspaceId)
+    : rawRequest(path, options);
   // Downloads keep their content type and headers, with the same destination
   // capture and error handling as JSON requests.
   const response = (path, options = {}) => perform(path, options, value => value);

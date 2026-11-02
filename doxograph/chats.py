@@ -9,6 +9,7 @@ written by one of them is still this page's own, not another window's.
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -77,6 +78,13 @@ class SavedChat(Conversation):
     operation: OperationId
     created: str
     updated: str
+    archived: bool = False
+
+
+class ArchiveUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1)
+    archived: bool
 
 
 def _now() -> str:
@@ -153,9 +161,25 @@ def save_chat(chat_id: ChatId, body: ConversationUpdate) -> dict:
         now = _now()
         chat = dict(body.model_dump(exclude={"revision", "unconfirmed"}), id=chat_id,
                     revision=(saved["revision"] if saved else 0) + 1,
-                    created=saved["created"] if saved else now, updated=now)
+                    created=saved["created"] if saved else now, updated=now,
+                    archived=saved["archived"] if saved else False)
         store.write_json(_path(chat_id), chat)
         return _shown(chat)
+
+
+@router.patch("/{chat_id}")
+def archive_chat(chat_id: ChatId, body: ArchiveUpdate) -> dict:
+    """Archive or restore without replacing messages or accepting a stale revision."""
+    with store.document_lock("chats"):
+        saved = _load(chat_id)
+        if saved is None:
+            raise HTTPException(404, "This conversation was deleted.")
+        if saved["revision"] != body.revision:
+            raise HTTPException(409, "This conversation changed in another window. Reopen the chat to load the latest version.")
+        saved.update(archived=body.archived, revision=saved["revision"] + 1,
+                     operation=uuid.uuid4().hex, updated=_now())
+        store.write_json(_path(chat_id), saved)
+        return _shown(saved)
 
 
 @router.delete("/{chat_id}")

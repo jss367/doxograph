@@ -69,8 +69,8 @@ extension AppDelegate {
 
     private func editMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(item("Undo", Selector(("undo:")), "z"))
-        menu.addItem(item("Redo", Selector(("redo:")), "z", modifiers: [.command, .shift]))
+        menu.addItem(item("Undo", #selector(undoEdit(_:)), "z", target: self))
+        menu.addItem(item("Redo", #selector(redoEdit(_:)), "z", modifiers: [.command, .shift], target: self))
         menu.addItem(.separator())
         menu.addItem(item("Cut", #selector(NSText.cut(_:)), "x"))
         menu.addItem(item("Copy", #selector(NSText.copy(_:)), "c"))

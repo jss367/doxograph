@@ -680,6 +680,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func reloadPage(_ sender: Any?) { window.webView.reload() }
 
+    @objc func undoEdit(_ sender: Any?) { window.performUndo(redo: false) }
+
+    @objc func redoEdit(_ sender: Any?) { window.performUndo(redo: true) }
+
     @objc func openCommandPalette(_ sender: Any?) {
         window.webView.evaluateJavaScript("document.getElementById('btn-command-palette')?.click()", completionHandler: nil)
     }

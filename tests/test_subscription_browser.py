@@ -183,19 +183,19 @@ def test_paper_conversations_run_side_by_side_on_their_own_agents_and_survive_re
             await page.locator('#agent-send').click()
             await page.get_by_text('ChatGPT answer 2.', exact=True).wait_for()
             release.set()
-            await page.locator('#agent-thread option', has_text='First question').filter(
+            await page.locator('#agent-thread [data-thread-open]', has_text='First question').filter(
                 has_not_text='answering').wait_for(state='attached')
             assert requests == [('claude_code', ['First question']), ('codex', ['Second question'])]
 
             await page.reload()
             await open_chat()
             # The most recently answered conversation reopens; the held first answer may have landed last.
-            await page.locator('#agent-thread option').nth(1).wait_for(state='attached')
-            assert sorted(await page.locator('#agent-thread option').all_text_contents()) == ['First question', 'Second question']
-            await page.locator('#agent-thread').select_option(label='Second question')
+            await page.locator('#agent-thread [data-thread-open]').nth(1).wait_for(state='attached')
+            assert sorted(await page.locator('#agent-thread [data-thread-open]').all_text_contents()) == ['First question', 'Second question']
+            await page.locator('#agent-thread').get_by_role('button', name='Second question', exact=True).click()
             await page.get_by_text('ChatGPT answer 2.', exact=True).wait_for()
             assert await page.locator('#agent-agent').input_value() == 'codex'
-            await page.locator('#agent-thread').select_option(label='First question')
+            await page.locator('#agent-thread').get_by_role('button', name='First question', exact=True).click()
             assert await page.locator('#agent-agent').input_value() == 'claude_code'
             await page.get_by_text('Claude answer 2.', exact=True).wait_for()
             await page.locator('#agent-question').fill('Follow up')
@@ -203,11 +203,11 @@ def test_paper_conversations_run_side_by_side_on_their_own_agents_and_survive_re
             await page.get_by_text('Claude answer 3.', exact=True).wait_for()
             assert requests[-1] == ('claude_code', ['First question', 'Claude answer 2.', 'Follow up'])
 
-            await page.locator('#agent-thread').select_option(label='Second question')
+            await page.locator('#agent-thread').get_by_role('button', name='Second question', exact=True).click()
             await page.locator('#agent-delete').click()
             await _answer(page, 'Delete conversation')
-            await page.locator('#agent-thread option', has_text='Second question').wait_for(state='detached')
-            assert await page.locator('#agent-thread option').all_text_contents() == ['First question']
+            await page.locator('#agent-thread [data-thread-open]', has_text='Second question').wait_for(state='detached')
+            assert await page.locator('#agent-thread [data-thread-open]').all_text_contents() == ['First question']
             await page.get_by_text('Claude answer 3.', exact=True).wait_for()
             [saved] = store.config.data_dir().joinpath('chats').glob('*.json')
             saved = json.loads(saved.read_text())
@@ -298,10 +298,10 @@ def test_unsaved_answer_survives_another_window_saving_the_same_conversation(eng
             await page.locator('#agent-close').click()
             await open_chat()
             await page.get_by_text('this version was kept as a separate conversation', exact=False).wait_for()
-            await page.locator('#agent-thread option').nth(1).wait_for(state='attached')
+            await page.locator('#agent-thread [data-thread-open]').nth(1).wait_for(state='attached')
             assert await _saved_contents(2) == [
                 ['First', 'Answer 1.', 'Mine', 'Answer 2.'], ['First', 'Answer 1.', 'Theirs', 'Their answer.']]
-            await page.locator('#agent-thread').select_option(index=1)
+            await page.locator('#agent-thread [data-thread-open]').nth(1).click()
             await page.get_by_text('Their answer.', exact=True).wait_for()
             assert not errors
 
@@ -330,7 +330,7 @@ def test_answer_saved_after_another_window_saved_first_is_kept_separately():
             await page.get_by_text('this version was kept as a separate conversation', exact=False).wait_for()
             assert await _saved_contents(2) == [
                 ['First', 'Answer 1.', 'Mine', 'Answer 2.'], ['First', 'Answer 1.', 'Theirs', 'Their answer.']]
-            assert await page.locator('#agent-thread option').count() == 2
+            assert await page.locator('#agent-thread [data-thread-open]').count() == 2
             assert not errors
 
     with _server() as url:
@@ -374,7 +374,7 @@ def test_saves_finished_while_the_conversation_list_loads_are_kept(engine):
                 assert await _saved_contents(1) == [contents]
                 release.set()
                 await page.wait_for_timeout(200)
-                assert await page.locator('#agent-thread option').all_text_contents() == ['First']
+                assert await page.locator('#agent-thread [data-thread-open]').all_text_contents() == ['First']
                 assert await page.locator('#agent-messages .agent-content > p:not(.hint)').all_text_contents() == contents
                 await page.locator('#agent-close').click()
                 taken.clear()
@@ -430,12 +430,12 @@ def test_an_older_conversation_list_arriving_last_is_ignored(engine):
             await page.get_by_text('Their answer.', exact=True).wait_for()
             release.set()
             await page.wait_for_timeout(200)
-            assert await page.locator('#agent-thread option').all_text_contents() == ['Theirs']
+            assert await page.locator('#agent-thread [data-thread-open]').all_text_contents() == ['Theirs']
             assert await page.locator('#agent-messages .agent-content > p:not(.hint)').all_text_contents() == ['Theirs', 'Their answer.']
             # A follow-up continues that conversation rather than forking it.
             await ask('Mine')
             assert await _saved_contents(1) == [['Theirs', 'Their answer.', 'Mine', 'Answer 1.']]
-            assert await page.locator('#agent-thread option').all_text_contents() == ['Theirs']
+            assert await page.locator('#agent-thread [data-thread-open]').all_text_contents() == ['Theirs']
             assert not errors
 
     with _server() as url:
@@ -521,10 +521,10 @@ def test_conversation_deleted_while_an_older_list_loads_stays_deleted(engine):
             await asyncio.wait_for(taken.wait(), timeout=10)
             await page.locator('#agent-delete').click()
             await _answer(page, 'Delete conversation')
-            await page.locator('#agent-thread option', has_text='First').wait_for(state='detached')
+            await page.locator('#agent-thread [data-thread-open]', has_text='First').wait_for(state='detached')
             release.set()
             await page.wait_for_timeout(200)
-            assert await page.locator('#agent-thread option').all_text_contents() == ['New conversation']
+            assert await page.locator('#agent-thread [data-thread-open]').all_text_contents() == ['New conversation']
             assert await page.locator('#agent-messages .agent-content > p:not(.hint)').count() == 0
             assert _saved_chats() == []
             assert not errors
@@ -572,7 +572,7 @@ def test_conversation_keeps_saving_after_a_save_response_is_lost(engine):
             await page.reload()
             await open_chat()
             await page.get_by_text('Answer 3.', exact=True).wait_for()
-            assert await page.locator('#agent-thread option').count() == 1
+            assert await page.locator('#agent-thread [data-thread-open]').count() == 1
             assert not errors
 
     with _server() as url:
