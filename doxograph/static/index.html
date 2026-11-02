@@ -24,7 +24,7 @@
     <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide claims</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
-    <button type="button" id="btn-agent" disabled title="Ask questions across every paper in this library">Ask the library</button>
+    <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask questions across every paper in this library">Ask the library</button>
     <button type="button" id="btn-export">Export HTML</button>
     <details id="workspace-actions" class="action-disclosure">
       <summary aria-label="More workspace actions" title="More workspace actions">•••</summary>
@@ -401,6 +401,42 @@
       </div>
     </div>
   </section>
+  <aside id="library-agent" class="paper-chat" hidden aria-labelledby="library-agent-title">
+    <div class="row"><h2 id="library-agent-title">Ask the library</h2>
+      <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
+    <p class="hint" id="agent-workspace"></p>
+    <details class="agent-guidance"><summary>About this conversation</summary>
+      <p class="hint">Ask about papers and claims in this workspace. Your Doxograph notes stay private.
+        Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>
+      <p class="hint" id="agent-input-format"></p>
+      <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
+    </details>
+    <div class="row chat-threads">
+      <label>Conversation <select id="agent-thread"></select></label>
+      <label>Agent <select id="agent-agent"></select></label>
+      <button type="button" id="agent-delete" hidden>Delete</button>
+    </div>
+    <div id="agent-messages" role="log" aria-live="polite"></div>
+    <form id="agent-form">
+      <div id="agent-scope" aria-label="Conversation sources"></div>
+      <div class="row"><button type="button" id="agent-add">Add sources</button>
+        <button type="button" id="agent-expand">Search the rest of the library</button>
+        <button type="button" id="agent-claims-only">Use extracted claims only</button></div>
+      <div id="agent-starters" class="row"></div>
+      <label for="agent-question">Question</label>
+      <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
+      <div id="agent-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
+      <div class="chat-attachment-picker">
+        <button type="button" id="agent-attach">Attach files…</button>
+        <input type="file" id="agent-files" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.tsv,.json,.jsonl,.log,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.toml,.tex,.rst">
+        <span class="hint">Drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.</span>
+      </div>
+      <p class="hint" id="agent-status" role="status"></p>
+      <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
+        <button type="button" id="agent-clear">New conversation</button>
+        <button type="submit" class="primary" id="agent-send">Send</button></div>
+    </form>
+  </aside>
 </div>
 
 <div class="jobs" id="jobs"></div>
@@ -456,40 +492,6 @@
       <button type="button" id="ask-cancel">Cancel</button>
       <button type="submit" id="ask-ok" class="primary">OK</button>
     </div>
-  </form>
-</dialog>
-
-<dialog id="library-agent" class="sheet paper-chat" aria-labelledby="library-agent-title">
-  <div class="row"><h2 id="library-agent-title">Ask the library</h2>
-    <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
-  <p class="hint">Ask about papers and claims in this workspace. Your Doxograph notes stay private.
-    Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>
-  <p class="hint" id="agent-input-format"></p>
-  <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
-  <div class="row chat-threads">
-    <label>Conversation <select id="agent-thread"></select></label>
-    <label>Agent <select id="agent-agent"></select></label>
-    <button type="button" id="agent-delete" hidden>Delete</button>
-  </div>
-  <div id="agent-messages" role="log" aria-live="polite"></div>
-  <form id="agent-form">
-    <div id="agent-scope" aria-label="Conversation sources"></div>
-    <div class="row"><button type="button" id="agent-add">Add sources</button>
-      <button type="button" id="agent-expand">Search the rest of the library</button>
-      <button type="button" id="agent-claims-only">Use extracted claims only</button></div>
-    <div id="agent-starters" class="row"></div>
-    <label for="agent-question">Question</label>
-    <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
-    <div id="agent-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
-    <div class="chat-attachment-picker">
-      <button type="button" id="agent-attach">Attach files…</button>
-      <input type="file" id="agent-files" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.tsv,.json,.jsonl,.log,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.toml,.tex,.rst">
-      <span class="hint">Drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.</span>
-    </div>
-    <p class="hint" id="agent-status" role="status"></p>
-    <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
-      <button type="button" id="agent-clear">New conversation</button>
-      <button type="submit" class="primary" id="agent-send">Send</button></div>
   </form>
 </dialog>
 

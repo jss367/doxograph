@@ -605,6 +605,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider,
             await page.get_by_text('Two papers agree.', exact=True).wait_for()
             assert await page.locator('#agent-messages .activity li').text_content() == 'Searched claims steering'
             assert await page.locator('#agent-messages .who').all_text_contents() == ['You', assistant]
+            await page.locator('.agent-guidance summary').click()
             assert await page.locator('#agent-codex-guidance').is_visible() == (provider == 'codex')
             await page.locator('#agent-question').fill('And disagrees?')
             await page.locator('#agent-question').press('Enter')
@@ -678,6 +679,7 @@ def test_library_agent_switches_agent_without_losing_drafts_or_answer_labels(eng
             assert await page.locator('#agent-send').is_enabled()
             await page.locator('#agent-agent').select_option('codex')
             assert await page.locator('#agent-question').input_value() == 'Follow up'
+            await page.locator('.agent-guidance summary').click()
             assert await page.locator('#agent-codex-guidance').is_visible()
             await page.locator('#agent-send').click()
             await page.get_by_text('ChatGPT answer.', exact=True).wait_for()

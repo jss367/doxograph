@@ -102,7 +102,7 @@ $('agent-messages').addEventListener('click', async (event) => {
         await switchWorkspace(workspace);
         if (workspaceClient.workspaceId !== workspace) return;
       }
-      $('library-agent').close();
+      closeAsk();
       await ResearchNotes.open(message.saved_note);
     } catch (error) { message.saveError = `Could not open this note: ${error.message}`; }
     finally {
@@ -157,9 +157,9 @@ $('btn-agent').addEventListener('click', () => {
 });
 sendOnEnter($('agent-question'));
 $('agent-question').addEventListener('input', () => { if (activeAgentChat()) activeAgentChat().draft = $('agent-question').value; });
-$('agent-close').addEventListener('click', () => $('library-agent').close());
+$('agent-close').addEventListener('click', () => closeAsk());
 $('agent-settings').addEventListener('click', () => {
-  $('library-agent').close();
+  closeAsk();
   openSettings();
   $('ai-enabled').focus();
 });
@@ -245,10 +245,31 @@ function renderAskScope(chat) {
 async function openAsk(scope) {
   askCatalogs.set(workspaceClient.workspaceId, {papers: structuredClone(S.papers), claims: S.claims.map(c => ({paper:c.paper, id:c.id, text:c.text, quote:c.quote, locator:c.locator, tags:c.tags, reviewed:c.reviewed}))});
   const opening = agentChats.open(workspaceClient.workspaceId, null, scope ? {fresh: true, scope} : {});
-  if (!$('library-agent').open) $('library-agent').showModal();
+  $('library-agent').hidden = false;
+  document.body.classList.add('agent-open');
+  $('btn-agent').setAttribute('aria-expanded', 'true');
+  const workspace = currentWorkspace();
+  $('agent-workspace').textContent = `Conversation in ${workspace?.name || workspaceClient.workspaceId}`;
   $('agent-question').focus();
   await opening;
 }
+function closeAsk() {
+  const restoreFocus = $('library-agent').contains(document.activeElement);
+  $('library-agent').hidden = true;
+  document.body.classList.remove('agent-open');
+  $('btn-agent').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('btn-agent').focus({preventScroll: true});
+}
+// This pane owns its keyboard, while shortcuts elsewhere still work.
+$('library-agent').addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !document.querySelector('dialog[open]')) {
+    event.preventDefault();
+    closeAsk();
+    event.stopPropagation();
+    return;
+  }
+  if (!(event.metaKey || event.ctrlKey || event.altKey)) event.stopPropagation();
+});
 async function changeAskScope(scope) {
   const chat = activeAgentChat();
   if (!chat) return false;

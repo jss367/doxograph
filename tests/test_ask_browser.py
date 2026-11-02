@@ -539,3 +539,80 @@ def test_large_source_roster_saves_a_bounded_note(engine):
                 assert saved['messages'][0]['scope']['papers'] == keys
                 assert await page.evaluate("boundedNoteText('x'.repeat(2100000), 1900000, 'Note').length") < 2_000_000
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_library_pane_keeps_workspace_interactive_while_answering(engine):
+    seed()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            held, release = asyncio.Event(), asyncio.Event()
+            requests, errors = [], []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            async def respond(route):
+                requests.append((route.request.headers['x-doxograph-workspace'], route.request.post_data_json))
+                held.set()
+                await release.wait()
+                await route.fulfill(json={'answer': 'The studies report improved recovery.', 'assistant': 'ChatGPT',
+                    'scope': {**route.request.post_data_json['scope'], 'papers': ['a', 'b', 'c']}})
+
+            await page.route('**/api/ask', respond)
+            with _server() as url:
+                other = httpx.post(url + '/api/workspaces', json={'name': 'Other workspace'}).json()['workspace']['id']
+                await page.goto(url)
+                await page.locator('#btn-agent:enabled').click()
+                await expect(page.locator('#btn-agent')).to_have_attribute('aria-expanded', 'true')
+                assert not await page.locator('dialog[open]').count()
+                pane = await page.locator('#library-agent').bounding_box()
+                main = await page.locator('#main').bounding_box()
+                assert pane['x'] >= main['x'] + main['width'] - 1
+                assert abs(pane['x'] + pane['width'] - 1440) <= 1
+                await page.locator('#agent-question').fill('What do these papers show?')
+                await page.locator('#agent-send').click()
+                await asyncio.wait_for(held.wait(), 5)
+                try:
+                    # Real clicks must reach navigation while the answer is pending.
+                    await page.locator('#papers li[data-paper="a"]').click()
+                    await expect(page.locator('#reader')).to_be_visible()
+                    await page.locator('#papers li[data-paper="b"]').click()
+                    await expect(page.locator('#paperhead')).to_contain_text('Recovery under intervention')
+                    await expect(page.locator('#library-agent')).to_be_visible()
+                    await expect(page.locator('#agent-status')).to_contain_text('Looking through')
+                    await page.locator('#content [data-act="edit"]').first.click()
+                    draft = page.locator('form[data-form] textarea[name="note"]')
+                    await draft.fill('A note made while the agent answers.')
+                    await expect(draft).to_have_value('A note made while the agent answers.')
+                    await page.locator('form[data-form] [data-act="cancel"]').click()
+                finally:
+                    release.set()
+                await expect(page.locator('#agent-messages')).to_contain_text('The studies report improved recovery.')
+                await page.wait_for_function('workspaceClient.pendingMutations === 0')
+                await page.locator('#workspace').select_option(other)
+                await expect(page.locator('#workspace')).to_have_value(other)
+                await expect(page.locator('#agent-workspace')).not_to_contain_text('Other workspace')
+                await page.locator('#agent-question').fill('Keep this follow-up')
+                # Pane keyboard input cannot navigate or review claims behind it.
+                await page.locator('#agent-close').focus()
+                await page.keyboard.press('/')
+                await expect(page.locator('#agent-close')).to_be_focused()
+                await page.keyboard.press('Escape')
+                await expect(page.locator('#library-agent')).to_be_hidden()
+                await expect(page.locator('#btn-agent')).to_be_focused()
+                await expect(page.locator('#btn-agent')).to_have_attribute('aria-expanded', 'false')
+                await page.locator('#workspace').select_option('default')
+                await page.locator('#btn-agent').click()
+                await expect(page.locator('#agent-question')).to_have_value('Keep this follow-up')
+                await expect(page.locator('#agent-messages')).to_contain_text('improved recovery')
+                send = await page.locator('#agent-send').bounding_box()
+                assert send['y'] + send['height'] <= 1000
+                if engine == 'chromium':
+                    Path('.context').mkdir(exist_ok=True)
+                    await page.screenshot(path='.context/ask-library-right-pane.png')
+                assert requests[0][0] == 'default'
+                assert requests[0][1]['scope']['mode'] == 'library'
+                assert not errors
+    run_browser(scenario())
