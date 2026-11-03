@@ -20,6 +20,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// Whether the final quit save has frozen the page. Reloading or going
     /// back then would drop writing that save is still waiting on.
     private(set) var editingFrozen = false
+    private var editingTransition = 0
     private let downloads: DownloadController
 
     init(downloads: DownloadController = DownloadController()) {
@@ -100,7 +101,10 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             answered = true
             done(saved)
         }
-        if freezeEditing { editingFrozen = true }
+        if freezeEditing {
+            editingTransition += 1
+            editingFrozen = true
+        }
         webView.callAsyncJavaScript(
             """
             if (freezeEditing) {
@@ -128,7 +132,17 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     }
 
     func resumeEditingAfterCancelledQuit() {
-        editingFrozen = false
+        editingTransition += 1
+        let transition = editingTransition
+        var answered = false
+        let finish = { (error: Error?) in
+            guard !answered, self.editingTransition == transition else { return }
+            answered = true
+            self.editingFrozen = false
+            if error != nil {
+                self.showStatus("The page could not restore editing. Reloading may discard unsaved writing.")
+            }
+        }
         webView.evaluateJavaScript("""
             if (typeof pageImports !== 'undefined') pageImports.resume();
             if (window.doxographQuitInert !== undefined) {
@@ -141,7 +155,26 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
                 if (window.doxographQuitFocus?.isConnected) window.doxographQuitFocus.focus({preventScroll:true});
                 delete window.doxographQuitFocus;
             }
-            """)
+            """) { _, error in finish(error) }
+        // A dead page must not permanently trap native navigation. Keep it
+        // protected unless the reader explicitly accepts losing its writing.
+        func checkRestoration() {
+            guard !answered, self.editingTransition == transition else { return }
+            let allow = self.confirmNavigationWhileRestoringEditing()
+            guard !answered, self.editingTransition == transition else { return }
+            if allow { finish(nil) }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: checkRestoration) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: checkRestoration)
+    }
+
+    private func confirmNavigationWhileRestoringEditing() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "The page has not restored editing yet"
+        alert.informativeText = "Keep waiting to preserve your writing. Allowing Reload and Back may discard unsaved writing."
+        alert.addButton(withTitle: "Keep Waiting")
+        alert.addButton(withTitle: "Allow Navigation")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func load(_ url: URL) {
