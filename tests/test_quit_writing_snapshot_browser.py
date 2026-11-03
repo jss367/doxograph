@@ -32,6 +32,8 @@ def test_quit_snapshot_is_stable_for_same_writing_and_changes_for_new_state(engi
                         field, _ = await editor(page, kind, claims)
                     else:
                         field = page.locator('#refs')
+                # Startup populates controls that are included in the snapshot.
+                await page.wait_for_function('libraryInitialized')
                 before = await page.evaluate('window.doxographQuitWritingSnapshot()')
                 if kind == 'references':
                     # A populated library collapses import; hidden retained input still counts.
