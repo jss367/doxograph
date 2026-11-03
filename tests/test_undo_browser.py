@@ -45,10 +45,11 @@ def test_highlights_undo_redo_and_text_editing(engine):
                 await page.keyboard.press('Control+Shift+z')
                 await green.wait_for()
                 # A typed note uses native text undo and leaves the mark intact.
+                # Native text undo is Command-Z on macOS and Control-Z on Linux.
                 await page.get_by_role('button', name='Add note', exact=True).click()
                 field = page.locator('[data-highlight-note]')
                 await field.press_sequentially('My note')
-                await field.press('Meta+z')
+                await field.press('ControlOrMeta+z')
                 assert await field.input_value() != 'My note'
                 assert len(httpx.get(url + '/api/notebook').json()['highlights']) == 1
                 # The function used by the native menu follows the same route.
