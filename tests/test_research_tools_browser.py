@@ -1991,3 +1991,46 @@ def test_back_while_a_new_board_saves_keeps_the_newer_destination(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('board', ['b1', 'b2'])
+def test_choosing_the_board_picker_placeholder_keeps_the_board_and_back(engine, board):
+    config.set_ai_enabled(False)
+    title = {'b1': 'First board', 'b2': 'Second board'}[board]
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': b, 'kind': 'board', 'title': t, 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}
+                                      for b, t in [('b1', 'First board'), ('b2', 'Second board')]]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=reading')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await page.goto(f'{url}/#view=tools&tool=boards&board={board}')
+                await page.wait_for_function(f"document.querySelector('#board-picker')?.value === '{board}'")
+                await ready(page)
+                entries = await page.evaluate('history.length')
+                # "Choose a board" is not a board: the open one stays, with no new entry.
+                await page.locator('#board-picker').select_option('')
+                await ready(page)
+                assert f'board={board}' in page.url
+                assert await page.evaluate('history.length') == entries
+                assert await page.locator('#board-picker').input_value() == board
+                assert await page.locator('#board-title').input_value() == title
+                # So Back leaves the board in one step.
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                await ready(page)
+                assert 'board=' not in page.url
+                assert not errors
+
+    run_browser(scenario())

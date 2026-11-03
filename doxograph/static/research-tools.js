@@ -1600,6 +1600,9 @@ const ResearchTools = (() => {
     }
     if (target.id === 'board-picker') run(async () => {
       const next = target.value, from = tabKey(wanted);
+      // "Choose a board" names none, and the redraw would open the first one:
+      // it is not a move, so the open board stays and history gets no entry.
+      if (!next) { target.value = boardId || ''; return; }
       if (!await discardDrafts()) { target.value = boardId || ''; return; }
       if (still(from)) chooseBoard(next);
     });
