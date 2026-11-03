@@ -7,10 +7,18 @@ const ResearchTools = (() => {
   let shown = false, wanted = null, loaded = null, origin = 'library';
   const TABS = ['compare', 'boards', 'questions', 'connections', 'reading', 'marks', 'searches'];
   const tabKey = target => target && `${target.tab}\u0000${target.board || ''}`;
-  // Whether the tab and board some work began at are still the ones wanted.
-  // Back, a link, or leaving the tools can arrive while it waits; the newer
-  // move then stands, and run() brings it on screen once the work returns.
-  const still = key => shown && tabKey(wanted) === key;
+  // Whether the tools are up and no move has come since some work took the
+  // navigation number it began at (app.js's navigationVersion). A move is a
+  // tab, a board, Back or Forward, a link, or leaving the tools, and counts
+  // even when it comes back to the same tab and board. Work checks after each
+  // wait and gives way to a newer move, which stands; `overtaken` then has
+  // run() draw the tools again once the work returns.
+  let overtaken = false;
+  const still = move => {
+    if (shown && navigationVersion() === move) return true;
+    overtaken = true;
+    return false;
+  };
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
@@ -171,22 +179,25 @@ const ResearchTools = (() => {
   // beside the notebook and stay through a change of tab; a connection being
   // written lives only in its form, so leaving its tab asks first.
   async function load() {
-    const target = wanted, same = tabKey(target) === tabKey(loaded);
+    const target = wanted, same = tabKey(target) === tabKey(loaded), move = navigationVersion();
+    // This load answers every move made so far.
+    overtaken = false;
     if (same && notebook && modalWorkspace === client.workspaceId && (dirty || connectionDraft)) return;
     if (!same && connectionDraft) {
       if (!await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) {
-        if (wanted === target && loaded) { wanted = loaded; select(loaded.tab, loaded.board); }
+        // The draft's tab stays and its entry names it again, unless a move
+        // made while this asked is newer.
+        if (still(move) && loaded) { wanted = loaded; select(loaded.tab, loaded.board); }
         return;
       }
       connectionDraft = false;
     }
-    if (wanted !== target) return;
+    // After each wait, a newer move stops this load without drawing or naming
+    // its tab.
+    if (!still(move)) return;
     loaded = target;
-    // After each wait below, a newer move stops this load without drawing or
-    // naming its tab.
-    const current = () => still(tabKey(target));
     const flushed = await WorkspaceNotes.flush();
-    if (!current()) return;
+    if (!still(move)) return;
     if (!flushed) {
       notebook = null;
       el('research-tabs').innerHTML = '';
@@ -203,9 +214,9 @@ const ResearchTools = (() => {
       // Leaving a paper for the tools saves its reading progress on the way
       // out. Read the notebook after that save, or the next save conflicts.
       await flushReadingProgress();
-      if (!current()) return;
+      if (!still(move)) return;
       const fresh = await request();
-      if (!current()) return;
+      if (!still(move)) return;
       notebook = fresh;
       dirty = false;
     }
@@ -238,13 +249,25 @@ const ResearchTools = (() => {
   // A tab opens at no particular board; the boards tab then shows the one
   // last open, or the first. Choosing the tab already open keeps its board:
   // the click is not a move, so the URL keeps the board and history gets no
-  // second copy of it.
-  function openTab(name) {
-    navigate(name, shown && wanted?.tab === name ? wanted.board : null);
+  // second copy of it. `replace` is for a tab that takes over the entry the
+  // same click made in opening the tools.
+  function openTab(name, replace = false) {
+    navigate(name, shown && wanted?.tab === name ? wanted.board : null, replace);
   }
-  // The URL follows a tab or board chosen here without asking for a reload.
-  // A move that arrived while the work drawing this was out is newer: the URL
-  // is left to it, and run() brings it on screen.
+  // A tab an action ends on is a move of its own, as a tab click is. When the
+  // click that ran the action also opened the tools, that opening has already
+  // made an entry and the tab takes it over: one click, one step back.
+  async function arrive(name, replace) {
+    if (shown && tab === name) { render(); return; }
+    openTab(name, replace);
+    await load();
+  }
+  // Writes the tab and board on screen over the current entry, for what the
+  // reader did not choose: a default board, none in place of a deleted one,
+  // or the same tab and board again. Every tab or board the reader chooses is
+  // a move and goes through navigate(), which takes a history entry; nothing
+  // here may stand in for that. A move that arrived while the work drawing
+  // this was out is newer: the URL is left to it, and run() brings it on screen.
   function syncLocation() {
     const board = ['boards', 'questions'].includes(tab) ? boardId : null, next = {tab, board};
     if (tabKey(wanted) !== tabKey(loaded) && tabKey(wanted) !== tabKey(next)) return;
@@ -430,10 +453,14 @@ const ResearchTools = (() => {
     const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
     (shown ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
   }
-  async function showHistory(paper, claim = null) {
-    historyPaper = paper; historyClaim = claim;
-    historyData = await request(`/history/${encodeURIComponent(paper)}`);
-    tab = 'history'; render();
+  // Opens the edit history of a paper, or of one of its claims. `move` is the
+  // navigation number the request for it began at.
+  async function showHistory(paper, claim, move, replace = false) {
+    const data = await request(`/history/${encodeURIComponent(paper)}`);
+    if (!still(move)) return false;
+    historyPaper = paper; historyClaim = claim; historyData = data;
+    await arrive('history', replace);
+    return true;
   }
   function renderHistory() {
     const entries = historyData.entries.filter(e => !historyClaim || e.claim === historyClaim);
@@ -1378,18 +1405,24 @@ const ResearchTools = (() => {
     connectionDraft = false;
     return true;
   }
-  async function action(name, target) {
+  // `opened` is whether the click that ran this action opened the tools for it.
+  async function action(name, target, opened = false) {
     const data = target.dataset;
+    // Whatever waits below gives way to a move made meanwhile.
+    const move = navigationVersion();
     if (name === 'tab') { openTab(data.tab); await load(); return; }
     if (name === 'reload') {
       if (!notebook) { loaded = null; await load(); return; }
       if (!await discardDrafts()) return;
+      // The history on screen was read with the version being dropped, so the
+      // tools return to Compare in its place: not a move the reader chose.
       const nextTab = tab === 'history' ? 'compare' : tab;
       if (nextTab === 'reading') {
         el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
         await flushReadingProgress();
       }
       notebook = await request();
+      if (!still(move)) return;
       tab = nextTab; render(); return;
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
@@ -1406,29 +1439,31 @@ const ResearchTools = (() => {
     if (name === 'export-selection') { await download(data.format); return; }
     if (name === 'export-board') { await download(data.format, boardId); return; }
     if (name === 'queue-selection' || name === 'queue-paper') {
-      const from = tabKey(wanted), version = navigationVersion();
-      await queue(name === 'queue-selection' ? selectedPapers() : [data.paper]);
-      if (!still(from) || navigationVersion() !== version) return;
-      openTab('reading'); await load(); return;
+      await queue(name === 'queue-paper' ? [data.paper] : selectedPapers());
+      if (still(move)) await arrive('reading', opened);
+      return;
     }
     if (name === 'new-board' || name === 'new-question') {
-      const from = tabKey(wanted), version = navigationVersion();
       if (!await discardDrafts()) return;
       const asking = name === 'new-question';
       const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
-      if (!title?.trim() || !still(from) || navigationVersion() !== version) return;
+      if (!title?.trim() || !still(move)) return;
       const board = {id:uid(),kind:asking ? 'question' : 'board',title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
       // With no board open, the tab's entry names none, and going back to it
       // would open this board anyway: the new board takes that entry in place.
       const before = boardId;
       notebook.boards.push(board); boardId = board.id; await save();
-      // Even a move away and back during the save is newer: save the board
-      // without replacing that history entry or opening the new board.
-      if (!still(from) || navigationVersion() !== version) { boardId = before; return; }
+      // A move made during the save is newer, even one back to this tab and
+      // board: the board is saved, not opened.
+      if (!still(move)) { boardId = before; return; }
       if (before) chooseBoard(board.id); else render();
       return;
     }
-    if (name === 'add-board') { openTab('boards'); await load(); message('Choose or create a board, then add the selected claims.'); return; }
+    if (name === 'add-board') {
+      await arrive('boards', opened);
+      if (!overtaken) message('Choose or create a board, then add the selected claims.');
+      return;
+    }
     if (name === 'board-add-selection') {
       if (!claims.size) throw new Error('Select claims in the library first.');
       const board = editBoard();
@@ -1450,7 +1485,8 @@ const ResearchTools = (() => {
       const id = boardId;
       notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id]; delete edits.boardBases[id];
       // The URL stops naming the board deleted.
-      render(); return;
+      if (still(move)) render();
+      return;
     }
     if (name.startsWith('entry-')) {
       const entries = editBoard().entries, id = target.closest('[data-entry]').dataset.entry;
@@ -1481,14 +1517,13 @@ const ResearchTools = (() => {
       await save(); renderReading(); return;
     }
     if (name === 'save-search') {
-      const from = tabKey(wanted), version = navigationVersion();
       const title = await promptDialog('Name this saved search', '', {ok:'Save search'});
       if (!title?.trim()) return;
       const search = {id:uid(),name:title.trim(),view:origin};
       for (const field of ['q','paper','tag','label','facet','kind','unreviewed','unverified','group']) search[field] = V[field];
       notebook.searches.push(search); await save();
-      if (!still(from) || navigationVersion() !== version) return;
-      openTab('searches'); await load(); return;
+      if (still(move)) await arrive('searches', opened);
+      return;
     }
     if (['apply-search','rename-search','delete-search'].includes(name)) {
       const id = target.closest('[data-search]').dataset.search, search = notebook.searches.find(s=>s.id === id);
@@ -1512,13 +1547,14 @@ const ResearchTools = (() => {
       notebook.highlights.find(h => h.id === target.closest('[data-highlight]').dataset.highlight).question = false;
       await save(); renderMarks(); message('Question marked answered. The mark and its note remain.'); return;
     }
-    if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper,data.claim); return; }
+    if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper, data.claim || null, move, opened); return; }
     if (name === 'restore') {
       const entry = historyData.entries.find(e => e.id === data.revision);
       const prompt = entry?.fields === null ? 'Restore this deletion? The claim will be removed and its wording kept in history.' : 'Restore this earlier version? The current version will remain in history.';
       if (!await confirmDialog(prompt,{ok:entry?.fields === null ? 'Restore deletion' : 'Restore version'})) return;
       const restored = await request(`/history/${encodeURIComponent(historyPaper)}/restore`,'POST',{revision:data.revision,expected:historyData.expected});
-      await refreshAll(); await showHistory(historyPaper,historyClaim);
+      await refreshAll();
+      if (!await showHistory(historyPaper, historyClaim, move)) return;
       message(restored.deleted ? 'Claim removed. Its wording remains in history.' : restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
   }
@@ -1529,8 +1565,9 @@ const ResearchTools = (() => {
     catch (error) { message(error.message,true); if (!shown) toast(error.message,{tone:'warn'}); }
     finally {
       setBusy(false);
-      // Hash navigation can arrive during other work. Drain the latest target.
-      if (shown && tabKey(wanted) !== tabKey(loaded)) void run(load);
+      // A move can arrive during other work. Drain the latest target, and
+      // draw it again if work gave way to a move that came back to it.
+      if (shown && (overtaken || tabKey(wanted) !== tabKey(loaded))) void run(load);
     }
   }
   document.addEventListener('selectionchange', trackSelection);
@@ -1583,23 +1620,24 @@ const ResearchTools = (() => {
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       // A tab, or a tool used from the library, opens the research tools first.
+      let opened = false;
       if (TABS.includes(name) || !shown) {
         // An unsaved workspace note would be hidden by the tools; keep it on screen.
         if (!shown) {
-          const navigation = navigationVersion();
+          const move = navigationVersion();
           if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
           // A move made while the note was saved is newer than this click.
-          if (navigationVersion() !== navigation) return;
+          // The tools are not up, so this is still()'s check without its `shown`.
+          if (navigationVersion() !== move) return;
+          opened = true;
         }
-        // External actions open their actual destination directly. Compare
-        // would otherwise leave an extra history entry before the action.
-        const destination = name === 'queue-paper' || name === 'queue-selection' ? 'reading'
-          : name === 'save-search' ? 'searches' : 'compare';
-        openTab(TABS.includes(name) ? name : shown ? tab : destination);
+        // An action used from outside runs on Compare; the tab it ends on
+        // takes over this entry (see arrive), so history gains one step.
+        openTab(TABS.includes(name) ? name : 'compare');
         await load();
-        if (TABS.includes(name) || !notebook) return;
+        if (TABS.includes(name) || !notebook || overtaken) return;
       }
-      await action(name,target);
+      await action(name, target, opened);
     });
   }, true);
   document.addEventListener('change', event => {
@@ -1611,12 +1649,12 @@ const ResearchTools = (() => {
       target.checked ? papers.add(target.dataset.selectPaper) : papers.delete(target.dataset.selectPaper); remember(); sync(); return;
     }
     if (target.id === 'board-picker') run(async () => {
-      const next = target.value, from = tabKey(wanted);
+      const next = target.value, move = navigationVersion();
       // "Choose a board" names none, and the redraw would open the first one:
       // it is not a move, so the open board stays and history gets no entry.
       if (!next) { target.value = boardId || ''; return; }
       if (!await discardDrafts()) { target.value = boardId || ''; return; }
-      if (still(from)) chooseBoard(next);
+      if (still(move)) chooseBoard(next);
     });
     if (target.matches('[data-entry-stance]')) {
       editBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;

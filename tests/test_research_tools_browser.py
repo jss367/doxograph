@@ -2034,3 +2034,138 @@ def test_choosing_the_board_picker_placeholder_keeps_the_board_and_back(engine, 
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_leaving_and_coming_back_while_a_new_board_saves_keeps_the_open_board(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=reading')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                nav = page.locator('.research-tools-nav')
+                await nav.get_by_role('button', name='Evidence boards', exact=True).click()
+                await ready(page)
+                assert 'board=b1' in page.url
+                held, release = [], asyncio.Event()
+                async def hold_put(route):
+                    if route.request.method == 'PUT' and not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_put)
+                await view.get_by_role('button', name='New board', exact=True).click()
+                await _answer(page, 'Create board', 'Second board')
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held
+                # Away and back to this same tab and board while the new board saves.
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                await page.go_forward()
+                await page.wait_for_function("location.hash.includes('board=b1')")
+                release.set()
+                await page.wait_for_function(
+                    "[...document.querySelectorAll('#board-picker option')].some(o => o.textContent === 'Second board')")
+                await ready(page)
+                # The return was the newer move: the board it named stays open.
+                assert 'board=b1' in page.url
+                assert await page.locator('#board-picker').input_value() == 'b1'
+                assert await page.locator('#board-title').input_value() == 'First board'
+                titles = [b['title'] for b in httpx.get(url + '/api/notebook').json()['boards']]
+                assert titles == ['First board', 'Second board']
+                await page.unroute('**/api/notebook')
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                await ready(page)
+                assert 'board=' not in page.url
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_add_claims_to_board_from_compare_then_back_returns_to_compare(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=reading')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await view.locator('[data-tab="compare"]').click()
+                await ready(page)
+                assert 'tool=compare' in page.url
+                entries = await page.evaluate('history.length')
+                # The action opens the boards as a destination of its own.
+                await view.get_by_role('button', name='Add claims to board', exact=True).click()
+                await ready(page)
+                assert 'tool=boards' in page.url and 'board=b1' in page.url
+                assert await page.evaluate('history.length') == entries + 1
+                assert 'Choose or create a board' in await page.locator('#research-message').inner_text()
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=compare')")
+                await ready(page)
+                assert await view.locator('[data-tab="compare"]').get_attribute('aria-current') == 'page'
+                assert await page.locator('#board-picker').count() == 0
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                await ready(page)
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_queueing_selected_papers_from_compare_then_back_returns_to_compare(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                view = page.locator('#research-tools')
+                await page.locator('[data-select-paper="study"]').first.check()
+                await page.locator('#selection-tools [data-tool="compare"]').click()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert 'tool=compare' in page.url
+                # Queueing the selection opens the queue as a move of its own.
+                await view.get_by_role('button', name='Queue selected papers', exact=True).click()
+                await ready(page)
+                assert 'tool=reading' in page.url
+                assert [r['paper'] for r in httpx.get(url + '/api/notebook').json()['reading']] == ['study']
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=compare')")
+                await ready(page)
+                assert await view.locator('[data-tab="compare"]').get_attribute('aria-current') == 'page'
+                await page.go_back()
+                await view.wait_for(state='hidden')
+                assert not errors
+
+    run_browser(scenario())

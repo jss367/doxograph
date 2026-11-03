@@ -182,15 +182,31 @@ function currentHash() {
 // before `applyHash` ever saw them.
 let restoringHistory = false;
 
-// A route can change away and back while a reader request waits. Record
-// each transition, including history traversal, rather than comparing only
-// the final paper/view. Background claim selection is not navigation.
+// A route can change away and back while a request waits. Record each
+// transition, including history traversal, rather than comparing only the
+// final route: work that waits takes this number first, and goes on only if
+// no move came between. The research tools' tab and board are part of the
+// route. Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
+function navigationRouteNow() {
+  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
+    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, V.view === 'tools' ? [V.tool, V.board] : null]);
+}
 function navigationVersion() {
-  const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
-    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, V.tool, V.board]);
+  const route = navigationRouteNow();
   if (route !== navigationRoute) { navigationRoute = route; navigationSeq++; }
   return navigationSeq;
+}
+
+// The research tools naming what they show when the reader did not choose it:
+// a default board, none in place of a deleted one, or the tab kept when leaving
+// it was refused. The entry on screen is rewritten, and this is not a move, so
+// work waiting on the reader's last move goes on.
+function followTools(tool, board) {
+  navigationVersion();
+  V.tool = tool; V.board = board;
+  navigationRoute = navigationRouteNow();
+  syncHash();
 }
 
 function syncHash(push = false) {
@@ -765,12 +781,14 @@ function drawPageViews() {
 }
 
 // Opens a page view at a record or tab, or at the one last open there. Each
-// destination gets its own history entry, so Back retraces them.
-function openPageView(view, fields = {}) {
+// destination gets its own history entry, so Back retraces them. `replace`
+// moves the current entry instead, for a destination that takes over the one
+// the same click has just made.
+function openPageView(view, fields = {}, replace = false) {
   const before = currentHash();
   for (const [key, value] of Object.entries(fields)) if (value !== undefined) V[key] = value;
   showView(view);
-  if (currentHash() !== before) syncHash(true);
+  if (currentHash() !== before) syncHash(!replace);
   renderAll();
 }
 
@@ -1453,8 +1471,8 @@ async function boot() {
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
   $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
   $('btn-research-notes').addEventListener('click', () => openPageView('notes'));
-  ResearchTools.connect(workspaceClient, {open: (tool, board) => openPageView('tools', {tool, board}),
-    selected: (tool, board) => { V.tool = tool; V.board = board; syncHash(); }});
+  ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
+    selected: followTools});
   window.FocusedReview.connect(workspaceClient);
   connectPaperMap(workspaceClient);
   AppStartup.phase('connection');
