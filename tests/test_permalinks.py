@@ -68,6 +68,43 @@ def test_an_id_not_derived_from_its_key_is_found_by_scanning(client):
     assert fragment(client.get("/claim/legacy-7", follow_redirects=False))["paper"] == "doe2026recovery"
 
 
+def restore_legacy_id(key, claim_id):
+    paper = store.load_paper(key)
+    paper["claims"][0]["id"] = claim_id
+    store.save_paper(paper)
+
+
+def test_an_id_two_papers_hold_is_cited_with_its_paper(client):
+    build_corpus()
+    store.save_paper(store.new_paper("roe2025steering", title="Steering", authors=["Ann Roe"], year=2025))
+    store.add_claim("roe2025steering", {"text": "Steering degrades fluency.", "tags": ["dose"]})
+    restore_legacy_id("doe2026recovery", "legacy-7")
+    restore_legacy_id("roe2025steering", "legacy-7")
+    urls = sorted(c["url"] for c in client.get("/api/query/claims").json()["items"])
+    assert urls == ["http://127.0.0.1:8765/claim/legacy-7?paper=doe2026recovery",
+                    "http://127.0.0.1:8765/claim/legacy-7?paper=roe2025steering"]
+    for key in ("doe2026recovery", "roe2025steering"):
+        assert fragment(client.get(f"/claim/legacy-7?paper={key}", follow_redirects=False)) == \
+            {"ws": "default", "view": "claims", "paper": key, "sel": "legacy-7"}
+    assert client.get("/claim/legacy-7?paper=nobody", follow_redirects=False).status_code == 404
+    # A link written without the paper cannot choose, so it offers both.
+    ambiguous = client.get("/claim/legacy-7", follow_redirects=False)
+    assert ambiguous.status_code == 404
+    assert "/claim/legacy-7?paper=doe2026recovery" in ambiguous.text
+    assert "/claim/legacy-7?paper=roe2025steering" in ambiguous.text
+    ids = re.findall(r'\bid="([^"]+)"', export.render())
+    assert "claim-doe2026recovery%3Alegacy-7" in ids and "claim-roe2025steering%3Alegacy-7" in ids
+
+
+def test_an_id_holding_a_slash_reaches_its_claim(client):
+    build_corpus()
+    restore_legacy_id("doe2026recovery", "legacy/7")
+    url = client.get("/api/query/claims").json()["items"][0]["url"]
+    assert url == "http://127.0.0.1:8765/claim/legacy%2F7?paper=doe2026recovery"
+    assert fragment(client.get(url, follow_redirects=False))["sel"] == "legacy/7"
+    assert fragment(client.get("/claim/legacy%2F7", follow_redirects=False))["sel"] == "legacy/7"
+
+
 def test_links_resolve_in_the_workspace_they_name(client):
     other = config.create_workspace("Research")["id"]
     with config.use_workspace(other):

@@ -630,6 +630,7 @@ function openPaper(paper) {
   // Papers opened from another view may be outside the current label or facet filter.
   keepLabelFor(paper);
   keepFacetFor(paper);
+  keepLedgerFor(paper);
   V.paper = paper; V.tag = null; V.selectedId = null;
   syncHash(true);
   renderAll();

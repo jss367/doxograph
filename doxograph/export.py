@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
 
-from . import __version__, config, store
+from . import __version__, config, permalinks, store
 
 CSS = """
 :root {
@@ -240,10 +240,13 @@ def _claim_html(row: dict[str, Any], ledger_by_id: dict[str, dict[str, Any]],
     ]).lower()
     cite = f"{_authors(row.get('paper_authors', []))} ({row.get('paper_year') or 'n.d.'})"
     tags = "".join(f'<span class="tag">#{_e(t)}</span>' for t in row.get("tags", []))
+    # The paper is part of the anchor only when the id does not name it, so
+    # two papers holding one restored id get an anchor each.
+    ref = permalinks.claim_ref(row["paper"], row["id"])
     own_id = ""
-    if anchored is not None and row["id"] not in anchored:
-        anchored.add(row["id"])
-        own_id = f'id="{_e(anchor("claim", row["id"]))}" '
+    if anchored is not None and ref not in anchored:
+        anchored.add(ref)
+        own_id = f'id="{_e(anchor("claim", ref))}" '
     parts = [
         f'<div class="claim {_e(row.get("strength"))}" {own_id}data-claim '
         f'data-kind="{_e(row.get("kind"))}" data-tags="{_e(" ".join(row.get("tags", [])))}" '
@@ -252,7 +255,7 @@ def _claim_html(row: dict[str, Any], ledger_by_id: dict[str, dict[str, Any]],
         f'{_e(row.get("text"))}</p>',
         f'<div class="meta">{tags}{_e(cite)}'
         + (f' · {_e(row.get("locator"))}' if row.get("locator") else "")
-        + _permalink("claim", row["id"]) + "</div>",
+        + _permalink("claim", ref) + "</div>",
     ]
     if row.get("evidence"):
         parts.append(f'<p class="evidence">{_e(row["evidence"])}</p>')

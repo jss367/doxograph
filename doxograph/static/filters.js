@@ -413,6 +413,11 @@ function keepFacetFor(key) {
   if (V.facet && key && !S.claims.some((row) => row.paper === key && hasFacetFilter(row))) V.facet = null;
 }
 
+// And for one of the reader's own claims, which a paper may have no evidence on.
+function keepLedgerFor(key) {
+  if (V.ledger && key && !S.claims.some((row) => row.paper === key && hasLedgerFilter(row))) V.ledger = null;
+}
+
 // The keys the label filter allows, or null when no label is chosen. A label
 // belongs to the paper, so it narrows the claims by way of the papers that
 // carry it rather than by anything on the claim itself.

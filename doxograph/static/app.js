@@ -278,6 +278,7 @@ function dropMissingFilters() {
   // every other path that opens one.
   keepLabelFor(V.paper);
   keepFacetFor(V.paper);
+  keepLedgerFor(V.paper);
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -492,10 +493,13 @@ function workspaceQuery() {
 
 // The address another document can keep for a paper, a claim, or one of the
 // reader's own claims: `permalinks.py` resolves it to wherever the app shows
-// that record, so it does not depend on the fragment's current shape.
-function permalink(kind, id) {
+// that record, so it does not depend on the fragment's current shape. A claim
+// whose id does not name its paper carries the paper, as `permalinks.path` does.
+function permalink(kind, id, paper = '') {
   const workspace = workspaceClient.workspaceId || 'default';
   const url = new URL(`/${kind}/${encodeURIComponent(id)}`, location.origin);
+  const derived = paper && id.startsWith(`${paper}-c`) && /^\d+$/.test(id.slice(paper.length + 2));
+  if (kind === 'claim' && paper && !derived) url.searchParams.set('paper', paper);
   if (workspace !== 'default') url.searchParams.set('workspace', workspace);
   return url.href;
 }
@@ -1137,7 +1141,7 @@ $('panes').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'copy-link') {
-      await copyText(permalink(button.dataset.kind, button.dataset.id), 'Link copied.');
+      await copyText(permalink(button.dataset.kind, button.dataset.id, paper), 'Link copied.');
       return;
     }
     if (act === 'copy-quote') {

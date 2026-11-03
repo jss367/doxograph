@@ -54,6 +54,14 @@ def test_permalinks_open_their_record_and_copy_from_the_page(engine):
                 await page.locator("#content .claim [data-act='copy-link']").click()
                 assert await page.evaluate("window.copied") == f"{url}/claim/one-c1"
 
+                # A paper with no evidence on L1, chosen from the command
+                # palette, opens with its claims.
+                await page.keyboard.press("Control+k")
+                await page.get_by_role("combobox", name="Search papers, topics, boards, and actions").fill("Unlinked")
+                await page.keyboard.press("Enter")
+                await expect(page.locator("#content .claim")).to_have_attribute("data-claim", "two-c1")
+                assert await page.evaluate("V.ledger") is None
+
                 await page.goto(f"{url}/paper/two")
                 await page.locator(".paper-actions summary").click()
                 await page.locator(".paper-actions [data-act='copy-link']").click()

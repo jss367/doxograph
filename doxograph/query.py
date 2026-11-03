@@ -42,10 +42,10 @@ def matches(q: str, *values: object) -> bool:
     return all(term in text for term in terms)
 
 
-def link(request: Request, kind: str, identifier: str) -> str:
+def link(request: Request, kind: str, identifier: str, paper: str | None = None) -> str:
     """The address a document citing this record can keep. The Host it is built
     from has already been checked against the names this server answers for."""
-    return str(request.base_url).rstrip("/") + permalinks.path(kind, identifier)
+    return str(request.base_url).rstrip("/") + permalinks.path(kind, identifier, paper=paper)
 
 
 def page(rows: list[dict[str, Any]], limit: int, offset: int, **extra: Any) -> dict[str, Any]:
@@ -119,7 +119,7 @@ def claims(request: Request, q: QueryText = "", topic: str = "", paper: str = ""
     if omit_notes:
         rows = [{k: v for k, v in c.items() if k not in PERSONAL_CLAIM_FIELDS} for c in rows]
     result = page(rows, limit, offset, storage_issues=issues)
-    result["items"] = [{**c, "url": link(request, "claim", c["id"])} for c in result["items"]]
+    result["items"] = [{**c, "url": link(request, "claim", c["id"], paper=c["paper"])} for c in result["items"]]
     return result
 
 

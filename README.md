@@ -504,7 +504,9 @@ and a link to a topic is something you can keep or send.
 
 A paper, a claim, and each of your own claims also has an address for other
 documents to cite: `/paper/<key>`, `/claim/<id>`, and `/ledger/<id>`, with
-`?workspace=<id>` outside the Default workspace. Keys and claim ids are never
+`?workspace=<id>` outside the Default workspace. A claim restored with an id
+that does not start with its paper's key carries `?paper=<key>` too, since two
+papers can hold such an id. Keys and claim ids are never
 reissued, so a brief that cites
 `http://127.0.0.1:8765/claim/doe2026recovery-c3` keeps opening that claim
 however the app's own URL changes. A paper opens with its claims, a claim
