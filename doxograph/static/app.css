@@ -609,6 +609,11 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .graph-wrap canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 .graph-wrap canvas.hover { cursor: pointer; }
 .graph-wrap canvas.drag { cursor: grabbing; }
+/* The map's bottom edge: 8px of grab area that shows a line under the pointer. */
+.graph-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; z-index: 4;
+  cursor: ns-resize; touch-action: none; }
+.graph-resize:hover, body.resizing-graph .graph-resize { border-bottom: 2px solid var(--accent); }
+body.resizing-graph { cursor: ns-resize; user-select: none; }
 .graph-tip { position: absolute; pointer-events: none; max-width: 22rem; z-index: 3;
   background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
   padding: .35rem .5rem; font-size: .82rem; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
