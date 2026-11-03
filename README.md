@@ -622,7 +622,9 @@ writing space are stored locally in `note-images/`.
   as you type, and leaving the catalog saves at once; a new record saves once
   it has a name. Each record has its own link. Add a record with a name, description, source URL or local path, version,
   license, access notes, and roles (training, evaluation, reference, or project
-  output). Add **Labels** separated by commas, such as `open source` or
+  output). **Add field** under **Custom fields** records any other detail as a
+  name and value, such as `Model` for a dataset a model generated; names used on
+  other records are suggested, and each record's field names must differ. Add **Labels** separated by commas, such as `open source` or
   `needs review`; labels appear in the inventory and are included in dataset
   search and workspace exports. Labels preserve your spelling and ignore case
   when deduplicating. Search the inventory and link records to papers and individual claims.

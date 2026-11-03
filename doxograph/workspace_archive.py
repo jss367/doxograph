@@ -267,6 +267,9 @@ def _datasets_markdown(saved_datasets: list[dict[str, Any]], saved_papers: list[
         for field_name, label in DATASET_DETAILS:
             if dataset[field_name]:
                 lines.extend([label + ': ' + notebook.md(dataset[field_name]), ''])
+        for custom in dataset['custom_fields']:
+            if custom['value']:
+                lines.extend([notebook.md(custom['name']) + ': ' + notebook.md(custom['value']), ''])
         lines.extend(['Roles: ' + ', '.join(role.replace('-', ' ') for role in dataset['roles']), ''])
         if dataset['labels']:
             lines.extend(['Labels: ' + notebook.md(', '.join(dataset['labels'])), ''])
