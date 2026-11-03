@@ -23,7 +23,8 @@ def client() -> TestClient:
 def test_repositories_are_found_in_the_order_the_text_names_them():
     text = ("Code is at https://github.com/Owner/Repo. Weights and a demo: "
             "gitlab.com/group/project.git and https://www.github.com/owner/repo/tree/main.")
-    assert code_links.find(text) == ["https://github.com/Owner/Repo", "https://gitlab.com/group/project"]
+    assert code_links.find(text) == ["https://github.com/Owner/Repo", "https://gitlab.com/group/project",
+                                     "https://github.com/owner/repo"]
 
 
 def test_a_link_to_a_user_or_a_page_is_not_a_repository():
