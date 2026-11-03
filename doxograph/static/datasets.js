@@ -39,6 +39,21 @@ const Datasets = (() => {
       .sort((a, b) => byCodePoint(labelKey(a), labelKey(b)) || byCodePoint(a, b)),
     facet_values:unique(item.facet_values.map(strip))});
   const key = value => facetValueKey(value);
+  // The table's optional columns. The name column is always shown.
+  const columns = {version:'Version', license:'License', source:'Source', roles:'Roles', labels:'Labels',
+    description:'Description', access_notes:'Access notes', facet_values:'Other dataset names',
+    papers:'Linked papers', claims:'Linked claims', created:'Added', updated:'Last updated'};
+  // The layout, columns, and sort are kept between visits.
+  const TABLE_KEY = 'doxograph-dataset-table';
+  let table = {view:'list', columns:['version','license','roles','labels'], sort:'name', descending:false};
+  try {
+    const kept = JSON.parse(localStorage.getItem(TABLE_KEY)) || {};
+    if (['list','table'].includes(kept.view)) table.view = kept.view;
+    if (Array.isArray(kept.columns)) table.columns = Object.keys(columns).filter(column => kept.columns.includes(column));
+    if (['name', ...table.columns].includes(kept.sort)) table.sort = kept.sort;
+    table.descending = kept.descending === true;
+  } catch (_) { /* optional */ }
+  const remember = () => { try { localStorage.setItem(TABLE_KEY, JSON.stringify(table)); } catch (_) { /* preference remains for this page */ } };
   const button = (action, text, attrs = '') => `<button type="button" data-dataset-action="${action}" ${attrs}>${text}</button>`;
   function status(message, error = false) {
     el('datasets-status').textContent = message;
@@ -118,10 +133,58 @@ const Datasets = (() => {
     const query = el('datasets-search').value.toLowerCase().trim();
     const filtered = items.filter(item => fields.filter(f => !['papers','claims'].includes(f))
       .map(f => item[f]).join('\n').toLowerCase().includes(query)).sort((a,b) => a.name.localeCompare(b.name));
-    el('datasets-list').innerHTML = filtered.map(item => button('open', `<strong>${esc(item.name)}</strong><small>${esc([item.version, ...item.roles.map(r => roles[r])].filter(Boolean).join(' · ') || 'Dataset')}</small>${item.labels.length ? `<span class="dataset-labels">${item.labels.map(label => `<span class="dataset-label">${esc(label)}</span>`).join('')}</span>` : ''}`,
-      `data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="page"' : ''}`)).join('')
-      || `<p class="hint">${query ? 'No datasets match your search.' : 'Catalog the datasets your project uses or produces.'}</p>`;
+    const empty = `<p class="hint">${query ? 'No datasets match your search.' : 'Catalog the datasets your project uses or produces.'}</p>`;
+    el('datasets-list').innerHTML = filtered.map(item => button('open', `<strong>${esc(item.name)}</strong><small>${esc([item.version, ...item.roles.map(r => roles[r])].filter(Boolean).join(' · ') || 'Dataset')}</small>${labelChips(item)}`,
+      `data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="page"' : ''}`)).join('') || empty;
+    // Only the visible layout holds the records, so each name appears once on the page.
+    el('datasets-table').innerHTML = table.view === 'table' ? renderTable(filtered) || empty : '';
     el('datasets-count').textContent = `${items.length} ${items.length === 1 ? 'dataset' : 'datasets'}`;
+  }
+  const labelChips = item => item.labels.length ? `<span class="dataset-labels">${item.labels.map(label => `<span class="dataset-label">${esc(label)}</span>`).join('')}</span>` : '';
+  function cell(item, column) {
+    const value = item[column];
+    if (column === 'papers' || column === 'claims') return value.length;
+    if (column === 'roles') return value.map(role => roles[role]).join(', ');
+    if (column === 'created' || column === 'updated') return value ? new Date(value).toLocaleDateString() : '';
+    return Array.isArray(value) ? value.join(', ') : value;
+  }
+  // Empty values sort last in either direction; ties fall back to the name.
+  function compare(a, b) {
+    const sortable = item => ['created','updated'].includes(table.sort) ? item[table.sort] || '' : cell(item, table.sort);
+    const x = sortable(a), y = sortable(b);
+    if ((x === '') !== (y === '')) return x === '' ? 1 : -1;
+    const order = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), undefined, {numeric:true, sensitivity:'base'});
+    return (table.descending ? -order : order) || a.name.localeCompare(b.name);
+  }
+  function renderTable(rows) {
+    if (!rows.length) return '';
+    const header = column => {
+      const sorted = table.sort === column;
+      return `<th scope="col" aria-sort="${sorted ? (table.descending ? 'descending' : 'ascending') : 'none'}">${button('sort',
+        `${column === 'name' ? 'Name' : columns[column]}<span aria-hidden="true">${sorted ? (table.descending ? ' ↓' : ' ↑') : ''}</span>`, `data-column="${column}"`)}</th>`;
+    };
+    return `<table><thead><tr>${['name', ...table.columns].map(header).join('')}</tr></thead><tbody>${[...rows].sort(compare).map(item =>
+      `<tr data-dataset-action="open" data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="true"' : ''}><th scope="row">${button('open', esc(item.name), `data-id="${item.id}"`)}</th>${table.columns.map(column =>
+        `<td class="dataset-cell-${column}">${column === 'labels' ? labelChips(item) : ['description','access_notes'].includes(column) ? `<span class="dataset-clamp">${esc(cell(item, column))}</span>` : esc(cell(item, column))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  }
+  function showView(view) {
+    table.view = view;
+    el('datasets-sheet').classList.toggle('table-view', view === 'table');
+    el('datasets-sheet').querySelectorAll('[data-view]').forEach(choice => choice.setAttribute('aria-pressed', String(choice.dataset.view === view)));
+    // Like the rows, the column choices exist only while the table shows, so
+    // their names never collide with the editor's fields.
+    el('dataset-column-options').innerHTML = view === 'table' ? Object.entries(columns).map(([column, label]) =>
+      `<label><input type="checkbox" data-table-column="${column}" ${table.columns.includes(column) ? 'checked' : ''}> ${label}</label>`).join('') : '';
+  }
+  function setView(view) {
+    if (table.view === view) return;
+    showView(view); remember(); renderList();
+  }
+  function sortBy(column) {
+    table.descending = table.sort === column && !table.descending;
+    table.sort = column;
+    remember(); renderList();
+    el('datasets-table').querySelector(`[data-column="${column}"]`)?.focus();
   }
   function input(field, label, multiline = false, hint = '', max = 300) {
     const value = field === 'facet_values' ? draft[field].join('\n') : field === 'labels' ? draft[field].join(', ') : draft[field];
@@ -331,6 +394,8 @@ const Datasets = (() => {
     if (wasShown) void autosave.flush();
   }
   async function action(name, target) {
+    // Opening or adding a record shows it in the editor.
+    if (name === 'new' || name === 'open') setView('list');
     if (name === 'new') {
       if (!loaded || !await discard()) return;
       saved = null;
@@ -393,9 +458,14 @@ const Datasets = (() => {
   el('datasets-sheet').addEventListener('click', event => {
     const target = event.target.closest('[data-dataset-action]');
     if (!target) return;
+    // Selecting text in a table row is not a request to open it.
+    if (target.tagName === 'TR' && !getSelection().isCollapsed) return;
     event.preventDefault();
-    if (target.dataset.datasetAction === 'loupe') { openInLoupe(); return; }
-    run(() => action(target.dataset.datasetAction,target));
+    const name = target.dataset.datasetAction;
+    if (name === 'loupe') { openInLoupe(); return; }
+    if (name === 'view') { setView(target.dataset.view); return; }
+    if (name === 'sort') { sortBy(target.dataset.column); return; }
+    run(() => action(name,target));
   });
   el('datasets-sheet').addEventListener('submit', event => { event.preventDefault(); if (!busy) void autosave.flush(); });
   el('datasets-search').addEventListener('input', renderList);
@@ -410,8 +480,16 @@ const Datasets = (() => {
     if (field === 'source') renderSource();
   });
   el('datasets-sheet').addEventListener('change', event => {
-    if (!draft) return;
     const target = event.target;
+    if (target.dataset.tableColumn) {
+      const column = target.dataset.tableColumn;
+      table.columns = Object.keys(columns).filter(other => other === column ? target.checked : table.columns.includes(other));
+      // A hidden column cannot explain the order, so the table sorts by name again.
+      if (!table.columns.includes(table.sort) && table.sort !== 'name') Object.assign(table, {sort:'name', descending:false});
+      remember(); renderList();
+      return;
+    }
+    if (!draft) return;
     if (target.dataset.role) draft.roles = [...el('datasets-sheet').querySelectorAll('[data-role]:checked')].map(field => field.dataset.role);
     else if (target.dataset.linkPaper) {
       const paper = target.dataset.linkPaper, claim = target.dataset.linkClaim;
@@ -430,6 +508,7 @@ const Datasets = (() => {
     // Saving is automatic. The shortcut saves now, or retries a failed save.
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!busy) void autosave.flush(); }
   });
+  showView(table.view);
   window.addEventListener('beforeunload', event => {
     if (dirty() || busy || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });

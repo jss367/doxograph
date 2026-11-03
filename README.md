@@ -626,6 +626,12 @@ writing space are stored locally in `note-images/`.
   `needs review`; labels appear in the inventory and are included in dataset
   search and workspace exports. Labels preserve your spelling and ignore case
   when deduplicating. Search the inventory and link records to papers and individual claims.
+  Switch to **Table** to compare every record side by side. Pick its columns
+  under **Columns** (version, license, source, roles, labels, description,
+  access notes, other dataset names, linked paper and claim counts, and the
+  dates a record was added and last updated), and click a column heading to
+  sort by it. The table remembers its columns and sort. Click a row to open
+  the record in the editor.
   **Linked research** also includes claims whose `dataset` or `datasets` facets
   match the record's name or one of its **Other dataset names in findings**.
   These matches appear automatically; existing facets are left as you entered them.
