@@ -65,7 +65,7 @@ def test_workspace_notes_autosave_navigation_and_isolation(engine):
                 await page.locator('.research-tools-nav').get_by_role('button', name='Evidence boards', exact=True).click()
                 await ready(page)
                 assert httpx.get(url + '/api/notebook').json()['notes'] == 'Saved before changing tools'
-                await page.get_by_role('button', name='Close research tools').click()
+                await page.go_back()
                 await page.locator('#research-tools').wait_for(state='hidden')
                 editor = await open_notes(page)
                 await editor.fill('Saved in the original workspace')
@@ -160,7 +160,7 @@ def test_workspace_notes_inflight_edits_failures_and_conflicts(engine):
                 await page.locator('.research-tools-nav').get_by_role('button', name='Evidence boards', exact=True).click()
                 await ready(page)
                 await expect(page.locator('#research-message')).to_contain_text('Temporary connection failure')
-                await page.get_by_role('button', name='Close research tools').click()
+                await page.go_back()
                 await page.locator('#research-tools').wait_for(state='hidden')
                 await editor.fill('Still editable after a failed tab load')
                 await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')

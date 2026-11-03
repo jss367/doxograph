@@ -82,12 +82,18 @@ def test_command_palette_destinations_and_actions(engine):
                 await expect(page.locator("#board-title")).to_have_value("Recovery <conditions> & evidence")
                 await expect(page.locator("#research-tools")).to_have_attribute("aria-busy", "false")
                 await page.locator("#board-title").fill("An unsaved title")
+                # The tools are a page like any other: the palette opens over them
+                # and closes back to the draft.
                 await page.keyboard.press("Meta+k")
+                await expect(palette).to_be_visible()
+                await page.keyboard.press("Escape")
                 await expect(palette).not_to_be_visible()
                 await expect(page.locator("#board-title")).to_have_value("An unsaved title")
-                # Discard the draft with the existing research tools dialog.
-                await page.get_by_role("button", name="Close research tools").click()
+                # Discard the draft, then go back to the paper the board was opened from.
+                await page.locator("#research-tabs").get_by_role("button", name="Reload saved version").click()
                 await page.locator("#ask-ok").click()
+                await expect(page.locator("#board-title")).to_have_value("Recovery <conditions> & evidence")
+                await page.go_back()
                 await expect(page.locator("#research-tools")).not_to_be_visible()
 
                 # Arrow navigation tracks the active descendant; Enter runs actions.

@@ -15,8 +15,10 @@ import contextvars
 import hashlib
 import json
 import threading
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any, cast
 
 import anthropic
 
@@ -52,7 +54,7 @@ existing tag fits; a proposed tag should name a topic other papers could also \
 be about, not a detail of this one paper.
 """
 
-CLAIM_SCHEMA = {
+CLAIM_SCHEMA: JSONSchema = {
     "type": "object",
     "properties": {
         "text": {
@@ -116,7 +118,7 @@ CLAIM_SCHEMA = {
     "additionalProperties": False,
 }
 
-EXTRACTION_SCHEMA = {
+EXTRACTION_SCHEMA: JSONSchema = {
     "type": "object",
     "properties": {
         "summary": {
@@ -167,7 +169,7 @@ RETAG_SCHEMA = {
 }
 
 
-def _facet_values_schema(facets: list[dict]) -> dict:
+def _facet_values_schema(facets: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
@@ -183,7 +185,7 @@ def _facet_values_schema(facets: list[dict]) -> dict:
     }
 
 
-def extraction_schema(facets: list[dict]) -> dict:
+def extraction_schema(facets: list[dict[str, Any]]) -> dict[str, Any]:
     """The extraction schema, with a `facets` object on each claim when the
     workspace defines any. Without facets it is `EXTRACTION_SCHEMA` itself."""
     if not facets:
@@ -199,7 +201,7 @@ def extraction_schema(facets: list[dict]) -> dict:
     }
 
 
-def facet_fill_schema(facets: list[dict]) -> dict:
+def facet_fill_schema(facets: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
@@ -235,6 +237,13 @@ def api_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
 
 
+def _files_client() -> anthropic.Anthropic:
+    """`client()` for Files API calls, which are made only with the Anthropic
+    provider selected. That provider's client is the SDK client, typed as the
+    narrower `MessageClient` it is adapted to."""
+    return cast(anthropic.Anthropic, client())
+
+
 #: Model calls in flight across this process. Sized once, from the setting as
 #: it was at import. Every call goes through `_create`, so the cap holds
 #: whether a call comes from a pass, from a single paper's read queued by the
@@ -251,7 +260,7 @@ def _create(api: MessageClient | providers.TextClient, *, model: str, max_tokens
                                 messages=messages, schema=schema, effort=effort)
 
 
-def _answer(response: ModelResponse, task: str, subject: str) -> dict:
+def _answer(response: ModelResponse, task: str, subject: str) -> dict[str, Any]:
     """The JSON a call answered with, or an error saying why there is none.
 
     A refusal is not the only reply that comes back without one. Thinking
@@ -277,9 +286,11 @@ def _answer(response: ModelResponse, task: str, subject: str) -> dict:
     return payload
 
 
-def run_concurrently(items: list, work, workers: int | None = None):
+def run_concurrently[T](items: list[T], work: Callable[[T], object], workers: int | None = None,
+                        ) -> Iterator[tuple[T, Any, Exception | None]]:
     """Run `work(item)` for every item, a few at a time, yielding
-    `(item, result, error)` as each finishes.
+    `(item, result, error)` as each finishes. The result is None exactly when
+    there is an error, which one flat tuple type cannot say, so it is `Any`.
 
     Each call runs in a copy of the caller's context, so a job bound to a
     workspace stays in it. One item's failure is reported and the rest go on:
@@ -304,7 +315,7 @@ def run_concurrently(items: list, work, workers: int | None = None):
                 yield item, None, exc
 
 
-def vocabulary_block(tags: list[dict] | None = None) -> str:
+def vocabulary_block(tags: list[dict[str, Any]] | None = None) -> str:
     tags = store.load_tags() if tags is None else tags
     if not tags:
         return (
@@ -315,7 +326,7 @@ def vocabulary_block(tags: list[dict] | None = None) -> str:
     return "Tag vocabulary (prefer these):\n" + "\n".join(lines)
 
 
-def facets_block(facets: list[dict], known: dict[str, dict[str, str]]) -> str:
+def facets_block(facets: list[dict[str, Any]], known: dict[str, dict[str, str]]) -> str:
     """The facets each claim is to be given values for, and the spellings the
     corpus already uses for them. Empty when the workspace defines none."""
     if not facets:
@@ -354,7 +365,7 @@ def context_block(text: str | None = None) -> str:
     return text or "No research context has been recorded, so judge relevance broadly."
 
 
-def _pdf_fingerprint(pdf: Path) -> dict:
+def _pdf_fingerprint(pdf: Path) -> dict[str, Any]:
     """What identifies the bytes an upload was made from."""
     st = pdf.stat()
     with pdf.open("rb") as contents:
@@ -409,9 +420,10 @@ def upload_pdf(key: str, api: anthropic.Anthropic | None = None, force: bool = F
     current = all(upload.get(k) == v for k, v in fingerprint.items())
     if upload.get("file_id") and current and not force:
         if upload.get("superseded_file_ids"):
-            _delete_superseded_uploads(key, api or client())
-        return upload["file_id"]
-    api = api or client()
+            _delete_superseded_uploads(key, api or _files_client())
+        file_id: str = upload["file_id"]
+        return file_id
+    api = api or _files_client()
     config.require_ai_enabled()
     uploaded = api.files.upload(file=pdf)
     with store.paper_lock(key):
@@ -456,13 +468,14 @@ def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
             file_ids = []
         def cleanup_uploads() -> None:
             nonlocal api
-            if file_ids:
-                api = api or (api_client() if config.ai_provider() != "api" else client())
-                # The SDK only finds out it has no credentials when it sends,
-                # and reports that as a bare TypeError. The paper is kept for
-                # a retry either way; this says what the retry needs.
-                if isinstance(api, anthropic.Anthropic) and api.api_key is None and api.auth_token is None:
-                    raise ModelSetupError(_UPLOAD_CLEANUP_NEEDS_KEY)
+            if not file_ids:
+                return
+            api = api or (api_client() if config.ai_provider() != "api" else _files_client())
+            # The SDK only finds out it has no credentials when it sends,
+            # and reports that as a bare TypeError. The paper is kept for
+            # a retry either way; this says what the retry needs.
+            if isinstance(api, anthropic.Anthropic) and api.api_key is None and api.auth_token is None:
+                raise ModelSetupError(_UPLOAD_CLEANUP_NEEDS_KEY)
             for file_id in file_ids:
                 try:
                     api.files.delete(file_id)
@@ -474,7 +487,7 @@ def delete_paper(key: str, api: anthropic.Anthropic | None = None) -> None:
         store.delete_paper(key, before_remove=cleanup_uploads)
 
 
-def _pdf_block(key: str, force_upload: bool = False) -> dict:
+def _pdf_block(key: str, force_upload: bool = False) -> dict[str, Any]:
     if config.analysis_config().provider != "anthropic":
         pdf = store.pdf_path(key)
         if not pdf.exists():
@@ -493,7 +506,7 @@ def _pdf_block(key: str, force_upload: bool = False) -> dict:
     }
 
 
-def inline_pdf(key: str) -> dict:
+def inline_pdf(key: str) -> dict[str, Any]:
     pdf = store.pdf_path(key)
     if not pdf.exists():
         raise FileNotFoundError(f"no PDF stored for {key}; add one before asking about it")
@@ -503,7 +516,7 @@ def inline_pdf(key: str) -> dict:
             "data": base64.b64encode(pdf.read_bytes()).decode("ascii")}}
 
 
-def paper_document(key: str, api) -> dict:
+def paper_document(key: str, api: object) -> dict[str, Any]:
     if isinstance(api, codex_cli.Client):
         pdf = store.pdf_path(key)
         if not pdf.exists():
@@ -516,7 +529,7 @@ def paper_document(key: str, api) -> dict:
     return inline_pdf(key) if isinstance(api, claude_code.Client) else _pdf_block(key)
 
 
-def _instructions(paper: dict, tags: list[dict] | None = None, facets: str = "") -> str:
+def _instructions(paper: dict[str, Any], tags: list[dict[str, Any]] | None = None, facets: str = "") -> str:
     facets = f"{facets}\n\n" if facets else ""
     return f"""\
 My research:
@@ -549,14 +562,14 @@ Extract its claims."""
 DERIVED_CLAIM_FIELDS = frozenset({"id", "quote_verified", "quote_page", "facets", "facet_basis"})
 
 
-def claim_state(claim: dict) -> str:
+def claim_state(claim: dict[str, Any]) -> str:
     """Everything about a claim a person can change, as a comparable string."""
     return json.dumps({k: v for k, v in claim.items() if k not in DERIVED_CLAIM_FIELDS},
                       sort_keys=True, default=str)
 
 
 @config.bind_model_access
-def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
+def extract_paper(key: str, keep_reviewed: bool = True) -> dict[str, Any]:
     """Run extraction and merge the result into the stored paper."""
     config.require_ai_enabled()
     # A second re-read starting from the same snapshot cannot be distinguished
@@ -582,7 +595,7 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
         api = client()
         instructions = {"type": "text", "text": _instructions(paper, tags, facets_block(facets, known))}
 
-        def read(pdf_block: dict):
+        def read(pdf_block: dict[str, Any]) -> ModelResponse:
             return _create(api, 
                 model=config.model(),
                 max_tokens=16000,
@@ -609,17 +622,17 @@ def extract_paper(key: str, keep_reviewed: bool = True) -> dict:
                                 prompt_facets=facets, known_values=known)
 
 
-def merge_extraction(key: str, payload: dict, response: ModelResponse | None = None, keep_reviewed: bool = True,
+def merge_extraction(key: str, payload: dict[str, Any], response: ModelResponse | None = None, keep_reviewed: bool = True,
                      prompt_tags: set[str] | None = None,
                      claims_before: dict[str, str] | None = None,
-                     prompt_facets: list[dict] | None = None,
-                     known_values: dict[str, dict[str, str]] | None = None) -> dict:
+                     prompt_facets: list[dict[str, Any]] | None = None,
+                     known_values: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
     with store.facets_lock(), store.vocab_lock(), store.paper_lock(key):
         return _merge_extraction(key, payload, response, keep_reviewed, prompt_tags, claims_before,
                                  prompt_facets, known_values)
 
 
-def _unchanged_facets(shown: list[dict]) -> list[dict]:
+def _unchanged_facets(shown: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The facets the model was asked about that are still defined as they
     were. One deleted or redescribed during the call was asked a question
     that no longer stands, and its answer is dropped."""
@@ -627,11 +640,11 @@ def _unchanged_facets(shown: list[dict]) -> list[dict]:
     return [facet for facet in shown if current.get(facet["name"]) == store.facet_basis(facet)]
 
 
-def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = None, keep_reviewed: bool = True,
+def _merge_extraction(key: str, payload: dict[str, Any], response: ModelResponse | None = None, keep_reviewed: bool = True,
                       prompt_tags: set[str] | None = None,
                       claims_before: dict[str, str] | None = None,
-                      prompt_facets: list[dict] | None = None,
-                      known_values: dict[str, dict[str, str]] | None = None) -> dict:
+                      prompt_facets: list[dict[str, Any]] | None = None,
+                      known_values: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
     paper = store.load_paper(key)
     # Aliases are read now rather than from the prompt's snapshot: a merge of
     # two values made during the call should apply to this paper too.
@@ -642,7 +655,7 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
     # a discarded claim's id be issued to a new one, and an in-flight retag reply
     # or PATCH for the discarded claim is matched by id alone.
     store.ensure_claim_seq(paper)
-    def changed_during_the_call(claim: dict) -> bool:
+    def changed_during_the_call(claim: dict[str, Any]) -> bool:
         # Written or corrected after the model was given the paper: a claim the
         # snapshot does not know, or one whose contents no longer match it.
         if claims_before is None:
@@ -740,7 +753,7 @@ def _merge_extraction(key: str, payload: dict, response: ModelResponse | None = 
 
 
 @config.bind_model_access
-def retag_paper(key: str) -> dict:
+def retag_paper(key: str) -> dict[str, Any]:
     """Reassign tags for a paper's existing claims against the current vocabulary.
 
     Used to backfill after adding a tag. Cheaper than a full re-extraction
@@ -760,7 +773,7 @@ def retag_paper(key: str) -> dict:
     # against, so a tag added or renamed between the two cannot be mistaken for
     # one the model invented.
     prompt_vocabulary = store.load_tags()
-    def state_of(claim: dict) -> tuple:
+    def state_of(claim: dict[str, Any]) -> tuple[Any, Any, list[Any]]:
         # Everything the answer depends on: the text and evidence the model was
         # shown, and the tags its answer would replace.
         return (claim.get("text", ""), claim.get("evidence", ""), sorted(claim.get("tags", [])))
@@ -830,7 +843,7 @@ the list of values in use."""
 
 
 @config.bind_model_access
-def fill_facets(key: str, force: bool = False) -> dict:
+def fill_facets(key: str, force: bool = False) -> dict[str, Any]:
     """Give a paper's claims values for the facets that are stale on it.
 
     Used after adding a facet or changing its description. Cheap in the way
@@ -858,7 +871,7 @@ def fill_facets(key: str, force: bool = False) -> dict:
         for c in claims
     )
 
-    def state_of(claim: dict) -> str:
+    def state_of(claim: dict[str, Any]) -> str:
         # What the answer was drawn from, and the values it would replace.
         return json.dumps([claim.get("text", ""), claim.get("evidence", ""), claim.get("quote", ""),
                            claim.get("facets") or {}, claim.get("facets_hand") or [],
@@ -969,12 +982,12 @@ TENSION_SCHEMA = {
 }
 
 
-def _tension_listing(rows: list[dict], mark_unreviewed: bool = False) -> str:
+def _tension_listing(rows: list[dict[str, Any]], mark_unreviewed: bool = False) -> str:
     """Claims grouped by paper, as the cross-paper passes show them. With
     `mark_unreviewed`, a claim nobody has checked is labelled so the model can
     weigh it accordingly; the fingerprint the merges compare does not include
     that flag, so reviewing a claim does not make a tension stale."""
-    by_paper: dict[str, list[dict]] = {}
+    by_paper: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_paper.setdefault(row["paper"], []).append(row)
     blocks = []
@@ -1011,8 +1024,8 @@ def _pass_extra(topic: str, description: str, context: str) -> str:
 
 
 @config.bind_model_access
-def find_tensions(topic: str, rows: list[dict] | None = None,
-                  tags: list[dict] | None = None, force: bool = False) -> dict:
+def find_tensions(topic: str, rows: list[dict[str, Any]] | None = None,
+                  tags: list[dict[str, Any]] | None = None, force: bool = False) -> dict[str, Any]:
     """Ask the model which claims in `topic` disagree, and record the answer.
 
     Cheap in the way retag is cheap: it sends claim text rather than PDFs. One
@@ -1102,7 +1115,7 @@ SYNTHESIS_SCHEMA = {
 }
 
 
-def _tension_block(topic: str, tensions: list[dict]) -> str:
+def _tension_block(topic: str, tensions: list[dict[str, Any]]) -> str:
     """The disagreements already on file for this topic, for the synthesis
     prompt. `tensions` is `store.tension_rows` output, read once by the caller
     so the basis it records is the same reading the prompt was built from.
@@ -1124,8 +1137,8 @@ def _tension_block(topic: str, tensions: list[dict]) -> str:
 
 
 @config.bind_model_access
-def synthesize_topic(topic: str, rows: list[dict] | None = None,
-                     tags: list[dict] | None = None, force: bool = False) -> dict:
+def synthesize_topic(topic: str, rows: list[dict[str, Any]] | None = None,
+                     tags: list[dict[str, Any]] | None = None, force: bool = False) -> dict[str, Any]:
     """Ask the model what the papers hold on `topic`, and record the answer.
 
     Cheap in the way the tensions pass is cheap: one call per topic, claim
@@ -1243,8 +1256,8 @@ AGREEMENT_SCHEMA = {
 
 
 @config.bind_model_access
-def find_agreements(topic: str, rows: list[dict] | None = None,
-                    tags: list[dict] | None = None, force: bool = False) -> dict:
+def find_agreements(topic: str, rows: list[dict[str, Any]] | None = None,
+                    tags: list[dict[str, Any]] | None = None, force: bool = False) -> dict[str, Any]:
     """Ask the model which claims in `topic` assert the same finding, and
     record the answer. One call per topic, claim text rather than PDFs, as the
     tensions pass; `store.tension_topics` lists the topics worth a call."""

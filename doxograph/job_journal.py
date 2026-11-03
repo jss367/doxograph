@@ -8,6 +8,7 @@ import os
 import re
 import threading
 from pathlib import Path
+from typing import Any
 
 from . import config, fingerprint, ingest, store
 
@@ -36,18 +37,20 @@ def _pid_alive(pid: int) -> bool:
         import _winapi
         fingerprint.snapshot()
 
+        # The stubs define `_winapi` and `winerror` only on win32; tests run
+        # this branch elsewhere with a substitute module.
         try:
-            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)  # type: ignore[attr-defined]
         except OSError as exc:
-            if exc.winerror == 87:  # ERROR_INVALID_PARAMETER: no such process.
+            if exc.winerror == 87:  # type: ignore[attr-defined]  # ERROR_INVALID_PARAMETER: no such process.
                 return False
-            if exc.winerror == 5:  # ERROR_ACCESS_DENIED: conservatively live.
+            if exc.winerror == 5:  # type: ignore[attr-defined]  # ERROR_ACCESS_DENIED: conservatively live.
                 return True
             raise
         try:
-            return _winapi.WaitForSingleObject(handle, 0) != _winapi.WAIT_OBJECT_0
+            return _winapi.WaitForSingleObject(handle, 0) != _winapi.WAIT_OBJECT_0  # type: ignore[attr-defined, no-any-return]
         finally:
-            _winapi.CloseHandle(handle)
+            _winapi.CloseHandle(handle)  # type: ignore[attr-defined]
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -57,7 +60,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _owner_alive(data: dict, folder: Path) -> bool:
+def _owner_alive(data: dict[str, Any], folder: Path) -> bool:
     if data['version'] == 1:
         # Journals written before instance leases cannot distinguish PID reuse.
         # Query Windows handles instead of sending a console control signal.
@@ -117,7 +120,7 @@ def release_workspace_owner(folder: Path) -> None:
             _leases.pop(path).__exit__(None, None, None)
 
 
-def save(job: dict) -> None:
+def save(job: dict[str, Any]) -> None:
     # Internal workers can also run with an ephemeral context rather than a
     # notification accepted by _new_job (for example from an integration).
     if 'id' not in job:
@@ -135,14 +138,14 @@ def save(job: dict) -> None:
         'job': {k: v for k, v in job.items() if not k.startswith('_')}, 'source': source})
 
 
-def remove(job: dict, *, keep_file: bool = False) -> None:
+def remove(job: dict[str, Any], *, keep_file: bool = False) -> None:
     path = _paths.pop(job['id'], None)
     if path and not keep_file:
         path.unlink(missing_ok=True)
 
 
-def recover(issues: list[str] | None = None) -> list[dict]:
-    recovered = []
+def recover(issues: list[str] | None = None) -> list[dict[str, Any]]:
+    recovered: list[dict[str, Any]] = []
     if (config.data_dir() / '.jobs').is_symlink():
         if issues is not None:
             issues.append('Import journals cannot be recovered from a symbolic link. The files were left in place.')

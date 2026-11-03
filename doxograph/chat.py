@@ -2,12 +2,15 @@
 
 import json
 from collections.abc import Callable
+from typing import Any
 
 import anthropic
 from pypdf import PdfReader
 
 from . import agent, ask_context, claude_code, codex_cli, config, extract, providers, quotes, search, store
+from .analysis_types import MessageClient, ModelResponse
 from .chat_attachments import conversation_blocks
+from .model_errors import ProviderResponseError
 
 SYSTEM = """Answer questions about the attached research paper. Use the paper as
 your source and cite PDF page numbers for specific claims. Distinguish what the
@@ -23,7 +26,7 @@ SCHEMA = {"type": "object", "properties": {"answer": {"type": "string"}},
 
 
 @config.bind_model_access
-def answer(key: str, messages: list[dict], *, callback_url: Callable[[], str] | None = None) -> dict:
+def answer(key: str, messages: list[dict[str, Any]], *, callback_url: Callable[[], str] | None = None) -> dict[str, Any]:
     config.require_ai_enabled()
     # Keep uploads alive until the answer finishes, as extraction does.
     # Deletion then sees every uploaded file ID and can clean it up.
@@ -31,12 +34,14 @@ def answer(key: str, messages: list[dict], *, callback_url: Callable[[], str] | 
         paper = store.load_paper(key)
         can_label = callback_url is not None and config.ai_provider() in ("claude_code", "codex")
         if can_label:
-            def library_server():
+            def library_server() -> codex_cli.MCPServer:
                 assert callback_url is not None
                 return agent.library_server(callback_url(), config.workspace_id(), paper=key)
 
-            api = (codex_cli.Client(mcp_server=library_server) if config.ai_provider() == "codex"
-                   else claude_code.Client(mcp_server=library_server))
+            labeling: codex_cli.Client | claude_code.Client = (
+                codex_cli.Client(mcp_server=library_server) if config.ai_provider() == "codex"
+                else claude_code.Client(mcp_server=library_server))
+            api: MessageClient | providers.TextClient = labeling
         else:
             api = extract.client()
         document = extract.paper_document(key, api)
@@ -50,7 +55,7 @@ def answer(key: str, messages: list[dict], *, callback_url: Callable[[], str] | 
         prompt = context + f"Paper: {paper.get('title') or key}\n\nConversation:"
         blocks = conversation_blocks(messages, text_pdfs=isinstance(api, (codex_cli.Client, providers.TextClient)))
 
-        def ask(document):
+        def ask(document: dict[str, Any]) -> ModelResponse:
             system = SYSTEM + (agent.instructions(config.workspace_id(), key) if can_label else
                                "Do not claim to have changed the user's notes, claims, or library.")
             return extract._create(api, model=config.model(), max_tokens=6000, system=system,
@@ -67,9 +72,9 @@ def answer(key: str, messages: list[dict], *, callback_url: Callable[[], str] | 
         try:
             payload = extract._answer(response, "paper chat", key)
         except json.JSONDecodeError as exc:
-            raise providers.ProviderResponseError("The model returned invalid JSON. Please retry.") from exc
+            raise ProviderResponseError("The model returned invalid JSON. Please retry.") from exc
         if not isinstance(payload, dict):
-            raise providers.ProviderResponseError("The model returned an invalid answer. Please retry.")
+            raise ProviderResponseError("The model returned an invalid answer. Please retry.")
         if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
             raise RuntimeError("The model returned no answer. Please retry.")
         assistant = "ChatGPT" if isinstance(api, codex_cli.Client) else "Claude"
@@ -85,7 +90,7 @@ def answer(key: str, messages: list[dict], *, callback_url: Callable[[], str] | 
                         page = citation["page"]
                         capture.direct.append(ask_context.entry(kind="passage", paper=key, page=page,
                             text=pages[page - 1][:12000], format="page excerpt from supplied text"))
-        result: dict = {"answer": payload["answer"], "model": config.model(), "assistant": assistant}
+        result: dict[str, Any] = {"answer": payload["answer"], "model": config.model(), "assistant": assistant}
         if can_label:
-            result["activity"] = agent.activity(api.events)
+            result["activity"] = agent.activity(labeling.events)
         return result

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import functools
+import io
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TypedDict
 from urllib.parse import urlsplit
 
 # The corpus lives outside the repository by default: it holds downloaded PDFs
@@ -35,7 +37,15 @@ _workspace_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 _workspaces_lock = threading.RLock()
 _windows_activity_guard = threading.RLock()
-_windows_activity_leases: dict[Path, dict] = {}
+
+
+class _WindowsLease(TypedDict):
+    handle: io.TextIOWrapper
+    users: int
+    exclusive: bool
+
+
+_windows_activity_leases: dict[Path, _WindowsLease] = {}
 _settings_lock = threading.RLock()
 _analysis_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar("analysis_provider", default=None)
 _codex_model: contextvars.ContextVar[str | None] = contextvars.ContextVar("codex_model", default=None)
@@ -43,11 +53,11 @@ _codex_model: contextvars.ContextVar[str | None] = contextvars.ContextVar("codex
 try:
     import fcntl
 except ImportError:  # pragma: no cover - not on POSIX
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 try:
     import msvcrt
 except ImportError:
-    msvcrt = None
+    msvcrt = None  # type: ignore[assignment]
 
 MODEL = os.environ.get("DOXOGRAPH_MODEL", "claude-opus-5")
 
@@ -59,7 +69,7 @@ PROVIDERS = {
 }
 
 
-def _settings() -> dict:
+def _settings() -> dict[str, Any]:
     try:
         value = json.loads((base_data_dir() / "settings.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -79,7 +89,7 @@ class AnalysisConfig:
 _analysis: contextvars.ContextVar[AnalysisConfig | None] = contextvars.ContextVar("analysis", default=None)
 
 
-def analysis_config(settings: dict | None = None) -> AnalysisConfig:
+def analysis_config(settings: dict[str, Any] | None = None) -> AnalysisConfig:
     if current := _analysis.get():
         return current
     settings = _settings() if settings is None else settings
@@ -161,7 +171,7 @@ def save_analysis_settings(provider: str, model: str, base_url: str) -> None:
         _write_json(base_data_dir() / "settings.json", settings)
 
 
-def analysis_settings() -> dict:
+def analysis_settings() -> dict[str, Any]:
     selected = analysis_config()
     profiles = _settings().get("providers", {})
     choices = {name: {**defaults, **profiles.get(name, {})} for name, defaults in PROVIDERS.items()}
@@ -213,7 +223,7 @@ def set_ai_enabled(enabled: bool) -> None:
     _update_settings(ai_enabled=enabled)
 
 
-def _update_settings(**changes) -> None:
+def _update_settings(**changes: Any) -> None:
     with _settings_lock:
         path = base_data_dir() / "settings.json"
         try:
@@ -243,7 +253,7 @@ def model() -> str:
     return MODEL if ai_provider() == "claude_code" else analysis_config().model
 
 
-def codex_model(settings: dict | None = None) -> str:
+def codex_model(settings: dict[str, Any] | None = None) -> str:
     if (bound := _codex_model.get()) is not None:
         return bound
     settings = _settings() if settings is None else settings
@@ -342,7 +352,7 @@ def workspaces_path() -> Path:
 
 
 @contextlib.contextmanager
-def _windows_workspace_activity(path: Path, *, exclusive: bool):
+def _windows_workspace_activity(path: Path, *, exclusive: bool) -> Iterator[None]:
     """Share one byte-range lock across requests and worker threads here.
 
     Windows locks conflict even between handles in the same process. Retain
@@ -360,7 +370,8 @@ def _windows_workspace_activity(path: Path, *, exclusive: bool):
             handle = path.open("a+")
             try:
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                # The stubs define these only on win32; tests substitute a fake module.
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
             except OSError as exc:
                 handle.close()
                 raise BlockingIOError("This workspace is busy") from exc
@@ -376,13 +387,13 @@ def _windows_workspace_activity(path: Path, *, exclusive: bool):
                 handle = lease["handle"]
                 try:
                     handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]  # win32-only stubs
                 finally:
                     handle.close()
 
 
 @contextlib.contextmanager
-def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool = False) -> Iterator[None]:
+def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool = False) -> Iterator[bool]:
     """Nonblocking corpus lease shared by every server using this data root.
 
     POSIX leases lock the existing corpus directory through a read-only handle,
@@ -433,7 +444,7 @@ def workspace_activity(value: str, *, exclusive: bool = False, missing_ok: bool 
 
 
 @contextlib.contextmanager
-def _workspace_file_lock():
+def _workspace_file_lock() -> Iterator[None]:
     """Serialize registry read-modify-write sequences across processes."""
     path = base_data_dir() / "locks" / "workspaces.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -469,7 +480,7 @@ def _workspace_slug(name: str) -> str:
     return slug or "workspace"
 
 
-def _read_workspace_records() -> list[dict]:
+def _read_workspace_records() -> list[Any]:
     path = workspaces_path()
     if not path.exists():
         return []
@@ -482,14 +493,14 @@ def _read_workspace_records() -> list[dict]:
     return loaded
 
 
-def _default_workspace(records: list[dict]) -> dict:
+def _default_workspace(records: list[Any]) -> dict[str, Any]:
     name = next((item["name"] for item in records
                  if isinstance(item, dict) and item.get("id") == DEFAULT_WORKSPACE_ID
                  and isinstance(item.get("name"), str)), DEFAULT_WORKSPACE_NAME)
     return {"id": DEFAULT_WORKSPACE_ID, "name": name, "created": None}
 
 
-def list_workspaces() -> list[dict]:
+def list_workspaces() -> list[dict[str, Any]]:
     """List the built-in default workspace followed by user-created ones."""
     saved = _read_workspace_records()
     records = [_default_workspace(saved)]
@@ -512,7 +523,7 @@ def list_workspaces() -> list[dict]:
     return records
 
 
-def get_workspace(value: str | None = None) -> dict | None:
+def get_workspace(value: str | None = None) -> dict[str, Any] | None:
     wanted = value or workspace_id()
     # The default corpus exists independently of the registry. A broken
     # registry can lose its custom display name, but must not block its papers.
@@ -525,11 +536,11 @@ def get_workspace(value: str | None = None) -> dict | None:
     return next((item for item in list_workspaces() if item["id"] == wanted), None)
 
 
-def _write_workspace_records(records: list[dict]) -> None:
+def _write_workspace_records(records: list[Any]) -> None:
     _write_json(workspaces_path(), records)
 
 
-def _write_json(path: Path, value) -> None:
+def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -556,7 +567,7 @@ def _clean_workspace_name(name: str) -> str:
     return clean
 
 
-def rename_workspace(value: str, name: str) -> dict:
+def rename_workspace(value: str, name: str) -> dict[str, Any]:
     """Change a display name without changing the corpus's id or paths."""
     clean = _clean_workspace_name(name)
     with _workspaces_lock, _workspace_file_lock():
@@ -577,7 +588,7 @@ def rename_workspace(value: str, name: str) -> dict:
     return renamed
 
 
-def create_workspace(name: str) -> dict:
+def create_workspace(name: str) -> dict[str, Any]:
     """Create and register an empty workspace with a stable, readable id."""
     clean = _clean_workspace_name(name)
     with _workspaces_lock, _workspace_file_lock():

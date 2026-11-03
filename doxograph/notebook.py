@@ -9,13 +9,17 @@ import io
 import json
 import threading
 import uuid
-from typing import Annotated, Literal
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 from . import config, storage, store
+
+if TYPE_CHECKING:
+    from pypdf import PageObject
 
 router = APIRouter(prefix="/api/notebook")
 _lock = threading.RLock()
@@ -39,7 +43,7 @@ class Entry(Model):
     stance: Literal["supporting", "opposing", "qualifying", "background"] = "background"
 
 
-def is_question(board: dict) -> bool:
+def is_question(board: dict[str, Any]) -> bool:
     return (board.get("kind") == "question"
             or any(board.get(field) for field in ("question", "conclusion", "open_questions"))
             or any(entry.get("kind") == "claim" and entry.get("stance", "background") != "background"
@@ -129,12 +133,12 @@ class Notebook(Model):
     highlights: list[Highlight] = Field(default_factory=list)
 
 
-def load() -> dict:
+def load() -> dict[str, Any]:
     return storage.read_model(config.data_dir() / "notebook.json", Notebook).model_dump()
 
 
 @router.get("")
-def read_notebook() -> dict:
+def read_notebook() -> dict[str, Any]:
     return load()
 
 
@@ -144,7 +148,7 @@ class NotesUpdate(Model):
 
 
 @router.put("/notes")
-def save_notes(body: NotesUpdate) -> dict:
+def save_notes(body: NotesUpdate) -> dict[str, Any]:
     # Autosave changes only notes, preserving concurrent board/queue edits.
     # Compare the last saved text so another note writer cannot be overwritten.
     with _lock, store.document_lock("notebook"):
@@ -160,7 +164,7 @@ def save_notes(body: NotesUpdate) -> dict:
         return data
 
 
-def references(data: dict):
+def references(data: dict[str, Any]) -> Iterator[dict[str, Any]]:
     for board in data["boards"]:
         for entry in board["entries"]:
             if entry["reference"]:
@@ -170,7 +174,7 @@ def references(data: dict):
         yield connection["target"]
 
 
-def resolve(ref: dict) -> dict:
+def resolve(ref: dict[str, Any]) -> dict[str, Any]:
     try:
         paper = store.load_paper(ref["paper"])
         claim = next(c for c in paper.get("claims", []) if c["id"] == ref["claim"])
@@ -182,7 +186,7 @@ def resolve(ref: dict) -> dict:
 
 
 @router.put("")
-def save_notebook(body: Notebook) -> dict:
+def save_notebook(body: Notebook) -> dict[str, Any]:
     # The revision check avoids overwriting another window's work. The browser
     # keeps the unsaved form on conflict and offers an explicit reload.
     with _lock, store.document_lock("notebook"):
@@ -255,7 +259,7 @@ def labels_after(old: list[str], values: list[str], mode: str) -> list[str]:
 
 
 @router.post("/bulk")
-def bulk(body: Bulk) -> dict:
+def bulk(body: Bulk) -> dict[str, Any]:
     try:
         values = (store.normalize_labels(body.values) if body.field == "labels" else
                   sorted({slug for value in body.values if (slug := store.slugify(value))}))
@@ -291,10 +295,10 @@ def bulk(body: Bulk) -> dict:
                         target["labels"] = new
                         changed += 1
                     continue
-                old = set(target.get(body.field) or [])
-                new = set(values) if body.mode == "replace" else old | set(values) if body.mode == "add" else old - set(values)
-                if old != new:
-                    target[body.field] = sorted(new)
+                had = set(target.get(body.field) or [])
+                has = set(values) if body.mode == "replace" else had | set(values) if body.mode == "add" else had - set(values)
+                if had != has:
+                    target[body.field] = sorted(has)
                     changed += 1
             store.save_paper(paper)
         return {"changed": changed}
@@ -303,7 +307,7 @@ def bulk(body: Bulk) -> dict:
 # History is kept in the same atomic paper write as the edit it records.
 # Only editable fields are captured; uploads, credentials and analysis caches
 # have no place in the reader's history.
-def claim_fields(claim: dict) -> dict:
+def claim_fields(claim: dict[str, Any]) -> dict[str, Any]:
     defaults = {"text": "", "kind": "finding", "strength": "supporting", "tags": [], "facets": {}, "facets_hand": [],
                 "evidence": "", "quote": "", "locator": "", "ledger_links": [],
                 "note": "", "reviewed": False, "conditions": "", "limitations": "",
@@ -311,7 +315,7 @@ def claim_fields(claim: dict) -> dict:
     return {k: copy.deepcopy(claim.get(k, v)) for k, v in defaults.items()}
 
 
-def record_history(previous: dict, paper: dict) -> None:
+def record_history(previous: dict[str, Any], paper: dict[str, Any]) -> None:
     history = copy.deepcopy(previous.get("history", []))
     current = {c["id"]: c for c in paper.get("claims", [])}
     for claim in previous.get("claims", []):
@@ -334,13 +338,13 @@ def record_history(previous: dict, paper: dict) -> None:
         paper["history"] = history
 
 
-def fingerprint(paper: dict) -> str:
+def fingerprint(paper: dict[str, Any]) -> str:
     value = {"claims": paper.get("claims", []), "notes": paper.get("notes", "")}
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 @router.get("/history/{key}")
-def history(key: str) -> dict:
+def history(key: str) -> dict[str, Any]:
     try:
         paper = store.load_paper(key)
     except KeyError:
@@ -355,7 +359,7 @@ class Restore(Model):
 
 
 @router.post("/history/{key}/restore")
-def restore(key: str, body: Restore) -> dict:
+def restore(key: str, body: Restore) -> dict[str, Any]:
     # Facets, then vocabulary, then the paper, as during facet and topic rewrites.
     with store.facets_lock(), store.vocab_lock(), store.paper_lock(key):
         try:
@@ -414,7 +418,7 @@ class Selection(Model):
     title: str = "Selected research"
 
 
-def md(text) -> str:
+def md(text: object) -> str:
     # User text is literal content, not raw HTML or Markdown links.
     value = str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     for char in "\\`*_{}[]()#+!|":
@@ -422,7 +426,7 @@ def md(text) -> str:
     return value
 
 
-def spreadsheet(value) -> str:
+def spreadsheet(value: object) -> str:
     value = str(value or "")
     return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r")) else value
 
@@ -468,7 +472,7 @@ def export_selection(body: Selection) -> Response:
     writer.writerow(header)
     for entry in entries:
         kind, text = entry["kind"], entry.get("text", "")
-        stance = entry.get("stance", "background") if body.board and is_question(board) else ""
+        stance = entry.get("stance", "background") if body.board and board is not None and is_question(board) else ""
         if kind != "claim":
             lines.extend([("## " if kind == "heading" else "") + md(text), ""])
             writer.writerow([kind, spreadsheet(text)] + [""] * (len(header) - 2))
@@ -514,7 +518,7 @@ def export_selection(body: Selection) -> Response:
 MARK_COLORS = {"yellow": "ffe200", "green": "46d264", "blue": "50a0ff", "pink": "ff64aa"}
 
 
-def page_box(page, rect: dict) -> tuple[float, float, float, float]:
+def page_box(page: PageObject, rect: dict[str, Any]) -> tuple[float, float, float, float]:
     """A rectangle in fractions of the page as the reader drew it, in PDF user space.
 
     The reader draws what PDF.js shows: the crop box, clipped to the media box,
@@ -569,6 +573,7 @@ def annotated_pdf(key: Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$", max_leng
         boxes = [page_box(page, r) for r in mark["rects"]]
         bounds = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
         color = MARK_COLORS[mark["color"]]
+        annotation: Rectangle | HighlightAnnotation
         if mark["kind"] == "figure":
             annotation = Rectangle(bounds)
             annotation.flags = AnnotationFlag.PRINT

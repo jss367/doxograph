@@ -264,6 +264,7 @@ function readingHeader(p, title, reading) {
           <button type="button" data-act="verify" data-paper="${key}">Check quotes</button>` : ''}
           ${p.n_unreviewed ? `<button type="button" data-act="review-all" data-paper="${key}">Mark ${p.n_unreviewed} reviewed</button>` : ''}
           <button type="button" data-act="labels" data-paper="${key}">Labels</button>
+          <button type="button" data-act="code" data-paper="${key}">Code links</button>
           <button type="button" data-act="edit-title" data-paper="${key}">Edit title…</button>
           <button type="button" data-tool="history" data-paper="${key}">Edit history</button>
           <hr>
@@ -301,12 +302,26 @@ function paperOverview(paper) {
     <div class="paper-reading-progress"><span class="who">Reading progress</span>
       <p data-paper-progress="${esc(paper.key)}">${esc(paperReadingProgress(paper.key))}</p></div>
     ${(paper.labels || []).length ? `<div class="labels">${paper.labels.map(labelChip).join('')}</div>` : ''}
+    ${paperCode(paper)}
     <div class="paper-summary"><h4>Summary</h4>
       ${paper.summary ? `<p>${esc(paper.summary)}</p>` : '<p class="hint">No summary yet. You can read the paper and add your own notes.</p>'}</div>
     ${paper.relevance ? `<div class="paper-relevance"><h4>Why it matters</h4><p>${esc(paper.relevance)}</p></div>` : ''}
     ${paperNote(paper.key)}
     ${proposedPanel(paper.key)}
   </section>`;
+}
+
+// Only web addresses become links. The server checks what it saves, but a
+// paper file edited by hand is not checked, and a `javascript:` link would run.
+function webLinks(links) {
+  return (links || []).filter((link) => /^https?:\/\//i.test(link));
+}
+
+function paperCode(paper) {
+  const links = webLinks(paper.code);
+  if (!links.length) return '';
+  return `<div class="paper-code"><h4>Code</h4><ul>${links.map((link) => `
+    <li><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/i, ''))}</a></li>`).join('')}</ul></div>`;
 }
 
 // A note is shown as the reader typed it: blank lines make paragraphs and
@@ -514,6 +529,34 @@ async function editLabels(key) {
   // header, which `render` leaves alone while a claim editor is open, and the
   // labels would not appear until that editor was closed. The draft in it is
   // kept across the rebuild.
+  await refreshAll();
+}
+
+async function editCode(key) {
+  const paper = S.papers.find((x) => x.key === key);
+  if (!paper) return;
+  const workspace = workspaceClient.workspaceId;
+  const answer = await askDialog({
+    title: `Code for ${paper.title || key}`,
+    note: 'Paste links to the paper\'s repositories, one per line. Commas are part of a link. '
+      + 'Command-Enter or Ctrl-Enter saves.',
+    input: {multiline: true, placeholder: 'https://github.com/owner/repository', value: (paper.code || []).join('\n')},
+    async onSubmit(text) {
+      try {
+        await api(`/api/papers/${encodeURIComponent(key)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+          // Any whitespace ends a link, so a line break, a stray space or a
+          // tab all separate two of them. A comma does not: it is valid
+          // inside an address's path, query and credentials.
+          body: JSON.stringify({ code: text.split(/\s+/).filter(Boolean) }),
+        });
+        return null;
+      } catch (error) { return `Could not save the code links: ${error.message}`; }
+    },
+  });
+  if (answer === null) return;   // cancelled: not the same as clearing them
+  // As for labels: the overview is part of the paper's header.
   await refreshAll();
 }
 
@@ -810,6 +853,7 @@ function openPaperMenu(paper, x, y, trigger = null) {
     <li class="mh">${esc(p ? p.title || paper : paper)}</li>
     ${p && p.has_pdf ? `<li><button type="button" data-act="open-pdf" data-paper="${esc(paper)}">Open the PDF</button></li>` : ''}
     <li><button type="button" data-act="labels" data-paper="${esc(paper)}">${p?.labels?.length ? 'Edit labels…' : 'Add labels…'}</button></li>
+    <li><button type="button" data-act="code" data-paper="${esc(paper)}">${p?.code?.length ? 'Edit code links…' : 'Add code links…'}</button></li>
     <li><button type="button" data-act="edit-title" data-paper="${esc(paper)}">Edit title…</button></li>
     <li><button type="button" data-act="del-paper" data-paper="${esc(paper)}">Remove paper</button></li>`;
   menu.hidden = false;
@@ -841,9 +885,10 @@ $('ctxmenu').addEventListener('click', async (event) => {
   if (!button) return;
   const trigger = closePaperMenu({ restoreFocus: true });
   const paper = button.dataset.paper;
-  if (button.dataset.act === 'labels' || button.dataset.act === 'edit-title') {
+  if (['labels', 'code', 'edit-title'].includes(button.dataset.act)) {
     try {
       if (button.dataset.act === 'edit-title') await editPaperTitle(paper);
+      else if (button.dataset.act === 'code') await editCode(paper);
       else await editLabels(paper);
     } finally {
       // A save replaces the restored button. Recover focus only if it fell

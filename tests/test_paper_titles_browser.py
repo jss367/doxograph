@@ -73,6 +73,8 @@ def test_edit_title_from_sidebar_and_paper_actions_persists(engine):
 @pytest.mark.parametrize("fails", [False, True], ids=["delayed-success", "delayed-failure"])
 def test_pending_title_save_cannot_overlap_or_replace_a_newer_dialog(engine, fails):
     _paper("target", "Imported title", "steering")
+    expected_request = {"title": "First correction",
+                        "expected_revision": store.paper_revision(store.load_paper("target"))}
 
     async def scenario():
         async with browser_session(engine) as browser:
@@ -114,7 +116,7 @@ def test_pending_title_save_cannot_overlap_or_replace_a_newer_dialog(engine, fai
                     await page.keyboard.press("Escape")
                     await expect(dialog).to_be_visible()
                     await page.evaluate("void editPaperTitle('target')")
-                    assert requests == [{"title": "First correction"}]
+                    assert requests == [expected_request]
 
                     # A forced replacement (for example navigation) retires the
                     # old dialog's owner while the request still has to finish.
@@ -139,7 +141,7 @@ def test_pending_title_save_cannot_overlap_or_replace_a_newer_dialog(engine, fai
                 saved = store.load_paper("target")
                 assert saved["labels"] == ["Keep this label draft"]
                 assert saved["title"] == ("Imported title" if fails else "First correction")
-                assert requests == [{"title": "First correction"}]
+                assert requests == [expected_request]
 
                 # The guard is released once the original save finishes.
                 await page.locator('#papers li[data-paper="target"] .pmenu').click()

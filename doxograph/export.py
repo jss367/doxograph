@@ -11,6 +11,7 @@ import html
 import json
 import re
 from pathlib import Path
+from typing import Any, cast
 
 from . import config, store
 
@@ -52,6 +53,7 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .paper .authors, .paper .rel { font-size: .87rem; color: var(--muted); }
 .paper .summary { font-size: .92rem; margin: .4rem 0 0; }
 .paper .labels { margin: .4rem 0 0; }
+.paper .code { margin: .4rem 0 0; font-size: .9em; overflow-wrap: anywhere; }
 .label { display: inline-block; font-size: .74rem; padding: .05rem .4rem; margin-right: .35rem;
   border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
 .note { border-left: 2px solid var(--accent); background: var(--panel); border-radius: 0 4px 4px 0;
@@ -116,8 +118,13 @@ apply();
 """
 
 
-def _e(value) -> str:
+def _e(value: object) -> str:
     return html.escape(str(value or ""))
+
+
+def _web_links(links: list[str] | None) -> list[str]:
+    # Stored links are checked when saved; a hand-edited file is not.
+    return [link for link in links or [] if link.lower().startswith(("https://", "http://"))]
 
 
 def _authors(authors: list[str]) -> str:
@@ -131,11 +138,11 @@ def _authors(authors: list[str]) -> str:
 _CITE = re.compile(r"\[([^\[\]]+)\]")
 
 
-def _synthesis_html(record: dict, rows_by_id: dict[str, dict]) -> str:
+def _synthesis_html(record: dict[str, Any], rows_by_id: dict[str, dict[str, Any]]) -> str:
     """The synthesis with its citations turned into author-year markers that
     show the cited claim on hover. A bracket that does not hold claim ids is
     left as written."""
-    def cite(match):
+    def cite(match: re.Match[str]) -> str:
         ids = [i for i in re.split(r"[,\s]+", match.group(1).strip()) if i]
         if not ids or not all(i in rows_by_id for i in ids):
             return _e(match.group(0))
@@ -148,7 +155,8 @@ def _synthesis_html(record: dict, rows_by_id: dict[str, dict]) -> str:
         return "[" + ", ".join(marks) + "]"
     paragraphs = [p.strip() for p in (record.get("text") or "").split("\n\n") if p.strip()]
     body = "".join(
-        "<p>" + "".join(_e(piece) if n % 2 == 0 else cite(_CITE.fullmatch(piece))
+        # Odd pieces are whole `_CITE` matches from `_split_cites`, so each fullmatches.
+        "<p>" + "".join(_e(piece) if n % 2 == 0 else cite(cast(re.Match[str], _CITE.fullmatch(piece)))
                         for n, piece in enumerate(_split_cites(p))) + "</p>"
         for p in paragraphs
     )
@@ -182,7 +190,7 @@ def _note_html(text: str, label: str) -> str:
     return f'<div class="note"><span class="who">{_e(label)}</span>{body}</div>'
 
 
-def _claim_html(row: dict, ledger_by_id: dict[str, dict]) -> str:
+def _claim_html(row: dict[str, Any], ledger_by_id: dict[str, dict[str, Any]]) -> str:
     hay = " ".join([
         row.get("text", ""), row.get("evidence", ""), row.get("quote", ""),
         row.get("note", ""), row.get("paper_notes", ""),
@@ -331,6 +339,7 @@ def render(title: str = "Doxograph") -> str:
         source = paper.get("source") or {}
         link = source.get("url") or ""
         heading = _e(paper.get("title") or paper["key"])
+        code = _web_links(paper.get("code"))
         if link:
             heading = f'<a href="{_e(link)}">{heading}</a>'
         body.append(
@@ -345,6 +354,9 @@ def render(title: str = "Doxograph") -> str:
             + (('<div class="labels">'
                 + "".join(f'<span class="label">{_e(l)}</span>' for l in paper.get("labels") or [])
                 + "</div>") if paper.get("labels") else "")
+            + (('<p class="code">Code: '
+                + ", ".join(f'<a href="{_e(url)}">{_e(url)}</a>' for url in code)
+                + "</p>") if code else "")
             + _note_html(paper.get("notes") or "", "my note")
             + "</div>"
         )

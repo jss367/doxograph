@@ -313,7 +313,7 @@ def test_library_search_topics_labels_sort_and_live_status(engine):
                 await page.get_by_role("button", name="Save this search", exact=True).click()
                 await _answer(page, "Save search", "Favorite papers")
                 await expect(page.locator("#research-body [data-search]")).to_have_count(1)
-                await page.get_by_role("button", name="Close research tools").click()
+                await page.go_back()
                 await page.get_by_role("button", name="Extracted claims", exact=True).click()
                 await page.locator('.research-tools-nav [data-tool="searches"]').click()
                 await page.get_by_role("button", name="Open search", exact=True).click()

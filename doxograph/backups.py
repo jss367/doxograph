@@ -7,6 +7,7 @@ import json
 import re
 import uuid
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -64,7 +65,7 @@ def preserve(path: Path, replacement: str) -> None:
         obsolete.unlink()
 
 
-def read(path: Path) -> tuple[dict, bytes]:
+def read(path: Path) -> tuple[dict[str, Any], bytes]:
     try:
         if not local(path):
             raise ValueError('symbolic link')
@@ -97,7 +98,7 @@ def restorable(relative: str) -> bool:
 
 
 @router.get('')
-def versions() -> dict:
+def versions() -> dict[str, Any]:
     items, issues = [], []
     for path in (config.data_dir() / 'backups').glob('*/*.json'):
         try:
@@ -124,7 +125,7 @@ class Restore(BaseModel):
 
 
 @router.post('/{identifier}/restore')
-def restore(identifier: str, body: Restore) -> dict:
+def restore(identifier: str, body: Restore) -> dict[str, Any]:
     saved, content = read(locate(identifier))
     relative = saved['path']
     if not restorable(relative):

@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2",
     "uvicorn>=0.27",
     "httpx>=0.26",
+    "idna>=3",
     "jsonschema>=4.0",
     "python-multipart>=0.0.9",
     "PyYAML>=6.0",
@@ -54,15 +55,22 @@ target-version = "py313"
 
 [tool.ruff.lint]
 # Syntax, correctness, and bug-prone patterns, without restyling the repository.
-select = ["E9", "F", "B"]
+# C901 holds function complexity at or below today's worst; lower the limit as
+# the most complex functions are split.
+select = ["E9", "F", "B", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
 
 [tool.mypy]
 python_version = "3.13"
-# Keep strict contracts at the persistence, provider, and HTTP boundaries. The
-# remaining application modules can be added as their annotations narrow.
+# Every module in the package is checked strictly.
 files = [
+    "doxograph/__init__.py", "doxograph/__main__.py",
     "doxograph/storage.py", "doxograph/records.py", "doxograph/publication_dates.py", "doxograph/workspace_metadata.py",
-    "doxograph/store.py",
+    "doxograph/store.py", "doxograph/store_claims.py", "doxograph/store_vocab.py",
+    "doxograph/store_ledger.py", "doxograph/store_views.py", "doxograph/store_facets.py",
+    "doxograph/store_tensions.py", "doxograph/store_syntheses.py", "doxograph/store_agreements.py",
     "doxograph/analysis_types.py", "doxograph/ask_context.py",
     "doxograph/model_errors.py", "doxograph/providers.py",
     "doxograph/claude_code.py", "doxograph/codex_cli.py",
@@ -72,6 +80,13 @@ files = [
     "doxograph/datasets.py",
     "doxograph/loupe.py",
     "doxograph/analysis_api.py",
+    "doxograph/agent.py", "doxograph/backups.py", "doxograph/bib.py", "doxograph/code_links.py",
+    "doxograph/chat.py", "doxograph/chats.py", "doxograph/cites.py",
+    "doxograph/config.py", "doxograph/export.py", "doxograph/extract.py",
+    "doxograph/fingerprint.py", "doxograph/ingest.py", "doxograph/job_journal.py",
+    "doxograph/loupe_runner.py", "doxograph/notebook.py", "doxograph/pairs.py",
+    "doxograph/posts.py", "doxograph/query.py", "doxograph/quotes.py",
+    "doxograph/research_notes.py", "doxograph/search.py",
     "doxograph/mcp_server.py", "doxograph/workspace_archive.py",
 ]
 strict = true

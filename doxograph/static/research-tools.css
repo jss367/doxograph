@@ -20,10 +20,7 @@
 #selection-count { font-size: .8rem; color: var(--muted); margin-right: auto; }
 .claim-selection { display: flex; gap: .5rem; justify-content: space-between; align-items: center; margin-bottom: .4rem; font-size: .76rem; color: var(--muted); }
 .paper-selection { float: left; margin: .2rem .5rem .2rem 0; }
-.research-sheet { width: min(1300px, 96vw); max-width: 96vw; height: 90vh; max-height: 94vh;
-  padding: 1.2rem; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--bg); color: var(--ink); overflow: auto; }
-.research-sheet::backdrop { background: rgb(0 0 0 / .45); }
+.research-sheet { max-width: 80rem; margin-inline: auto; }
 .research-sheet .sheet-head { display: flex; align-items: center; justify-content: space-between; }
 #research-tabs, .tool-actions, .entry-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .75rem 0; }
 #research-tabs { border-bottom: 1px solid var(--line); padding-bottom: .7rem; }
@@ -171,7 +168,6 @@
 @media (max-width: 800px) {
   .connection-pair, .history-diff { grid-template-columns: 1fr; }
   .comparison-card { flex-basis: 85vw; }
-  .research-sheet { padding: .7rem; }
 }
 
 /* A paper is a place to read, with the library alongside it. */
@@ -264,6 +260,8 @@ body.resizing-claims { cursor: col-resize; user-select: none; }
   font-size: .72rem; font-weight: 600; color: var(--muted); }
 .paper-overview p { margin: 0; font-size: .88rem; line-height: 1.65; white-space: pre-wrap; }
 .paper-overview > div + div { margin-top: 1rem; }
+.paper-code ul { margin: 0; padding: 0; list-style: none; font-size: .88rem; line-height: 1.65; }
+.paper-code a { overflow-wrap: anywhere; }
 .paper-overview .note { margin-top: 1.25rem; }
 .paper-overview .note .who { font-weight: 600; }
 .paper-overview .note p + p { margin-top: .5rem; }

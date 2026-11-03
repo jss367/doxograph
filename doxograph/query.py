@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import config, notebook, quotes, research_notes, search, store
+from . import config, notebook, quotes, records, research_notes, search, store
 
 router = APIRouter(prefix="/api/query", dependencies=[Depends(store.recover_storage)])
 Limit = Annotated[int, Query(ge=1, le=100)]
@@ -33,7 +33,7 @@ PaperScope = Annotated[list[str] | None, Depends(request_scope)]
 PERSONAL_CLAIM_FIELDS = ("note", "ledger_links", "conditions", "limitations", "evidence_origin", "evidence_relationship")
 
 
-def matches(q: str, *values) -> bool:
+def matches(q: str, *values: object) -> bool:
     """Every query word must occur; case and accents follow PDF search."""
     terms = search.terms(q)
     if not terms:
@@ -42,15 +42,15 @@ def matches(q: str, *values) -> bool:
     return all(term in text for term in terms)
 
 
-def page(rows: list[dict], limit: int, offset: int, **extra) -> dict:
+def page(rows: list[dict[str, Any]], limit: int, offset: int, **extra: Any) -> dict[str, Any]:
     end = offset + limit
     return {"workspace": config.workspace_id(), "items": rows[offset:end],
             "total": len(rows), "offset": offset,
             "next_offset": end if end < len(rows) else None, **extra}
 
 
-def papers_and_issues(paper_keys: list[str] | None = None) -> tuple[list[dict], list[dict]]:
-    issues = []
+def papers_and_issues(paper_keys: list[str] | None = None) -> tuple[list[dict[str, Any]], list[records.StorageIssue]]:
+    issues: list[records.StorageIssue] = []
     if paper_keys is None:
         papers = store.all_papers(issues=issues)
     else:
@@ -70,7 +70,7 @@ def papers_and_issues(paper_keys: list[str] | None = None) -> tuple[list[dict], 
 @router.get("/papers")
 @router.post("/papers")
 def papers(q: QueryText = "", topic: str = "", label: str = "",
-           limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None) -> dict:
+           limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None) -> dict[str, Any]:
     saved, issues = papers_and_issues(paper_keys)
     rows = [{key: value for key, value in store.summarize(p).items() if key != "notes"} for p in saved
             if (not topic or any(topic in c.get("tags", []) for c in p.get("claims", [])))
@@ -81,7 +81,7 @@ def papers(q: QueryText = "", topic: str = "", label: str = "",
 
 
 @router.get("/papers/{key}")
-def paper(key: str, omit_notes: OmitNotes = False) -> dict:
+def paper(key: str, omit_notes: OmitNotes = False) -> dict[str, Any]:
     try:
         saved = store.load_paper(key)
     except KeyError:
@@ -98,7 +98,7 @@ def paper(key: str, omit_notes: OmitNotes = False) -> dict:
 @router.post("/claims")
 def claims(q: QueryText = "", topic: str = "", paper: str = "",
            reviewed: bool | None = None, limit: Limit = 20, offset: Offset = 0,
-           omit_notes: OmitNotes = False, paper_keys: PaperScope = None) -> dict:
+           omit_notes: OmitNotes = False, paper_keys: PaperScope = None) -> dict[str, Any]:
     saved, issues = papers_and_issues(paper_keys)
     rows = [c for c in store.claim_rows(saved)
             if (not topic or topic in c.get("tags", []))
@@ -115,7 +115,7 @@ def claims(q: QueryText = "", topic: str = "", paper: str = "",
 
 @router.get("/topics")
 @router.post("/topics")
-def topics(q: QueryText = "", limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None) -> dict:
+def topics(q: QueryText = "", limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None) -> dict[str, Any]:
     saved, issues = papers_and_issues(paper_keys)
     counts = store.tag_counts(store.claim_rows(saved))
     rows = [{**tag, "n_claims": counts.get(tag["name"], 0)} for tag in store.load_tags()
@@ -127,7 +127,7 @@ def topics(q: QueryText = "", limit: Limit = 20, offset: Offset = 0, paper_keys:
 @router.get("/evidence")
 @router.post("/evidence")
 def evidence(kind: Literal["agreements", "tensions", "syntheses"], topic: str = "",
-             limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None, library_snapshot: bool = False) -> dict:
+             limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None, library_snapshot: bool = False) -> dict[str, Any]:
     saved, issues = papers_and_issues()
     claims = store.claim_rows(saved)
     readers = {"agreements": store.agreement_rows, "tensions": store.tension_rows,
@@ -171,13 +171,13 @@ def evidence(kind: Literal["agreements", "tensions", "syntheses"], topic: str = 
     return page(rows, limit, offset, kind=kind, storage_issues=issues)
 
 
-def saved_notes() -> list[dict]:
+def saved_notes() -> list[dict[str, Any]]:
     return [{"id": "workspace", "title": "Workspace notes", "body": notebook.load()["notes"]},
             *research_notes.load()]
 
 
 @router.get("/notes")
-def notes(q: QueryText = "", limit: Limit = 20, offset: Offset = 0) -> dict:
+def notes(q: QueryText = "", limit: Limit = 20, offset: Offset = 0) -> dict[str, Any]:
     rows = [{"id": n["id"], "title": n["title"], "length": len(n["body"]),
              "preview": n["body"][:300]} for n in saved_notes()
             if matches(q, n["title"], n["body"])]
@@ -186,7 +186,7 @@ def notes(q: QueryText = "", limit: Limit = 20, offset: Offset = 0) -> dict:
 
 @router.get("/notes/{note_id}")
 def note(note_id: str, offset: Offset = 0,
-         limit: Annotated[int, Query(ge=1, le=20000)] = 8000) -> dict:
+         limit: Annotated[int, Query(ge=1, le=20000)] = 8000) -> dict[str, Any]:
     saved = next((n for n in saved_notes() if n["id"] == note_id), None)
     if saved is None:
         raise HTTPException(404, "no such note")
@@ -198,7 +198,7 @@ def note(note_id: str, offset: Offset = 0,
 
 @router.get("/passage/{key}")
 def passage(key: str, page_number: Annotated[int, Query(ge=1)] = 1,
-            offset: Offset = 0, limit: Annotated[int, Query(ge=1, le=12000)] = 6000) -> dict:
+            offset: Offset = 0, limit: Annotated[int, Query(ge=1, le=12000)] = 6000) -> dict[str, Any]:
     """Read a bounded span of one PDF page, with continuation for long pages."""
     papers_and_issues([key])
     raw = search.paper_text(key)
