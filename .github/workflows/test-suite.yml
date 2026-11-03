@@ -59,17 +59,22 @@ jobs:
         env:
           PYTHON_SHARD: ${{ matrix.shard }}/4
         # The process deadline also covers collection and session teardown.
-        # pipefail keeps timeout/assertion failures red despite the tee command.
+        # Output goes to a file, not a pipe: a process that outlives pytest
+        # would hold a pipe open and keep the step running to the job timeout.
         run: |
-          set -o pipefail
           mkdir -p test-results
+          status=0
           timeout --signal=ABRT --kill-after=10s 210s \
             python -u -X faulthandler -m pytest -p no_live_providers \
             -m "not browser" --python-shard="$PYTHON_SHARD" \
             -v --tb=short --durations=0 --durations-min=0 \
             --timeout=60 --timeout-method=thread -o faulthandler_timeout=30 \
             --report-log=test-results/events.jsonl --junitxml=test-results/junit.xml \
-            2>&1 | tee test-results/console.log
+            > test-results/console.log 2>&1 || status=$?
+          cat test-results/console.log
+          echo "pytest exited with $status; processes still running:"
+          ps -eo pid,ppid,pgid,etimes,args --forest | tee test-results/processes.txt
+          exit "$status"
       - name: Retain Python test diagnostics
         if: ${{ always() }}
         timeout-minutes: 2
