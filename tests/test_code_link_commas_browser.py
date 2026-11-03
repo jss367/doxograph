@@ -40,8 +40,9 @@ def test_code_editor_roundtrips_comma_urls_with_whitespace_separators(engine, li
                 await page.route('**/api/papers/synthetic', record)
                 await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Code links', exact=True).click()
-                await expect(page.locator('#ask-input')).to_have_value(' '.join(links))
-                await page.locator('#ask-input').fill('  ' + '  \t '.join(links) + '  ')
+                # Prefilled one per line; any whitespace still separates links.
+                await expect(page.locator('#ask-lines')).to_have_value('\n'.join(links))
+                await page.locator('#ask-lines').fill('  ' + ' \n\t\n '.join(links) + '  \n')
                 await page.locator('#ask').get_by_role('button', name='OK', exact=True).click()
                 await asyncio.wait_for(requested.wait(), 5)
                 assert payloads == [links]

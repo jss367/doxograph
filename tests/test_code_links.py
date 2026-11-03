@@ -135,12 +135,24 @@ def test_code_links_are_edited_from_paper_actions_and_shown_in_the_overview(engi
                 await page.locator(".paper-actions > summary").click()
                 await page.get_by_role("button", name="Code links", exact=True).click()
                 await expect(page.locator("#ask-title")).to_have_text("Code for A Study")
+                # A list of links gets the multi-line field, not the one-line input.
+                lines = page.locator("#ask-lines")
+                await expect(lines).to_be_visible()
+                await expect(page.locator("#ask-input")).to_be_hidden()
                 # A refused link keeps the dialog open with the draft in it.
-                await page.locator("#ask-input").fill("javascript:alert(1)")
+                await lines.fill("javascript:alert(1)")
                 await page.locator("#ask").get_by_role("button", name="OK", exact=True).click()
                 await expect(page.locator("#ask-note")).to_contain_text("Could not save the code links")
-                await expect(page.locator("#ask-input")).to_have_value("javascript:alert(1)")
-                await _answer(page, "OK", "github.com/doe/study https://gitlab.com/doe/data")
+                await expect(lines).to_have_value("javascript:alert(1)")
+                # Enter starts a line rather than saving, and the shortcut saves.
+                await lines.fill("")
+                await lines.press_sequentially("github.com/doe/study")
+                await lines.press("Enter")
+                await lines.press_sequentially("https://gitlab.com/doe/data")
+                await expect(page.locator("#ask")).to_be_visible()
+                await expect(lines).to_have_value("github.com/doe/study\nhttps://gitlab.com/doe/data")
+                await lines.press("Control+Enter")
+                await expect(page.locator("#ask")).to_be_hidden()
                 links = page.locator(".paper-code a")
                 await expect(links).to_have_count(2)
                 await expect(links.first).to_have_text("github.com/doe/study")
@@ -151,11 +163,21 @@ def test_code_links_are_edited_from_paper_actions_and_shown_in_the_overview(engi
                 target = page.locator('#papers li[data-paper="doe2026study"]')
                 await target.click(button="right")
                 await page.locator("#ctxmenu").get_by_role("button", name="Edit code links…").click()
-                await expect(page.locator("#ask-input")).to_have_value(
-                    "https://github.com/doe/study https://gitlab.com/doe/data")
-                await _answer(page, "OK", "")
+                await expect(lines).to_have_value(
+                    "https://github.com/doe/study\nhttps://gitlab.com/doe/data")
+                await lines.fill("")
+                await lines.press("Meta+Enter")
+                await expect(page.locator("#ask")).to_be_hidden()
                 await expect(page.locator(".paper-code")).to_have_count(0)
                 assert store.load_paper("doe2026study")["code"] == []
+
+                # The next question is one line again, with nothing carried over.
+                await page.locator(".paper-actions > summary").click()
+                await page.get_by_role("button", name="Labels", exact=True).click()
+                await expect(page.locator("#ask-input")).to_be_visible()
+                await expect(lines).to_be_hidden()
+                await expect(lines).to_have_value("")
+                await _answer(page, "Cancel")
                 assert not errors
 
     run_browser(scenario())

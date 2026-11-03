@@ -52,6 +52,13 @@ let askResolve = null;
 let askSubmit = null;
 let askBusy = false;
 
+// The field the open question is answered in. Most answers are one line, and
+// Enter in that input submits. A caller that asks for a list, one entry per
+// line, passes `input.multiline` and gets a textarea instead, where Enter
+// starts the next line: a line break pasted into a one-line input is dropped,
+// and the entries either side of it run together.
+const askField = () => ($('ask-lines').hidden ? $('ask-input') : $('ask-lines'));
+
 function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK', cancel = 'Cancel', onSubmit = null }) {
   // A replacement prompt cancels the previous caller rather than stranding it.
   if (askResolve) settleAsk(null);
@@ -61,11 +68,18 @@ function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK
   $('ask-title').textContent = title;
   $('ask-note').textContent = note;
   $('ask-note').hidden = !note;
-  const field = $('ask-input');
-  field.hidden = input === null;
+  const multiline = Boolean(input?.multiline);
+  $('ask-input').hidden = input === null || multiline;
+  $('ask-lines').hidden = !multiline;
+  // Both are reset so the hidden one never carries an earlier question's text.
+  for (const element of [$('ask-input'), $('ask-lines')]) {
+    element.value = '';
+    element.placeholder = '';
+    element.disabled = false;
+  }
+  const field = askField();
   field.value = input ? (input.value || '') : '';
   field.placeholder = input ? (input.placeholder || '') : '';
-  field.disabled = false;
   const choices = $('ask-label-choices');
   choices.hidden = labelChoices.length === 0;
   choices.innerHTML = labelChoices.map((name) => `<button type="button" class="label label-choice"
@@ -95,13 +109,14 @@ function settleAsk(value) {
 $('ask-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (askBusy) return;
-  const value = $('ask-input').hidden ? true : $('ask-input').value;
+  const field = askField();
+  const value = field.hidden ? true : field.value;
   if (!askSubmit) { settleAsk(value); return; }
   const owner = askResolve;
   const label = $('ask-ok').textContent;
   askBusy = true;
   $('ask').setAttribute('aria-busy', 'true');
-  $('ask-input').disabled = true;
+  field.disabled = true;
   $('ask-ok').disabled = true;
   $('ask-cancel').disabled = true;
   $('ask-ok').textContent = 'Saving…';
@@ -121,13 +136,20 @@ $('ask-form').addEventListener('submit', async (event) => {
     if (askResolve === owner) {
       askBusy = false;
       $('ask').removeAttribute('aria-busy');
-      $('ask-input').disabled = false;
+      field.disabled = false;
       $('ask-ok').disabled = false;
       $('ask-cancel').disabled = false;
       $('ask-ok').textContent = label;
-      $('ask-input').focus();
+      field.focus();
     }
   }
+});
+// Enter in the textarea starts a new line, so the list is saved the way a
+// multi-line field in a native dialog is: Command-Enter, or Ctrl-Enter.
+$('ask-lines').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.isComposing || !(event.metaKey || event.ctrlKey)) return;
+  event.preventDefault();
+  $('ask-form').requestSubmit();
 });
 $('ask-cancel').addEventListener('click', () => settleAsk(null));
 $('ask').addEventListener('cancel', (event) => {

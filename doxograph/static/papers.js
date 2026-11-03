@@ -514,13 +514,17 @@ async function editCode(key) {
   const workspace = workspaceClient.workspaceId;
   const answer = await askDialog({
     title: `Code for ${paper.title || key}`,
-    note: 'Paste links to the paper\'s repositories, separated by spaces. Commas are part of a link.',
-    input: {placeholder: 'https://github.com/owner/repository', value: (paper.code || []).join(' ')},
+    note: 'Paste links to the paper\'s repositories, one per line. Commas are part of a link. '
+      + 'Command-Enter or Ctrl-Enter saves.',
+    input: {multiline: true, placeholder: 'https://github.com/owner/repository', value: (paper.code || []).join('\n')},
     async onSubmit(text) {
       try {
         await api(`/api/papers/${encodeURIComponent(key)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+          // Any whitespace ends a link, so a line break, a stray space or a
+          // tab all separate two of them. A comma does not: it is valid
+          // inside an address's path, query and credentials.
           body: JSON.stringify({ code: text.split(/\s+/).filter(Boolean) }),
         });
         return null;

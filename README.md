@@ -555,12 +555,13 @@ writing space are stored locally in `note-images/`.
   paper to that page.
 - **Code links.** **Paper actions → Code links** (or **Add code links…** on
   the paper's menu in the sidebar) records where the paper's repositories are.
-  Paste one or more web addresses separated by spaces (commas remain part of an address); an address
-  without `https://` gets it. When a paper is added, GitHub, GitLab, Bitbucket,
-  and Codeberg repositories named in its abstract or arXiv comment are filled
-  in, and papers added earlier get the ones their abstract names. The links
-  appear under **Code** in the paper overview, in the HTML export, in
-  workspace archives, and in what the agent connection returns for a paper.
+  Paste one or more web addresses, one per line (a comma stays part of an
+  address), and press **OK** or `Command-Enter` / `Ctrl-Enter` to save; an
+  address without `https://` gets it. When a paper is added, GitHub, GitLab,
+  Bitbucket, and Codeberg repositories named in its abstract or arXiv comment
+  are filled in, and papers added earlier get the ones their abstract names.
+  The links appear under **Code** in the paper overview, in the HTML export,
+  in workspace archives, and in what the agent connection returns for a paper.
 - **Passages.** Select text on a page and a **Highlight** button appears under
   it. One click draws the highlight over the text, lists it in the rail with
   its page, and opens a note of your own on it, ready to type into. The
