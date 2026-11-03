@@ -40,21 +40,28 @@ const FindingsModel = (() => {
     return (claims || []).filter((claim) => !claim.reviewed).length;
   }
 
-  // The papers a finding rests on, named the way a citation names them.
+  // The papers a finding rests on, named the way a citation names them. Two
+  // papers by the same first author in the same year share that name, so the
+  // names are kept per paper and a shared one carries the paper's key, which
+  // is what the rest of the page falls back on when a paper has no author.
   function papersOf(finding) {
-    const names = new Set();
+    const names = new Map();
     for (const claim of finding.claims || []) {
       const author = (claim.paper_authors || [])[0];
       const who = author ? author.split(' ').pop() : claim.paper;
-      names.add(`${who} ${claim.paper_year || 'n.d.'}`);
+      names.set(claim.paper, `${who} ${claim.paper_year || 'n.d.'}`);
     }
-    return [...names].sort();
+    const shared = new Map();
+    for (const name of names.values()) shared.set(name, (shared.get(name) || 0) + 1);
+    return [...names].map(([paper, name]) => (shared.get(name) > 1 ? `${name} (${paper})` : name)).sort();
   }
 
   // One section per topic that has a finding or a synthesis, in the order of
   // the vocabulary, which is the reader's own order of importance; topics the
   // vocabulary does not list follow, alphabetically. A topic is stale when a
   // claim under it changed since any of its findings were judged or written.
+  // Its paper count is of the papers with claims under it, not only of those
+  // a finding names: a paper nobody has set against another is still there.
   function topics(state) {
     const byName = new Map();
     const section = (name) => {
@@ -75,6 +82,9 @@ const FindingsModel = (() => {
         entry.tensions.push(row);
         for (const claim of row.claims || []) entry.papers.add(claim.paper);
       }
+    }
+    for (const claim of state.claims || []) {
+      for (const name of claim.tags || []) if (byName.has(name)) byName.get(name).papers.add(claim.paper);
     }
     const order = new Map((state.tags || []).map((tag, index) => [tag.name, index]));
     for (const tag of state.tags || []) if (byName.has(tag.name)) byName.get(tag.name).description = tag.description || '';

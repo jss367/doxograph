@@ -26,8 +26,11 @@ test('a sentence does not end at a decimal point or an abbreviation that is not 
 
 test('topics follow the vocabulary order, with unlisted ones after it, and carry their findings', () => {
   const a = claim('a-c1', 'a', 'Jane Doe', 2026), b = claim('b-c1', 'b', 'Bo Li', 2025, false);
+  // A third paper under recovery that no finding names still counts there.
+  const c = {...claim('c-c1', 'c', 'Cy Chen', 2024), tags: ['recovery']};
   const state = {
     tags: [{name: 'recovery', description: 'How often a model returns.'}, {name: 'scaling', description: ''}],
+    claims: [{...a, tags: ['recovery']}, {...b, tags: ['recovery']}, c],
     syntheses: [{topic: 'scaling', text: 'Flat [a-c1].', stale: true, n_papers: 2}],
     tensions: [{id: 't1', topics: ['recovery', 'zeta'], claims: [a, b], status: 'open', stale: false}],
     agreements: [{id: 'a1', topics: ['recovery'], claims: [a, b], status: 'open', stale: false}],
@@ -36,7 +39,8 @@ test('topics follow the vocabulary order, with unlisted ones after it, and carry
   assert.deepEqual(sections.map((s) => s.name), ['recovery', 'scaling', 'zeta']);
   assert.equal(sections[0].description, 'How often a model returns.');
   assert.equal(sections[0].count, 2);
-  assert.equal(sections[0].papers, 2);
+  assert.equal(sections[0].papers, 3);
+  assert.equal(sections[1].papers, 2);
   assert.equal(sections[0].stale, false);
   assert.equal(sections[1].stale, true);
   assert.equal(sections[1].count, 0);
@@ -54,4 +58,9 @@ test('papers are named by first author and year, once each, and unreviewed claim
   assert.deepEqual(FindingsModel.papersOf({claims: [a, b, c]}), ['Doe 2026', 'Li 2025']);
   assert.equal(FindingsModel.unreviewedCount([a, b, c]), 2);
   assert.deepEqual(FindingsModel.papersOf({claims: [claim('k-c1', 'key2024', null, null)]}), ['key2024 n.d.']);
+});
+
+test('two papers by the same first author in the same year are told apart by their keys', () => {
+  const a = claim('a-c1', 'doe2026steering', 'Jane Doe', 2026), b = claim('b-c1', 'doe2026recovery', 'Jane Doe', 2026);
+  assert.deepEqual(FindingsModel.papersOf({claims: [a, b]}), ['Doe 2026 (doe2026recovery)', 'Doe 2026 (doe2026steering)']);
 });
