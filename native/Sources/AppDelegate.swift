@@ -545,8 +545,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Staying is handled the way every other refusal is: the relaunch was only
     /// meant to follow this quit, so it is called off too.
     private func saveDraftsAgainBeforeQuitting() {
-        window.saveDrafts { saved in
+        window.saveDrafts(freezeEditing: true) { saved in
             if !saved, !self.confirmQuitWithUnsavedWriting() {
+                self.window.resumeEditingAfterCancelledQuit()
                 self.relaunchAfterQuit = false
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return

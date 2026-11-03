@@ -90,7 +90,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// nothing is left unsaved, and false when something could not be saved
     /// or the page did not answer in time; the caller asks rather than
     /// waiting on a page that may never answer.
-    func saveDrafts(_ done: @escaping (Bool) -> Void) {
+    func saveDrafts(freezeEditing: Bool = false, _ done: @escaping (Bool) -> Void) {
         var answered = false
         let finish = { (saved: Bool) in
             guard !answered else { return }
@@ -98,12 +98,43 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             done(saved)
         }
         webView.callAsyncJavaScript(
-            "return window.doxographSaveDrafts ? await window.doxographSaveDrafts() : true",
-            arguments: [:], in: nil, in: .page
+            """
+            if (freezeEditing) {
+                window.doxographQuitInert ??= document.body.inert;
+                window.doxographQuitFocus ??= document.activeElement;
+                document.activeElement?.blur();
+                // WebKit can still deliver keyboard input to a control that
+                // held focus when its ancestor became inert.
+                window.doxographQuitBlockInput ??= event => {
+                    event.preventDefault(); event.stopImmediatePropagation();
+                };
+                for (const type of ['beforeinput', 'keydown', 'pointerdown', 'click', 'paste', 'cut', 'drop']) {
+                    window.addEventListener(type, window.doxographQuitBlockInput, true);
+                }
+                document.body.inert = true;
+            }
+            return window.doxographSaveDrafts ? await window.doxographSaveDrafts() : true;
+            """,
+            arguments: ["freezeEditing": freezeEditing], in: nil, in: .page
         ) { result in
             if case .success(let saved) = result { finish((saved as? Bool) ?? false) } else { finish(false) }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(false) }
+    }
+
+    func resumeEditingAfterCancelledQuit() {
+        webView.evaluateJavaScript("""
+            if (window.doxographQuitInert !== undefined) {
+                document.body.inert = window.doxographQuitInert;
+                delete window.doxographQuitInert;
+                for (const type of ['beforeinput', 'keydown', 'pointerdown', 'click', 'paste', 'cut', 'drop']) {
+                    window.removeEventListener(type, window.doxographQuitBlockInput, true);
+                }
+                delete window.doxographQuitBlockInput;
+                if (window.doxographQuitFocus?.isConnected) window.doxographQuitFocus.focus({preventScroll:true});
+                delete window.doxographQuitFocus;
+            }
+            """)
     }
 
     func load(_ url: URL) {
