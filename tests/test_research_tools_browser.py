@@ -2169,3 +2169,49 @@ def test_queueing_selected_papers_from_compare_then_back_returns_to_compare(engi
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_keeping_a_connection_draft_leaves_an_action_from_a_paper_on_the_paper(engine):
+    config.set_ai_enabled(False)
+    for key, title in [('one', 'Steering and recovery'), ('two', 'Recovery under different conditions')]:
+        store.save_paper(store.new_paper(key, title=title))
+        store.add_claim(key, {'text': f'{title} is measured.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(f'{url}/#view=tools&tool=connections')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await page.locator('#connection-note').fill('Unsaved connection')
+                await page.locator('#papers li[data-paper="one"]').click()
+                await view.wait_for(state='hidden')
+                await page.wait_for_function("location.hash.includes('paper=one')")
+                origin, entries = await page.evaluate('location.hash'), await page.evaluate('history.length')
+                # Keeping the draft refuses the action: the paper stays, with no entry made.
+                await page.get_by_role('button', name='Add to reading queue', exact=True).click()
+                await _answer(page, 'Cancel')
+                await ready(page)
+                assert not await view.is_visible()
+                assert await page.evaluate('location.hash') == origin
+                assert await page.evaluate('history.length') == entries
+                assert httpx.get(url + '/api/notebook').json()['reading'] == []
+                # Discarding it runs the action, and Back returns to the paper.
+                await page.get_by_role('button', name='Add to reading queue', exact=True).click()
+                await _answer(page, 'Discard changes')
+                await view.wait_for(state='visible')
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                await ready(page)
+                assert [r['paper'] for r in httpx.get(url + '/api/notebook').json()['reading']] == ['one']
+                await page.go_back()
+                await view.wait_for(state='hidden')
+                assert await page.evaluate('location.hash') == origin
+                assert not errors
+
+    run_browser(scenario())

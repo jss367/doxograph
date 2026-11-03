@@ -1626,9 +1626,17 @@ const ResearchTools = (() => {
         if (!shown) {
           const move = navigationVersion();
           if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
-          // A move made while the note was saved is newer than this click.
-          // The tools are not up, so this is still()'s check without its `shown`.
+          // A connection still being written from an earlier visit is asked
+          // about before the tools open, as load() would ask after: refusing
+          // then leaves the reader on the page they clicked from, with no
+          // history entry for a move not taken.
+          const leaving = connectionDraft && loaded?.tab !== (TABS.includes(name) ? name : 'compare');
+          if (leaving && !await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) return;
+          // A move made while the note was saved, or while that was asked, is
+          // newer than this click. The tools are not up, so this is still()'s
+          // check without its `shown`.
           if (navigationVersion() !== move) return;
+          if (leaving) connectionDraft = false;
           opened = true;
         }
         // An action used from outside runs on Compare; the tab it ends on
