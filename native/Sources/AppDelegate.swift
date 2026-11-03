@@ -528,8 +528,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
             }
-            // Uploads in flight now were part of the question just answered.
-            self.saveDraftsAgainBeforeQuitting(acceptedUploads: Uploader.uploadsInFlight)
+            // Uploads begun by now were part of the question just answered.
+            self.saveDraftsAgainBeforeQuitting(acceptedStarts: Uploader.uploadsStarted)
         }
     }
 
@@ -544,11 +544,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// same question the first save asks.
     ///
     /// A paper dropped on the Dock or the window during this save starts an
-    /// upload the earlier question never saw, so it is asked about here.
+    /// upload the earlier question never saw, so it is asked about here. That
+    /// is told by how many uploads have begun, not how many are live: a paper
+    /// the question covered can finish just as a new one starts, and the live
+    /// count would not move.
     ///
     /// Staying is handled the way every other refusal is: the relaunch was only
     /// meant to follow this quit, so it is called off too.
-    private func saveDraftsAgainBeforeQuitting(acceptedUploads: Int) {
+    private func saveDraftsAgainBeforeQuitting(acceptedStarts: Int) {
         window.saveDrafts(freezeEditing: true) { saved in
             let stay = {
                 self.window.resumeEditingAfterCancelledQuit()
@@ -557,7 +560,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             if !saved, !self.confirmQuitWithUnsavedWriting() { return stay() }
             let uploading = Uploader.uploadsInFlight
-            if uploading > acceptedUploads,
+            if Uploader.uploadsStarted > acceptedStarts, uploading > 0,
                !self.confirmInterruption(.quit, uploading: uploading, reading: 0) { return stay() }
             NSApp.reply(toApplicationShouldTerminate: true)
         }
