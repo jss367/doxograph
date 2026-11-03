@@ -1833,3 +1833,50 @@ def test_clicking_the_open_boards_tab_keeps_the_board_and_back(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('tool', ['boards', 'questions'])
+def test_the_first_board_takes_the_tab_entry_and_back_leaves_it(engine, tool):
+    config.set_ai_enabled(False)
+    create, answer = ('New board', 'Create board') if tool == 'boards' else ('New research question', 'Create question')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(f'{url}/#view=tools&tool=reading')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await view.locator(f'[data-tab="{tool}"]').click()
+                await ready(page)
+                assert f'tool={tool}' in page.url and 'board=' not in page.url
+                entries = await page.evaluate('history.length')
+                # The tab showed no board, so the first one takes its entry.
+                await view.get_by_role('button', name=create, exact=True).click()
+                await _answer(page, answer, 'First board')
+                await ready(page)
+                first = httpx.get(url + '/api/notebook').json()['boards'][0]['id']
+                assert f'board={first}' in page.url
+                assert await page.evaluate('history.length') == entries
+                # A board made while another is open is a new destination.
+                await view.get_by_role('button', name=create, exact=True).click()
+                await _answer(page, answer, 'Second board')
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'Second board'
+                assert await page.evaluate('history.length') == entries + 1
+                await page.go_back()
+                await page.wait_for_function(f"location.hash.includes('board={first}')")
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'First board'
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                await ready(page)
+                assert 'board=' not in page.url
+                assert not errors
+
+    run_browser(scenario())

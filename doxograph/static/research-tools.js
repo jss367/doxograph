@@ -1402,7 +1402,12 @@ const ResearchTools = (() => {
       const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
       if (!title?.trim()) return;
       const board = {id:uid(),kind:asking ? 'question' : 'board',title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
-      notebook.boards.push(board); boardId = board.id; await save(); chooseBoard(board.id); return;
+      // With no board open, the tab's entry names none, and going back to it
+      // would open this board anyway: the new board takes that entry in place.
+      const before = boardId;
+      notebook.boards.push(board); boardId = board.id; await save();
+      if (before) chooseBoard(board.id); else render();
+      return;
     }
     if (name === 'add-board') { tab = 'boards'; render(); message('Choose or create a board, then add the selected claims.'); return; }
     if (name === 'board-add-selection') {
