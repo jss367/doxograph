@@ -1591,7 +1591,11 @@ const ResearchTools = (() => {
           // A move made while the note was saved is newer than this click.
           if (navigationVersion() !== navigation) return;
         }
-        openTab(TABS.includes(name) ? name : shown ? tab : 'compare');
+        // External actions open their actual destination directly. Compare
+        // would otherwise leave an extra history entry before the action.
+        const destination = name === 'queue-paper' || name === 'queue-selection' ? 'reading'
+          : name === 'save-search' ? 'searches' : 'compare';
+        openTab(TABS.includes(name) ? name : shown ? tab : destination);
         await load();
         if (TABS.includes(name) || !notebook) return;
       }
