@@ -10,7 +10,8 @@ function createAutosave({current, dirty, blocked = () => '', write, changed, del
   }
   async function flush() {
     clearTimeout(timer); timer = null; held = false;
-    while (saving) await saving;
+    // Waiting callers observe this round's failure; retry needs a new flush.
+    while (saving) if (!await saving) return false;
     const target = current();
     if (!target || !dirty()) return true;
     const reason = blocked();

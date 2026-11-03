@@ -367,18 +367,22 @@ function noteAutosave(key) {
   const id = noteSession(key), workspace = workspaceClient.workspaceId;
   if (noteAutosaves.has(id)) return noteAutosaves.get(id);
   const session = { key, workspace };
+  // An unacknowledged write may have changed the server, leaving storedNote stale.
+  let unconfirmed = false;
   const autosave = createAutosave({
     current: () => (workspaceClient.workspaceId === workspace ? session : null),
-    dirty: () => V.noteDrafts[key] !== undefined && V.noteDrafts[key] !== storedNote(key),
+    dirty: () => V.noteDrafts[key] !== undefined && (unconfirmed || V.noteDrafts[key] !== storedNote(key)),
     // The PATCH landing first would report a note saved that the DELETE
     // behind it throws away; landing second it is a 404.
     blocked: () => (isRemoving(key) ? 'That paper is being removed.' : ''),
     async write() {
       const text = V.noteDrafts[key];
+      unconfirmed = true;
       await api(`/api/papers/${encodeURIComponent(key)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes: text }),
       });
+      unconfirmed = false;
       if (workspaceClient.workspaceId !== workspace) return;
       // Polls hold while the note is open, so the page keeps what it wrote
       // until the next one brings the same text back.
@@ -390,7 +394,7 @@ function noteAutosave(key) {
       if (workspaceClient.workspaceId !== workspace) return;
       // A reverted edit needs no write, but must stop counting as a draft.
       // While saving, keep it: the pending write may change the stored text.
-      if (!autosave.saving && V.noteDrafts[key] === storedNote(key)) delete V.noteDrafts[key];
+      if (!autosave.saving && !unconfirmed && V.noteDrafts[key] === storedNote(key)) delete V.noteDrafts[key];
       const label = document.querySelector(`[data-note-status="${CSS.escape(key)}"]`);
       if (!label) return;
       label.textContent = autosave.describe();
