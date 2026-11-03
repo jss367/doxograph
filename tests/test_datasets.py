@@ -50,6 +50,10 @@ def test_dataset_lifecycle_and_workspace_isolation(client):
     {'name': 'x', 'extra': 'unexpected'}, {'name': 'x' * 301},
     {'name': 'x', 'labels': ['two, labels']}, {'name': 'x', 'labels': ['x' * 301]},
     {'name': 'x', 'labels': 'not a list'}, {'name': 'x', 'labels': [None]},
+    {'name': 'x', 'custom_fields': [{'name': ' ', 'value': 'GPT-4o'}]},
+    {'name': 'x', 'custom_fields': [{'name': 'Model', 'value': 'a'}, {'name': ' MODEL ', 'value': 'b'}]},
+    {'name': 'x', 'custom_fields': [{'name': 'Model', 'value': 'a', 'extra': 'unexpected'}]},
+    {'name': 'x', 'custom_fields': [{'name': 'x' * 101}]},
 ])
 def test_invalid_records_do_not_write(client, body):
     assert client.post('/api/datasets', json=body).status_code == 422
@@ -82,6 +86,29 @@ def test_existing_datasets_without_labels_remain_editable(client):
     })
     assert edited.status_code == 200
     assert edited.json()['labels'] == ['archived']
+
+
+def test_custom_fields_record_details_the_catalog_does_not_name(client):
+    item = client.post('/api/datasets', json={'name': 'Synthetic dialogues', 'custom_fields': [
+        {'name': ' Model ', 'value': 'claude-opus-5-5'}, {'name': 'Prompt set'},
+    ]}).json()
+    assert item['custom_fields'] == [{'name': 'Model', 'value': 'claude-opus-5-5'}, {'name': 'Prompt set', 'value': ''}]
+    assert datasets.load()[0]['custom_fields'] == item['custom_fields']
+    edited = client.put('/api/datasets/' + item['id'], json={
+        'name': item['name'], 'revision': item['revision'], 'custom_fields': [{'name': 'Model', 'value': 'gpt-5'}],
+    }).json()
+    assert edited['custom_fields'] == [{'name': 'Model', 'value': 'gpt-5'}]
+
+
+def test_existing_datasets_without_custom_fields_remain_editable(client):
+    item = client.post('/api/datasets', json={'name': 'Older corpus'}).json()
+    del item['custom_fields']
+    (config.data_dir() / 'datasets.json').write_text(json.dumps([item]))
+    assert client.get('/api/datasets').json()['datasets'][0]['custom_fields'] == []
+    edited = client.put('/api/datasets/' + item['id'], json={
+        'name': item['name'], 'revision': item['revision'], 'custom_fields': [{'name': 'Model', 'value': 'gpt-5'}],
+    })
+    assert edited.status_code == 200
 
 
 def test_removed_references_are_preserved_but_new_broken_links_are_rejected(client):
@@ -138,7 +165,8 @@ def test_archive_and_restore_include_datasets_and_invalidate_old_editors(client)
     store.update_claim('study', claim['id'], {'facets': {'dataset': ['EVAL corpus']}})
     item = client.post('/api/datasets', json={'name': 'Evaluation corpus', 'facet_values': ['Eval corpus'],
                                             'labels': ['open source', 'needs review'],
-                                            'source': '/data/evaluation.parquet', 'license': 'CC BY 4.0'}).json()
+                                            'source': '/data/evaluation.parquet', 'license': 'CC BY 4.0',
+                                            'custom_fields': [{'name': 'Model', 'value': 'gpt-5'}, {'name': 'Seed'}]}).json()
     revised = client.put('/api/datasets/' + item['id'], json={**datasets.DatasetBody.model_validate(
         {key: item[key] for key in datasets.DatasetBody.model_fields}).model_dump(), 'name': 'Revised corpus', 'revision': item['revision']}).json()
     client.delete(f'/api/datasets/{item["id"]}?revision={revised["revision"]}').raise_for_status()
@@ -156,5 +184,6 @@ def test_archive_and_restore_include_datasets_and_invalidate_old_editors(client)
         readable = archive.read('datasets.md').decode()
         assert '/data/evaluation.parquet' in readable and 'CC BY 4.0' in readable
         assert 'Labels: needs review, open source' in readable
+        assert 'Model: gpt-5' in readable and 'Seed' not in readable
         assert '[Dataset evaluation study](papers/study.md)' in readable and 'A matched result' in readable
         assert '[Project datasets](datasets.md)' in archive.read('index.md').decode()

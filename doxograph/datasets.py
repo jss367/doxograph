@@ -15,6 +15,20 @@ Token = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 Role = Literal["training", "evaluation", "reference", "project-output"]
 
 
+class DatasetField(BaseModel):
+    """A detail the writer names, such as the model that generated the data."""
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    value: str = Field(default="", max_length=4000)
+
+    @field_validator("name")
+    @classmethod
+    def nonblank_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Name each custom field.")
+        return value.strip()
+
+
 class DatasetBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=300)
@@ -28,6 +42,7 @@ class DatasetBody(BaseModel):
     facet_values: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, max_length=200)
     papers: list[PaperKey] = Field(default_factory=list, max_length=1000)
     claims: list[Reference] = Field(default_factory=list, max_length=5000)
+    custom_fields: list[DatasetField] = Field(default_factory=list, max_length=100)
 
     @field_validator("name")
     @classmethod
@@ -47,6 +62,13 @@ class DatasetBody(BaseModel):
     @classmethod
     def normalize_labels(cls, values: list[str]) -> list[str]:
         return store.normalize_labels(values)
+
+    @field_validator("custom_fields")
+    @classmethod
+    def distinct_field_names(cls, values: list[DatasetField]) -> list[DatasetField]:
+        if len({store.label_key(field.name) for field in values}) != len(values):
+            raise ValueError("Give each custom field a different name.")
+        return values
 
     @model_validator(mode="after")
     def distinct_links(self) -> Self:
