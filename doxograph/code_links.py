@@ -14,6 +14,36 @@ def _identity(parts: SplitResult) -> LinkKey:
     return (parts.scheme.lower(), parts.hostname, parts.port, parts.username, parts.password,
             parts.path, parts.query, parts.fragment)
 
+
+def _valid_host(host: str) -> bool:
+    if ":" in host:
+        if "%" in host:  # Browsers do not accept IPv6 zone identifiers.
+            return False
+        IPv6Address(host)
+        return True
+    if "." not in host:
+        return False
+    # Browser URLs recognize dotted decimal, octal, hex, and shortened IPv4.
+    # An address ending in a number must parse as IPv4, not as a domain name.
+    pieces = host.removesuffix(".").split(".")
+    if not re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]*", pieces[-1]):
+        return True
+    if len(pieces) > 4:
+        return False
+    numbers = []
+    for piece in pieces:
+        base = 10
+        if piece.lower().startswith("0x"):
+            base, piece = 16, piece[2:]
+        elif len(piece) > 1 and piece.startswith("0"):
+            base, piece = 8, piece[1:]
+        if piece and not re.fullmatch({8:r"[0-7]+", 10:r"[0-9]+", 16:r"[0-9a-fA-F]+"}[base], piece):
+            return False
+        if not piece and base == 10:
+            return False
+        numbers.append(int(piece, base) if piece else 0)
+    return all(number <= 255 for number in numbers[:-1]) and numbers[-1] < 256 ** (5 - len(numbers))
+
 # Repositories named in the paper's own abstract or arXiv comment. Only hosts
 # with at least a namespace and project are recognized. GitLab namespaces may
 # be nested; the other supported hosts use owner/repository paths.
@@ -44,10 +74,7 @@ def normalize(values: list[str]) -> list[str]:
             host = parts.hostname or ""
             # Accessing hostname does not validate a numeric/ranged port.
             identity = _identity(parts)
-            valid_host = "." in host
-            if ":" in host:
-                IPv6Address(host)
-                valid_host = True
+            valid_host = _valid_host(host)
         except ValueError:
             parts, valid_host = None, False
         if (parts is None or parts.scheme.lower() not in ("http", "https") or not valid_host
