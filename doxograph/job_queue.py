@@ -383,6 +383,55 @@ def _run_agreements(job: dict[str, Any], topics: list[str], force: bool = False)
 
 
 @_workspace_job
+def _run_findings(job: dict[str, Any], topics: list[str], force: bool = False) -> None:
+    """Tensions, then agreements, then syntheses, over the same topics.
+
+    One job rather than three on the queue at once: the synthesis prompt reads
+    the tensions on file, so it has to run after the tension pass has written
+    them, and three jobs started together would race for that. A stage that
+    fails in some topics goes on to the next stage, as each pass on its own
+    goes on after a failed topic; the job reports every failure at the end.
+    """
+    stages: list[tuple[str, Callable[[str], dict[str, Any]], Callable[[dict[str, Any]], int], str]] = []
+    try:
+        rows, tags = store.claim_rows(), store.load_tags()
+        stages = [
+            ("tensions", lambda t: extract.find_tensions(t, rows, tags, force=force),
+             lambda r: r["added"], "new"),
+            ("agreements", lambda t: extract.find_agreements(t, rows, tags, force=force),
+             lambda r: r["added"], "new"),
+            ("syntheses", lambda t: extract.synthesize_topic(t, rows, tags, force=force),
+             lambda r: 1 if r["written"] else 0, "written"),
+        ]
+        # Three stages can each fail the same topic, so the count is of topics
+        # rather than of attempts, and every failure is kept: the last one
+        # alone would hide a tension pass that failed under a synthesis that
+        # did not.
+        failed_topics: set[str] = set()
+        failures: list[str] = []
+        summary = []
+        for name, work, count, verb in stages:
+            got = done = 0
+            _set(job, state="reading", detail=f"{name} · 0 of {len(topics)} topics")
+            for topic, result, exc in extract.run_concurrently(topics, work):
+                done += 1
+                if exc is not None:
+                    failed_topics.add(topic)
+                    failures.append(f"{name} in {topic}: {type(exc).__name__}: {exc}")
+                    traceback.print_exception(exc)
+                else:
+                    got += count(result)
+                _set(job, detail=f"{name} · {done} of {len(topics)} topics")
+            summary.append(f"{got} {name} {verb}")
+        _finish_pass(job, len(topics), "topics", len(failed_topics), "; ".join(failures), ", ".join(summary))
+    except Exception as exc:
+        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+    finally:
+        _prune_jobs()
+
+
+@_workspace_job
 def _run_syntheses(job: dict[str, Any], topics: list[str], force: bool = False) -> None:
     try:
         rows, tags = store.claim_rows(), store.load_tags()

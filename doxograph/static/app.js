@@ -146,7 +146,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'people', 'notes', 'tools'];
+const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'people', 'notes', 'tools'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -726,6 +726,7 @@ async function loadWorkspaces() {
 function render() {
   renderStats();
   renderPapers();
+  renderFindingsNav();
   renderTensionsNav();
   renderAgreementsNav();
   renderResearchNav();
@@ -763,6 +764,7 @@ function renderAll() {
   else captureOpenEditor();
   renderStats();
   renderPapers();
+  renderFindingsNav();
   renderTensionsNav();
   renderAgreementsNav();
   renderResearchNav();
@@ -825,7 +827,7 @@ function renderStorageWarnings() {
 
 function showView(view) {
   const destination = {library: 'papers', claims: 'papers', graph: 'graph-nav', research: 'research-nav',
-    tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people', notes: 'btn-research-notes'}[view];
+    findings: 'findings-nav', tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people', notes: 'btn-research-notes'}[view];
   if (destination) revealSidebar($(destination));
   if (view === 'tools') revealSidebar(toolButton());
   if (view === V.view) return;
@@ -961,6 +963,7 @@ function drawContent() {
   layoutPanes(reading);
   const library = V.view === 'library';
   document.body.classList.toggle('paper-library-view', library);
+  document.body.classList.toggle('findings-view', V.view === 'findings');
   $('library-view-switch').hidden = Boolean(V.paper) || !['library', 'claims'].includes(V.view);
   $('btn-library-view').setAttribute('aria-pressed', String(library));
   $('btn-claims-view').setAttribute('aria-pressed', String(V.view === 'claims'));
@@ -971,6 +974,7 @@ function drawContent() {
   graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (page) { $('content').innerHTML = ''; return; }
   if (library) { renderLibrary(); return; }
+  if (V.view === 'findings') { renderFindings(); return; }
   if (V.view === 'tensions') { renderTensions(); return; }
   if (V.view === 'research') { renderResearch(); return; }
   if (V.view === 'agreements') { renderAgreements(); return; }
@@ -1271,6 +1275,11 @@ $('panes').addEventListener('click', async (event) => {
       return;
     }
     if (act === 'find-agreements') { await findAgreements(); return; }
+    if (act === 'update-findings') { await updateFindings(); return; }
+    if (act === 'findings-topic') {
+      document.getElementById(`finding-topic-${button.dataset.topic}`)?.scrollIntoView({block: 'start', behavior: 'smooth'});
+      return;
+    }
     if (act === 'find-tensions') {
       await findTensions();
       return;
@@ -1636,7 +1645,7 @@ async function updateFromPoll() {
   // not anything in the corpus has moved.
   if (citationsFailed && V.view === 'graph') loadCitations();
   renderStats();
-  renderPapers(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels(); renderFacets();
+  renderPapers(); renderFindingsNav(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels(); renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   syncHash();

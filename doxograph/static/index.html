@@ -23,6 +23,7 @@
   </span>
   <div class="actions">
     <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide claims</button>
+    <button type="button" id="btn-findings" title="What the papers hold on each topic, where they agree, and where they disagree">Findings</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask questions across every paper in this library">Ask the library</button>
@@ -274,6 +275,13 @@
         <button type="button" data-tool="reading"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Reading queue</button>
         <button type="button" data-tool="marks"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4Z"/></svg>Marks and questions</button>
         <button type="button" data-tool="connections"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 10 7-4 M8 14l7 4"/></svg>Claim connections</button>
+      </div>
+      <div class="sec">
+        <h3>Findings</h3>
+        <ul class="plist" id="findings-nav"></ul>
+        <div class="row right">
+          <button type="button" id="btn-update-findings" data-ai-action disabled title="Find tensions, then agreements, then write each topic's synthesis">Update findings</button>
+        </div>
       </div>
       <div class="sec">
         <h3>Tensions</h3>
@@ -618,6 +626,8 @@
 <script src="/papers.js"></script>
 <script src="/claims.js"></script>
 <script src="/analysis.js"></script>
+<script src="/findings-model.js"></script>
+<script src="/findings.js"></script>
 <script src="/jobs.js"></script>
 <script src="/workspace-actions.js"></script>
 <script src="/keyboard.js"></script>

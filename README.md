@@ -1089,12 +1089,15 @@ Changing `DOXOGRAPH_MODEL` counts too: a different model is a different answer.
 the research context, which is not part of what makes one stale. **Rewrite** on
 a synthesis forces it too: it is an instruction, not a request. Bumping
 `PASS_VERSION` in `config.py` after changing one of these prompts puts every
-topic back in the queue once.
+topic back in the queue once; `SYNTHESIS_VERSION` does the same for the
+synthesis prompt alone.
 
 This costs nothing in findings: a pair the model does not return is kept
 anyway, so a repeat call over unchanged claims could only re-derive what is
 there. Skipping also leaves a synthesis you corrected by hand alone, where a
-rerun used to write over it.
+rerun used to write over it: no prompt wrote it, so a new prompt, model, or
+topic wording does not put it back in the queue either. Only a change to its
+claims or tensions, **Rewrite**, or `--force` replaces it.
 
 ## Notes of your own
 
@@ -1140,6 +1143,21 @@ are shown — two claims can contradict each other in words that have nothing in
 common, "recovers in 46% of rollouts" against "almost never returns to the
 task", and filtering the prompt by word overlap would quietly throw those
 away.
+
+## Findings
+
+**Findings**, in the header, is the page to read once a few papers share a
+topic. It has one section per topic, in the order of your vocabulary: the
+synthesis as a single sentence until you open it, then the agreements, then
+the tensions, each as one row naming the papers. A row opens to the model's
+note on the pair and the claims it rests on, with their quotes, and the same
+confirm and dismiss decisions as the tensions and agreements pages. A topic is
+marked stale when a claim under it changed after its findings were written.
+
+**Update findings** runs the three passes below in sequence as one job:
+tensions, then agreements, then a synthesis per topic, since the synthesis
+reads the tensions on file. `doxograph tensions`, `doxograph agreements` and
+`doxograph synthesize` do the same from the command line, one at a time.
 
 ## Where papers disagree
 

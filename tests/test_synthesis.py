@@ -549,6 +549,23 @@ def test_a_synthesis_written_under_an_older_prompt_is_written_again(monkeypatch)
     assert extract.synthesize_topic("recovery-rate")["skipped"] is True
 
 
+def test_a_hand_correction_outlives_a_new_prompt_version(monkeypatch):
+    """No prompt wrote the correction, so a new prompt has nothing to
+    improve on it; only its claims or tensions changing, or `force`, does."""
+    from doxograph import config
+    build_corpus()
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("first"))
+    assert extract.synthesize_topic("recovery-rate")["written"] is True
+    store.set_synthesis_text("recovery-rate", "corrected by hand")
+
+    monkeypatch.setattr(config, "SYNTHESIS_VERSION", config.SYNTHESIS_VERSION + 1)
+    monkeypatch.setattr(extract, "client", lambda: FakeClient("second"))
+    assert extract.synthesize_topic("recovery-rate")["skipped"] is True
+    assert store.synthesis_rows()[0]["text"] == "corrected by hand"
+    assert extract.synthesize_topic("recovery-rate", force=True)["written"] is True
+    assert store.synthesis_rows()[0]["text"] == "second"
+
+
 def test_a_synthesis_from_before_the_version_was_recorded_is_written_again(monkeypatch):
     build_corpus()
     store.record_synthesis("recovery-rate", "older than the field", shown("recovery-rate"))

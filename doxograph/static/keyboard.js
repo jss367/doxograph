@@ -133,6 +133,7 @@ const CommandPalette = (() => {
       if (next === 'graph') loadCitations();
     });
     view('map', 'Open paper map', 'graph');
+    view('findings', 'Browse findings', 'findings');
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
@@ -158,6 +159,7 @@ const CommandPalette = (() => {
     click('btn-settings', 'Open settings', 'appearance theme color AI');
     click('btn-help', 'Show keyboard shortcuts', 'help');
     click('btn-retag', 'Retag all papers');
+    click('btn-update-findings', 'Update findings');
     click('btn-tensions', 'Find tensions');
     click('btn-agreements', 'Find agreements');
     click('btn-synth', 'Synthesize topics');

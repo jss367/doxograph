@@ -1081,14 +1081,22 @@ def find_tensions(topic: str, rows: list[dict[str, Any]] | None = None,
 
 SYNTHESIS_SYSTEM = """\
 You write the state of one question from research claims drawn from several
-papers.
+papers, for a reader who will open the claims themselves when a number matters.
 
 You are given every claim in one topic, grouped by paper, and any disagreements
-between them that have already been noted. Write what the papers, taken
-together, hold on the topic: where they agree, where they differ and what might
-account for that, and what none of them settles. Say what the evidence is, not
-merely that some exists: name the models, scales, metrics and effect sizes that
-carry the weight.
+between them that have already been noted. Write three short paragraphs:
+
+1. What the papers settle: the findings two or more of them make, in one or
+   two sentences.
+2. What they contest: where they pull against each other, and what difference
+   in model, scale, task, metric or sweep might account for it.
+3. What none of them tests: the question the reader is left with.
+
+Lead each paragraph with the point, not the paper. Keep the prose to the
+finding and the condition it holds under; models, sample sizes and effect
+sizes belong in the claims you cite, not in the sentence, unless the size of
+an effect is itself the point. Where the papers are few or thin, say less and
+leave a paragraph out rather than pad it.
 
 Stay inside the claims you are given. Do not add findings from your own
 knowledge, do not soften or sharpen a claim beyond how it is written, and do not
@@ -1098,8 +1106,8 @@ putting their ids in square brackets at the end of the sentence, like
 [doe2026recovery-c3] or [doe2026recovery-c3, li2025steer-c1]. Every sentence
 that states a finding carries at least one citation.
 
-One to three short paragraphs, in plain language, with no headings and no
-bullet points. Where the papers are few or thin, say less."""
+Plain language, no headings and no bullet points. About a hundred and fifty
+words in all."""
 
 SYNTHESIS_SCHEMA = {
     "type": "object",
@@ -1155,9 +1163,11 @@ def synthesize_topic(topic: str, rows: list[dict[str, Any]] | None = None,
     A topic whose synthesis is on file and not stale is skipped: no claim and
     no tension in it has changed since it was written, so the model would be
     asked the same question, and a text somebody corrected by hand would be
-    replaced by a model's for nothing. `force` writes it again anyway, which
-    is also how to rewrite after editing the research context, since that is
-    not part of what makes a synthesis stale.
+    replaced by a model's for nothing. A new prompt, model, or topic wording
+    does put a model's text back in the queue, but not a hand correction,
+    which no prompt wrote. `force` writes it again anyway, which is also how
+    to rewrite after editing the research context, since that is not part of
+    what makes a synthesis stale.
     """
     config.require_ai_enabled()
     all_rows = rows if rows is not None else store.claim_rows()
@@ -1173,9 +1183,11 @@ def synthesize_topic(topic: str, rows: list[dict[str, Any]] | None = None,
         # The prompt as well as the claims and tensions: a synthesis written
         # under an older prompt, or under the topic's old name or description,
         # is worth writing again, and nothing in the corpus changing would
-        # ever say so.
+        # ever say so. Not one corrected by hand, though: no prompt wrote it,
+        # so a new one has nothing to improve on, and a version bump would
+        # otherwise write over every correction in the workspace at once.
         if (current and not current["stale"]
-                and current.get("prompt_basis") == basis):
+                and (current.get("prompt_basis") == basis or current.get("source") == "hand")):
             return {"written": False, "skipped": True, "claims": len(rows), "papers": len(papers)}
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}
