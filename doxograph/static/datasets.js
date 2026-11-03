@@ -241,6 +241,14 @@ const Datasets = (() => {
     if (await autosave.flush()) return true;
     return confirmDialog(`This dataset couldn’t be saved. ${autosave.failure} Discard your changes?`, {ok:'Discard changes'});
   }
+  // The record a new draft's create stored, while it still holds only what
+  // this draft wrote. A record another window changed since is left alone.
+  async function created(target) {
+    if (saved) return conflicted === target ? null : saved;
+    if (posted?.target !== target) return null;
+    const item = (await request()).datasets.find(row => row.id === target.id);
+    return item && posted.bodies.some(sent => stored(sent) === stored(item)) ? item : null;
+  }
   function choose(item) {
     inspectedRevision = undefined;
     saved = structuredClone(item); draft = structuredClone(item);
@@ -312,7 +320,15 @@ const Datasets = (() => {
       choose(items.find(item => item.id === target.dataset.id));
     } else if (name === 'cancel') {
       if (!await confirmDialog('Discard this new dataset?', {ok:'Discard dataset'})) return;
-      draft = saved = null; renderDocument(); renderList(); status('');
+      // Its create can land while the prompt waits, or land with its answer
+      // lost. Discarding the draft also deletes the record it made.
+      await autosave.settle();
+      const item = await created(draft);
+      if (item) {
+        await request('/' + item.id + '?' + new URLSearchParams({revision:item.revision}),'DELETE');
+        items = items.filter(row => row.id !== item.id);
+      }
+      draft = saved = null; select(null); renderDocument(); renderList(); status('');
     } else if (name === 'reload') {
       await autosave.flush();
       const latest = (await request()).datasets;

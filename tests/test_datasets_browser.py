@@ -709,3 +709,54 @@ def test_a_retried_create_keeps_changes_another_window_made_after_its_answer_was
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('create', ['answered', 'lost'])
+def test_discarding_a_new_dataset_deletes_the_record_its_create_stored(engine, create):
+    """Discard waits for a create under way, which can store the record before
+    the prompt is answered, or store it and lose the answer. Confirming the
+    discard must not leave that record behind."""
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            held, release = asyncio.Event(), asyncio.Event()
+
+            async def hold_create(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                held.set()
+                await release.wait()
+                if create == 'lost':
+                    await route.fetch()
+                    await route.fulfill(status=503, json={'detail': 'The connection dropped.'})
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/datasets', hold_create)
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Dataset name', exact=True).fill('Evaluation corpus')
+                await asyncio.wait_for(held.wait(), timeout=5)
+                await dialog.get_by_role('button', name='Discard new dataset', exact=True).click()
+                release.set()
+                await _answer(page, 'Discard dataset')
+                await ready(page)
+                assert httpx.get(url + '/api/datasets').json()['datasets'] == []
+                assert await page.locator('#datasets-count').text_content() == '0 datasets'
+                assert await dialog.get_by_label('Dataset name', exact=True).count() == 0
+                assert 'dataset=' not in page.url
+                assert not errors
+
+    run_browser(scenario())
