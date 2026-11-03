@@ -188,15 +188,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.informativeText = ownsServer ? outcome.changes : outcome.changes + Self.adoptedServerNote
             alert.addButton(withTitle: "Relaunch")
             alert.addButton(withTitle: "Later")
-            guard alert.runModal() == .alertFirstButtonReturn else {
-                if ready { window.hideStatus() }
-                // The old bundle keeps running, but the Python is new, and a
-                // server that failed to start may start now.
-                if serverFailed { startServer() }
-                return
+            let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+                guard let self else { return }
+                guard response == .alertFirstButtonReturn else {
+                    if self.ready { self.window.hideStatus() }
+                    // The old bundle keeps running, but the Python is new, and a
+                    // server that failed to start may start now.
+                    if self.serverFailed { self.startServer() }
+                    return
+                }
+                self.relaunchAfterQuit = true
+                NSApp.terminate(nil)
             }
-            relaunchAfterQuit = true
-            NSApp.terminate(nil)
+            // Run modally from the updater's main-queue callback, this alert
+            // was seen to go blank until a screenshot redrew it. A sheet on the
+            // window avoids that path, as `inform` and `warn` already do.
+            if window.window.isVisible {
+                alert.beginSheetModal(for: window.window, completionHandler: handle)
+            } else {
+                handle(alert.runModal())
+            }
 
         case .success(let outcome):
             if serverFailed {
