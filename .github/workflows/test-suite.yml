@@ -18,6 +18,13 @@ on:
 permissions:
   contents: read
 
+# A new commit or retarget supersedes a PR's earlier runs, and auto-merge only
+# reads the newest one, so cancel them. On main, let the running push finish;
+# GitHub still drops a waiting push run when a newer one arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   python:
     name: Python tests (${{ matrix.shard }}/4)

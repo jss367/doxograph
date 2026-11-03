@@ -501,6 +501,9 @@ def test_ask_waits_for_initial_provider_state(engine, enabled, monkeypatch):
                 await asyncio.wait_for(started.wait(), 5)
                 await expect(page.locator('#btn-agent')).to_be_disabled()
                 release.set()
+                # Later state polls must not be held in a handler that can
+                # outlive the page and fail the next test's browser call.
+                await page.unroute_all(behavior='wait')
                 await page.locator('#btn-agent:enabled').click()
                 await expect(page.locator('#agent-agent')).to_have_value('codex')
                 if enabled:
