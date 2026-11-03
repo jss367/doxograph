@@ -1722,7 +1722,7 @@ const ResearchTools = (() => {
   let discarding = null;
   const writing = () => JSON.stringify([dirty && notebook, edits, connectionDraft
     && [...document.querySelectorAll('#research-body [id^="connection-"]')].map(field => field.value),
-    highlightDrafting() && markEditor.text]);
+    highlightDrafting() && [markEditor.id, markEditor.paper, markEditor.text]]);
   async function beforeWorkspaceSwitch() {
     // A reader action waiting on the notebook would finish in the workspace
     // it started in and open its paper over the one switched to.

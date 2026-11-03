@@ -6,7 +6,7 @@ const Datasets = (() => {
   let requested = null, revealed = null;
   // The draft the reader agreed to discard when a workspace switch began.
   let discarding = null;
-  const writing = () => dirty() ? JSON.stringify(body(draft)) : null;
+  const writing = () => dirty() ? JSON.stringify([draft.id, body(draft)]) : null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
