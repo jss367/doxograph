@@ -58,8 +58,12 @@ const FindingsModel = (() => {
 
   // One section per topic that has a finding or a synthesis, in the order of
   // the vocabulary, which is the reader's own order of importance; topics the
-  // vocabulary does not list follow, alphabetically. A topic is stale when a
-  // claim under it changed since any of its findings were judged or written.
+  // vocabulary does not list follow, alphabetically. A topic is stale when
+  // any finding or synthesis under it is: a finding, when a claim it rests on
+  // changed since it was judged; a synthesis, when any claim under the topic
+  // did, added ones included, since it rests on all of them. So a claim no
+  // finding cites stales the topic once a synthesis is on file, which the
+  // combined pass writes for every topic it runs over.
   // Its paper count is of the papers with claims under it, not only of those
   // a finding names: a paper nobody has set against another is still there.
   function topics(state) {
