@@ -187,20 +187,42 @@ const People = (() => {
     items = latest;
     return true;
   }
-  async function reload() {
-    if (!shown || !loaded) return;
-    await run(async () => {
-      if (!await refreshItems() || !shown) return;
-      if (draft && saved && !dirty() && !autosave.unconfirmed) {
-        const version = items.find(item => item.id === saved.id);
-        if (!version) {
-          if (authors().has(nameKey(saved.name))) chooseAuthor(saved.name); else clear();
-          status('This person’s record no longer exists.');
-        } else if (version.revision !== saved.revision) choose(version);
-      } else if (!draft && author && recordFor(author)) choose(recordFor(author));
-      renderList();
-    });
+  // Library refreshes read them in the background, at most every few seconds,
+  // without freezing the editor. A read that a save or an edit overtook is
+  // dropped, so it can never put an older version on screen.
+  let reading = null, lastRead = 0;
+  async function refresh(force = false) {
+    if (!force && (reading || Date.now() - lastRead < 5000)) return;
+    while (reading) await reading;
+    if (!shown || !loaded || busy) return;
+    lastRead = Date.now();
+    const ws = workspace, revision = saved?.revision, generation = autosave.generation, current = draft;
+    reading = request().then(({people}) => {
+      if (ws !== client.workspaceId || !shown || busy || autosave.saving || draft !== current
+          || saved?.revision !== revision || autosave.generation !== generation) return;
+      adopt(people);
+    }).catch(() => { /* The next refresh tries again; saves report their own errors. */ })
+      .finally(() => { reading = null; });
+    await reading;
   }
+  function adopt(latest) {
+    items = latest;
+    if (draft && saved && !dirty() && !autosave.unconfirmed) {
+      const version = items.find(item => item.id === saved.id);
+      if (!version) {
+        if (authors().has(nameKey(saved.name))) chooseAuthor(saved.name); else clear();
+        status('This person’s record no longer exists.');
+      } else if (version.revision !== saved.revision) {
+        // Rebuilding the form for the new version keeps the reader's place in it.
+        const focused = document.activeElement?.closest('#person-form') ? document.activeElement.id : null;
+        choose(version);
+        if (focused) el(focused)?.focus();
+      }
+    } else if (!draft && author && recordFor(author)) choose(recordFor(author));
+    renderList();
+  }
+  // A restored backup replaces the records at once.
+  const reload = () => refresh(true);
   function renderList() {
     const query = el('people-search').value.toLowerCase().trim();
     const all = authors();
@@ -570,7 +592,7 @@ const People = (() => {
   window.addEventListener('beforeunload', event => {
     if (dirty() || busy || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
-  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, sync, reload, flush: () => autosave.flush(),
+  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, sync, refresh, reload, flush: () => autosave.flush(),
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
     hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,

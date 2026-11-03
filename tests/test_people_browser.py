@@ -174,3 +174,39 @@ def test_author_page_opens_when_records_cannot_be_read():
                 assert await document.get_by_role('button', name='Add notes on this person', exact=True).is_disabled()
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_library_refresh_takes_other_windows_edits_but_keeps_writing(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                item = httpx.post(url + '/api/people', json={'name': 'Ada Lovelace', 'notes': 'First.'}).json()
+                await page.goto(url + '/#view=people&person=' + item['id'])
+                view = page.locator('#people-sheet')
+                notes = view.get_by_label('Notes', exact=True)
+                await notes.wait_for()
+                await ready(page)
+                await notes.focus()
+
+                # A clean record takes another window's edit on the next refresh,
+                # and the reader stays in the field they were in.
+                item = httpx.put(url + '/api/people/' + item['id'], json={
+                    'name': 'Ada Lovelace', 'notes': 'From another window.', 'revision': item['revision']}).json()
+                await page.evaluate('async () => { await refreshAll(); }')
+                await page.wait_for_function("document.querySelector('#person-notes').value === 'From another window.'")
+                assert await notes.evaluate('field => field === document.activeElement')
+
+                # Writing in progress is never replaced: its save conflicts instead.
+                await page.route('**/api/people/*', lambda route: route.abort() if route.request.method == 'PUT' else route.continue_())
+                await notes.fill('Mine, not yet saved.')
+                httpx.put(url + '/api/people/' + item['id'], json={
+                    'name': 'Ada Lovelace', 'notes': 'Theirs.', 'revision': item['revision']}).raise_for_status()
+                await page.evaluate('async () => { await refreshAll(); await People.refresh(true); }')
+                assert await notes.input_value() == 'Mine, not yet saved.'
+
+    run_browser(scenario())
