@@ -13,7 +13,7 @@ LinkKey = tuple[str, str | None, int | None, str | None, str | None, str, str, s
 
 def _identity(parts: SplitResult) -> LinkKey:
     # Scheme/hostname ignore case; credentials, path, query and fragment do not.
-    return (parts.scheme.lower(), parts.hostname.lower() if parts.hostname else None, parts.port, parts.username, parts.password,
+    return (parts.scheme.lower(), _canonical_host(parts.hostname) if parts.hostname else None, parts.port, parts.username, parts.password,
             parts.path, parts.query, parts.fragment)
 
 
@@ -36,22 +36,22 @@ def _domain_host(host: str) -> str:
     return host
 
 
-def _valid_host(host: str) -> bool:
+def _canonical_host(host: str) -> str | None:
     if ":" in host:
         if "%" in host:  # Browsers do not accept IPv6 zone identifiers.
-            return False
-        IPv6Address(host)
-        return True
+            return None
+        return IPv6Address(host).compressed
     host = _domain_host(host)
-    if "." not in host:
-        return False
     # Browser URLs recognize dotted decimal, octal, hex, and shortened IPv4.
     # An address ending in a number must parse as IPv4, not as a domain name.
     pieces = host.removesuffix(".").split(".")
     if not re.fullmatch(r"[0-9]+|0[xX][0-9a-fA-F]*", pieces[-1]):
-        return True
+        if "." not in host:
+            return None
+        return ".".join(label if label.isascii() else "xn--" + label.encode("punycode").decode("ascii")
+                        for label in host.split("."))
     if len(pieces) > 4:
-        return False
+        return None
     numbers = []
     for piece in pieces:
         base = 10
@@ -60,11 +60,14 @@ def _valid_host(host: str) -> bool:
         elif len(piece) > 1 and piece.startswith("0"):
             base, piece = 8, piece[1:]
         if piece and not re.fullmatch({8:r"[0-7]+", 10:r"[0-9]+", 16:r"[0-9a-fA-F]+"}[base], piece):
-            return False
+            return None
         if not piece and base == 10:
-            return False
+            return None
         numbers.append(int(piece, base) if piece else 0)
-    return all(number <= 255 for number in numbers[:-1]) and numbers[-1] < 256 ** (5 - len(numbers))
+    if any(number > 255 for number in numbers[:-1]) or numbers[-1] >= 256 ** (5 - len(numbers)):
+        return None
+    address = numbers[-1] + sum(number * 256 ** (3 - index) for index, number in enumerate(numbers[:-1]))
+    return ".".join(str((address >> shift) & 255) for shift in (24, 16, 8, 0))
 
 # Repositories named in the paper's own abstract or arXiv comment. Only hosts
 # with at least a namespace and project are recognized. GitLab namespaces may
@@ -93,10 +96,9 @@ def normalize(values: list[str]) -> list[str]:
             link = "https://" + link
         try:
             parts = urlsplit(link)
-            host = parts.hostname or ""
             # Accessing hostname does not validate a numeric/ranged port.
             identity = _identity(parts)
-            valid_host = _valid_host(host)
+            valid_host = identity[1] is not None
         except ValueError:
             parts, valid_host = None, False
         if (parts is None or parts.scheme.lower() not in ("http", "https") or not valid_host
