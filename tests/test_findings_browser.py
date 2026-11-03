@@ -130,3 +130,33 @@ def test_update_findings_posts_one_request_and_reports_an_empty_corpus():
                 assert len(posted) == 1
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+@pytest.mark.parametrize("cited", [False, True], ids=["uncited-change", "cited-change"])
+def test_no_synthesis_status_names_existing_findings(engine, cited):
+    from playwright.async_api import expect
+
+    _, aid = _corpus()
+    _paper("paper-d", "Uncited paper", "scaling", year=2023)
+    paper = "paper-a" if cited else "paper-d"
+    store.update_claim(paper, paper + "-c1", {"text": "Edited claim under this topic."})
+    assert next(row for row in store.agreement_rows() if row["id"] == aid)["stale"] is cited
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url + "/#view=findings")
+                section = page.locator('.ftopic[data-topic="scaling"]')
+                await expect(section.locator(".flead.empty")).to_contain_text("No synthesis yet.")
+                await expect(section.locator(".fsynth")).to_have_count(0)
+                await expect(section.locator(".pill")).to_have_text("stale" if cited else "findings current")
+                if not cited:
+                    await expect(section.locator(".pill")).to_have_attribute("title", "Existing findings reflect the claims they cite.")
+                    await expect(section.locator(".frow.is-stale")).to_have_count(0)
+                else:
+                    await expect(section.locator(".frow.is-stale")).to_have_count(1)
+
+    run_browser(scenario())
