@@ -1,0 +1,47 @@
+.people-sheet { max-width: 80rem; margin-inline: auto; }
+.people-sheet .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.people-sheet .sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.people-sheet h2 { margin: 0 0 .3rem; }
+#people-status { min-height: 1.2em; margin: .7rem 0; }
+.people-layout { display: grid; grid-template-columns: 240px minmax(0,1fr); gap: 1.5rem; }
+.people-library { border-right: 1px solid var(--line); padding-right: 1rem; position: sticky; top: 0; align-self: start; }
+#people-search { width: 100%; margin: .8rem 0; }
+#people-list { display: flex; flex-direction: column; gap: .4rem; max-height: 70vh; overflow: auto; }
+#people-list h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: .8rem 0 .2rem; }
+#people-list h3:first-child { margin-top: 0; }
+#people-list button { text-align: left; white-space: normal; overflow-wrap: anywhere; padding: .6rem .8rem; }
+#people-list button[aria-current] { border-color: var(--accent); background: var(--sel); }
+#people-list strong, #people-list small { display: block; }
+#people-list small { margin-top: .25rem; color: var(--muted); }
+.person-labels { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .5rem; }
+.person-label { font-size: .8rem; font-weight: normal; border: 1px solid var(--line); border-radius: 1rem; padding: .1rem .5rem; }
+#person-document { min-width: 0; }
+.person-page h2 { margin: 0 0 1rem; }
+.person-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+.person-fields { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: .8rem; }
+.person-field { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .7rem; min-width: 0; }
+.person-field:has(textarea), .person-field:has(#person-homepage) { grid-column: 1 / -1; }
+.person-field input, .person-field textarea, #person-link-search { width: 100%; }
+.person-field textarea { resize: vertical; min-height: 4em; }
+.person-link-picker { border: 1px solid var(--line); border-radius: 5px; padding: .8rem; margin: 1rem 0; }
+.person-link-picker summary { cursor: pointer; }
+.person-link-picker > label { display: block; margin-top: .8rem; }
+#person-link-search { margin: .4rem 0; }
+#person-link-options { max-height: 260px; overflow: auto; }
+#person-link-options label { display: flex; align-items: baseline; gap: .6rem; padding: .45rem 0; overflow-wrap: anywhere; }
+#person-link-options input { flex-shrink: 0; }
+#person-work section { margin-top: 1.2rem; }
+.person-paper { padding: .7rem 0; border-top: 1px solid var(--line); }
+.person-paper > button { display: block; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.person-paper .hint { margin: .3rem 0; }
+.person-paper summary { cursor: pointer; color: var(--muted); }
+.person-paper .person-claim-link { display: block; text-align: left; white-space: normal; overflow-wrap: anywhere; margin: .3rem 0 .3rem 1rem; max-width: calc(100% - 1rem); font-weight: normal; }
+.person-coauthors { display: flex; flex-wrap: wrap; gap: .4rem; }
+.person-coauthors small { color: var(--muted); }
+#person-saved-version dl { max-height: 280px; overflow: auto; padding: .8rem; border: 1px solid var(--line); }
+#person-saved-version dt { font-weight: 600; }
+#person-saved-version dd { margin: .3rem 0 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.people-empty { margin: 12vh auto; max-width: 430px; line-height: 1.7; color: var(--muted); }
+.author-link { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: .2em; }
+.author-link:hover { color: var(--accent); }
+@media (max-width: 700px) { .people-layout, .person-fields { grid-template-columns: minmax(0,1fr); } .people-library { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 .8rem; position: static; } #people-list { max-height: 160px; } }

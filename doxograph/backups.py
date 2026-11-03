@@ -13,11 +13,11 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import config, datasets, notebook, records, research_notes, store
+from . import config, datasets, notebook, people, records, research_notes, store
 
 router = APIRouter(prefix='/api/workspace/backups')
 KEEP_VERSIONS = 20
-DOCUMENTS = {'notebook.json', 'research-notes.json', 'datasets.json', 'tags.yaml', 'facets.yaml', 'ledger.yaml',
+DOCUMENTS = {'notebook.json', 'research-notes.json', 'datasets.json', 'people.json', 'tags.yaml', 'facets.yaml', 'ledger.yaml',
              'context.md', 'agreements.json', 'tensions.json', 'syntheses.json', 'retired-keys.json'}
 
 
@@ -94,7 +94,7 @@ def locate(identifier: str) -> Path:
 
 
 def restorable(relative: str) -> bool:
-    return relative in ('notebook.json', 'research-notes.json', 'datasets.json', 'context.md') or relative.startswith('papers/')
+    return relative in ('notebook.json', 'research-notes.json', 'datasets.json', 'people.json', 'context.md') or relative.startswith('papers/')
 
 
 @router.get('')
@@ -174,6 +174,11 @@ def restore(identifier: str, body: Restore) -> dict[str, Any]:
                 restored = datasets.SavedDatasets.model_validate_json(text).model_dump()
                 for dataset in restored:
                     dataset.update(revision=uuid.uuid4().hex, updated=store.now())
+                text = json.dumps(restored, ensure_ascii=False)
+            elif relative == 'people.json':
+                restored = people.SavedPeople.model_validate_json(text).model_dump()
+                for person in restored:
+                    person.update(revision=uuid.uuid4().hex, updated=store.now())
                 text = json.dumps(restored, ensure_ascii=False)
             elif relative == 'research-notes.json':
                 restored = research_notes.SavedNotes.model_validate_json(text).model_dump()

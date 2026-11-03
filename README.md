@@ -660,6 +660,21 @@ writing space are stored locally in `note-images/`.
   available across restarts. Keep using the same browser and source path and
   export reviews before moving files. An occupied port reports an error; it
   never opens an unrelated server. Dataset files stay unchanged.
+- **People**, under Library, gives every author in the workspace a page with
+  their papers, the claims extracted from them, and their coauthors. Click an
+  author's name on a paper card or in a paper's header to open it. Names match
+  regardless of case, accents, and punctuation, so `Schölkopf, B.` and
+  `scholkopf b` are one author, but `B. Schölkopf` and `Bernhard Schölkopf` stay
+  two until you say otherwise. **Add notes on this person** turns an author's
+  page into a record with notes, an affiliation, a web page, and labels. List
+  the other spellings author lists use under **Other names in author lists**
+  and their papers join the same page. One spelling can belong to one record
+  only. **Add person** keeps notes on someone with no papers in the workspace,
+  and **Link other papers** adds papers they did not write, such as ones they
+  recommended. Edits save as you type, as in Datasets. Records stay in the
+  selected workspace in `people.json`, work with AI disabled, and have automatic
+  backups with conflict protection. Workspace archives include the original
+  records and a readable `people.md`.
 - **Research notes** are a separate writing space for arguments, literature
   reviews, derivations, and experiment plans. Open **Research notes** in the
   sidebar to create, search, rename, and write notes in Markdown with a live
@@ -859,6 +874,7 @@ ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 research-notes.json  your long-form Markdown notes, with per-note revisions
 research-note-revisions.json  revision counters retained across note deletion and restoration
+people.json          your notes on authors, and the spellings of their names
 note-images/        local images embedded in workspace and research notes
 chats/<id>.json     saved paper and library conversations, one file each
 backups/            previous versions captured before document edits
