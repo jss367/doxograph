@@ -215,7 +215,9 @@ const People = (() => {
       }
     }
     const top = [...coauthors.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, 40);
-    const others = linked.map(key => client.state.papers.find(paper => paper.key === key)
+    // A linked paper that lists this person as an author is already above.
+    const written = new Set(papers.map(paper => paper.key));
+    const others = linked.filter(key => !written.has(key)).map(key => client.state.papers.find(paper => paper.key === key)
       ? paperRow(client.state.papers.find(paper => paper.key === key)) : `<p class="hint">Missing paper: ${esc(key)}</p>`);
     const count = papers.reduce((sum, paper) => sum + (claims.get(paper.key) || []).length, 0);
     return `<section aria-labelledby="person-papers-heading"><h3 id="person-papers-heading">Papers</h3>

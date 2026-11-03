@@ -160,3 +160,24 @@ def test_archive_and_restore_include_people_and_invalidate_old_editors(client):
             '### Papers', '', '- [Notes on the engine](papers/engine.md) (1843)', '',
             '### Other papers', '', '- [A review](papers/review.md) (year unknown)', ''])
         assert '[People](people.md)' in archive.read('index.md').decode()
+
+
+def test_a_file_giving_one_spelling_to_two_people_is_never_overwritten(client):
+    first = client.post('/api/people', json={'name': 'Ada Lovelace'}).json()
+    second = client.post('/api/people', json={'name': 'Augusta King'}).json()
+    path = config.data_dir() / 'people.json'
+    # A hand edit gives the first record's name to the second.
+    damaged = [first, {**second, 'other_names': ['ADA lovelace']}]
+    path.write_text(json.dumps(damaged))
+    assert client.get('/api/people').status_code == 503
+    assert client.put('/api/people/' + first['id'], json={'name': 'Ada', 'revision': first['revision']}).status_code == 503
+    assert json.loads(path.read_text()) == damaged
+
+
+def test_a_linked_paper_the_person_wrote_is_listed_once(client):
+    store.save_paper(store.new_paper('engine', title='Notes on the engine', authors=['Ada Lovelace'], year=1843))
+    client.post('/api/people', json={'name': 'Ada Lovelace', 'papers': ['engine']}).raise_for_status()
+    prepared = client.post('/api/workspace/archive').json()
+    with zipfile.ZipFile(io.BytesIO(client.get(prepared['download']).content)) as archive:
+        readable = archive.read('people.md').decode()
+    assert readable.count('papers/engine.md') == 1 and '### Other papers' not in readable

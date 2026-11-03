@@ -98,6 +98,13 @@ class SavedPeople(RootModel[list[SavedPerson]]):
     def unique_ids(self) -> Self:
         if len({item.id for item in self.root}) != len(self.root):
             raise ValueError("Person identities must be unique.")
+        # Every reader takes a spelling to name one person. A file that gives
+        # one spelling to two records is damaged, as two records with one id are.
+        owners: dict[str, str] = {}
+        for item in self.root:
+            for key in {name_key(value) for value in [item.name, *item.other_names]}:
+                if owners.setdefault(key, item.id) != item.id:
+                    raise ValueError(f"Two people share the name “{key}”.")
         return self
 
 

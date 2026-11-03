@@ -327,9 +327,11 @@ def _people_markdown(saved_people: list[dict[str, Any]], saved_papers: list[dict
             lines.extend(['### Papers', ''])
             lines.extend(_paper_link(paper['key'], papers_by_key) for paper in authored)
             lines.append('')
-        if person['papers']:
+        # A linked paper that lists the person as an author is already above.
+        others = [key for key in person['papers'] if key not in {paper['key'] for paper in authored}]
+        if others:
             lines.extend(['### Other papers', ''])
-            lines.extend(_paper_link(key, papers_by_key) for key in person['papers'])
+            lines.extend(_paper_link(key, papers_by_key) for key in others)
             lines.append('')
     return '\n'.join(lines)
 
