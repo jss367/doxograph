@@ -14,10 +14,13 @@ function focusPaperImport() {
 // requests settle first: a finished transfer may have created a reading job.
 const pageImports = (() => {
   let frozen = Boolean(window.doxographQuitBlockInput);
+  let failedReferences = false;
   const pending = new Set();
   return {
     freeze() { frozen = true; },
     resume() { frozen = false; },
+    referencesFailed() { failedReferences = true; },
+    referencesSubmitted() { if (!$('refs').value.trim()) failedReferences = false; },
     async run(path, options) {
       if (frozen) throw new Error('Wait for quitting to finish before adding papers.');
       const transfer = api(path, options);
@@ -26,8 +29,9 @@ const pageImports = (() => {
       finally { pending.delete(transfer); }
     },
     async settle() {
-      await Promise.allSettled([...pending]);
-      return true;
+      const results = await Promise.allSettled([...pending]);
+      if (!$('refs').value.trim()) failedReferences = false;
+      return results.every(result => result.status === 'fulfilled') && !failedReferences;
     },
   };
 })();
@@ -186,6 +190,7 @@ async function addReferences() {
   } catch (error) {
     // What was pasted stays in the box either way: a refused request is a
     // reason to try again, not a reason to lose the list.
+    pageImports.referencesFailed();
     toast(`Could not add these references: ${error.message}`, { tone: 'warn' });
     $('import-status').textContent = `Could not add these references: ${error.message}`;
     return;
@@ -199,6 +204,7 @@ async function addReferences() {
   if (workspace !== workspaceClient.workspaceId) return;
   const unknown = result.unknown || [];
   if ($('refs').value.trim() === text) $('refs').value = unknown.join('\n');
+  pageImports.referencesSubmitted();
   $('import-status').hidden = !result.queued;
   if (result.queued) $('import-status').textContent =
     `Import started for ${result.queued} ${result.queued === 1 ? 'paper' : 'papers'}. Progress appears in the notifications.`;

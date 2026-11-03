@@ -84,7 +84,12 @@ def test_admitted_pdf_settles_before_the_quit_health_snapshot(engine, completion
                     assert await page.evaluate('window.quitHealth') is None
                     assert await page.evaluate('document.body.inert') is True
                     release.set()
-                    await page.wait_for_function('window.quitHealth !== null')
+                    await page.wait_for_function('window.quitReady !== null')
+                    assert await page.evaluate('window.quitReady') is (completion == 'response')
+                    # An uncertain transfer asks about unsaved work first. Explicit
+                    # Discard still proceeds to health, which sees its created job.
+                    if completion == 'lost-response':
+                        await page.evaluate('window.quitHealth = {jobs:window.quitMockJobs}')
                     assert await page.evaluate('window.quitHealth.jobs') == 1
                     # A Stay decision reopens admission without changing the reference draft.
                     await page.evaluate('() => {' + resume + '}')
