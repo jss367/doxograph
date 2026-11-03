@@ -16,8 +16,10 @@ const ResearchTools = (() => {
   // be read again around them when the reader comes back from a paper.
   // Each keeps the saved version it started from, so a save can tell when
   // another window changed or removed the same board or connection meanwhile.
+  // An explanation also keeps its connection, to show it if that is removed.
   // `dirty` is the notebook itself differing from the saved one: a failed save.
-  const noEdits = () => ({boards:{}, notes:{}, boardBases:{}, noteBases:{}});
+  const noEdits = () => ({boards:{}, notes:{}, boardBases:{}, noteBases:{}, noteConnections:{}});
+  const dropNote = id => { delete edits.notes[id]; delete edits.noteBases[id]; delete edits.noteConnections[id]; };
   let edits = noEdits();
   const editing = () => Object.keys(edits.boards).length + Object.keys(edits.notes).length > 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
@@ -157,7 +159,7 @@ const ResearchTools = (() => {
     notebook = await request('', 'PUT', next);
     dirty = false;
     if (board) { delete edits.boards[board]; delete edits.boardBases[board]; }
-    if (notes) { edits.notes = {}; edits.noteBases = {}; }
+    if (notes) { edits.notes = {}; edits.noteBases = {}; edits.noteConnections = {}; }
     await refreshAll();
     message('Saved.');
   }
@@ -343,6 +345,12 @@ const ResearchTools = (() => {
         </article>`).join('')}</div>${!board.entries.length ? '<p class="empty">Add selected claims, then arrange headings and commentary around the evidence.</p>' : ''}`
         : questioning ? '<p class="empty">Create a research question. Select claims in the library, then add them here as evidence.</p>' : '<p class="empty">Create a board for a question, argument, or section you are writing.</p>'}`;
   }
+  // The connections as they stand on screen, as boards() has them: an edited
+  // connection removed elsewhere meanwhile is kept so its explanation can be copied.
+  function connections() {
+    const removed = Object.keys(edits.notes).filter(id => !notebook.connections.some(c => c.id === id));
+    return notebook.connections.concat(removed.map(id => ({...edits.noteConnections[id], removed:true})));
+  }
   function renderConnections() {
     const options = refs().map(r => `<option value="${html(refKey(r))}">${html(resolve(r)?.text || r.claim)}</option>`).join('');
     el('research-body').innerHTML = `<p class="hint">Select at least two claims in the library to connect them. “Qualifies” runs from the first claim to the second.</p>
@@ -351,7 +359,7 @@ const ResearchTools = (() => {
       <label>Relationship<select id="connection-relation"><option value="agrees">Agrees with</option><option value="contradicts">Contradicts</option><option value="qualifies">Qualifies</option></select></label>
       <label>Second claim<select id="connection-target">${options}</select></label>
       ${area('Your explanation', 'connection-note')}${button('create-connection','Create connection', claims.size < 2 ? 'disabled' : '')}</fieldset>
-      ${notebook.connections.map(c => `<article class="board-entry" data-connection="${html(c.id)}"><strong>${html(c.relation)}</strong>
+      ${connections().map(c => `<article class="board-entry" data-connection="${html(c.id)}">${c.removed ? '<p class="warn" role="status">This connection was removed in another window. Your unsaved explanation is kept here.</p>' : ''}<strong>${html(c.relation)}</strong>
         <div class="connection-pair"><div>${claimSummary(c.source)}</div><div>${claimSummary(c.target)}</div></div>
         <label>Your explanation<textarea data-connection-note="${html(c.id)}">${html(edits.notes[c.id] ?? c.note)}</textarea></label>
         ${button('save-connection','Save explanation')}${button('delete-connection','Remove connection')}</article>`).join('')}`;
@@ -1445,14 +1453,14 @@ const ResearchTools = (() => {
       if (JSON.stringify(from) === JSON.stringify(to)) throw new Error('Choose two different claims.');
       const relation = el('connection-relation').value;
       const existing = notebook.connections.find(c => refKey(c.source) === JSON.stringify(from) && refKey(c.target) === JSON.stringify(to) && c.relation === relation);
-      if (existing) { existing.note = el('connection-note').value; delete edits.notes[existing.id]; delete edits.noteBases[existing.id]; }
+      if (existing) { existing.note = el('connection-note').value; dropNote(existing.id); }
       else notebook.connections.push({id:uid(),source:{paper:from[0],claim:from[1]},target:{paper:to[0],claim:to[1]},relation,note:el('connection-note').value});
       await save(); connectionDraft = false; renderConnections(); return;
     }
     if (name === 'delete-connection') {
       const id = target.closest('[data-connection]').dataset.connection;
       if (!await confirmDialog('Remove this manual connection?',{ok:'Remove connection'})) return;
-      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); delete edits.notes[id]; delete edits.noteBases[id]; renderConnections(); return;
+      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); dropNote(id); renderConnections(); return;
     }
     if (name.startsWith('reading-')) {
       const key = target.closest('[data-reading]').dataset.reading, items = notebook.reading;
@@ -1619,7 +1627,11 @@ const ResearchTools = (() => {
     if (target.dataset.entryText) editBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value;
     if (target.dataset.connectionNote) {
       const id = target.dataset.connectionNote;
-      if (!Object.hasOwn(edits.notes, id)) edits.noteBases[id] = JSON.stringify(notebook.connections.find(c => c.id === id)?.note ?? null);
+      if (!Object.hasOwn(edits.notes, id)) {
+        const connection = notebook.connections.find(c => c.id === id);
+        edits.noteBases[id] = JSON.stringify(connection.note ?? null);
+        edits.noteConnections[id] = structuredClone(connection);
+      }
       edits.notes[id] = target.value;
     }
   });

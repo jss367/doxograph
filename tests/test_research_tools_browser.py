@@ -1880,3 +1880,59 @@ def test_the_first_board_takes_the_tab_entry_and_back_leaves_it(engine, tool):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_an_explanation_draft_stays_reachable_after_another_window_removes_its_connection(engine):
+    config.set_ai_enabled(False)
+    claims = []
+    for key, title in [('one', 'Steering and recovery'), ('two', 'Recovery under different conditions')]:
+        store.save_paper(store.new_paper(key, title=title))
+        claims.append(store.add_claim(key, {'text': f'{title} is measured.'})['id'])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['connections'] = [{'id': 'c1', 'relation': 'qualifies', 'note': 'Saved explanation',
+                                            'source': {'paper': 'one', 'claim': claims[0]},
+                                            'target': {'paper': 'two', 'claim': claims[1]}}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=connections')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await page.locator('[data-connection-note="c1"]').fill('Unsaved explanation')
+                # Another window removes the connection while a paper is open here.
+                await page.locator('#papers li[data-paper="one"]').click()
+                await view.wait_for(state='hidden')
+                other = httpx.get(url + '/api/notebook').json()
+                other['connections'] = []
+                assert httpx.put(url + '/api/notebook', json=other).status_code == 200
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                card = view.locator('[data-connection="c1"]')
+                assert 'removed in another window' in await card.inner_text()
+                assert 'Steering and recovery is measured.' in await card.inner_text()
+                assert await page.locator('[data-connection-note="c1"]').input_value() == 'Unsaved explanation'
+                # Saving it would bring the connection back: refused, and the draft stays.
+                await card.get_by_role('button', name='Save explanation', exact=True).click()
+                await ready(page)
+                assert 'another window' in await page.locator('#research-message').inner_text()
+                assert await page.locator('[data-connection-note="c1"]').input_value() == 'Unsaved explanation'
+                assert httpx.get(url + '/api/notebook').json()['connections'] == []
+                # Removing it discards the draft, and nothing is left unsaved.
+                await card.get_by_role('button', name='Remove connection', exact=True).click()
+                await _answer(page, 'Remove connection')
+                await ready(page)
+                assert await view.locator('[data-connection]').count() == 0
+                assert not await page.evaluate('ResearchTools.hasUnsavedChanges()')
+                assert httpx.get(url + '/api/notebook').json()['connections'] == []
+                assert not errors
+
+    run_browser(scenario())
