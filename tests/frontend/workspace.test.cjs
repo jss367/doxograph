@@ -226,6 +226,20 @@ function navigation(client, overrides = {}) {
   });
 }
 
+test('a synchronous selection guard vetoes changes made after the async final check', async () => {
+  const client = createClient();
+  let pendingSave = false, entered = false;
+  const controller = navigation(client, {
+    beforeSelect: async () => { pendingSave = true; return true; },
+    canSelect: () => !pendingSave,
+    enter: async () => { entered = true; },
+  });
+  await controller.switchTo('second');
+  assert.equal(client.workspaceId, 'default');
+  assert.equal(entered, false);
+  assert.equal(controller.pending, null);
+});
+
 test('switches flush the old workspace first and only the newest queued selection proceeds', async () => {
   const flushing = deferred(), entered = deferred(), destinations = [], requests = [];
   const client = createClient({ fetch: async (path, options) => {

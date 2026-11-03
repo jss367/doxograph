@@ -528,6 +528,30 @@ function hasWorkspaceDrafts() {
     || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty());
 }
 
+// Core editors keep some writing only in their visible form. Snapshot it
+// without closing that form, including the identity of every parked draft.
+function workspaceWritingSnapshot() {
+  captureOpenEditor();
+  captureResearchDraft();
+  const synthesis = V.synthEditing && document.querySelector(`textarea[data-synth="${CSS.escape(V.synthEditing)}"]`);
+  const note = V.noteEditing && document.querySelector(`textarea[data-note="${CSS.escape(V.noteEditing)}"]`);
+  if (synthesis) V.synthDrafts[V.synthEditing] = synthesis.value;
+  if (note) V.noteDrafts[V.noteEditing] = note.value;
+  return JSON.stringify([workspaceClient.workspaceId, V.editing, V.drafts, V.newClaim, V.parkedNewClaims,
+    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, V.researchDraft]);
+}
+let discardedWorkspaceWriting = null;
+let discardedWorkspaceId = null;
+
+function canLeaveWorkspace() {
+  if (deletingWorkspace) return false;
+  if (workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || V.noteSaving || V.researchSaving) {
+    toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
+    return false;
+  }
+  return true;
+}
+
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
     && !V.synthSaving && !V.noteSaving && !V.researchSaving && !trash.size
@@ -540,24 +564,41 @@ const workspaceController = createWorkspaceController(workspaceClient, {
       && await ResearchNotes.beforeWorkspaceSwitch() && await Datasets.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
-  canLeave() {
-    if (deletingWorkspace) return false;
-    if (workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || V.noteSaving || V.researchSaving) {
-      toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
-      return false;
-    }
-    return true;
-  },
+  canLeave: canLeaveWorkspace,
   async confirmLeave() {
-    return !hasWorkspaceDrafts() || await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
-                                           { ok: 'Discard and switch' });
+    const writing = workspaceWritingSnapshot();
+    if (hasWorkspaceDrafts() && !await confirmDialog('Switch workspaces and discard unsaved edits in this workspace?',
+                                                    { ok: 'Discard and switch' })) return false;
+    discardedWorkspaceWriting = writing;
+    discardedWorkspaceId = workspaceClient.workspaceId;
+    return true;
   },
   beforeLeave: flushTrash,
   async beforeSelect() {
     if (!await WorkspaceNotes.beforeWorkspaceSwitch()) return false;
     if (!await ResearchNotes.beforeWorkspaceSelect() || !await Datasets.beforeWorkspaceSelect()
         || !await ResearchTools.beforeWorkspaceSelect()) return false;
+    // All earlier waits leave core editors interactive. Consent applies only
+    // to the snapshot shown when asking, not later writing or pending saves.
+    while (true) {
+      if (!canLeaveWorkspace()) return false;
+      const writing = workspaceWritingSnapshot();
+      if (!hasWorkspaceDrafts() || writing === discardedWorkspaceWriting) break;
+      if (!await confirmDialog('Switch workspaces and discard edits made while the switch was waiting?',
+                               { ok: 'Discard and switch' })) return false;
+      discardedWorkspaceWriting = writing;
+    }
     if (typeof rememberAskCatalog === 'function') rememberAskCatalog();
+    return true;
+  },
+  canSelect() {
+    // This synchronous last check runs after beforeSelect's Promise and
+    // immediately before selection, so a late save/draft cannot slip through.
+    if (!canLeaveWorkspace()) return false;
+    if (hasWorkspaceDrafts() && workspaceWritingSnapshot() !== discardedWorkspaceWriting) {
+      toast('Your writing changed. Switch workspaces again to review it.', { tone: 'warn' });
+      return false;
+    }
     return true;
   },
   async enter() {
@@ -616,7 +657,11 @@ function editorHolds() {
 // first, so rebuilding the editor is safe, and the claim list has to be rebuilt
 // or a filter would change the sidebar without changing what is listed.
 function renderAll() {
-  captureOpenEditor();
+  // Finishing a held delete redraws while the old workspace is still open.
+  // Capture every core form before that redraw, never the retired DOM after
+  // selection has committed to the destination workspace.
+  if (workspaceController.pending && workspaceClient.workspaceId === discardedWorkspaceId) workspaceWritingSnapshot();
+  else captureOpenEditor();
   renderStats();
   renderPapers();
   renderTensionsNav();
