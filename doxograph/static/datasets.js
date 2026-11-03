@@ -235,7 +235,7 @@ const Datasets = (() => {
       <div class="dataset-actions"></div>
       <div class="dataset-fields">${input('name','Dataset name')}${input('version','Version')}
       ${input('description','Description',true,'',20000)}
-      ${input('source','Source URL or local path',false,'Use a local conversation JSON/JSONL file, survey export, or Gloom directory to inspect it in Loupe.',4000)}
+      ${input('source','Source URL or local path',false,'Use a local conversation JSON/JSONL file, survey export, Gloom directory, or Hugging Face dataset URL to inspect it in Loupe.',4000)}
       ${input('license','License',false,'',1000)}
       ${input('access_notes','Access notes',true,'Permissions, download instructions, or other requirements.',20000)}</div>
       <fieldset class="dataset-custom-fields"><legend>Custom fields</legend>
@@ -272,6 +272,7 @@ const Datasets = (() => {
       container.innerHTML = button('loupe', 'Open in Loupe');
       return;
     }
+    if (huggingFace(draft.source)) container.innerHTML = button('loupe', 'Open in Loupe');
     try {
       const url = new URL(draft.source);
       if (!['http:','https:'].includes(url.protocol)) return;
@@ -280,13 +281,17 @@ const Datasets = (() => {
       container.append(link);
     } catch (_) { /* Local paths remain available as editable text. */ }
   }
+  // Loupe downloads these itself; other remote sources need a local copy.
+  function huggingFace(source) {
+    return /^(https?:\/\/(www\.)?huggingface\.co\/|hf:\/\/)datasets\/[^/?#]+\/[^/?#]+/i.test(source.trim());
+  }
   function openInLoupe() {
     if (busy) return;
     // Reserve the viewer during the click so browsers allow the new window.
     const viewer = window.open('about:blank', '_blank');
     if (viewer) viewer.opener = null;
     run(async () => {
-      status('Starting Loupe…');
+      status(huggingFace(draft.source) ? 'Downloading the dataset for Loupe. Large datasets can take a few minutes…' : 'Starting Loupe…');
       try {
         const result = await request('/loupe', 'POST', {source:draft.source});
         const url = new URL(result.url);

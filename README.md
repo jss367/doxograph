@@ -651,7 +651,19 @@ writing space are stored locally in `note-images/`.
   JSON/JSONL files with a `messages` array per record, `loupe.survey.v1` survey
   JSON exports, and Gloom directories containing both `gloom-train.parquet` and
   `gloom-test.parquet` (either file can also be selected). Use an absolute path,
-  a `~/` path, or a local `file://` URL. Download remote datasets first.
+  a `~/` path, or a local `file://` URL. Download other remote datasets first.
+  A Hugging Face dataset URL (`https://huggingface.co/datasets/owner/name`,
+  optionally with `/tree/<revision>`) shows **Open in Loupe** beside
+  **Open source**. Loupe downloads the dataset's Parquet, JSON Lines, or JSON
+  files at the resolved commit into its own data directory (`data/hf/`, or
+  `$LOUPE_DATA_DIR/hf/`), reuses intact downloads, and reads rows with a chat
+  column such as `messages` or prompt and response text columns. Gated and
+  private datasets need `HF_TOKEN` or an `hf auth login` session for the
+  account that has access. Downloads may take up to ten minutes before
+  Doxograph reports a timeout. A running viewer keeps the commit it resolved;
+  restart Doxograph to pick up new commits on a branch. Hugging Face sources
+  need Loupe
+  [`8b68b4a`](https://github.com/jss367/loupe/commit/8b68b4a) or newer.
   The integrated launcher is available on macOS and Linux. On Windows or other
   unsupported platforms, start Loupe separately and save its URL as the dataset
   source; **Open source** opens the viewer.

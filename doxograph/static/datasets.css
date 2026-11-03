@@ -21,6 +21,7 @@
 .dataset-field:has(textarea), .dataset-field:has(#dataset-source) { grid-column: 1 / -1; }
 .dataset-field input, .dataset-field textarea, #dataset-link-search { width: 100%; }
 .dataset-field textarea { resize: vertical; min-height: 4em; }
+#dataset-source-link { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; }
 .dataset-roles { display: flex; flex-wrap: wrap; gap: .7rem 1.2rem; border: 1px solid var(--line); border-radius: 5px; padding: .8rem; margin: .3rem 0 1rem; }
 .dataset-roles label { white-space: nowrap; }
 .dataset-custom-fields { border: 1px solid var(--line); border-radius: 5px; padding: .8rem; margin: .3rem 0 1rem; }
