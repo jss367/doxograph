@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from doxograph import config, extract, store
+from doxograph import config, extract, store, store_vocab
 
 
 # --- a tag deleted during the call must not come back --------------------
@@ -97,8 +97,15 @@ def test_the_prompt_and_the_snapshot_come_from_one_vocabulary_read(monkeypatch):
 
     reads = []
     real_load_tags = store.load_tags
-    monkeypatch.setattr(store, "load_tags",
-                        lambda: (reads.append(1), real_load_tags())[1])
+
+    def counted():
+        reads.append(1)
+        return real_load_tags()
+
+    # Callers outside the vocabulary module read through `store`; `tag_names`
+    # and the rest of `store_vocab` read within it. Patch both to count both.
+    monkeypatch.setattr(store, "load_tags", counted)
+    monkeypatch.setattr(store_vocab, "load_tags", counted)
 
     seen = {}
 
