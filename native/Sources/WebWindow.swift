@@ -17,6 +17,9 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// message is taken down by the next page that loads; an update's progress
     /// line is the updater's to take down.
     private var showingFailure = false
+    /// Whether the final quit save has frozen the page. Reloading or going
+    /// back then would drop writing that save is still waiting on.
+    private(set) var editingFrozen = false
     private let downloads: DownloadController
 
     init(downloads: DownloadController = DownloadController()) {
@@ -97,6 +100,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
             answered = true
             done(saved)
         }
+        if freezeEditing { editingFrozen = true }
         webView.callAsyncJavaScript(
             """
             if (freezeEditing) {
@@ -123,6 +127,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     }
 
     func resumeEditingAfterCancelledQuit() {
+        editingFrozen = false
         webView.evaluateJavaScript("""
             if (window.doxographQuitInert !== undefined) {
                 document.body.inert = window.doxographQuitInert;
