@@ -102,6 +102,47 @@ def test_paper_overview_keeps_context_notes_and_reading_position(engine, width):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_failed_note_save_stays_editable_after_a_queue_round_trip(engine):
+    config.set_ai_enabled(True)
+    store.save_paper(store.new_paper('paper', title='Synthetic unsaved overview note'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+
+            async def refuse(route):
+                if route.request.method == 'PATCH':
+                    await route.fulfill(status=503, json={'detail':'Synthetic refusal'})
+                else:
+                    await route.continue_()
+
+            await page.route('**/api/papers/paper', refuse)
+            with _server() as url:
+                await page.goto(url + '/#paper=paper')
+                overview = page.get_by_role('region', name='Paper overview', exact=True)
+                await overview.locator('textarea[data-note]').fill('Keep this failed note')
+                await page.get_by_role('button', name='Add to reading queue', exact=True).click()
+                await expect(page.locator('#research-tools')).to_be_visible()
+                await ready(page)
+                await page.go_back()
+                await expect(page.locator('#research-tools')).to_be_hidden()
+                await expect(overview.locator('textarea[data-note]')).to_have_value('Keep this failed note')
+                assert await page.evaluate('window.doxographSaveDrafts()') is False
+                assert store.load_paper('paper')['notes'] == ''
+                await overview.locator('[data-act="done-note"]').click()
+                await page.wait_for_function('!noteAutosave("paper").saving && Boolean(noteAutosave("paper").failure)')
+                await expect(overview.locator('textarea[data-note]')).to_have_value('Keep this failed note')
+                assert store.load_paper('paper')['notes'] == ''
+                await page.unroute('**/api/papers/paper', refuse)
+                await overview.locator('[data-act="done-note"]').click()
+                await expect(overview.locator('textarea[data-note]')).to_have_count(0)
+                await expect(overview.locator('.note')).to_contain_text('Keep this failed note')
+                assert store.load_paper('paper')['notes'] == 'Keep this failed note'
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_paper_overview_without_analysis_or_pdf_can_be_noted_and_queued(engine):
     config.set_ai_enabled(True)
     store.save_paper(store.new_paper('paper', title='A source to read later'))
@@ -124,7 +165,16 @@ def test_paper_overview_without_analysis_or_pdf_can_be_noted_and_queued(engine):
                 await page.go_back()
                 await expect(page.locator('#research-tools')).to_be_hidden()
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('In reading queue')
-                await expect(overview.locator('textarea[data-note]')).to_have_value('A question to return to.')
+                # Leaving for the full-page queue parks and flushes the editor.
+                # A saved note returns as a paragraph; reopening is an explicit edit.
+                await expect(overview.locator('textarea[data-note]')).to_have_count(0)
+                await expect(overview.locator('.note')).to_contain_text('A question to return to.')
+                assert store.load_paper('paper')['notes'] == 'A question to return to.'
+                await overview.locator('[data-act="edit-note"]').click()
+                field = overview.locator('textarea[data-note]')
+                await expect(field).to_have_value('A question to return to.')
+                await expect(field).to_be_focused()
+                await field.fill('A question to return to. Edited after reopening.')
                 await page.locator('.reading-actions').get_by_role('button', name='View reading queue', exact=True).click()
                 await expect(page.locator('[data-reading="paper"]')).to_have_count(1)
                 await ready(page)
@@ -133,9 +183,16 @@ def test_paper_overview_without_analysis_or_pdf_can_be_noted_and_queued(engine):
                 await page.go_back()
                 await expect(page.locator('#research-tools')).to_be_hidden()
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('Finished · Page 1')
+                await expect(overview.locator('textarea[data-note]')).to_have_count(0)
+                await expect(overview.locator('.note')).to_contain_text('A question to return to. Edited after reopening.')
+                assert store.load_paper('paper')['notes'] == 'A question to return to. Edited after reopening.'
+                reading = httpx.get(url + '/api/notebook').json()['reading']
+                assert next(entry for entry in reading if entry['paper'] == 'paper')['status'] == 'finished'
+                await overview.locator('[data-act="edit-note"]').click()
+                await expect(overview.locator('textarea[data-note]')).to_have_value('A question to return to. Edited after reopening.')
+                await expect(overview.locator('textarea[data-note]')).to_be_focused()
                 await overview.locator('[data-act="done-note"]').click()
                 await expect(overview.locator('textarea[data-note]')).to_have_count(0)
-                await expect(overview.locator('.note')).to_contain_text('A question to return to.')
                 await page.locator('.paper-actions > summary').click()
                 await page.get_by_role('button', name='Add claim by hand', exact=True).click()
                 await expect(page.locator('form[data-form="__new__"]')).to_be_visible()
