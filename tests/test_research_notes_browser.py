@@ -400,3 +400,54 @@ def test_a_save_whose_answer_was_lost_is_not_saved_by_restoring_the_old_text(eng
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine',['chromium','webkit'])
+def test_reloading_after_a_lost_save_keeps_the_restored_draft(engine):
+    """Reloading must not take the server's text over a draft whose save may
+    have stored something else, even when the draft matches the old revision."""
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':900})
+            errors = []
+            page.on('pageerror',lambda error: errors.append(str(error)))
+            updates = []
+
+            async def lose_first_answer(route):
+                if route.request.method != 'PUT':
+                    await route.continue_()
+                    return
+                updates.append(route.request.post_data_json)
+                if len(updates) == 1:
+                    # The edit is stored, but its answer never arrives.
+                    await route.fetch()
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            with _server() as url:
+                note = httpx.post(url+'/api/research-notes', json={'title':'Working argument'}).json()
+                await page.route('**/api/research-notes/*', lose_first_answer)
+                await page.goto(url+'/?note='+note['id'])
+                view = page.locator('#research-notes')
+                await view.wait_for(state='visible')
+                await ready(page)
+                body = page.locator('#note-body')
+                await body.fill('A transient paragraph.')
+                await page.wait_for_function(
+                    "document.querySelector('#notes-status').textContent.startsWith('Couldn’t save')")
+
+                await body.fill('')
+                await view.get_by_role('button',name='Reload saved version',exact=True).click()
+                await ready(page)
+                # The retry is a conflict, so the writer compares before replacing.
+                assert len(updates) >= 2
+                assert 'A transient paragraph.' in await page.locator('.note-saved-comparison').inner_text()
+                assert await body.input_value() == ''
+                assert await page.evaluate('ResearchNotes.hasUnsavedChanges()') is True
+                assert not errors
+
+    run_browser(scenario())

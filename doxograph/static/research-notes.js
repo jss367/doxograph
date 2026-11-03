@@ -244,10 +244,12 @@ const ResearchNotes = (() => {
       notes.push(note); draft = saved = null; return choose(note.id);
     }
     if (name === 'reload') {
-      await autosave.flush();
+      const flushed = await autosave.flush();
       // Read first: a network failure must not erase the draft.
       const latest = (await request()).notes;
-      if (isDirty()) {
+      // A draft whose write went unanswered can match the old revision while
+      // the server holds another, so it is compared like any unsaved draft.
+      if (!flushed || isDirty() || autosave.unconfirmed) {
         const version = latest.find(n => n.id === draft.id);
         const comparison = version ? `Saved title: ${version.title}\n\n${version.body}` : 'This note has been deleted.';
         // Keep the writer's draft while they inspect the saved version.
