@@ -69,7 +69,7 @@ function findingsSection(section) {
     `${section.agreements.length} agreement${section.agreements.length === 1 ? '' : 's'}`,
     `${section.tensions.length} tension${section.tensions.length === 1 ? '' : 's'}`];
   const pill = section.stale
-    ? '<span class="pill stale" title="A claim under this topic changed after these were written">stale</span>'
+    ? '<span class="pill stale" title="A claim or tension under this topic changed after these were written">stale</span>'
     : '<span class="pill fresh">current</span>';
   return `<section class="ftopic" id="finding-topic-${esc(section.name)}" data-topic="${esc(section.name)}">
     <h2><span class="tag" data-tag="${esc(section.name)}">#${esc(section.name)}</span> ${pill}
