@@ -514,14 +514,14 @@ async function editCode(key) {
   const workspace = workspaceClient.workspaceId;
   const answer = await askDialog({
     title: `Code for ${paper.title || key}`,
-    note: 'Paste links to the paper\'s repositories, separated by spaces or commas.',
+    note: 'Paste links to the paper\'s repositories, separated by spaces. Commas are part of a link.',
     input: {placeholder: 'https://github.com/owner/repository', value: (paper.code || []).join(' ')},
     async onSubmit(text) {
       try {
         await api(`/api/papers/${encodeURIComponent(key)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-          body: JSON.stringify({ code: text.split(/[\s,]+/).filter(Boolean) }),
+          body: JSON.stringify({ code: text.split(/\s+/).filter(Boolean) }),
         });
         return null;
       } catch (error) { return `Could not save the code links: ${error.message}`; }

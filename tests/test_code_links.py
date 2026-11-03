@@ -140,7 +140,7 @@ def test_code_links_are_edited_from_paper_actions_and_shown_in_the_overview(engi
                 await page.locator("#ask").get_by_role("button", name="OK", exact=True).click()
                 await expect(page.locator("#ask-note")).to_contain_text("Could not save the code links")
                 await expect(page.locator("#ask-input")).to_have_value("javascript:alert(1)")
-                await _answer(page, "OK", "github.com/doe/study, https://gitlab.com/doe/data")
+                await _answer(page, "OK", "github.com/doe/study https://gitlab.com/doe/data")
                 links = page.locator(".paper-code a")
                 await expect(links).to_have_count(2)
                 await expect(links.first).to_have_text("github.com/doe/study")

@@ -555,7 +555,7 @@ writing space are stored locally in `note-images/`.
   paper to that page.
 - **Code links.** **Paper actions → Code links** (or **Add code links…** on
   the paper's menu in the sidebar) records where the paper's repositories are.
-  Paste one or more web addresses separated by spaces or commas; an address
+  Paste one or more web addresses separated by spaces (commas remain part of an address); an address
   without `https://` gets it. When a paper is added, GitHub, GitLab, Bitbucket,
   and Codeberg repositories named in its abstract or arXiv comment are filled
   in, and papers added earlier get the ones their abstract names. The links
