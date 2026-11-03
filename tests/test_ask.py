@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from mcp.server.mcpserver.exceptions import ToolError
 
 from doxograph import agent, ask_context, chat, config, mcp_server, query, search, server, store
+from doxograph import store_agreements, store_syntheses, store_tensions
 
 
 def seed(key, text=None):
@@ -66,7 +67,9 @@ def test_text_search_ranks_only_selected_papers(monkeypatch):
 
 def test_cross_scope_agreement_is_omitted_even_when_some_members_are_selected(monkeypatch):
     claims = {key: seed(key) for key in ("a", "b", "outside")}
-    monkeypatch.setattr(store, "load_agreements", lambda: [{"id": "agreement", "claims": [c["id"] for c in claims.values()],
+    # `agreement_rows` reads the file from within `store_agreements`, so the
+    # loader is patched there rather than on the `store` facade.
+    monkeypatch.setattr(store_agreements, "load_agreements", lambda: [{"id": "agreement", "claims": [c["id"] for c in claims.values()],
         "text": "Outside result affects this conclusion", "fingerprints": {c["id"]: "old" for c in claims.values()}}])
     result = call(tool_server(["a", "b"]), "read_evidence", kind="agreements")
     assert result["total"] == 0 and result["next_offset"] is None
@@ -461,9 +464,11 @@ def test_scoped_analyses_reject_ambiguous_claim_ids(method, kind, monkeypatch):
     refs = ['restored-duplicate', claims['b']['id']]
     record = {'id':'ambiguous', 'claims':refs, 'fingerprints':dict.fromkeys(refs, 'old'),
         'note':'EXCLUDED analysis', 'topics':['recovery'], 'status':'open'}
-    monkeypatch.setattr(store, 'load_agreements', lambda: [record])
-    monkeypatch.setattr(store, 'load_tensions', lambda: [record])
-    monkeypatch.setattr(store, 'load_syntheses', lambda: {'recovery': {'text':'EXCLUDED synthesis',
+    # The `*_rows` readers call these loaders within their own modules, so
+    # each is patched where it is defined rather than on the `store` facade.
+    monkeypatch.setattr(store_agreements, 'load_agreements', lambda: [record])
+    monkeypatch.setattr(store_tensions, 'load_tensions', lambda: [record])
+    monkeypatch.setattr(store_syntheses, 'load_syntheses', lambda: {'recovery': {'text':'EXCLUDED synthesis',
         'claims':dict.fromkeys(refs, 'old')}})
     with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
         params = {'kind':kind, 'library_snapshot':'true'}
