@@ -11,7 +11,7 @@ LinkKey = tuple[str, str | None, int | None, str | None, str | None, str, str, s
 def _identity(parts: SplitResult) -> LinkKey:
     # Scheme/hostname ignore case; credentials, path, query and fragment do not.
     return (parts.scheme.lower(), parts.hostname, parts.port, parts.username, parts.password,
-            parts.path.rstrip('/'), parts.query, parts.fragment)
+            parts.path, parts.query, parts.fragment)
 
 # Repositories named in the paper's own abstract or arXiv comment. Only hosts
 # whose first two path segments are an owner and a repository are recognized,

@@ -42,3 +42,13 @@ def test_query_slashes_and_case_distinct_repository_paths_are_preserved():
 def test_valid_explicit_ports_are_kept_without_fetching_them():
     links = ['https://example.org:443/Repo', 'http://example.org:8080/Repo']
     assert code_links.normalize(links) == links
+
+
+def test_trailing_path_slashes_are_distinct_in_offline_api_storage():
+    links = ['https://example.org/Repo', 'https://example.org/Repo/', 'https://example.org/Repo//']
+    store.save_paper(store.new_paper('synthetic', title='Synthetic path control'))
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.patch('/api/papers/synthetic', json={'code': links})
+        assert response.status_code == 200
+        assert response.json()['code'] == links
+    assert store.load_paper('synthetic')['code'] == links

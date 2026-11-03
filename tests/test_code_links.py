@@ -75,7 +75,7 @@ def test_an_arxiv_import_reads_the_comment_as_well_as_the_abstract(monkeypatch):
 
 def test_links_are_kept_in_order_once_each_with_https_assumed():
     assert code_links.normalize([" github.com/a/b ", "https://github.com/a/b/", "", "http://x.org/c"]) == [
-        "https://github.com/a/b", "http://x.org/c",
+        "https://github.com/a/b", "https://github.com/a/b/", "http://x.org/c",
     ]
 
 
