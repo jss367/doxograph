@@ -1,4 +1,5 @@
 """Exercise the offline writing workflow in the browser and native WebKit engine."""
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -63,6 +64,51 @@ def test_same_note_image_can_be_retried_and_inserted_twice(engine, tmp_path):
                 saved = httpx.get(url+'/api/research-notes').json()['notes'][0]
                 assert saved['id'] == note['id']
                 assert saved['body'].count('![figure.png](') == 2
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine',['chromium','webkit'])
+def test_saving_drafts_waits_for_an_image_upload_in_flight(engine, tmp_path):
+    config.set_ai_enabled(False)
+    image = tmp_path / 'figure.png'
+    image.write_bytes(image_bytes())
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            started, release = asyncio.Event(), asyncio.Event()
+
+            async def hold(route):
+                started.set()
+                await release.wait()
+                await route.continue_()
+
+            await page.route('**/api/research-notes/images', hold)
+            with _server() as url:
+                httpx.post(url+'/api/research-notes', json={'title':'Quit with a figure'})
+                await page.goto(url)
+                await page.get_by_role('button',name='Research notes',exact=True).click()
+                await ready(page)
+                async with page.expect_file_chooser() as chooser:
+                    await page.locator('#research-notes').get_by_role('button',name='Image',exact=True).click()
+                await (await chooser.value).set_files(str(image))
+                try:
+                    await asyncio.wait_for(started.wait(), 5)
+                    await page.evaluate("""() => {
+                      window.savedDrafts = null;
+                      void window.doxographSaveDrafts().then(saved => { window.savedDrafts = saved; });
+                    }""")
+                    await page.wait_for_timeout(200)
+                    assert await page.evaluate('window.savedDrafts') is None
+                    release.set()
+                    await page.wait_for_function('window.savedDrafts !== null')
+                    assert await page.evaluate('window.savedDrafts') is True
+                    saved = httpx.get(url+'/api/research-notes').json()['notes'][0]
+                    assert '![figure.png](' in saved['body']
+                finally:
+                    release.set()
 
     run_browser(scenario())
 

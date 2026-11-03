@@ -6,7 +6,7 @@ const ResearchNotes = (() => {
   let requested = null, revealed = null;
   const el = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
-  let workspace, notes = [], draft = null, saved = null, busy = false, previewTimer;
+  let workspace, notes = [], draft = null, saved = null, busy = false, uploading = null, previewTimer;
   let mode = 'split';
   const isDirty = () => !!draft && (!saved || draft.title !== saved.title || draft.body !== saved.body);
   const markdown = NoteWriting.markdown;
@@ -227,12 +227,16 @@ const ResearchNotes = (() => {
       .map(item => button('insert-link', `<small>${item.kind === 'note' ? 'Note' : 'Paper'}</small> ${escape(item.title)}`,
         `data-link-kind="${item.kind}" data-link-id="${escape(item.id)}"`)).join('') || '<p class="hint">No matching notes or papers.</p>';
   }
-  async function upload(file) {
-    if (!draft) return;
-    if (file.size > 10 * 1024 * 1024) throw new Error('Choose an image smaller than 10 MB.');
-    const form = new FormData(); form.append('file', file);
-    const result = await request('/images', 'POST', form);
-    insert(`\n![${(file.name || 'Figure').replace(/[\[\]\\\r\n]/g,'')}](${result.url})\n`);
+  function upload(file) {
+    // A flush waits for this, so the link it inserts is saved with the note.
+    uploading = (async () => {
+      if (!draft) return;
+      if (file.size > 10 * 1024 * 1024) throw new Error('Choose an image smaller than 10 MB.');
+      const form = new FormData(); form.append('file', file);
+      const result = await request('/images', 'POST', form);
+      insert(`\n![${(file.name || 'Figure').replace(/[\[\]\\\r\n]/g,'')}](${result.url})\n`);
+    })().finally(() => { uploading = null; });
+    return uploading;
   }
   async function action(name, target) {
     if (name === 'open') return choose(target.dataset.noteId);
@@ -352,7 +356,11 @@ const ResearchNotes = (() => {
     if (isDirty() || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
   return {connect(value, {open: opening, follow: following, selected}) { client = value; navigate = opening; follow = following; select = selected; },
-    show, hide, flush: () => autosave.flush(), open: id => navigate(id),
+    show, hide, open: id => navigate(id),
+    async flush() {
+      if (uploading) await uploading.catch(() => {});
+      return autosave.flush();
+    },
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
     hasUnsavedChanges: () => Boolean(isDirty() || busy || autosave.saving || autosave.unconfirmed),
