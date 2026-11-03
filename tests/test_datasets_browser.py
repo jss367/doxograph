@@ -1047,3 +1047,66 @@ def test_navigating_to_a_dataset_made_since_the_list_was_read(engine):
 
     run_browser(scenario())
 
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_dataset_custom_fields(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Dataset name', exact=True).fill('Synthetic dialogues')
+                await settled(page)
+                # An empty new row is not part of the record and does not block saving.
+                await dialog.get_by_role('button', name='Add field', exact=True).click()
+                assert await page.evaluate("document.activeElement.dataset.custom") == 'name'
+                await page.keyboard.type('Model ')
+                await dialog.get_by_label('Model', exact=True).fill('claude-opus-5-5')
+                await settled(page)
+                [saved] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert saved['custom_fields'] == [{'name': 'Model', 'value': 'claude-opus-5-5'}]
+                # A second field with the same name waits until it is renamed.
+                await dialog.get_by_role('button', name='Add field', exact=True).click()
+                await page.keyboard.type('MODEL')
+                await page.wait_for_function("document.querySelector('#datasets-status').textContent.includes('Give each custom field a different name.')")
+                await page.keyboard.press('ControlOrMeta+a')
+                await page.keyboard.type('Seed')
+                await dialog.get_by_label('Seed', exact=True).fill('7')
+                await settled(page)
+                [saved] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert saved['custom_fields'] == [{'name': 'Model', 'value': 'claude-opus-5-5'}, {'name': 'Seed', 'value': '7'}]
+                await page.locator('#datasets-search').fill('opus')
+                assert await page.locator('#datasets-list button').count() == 1
+                await page.locator('#datasets-search').fill('')
+                await dialog.get_by_role('button', name='Remove Seed', exact=True).click()
+                await settled(page)
+                [saved] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert saved['custom_fields'] == [{'name': 'Model', 'value': 'claude-opus-5-5'}]
+                # Other records suggest the names already in use.
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                assert await page.locator('#dataset-field-names option').evaluate_all('options => options.map(o => o.value)') == ['Model']
+                await page.reload()
+                await ready(page)
+                await dialog.wait_for(state='visible')
+                await dialog.get_by_role('button', name='Synthetic dialogues').click()
+                await ready(page)
+                assert await dialog.get_by_label('Model', exact=True).input_value() == 'claude-opus-5-5'
+                if engine == 'chromium':
+                    screenshot = Path(__file__).parents[1] / '.context' / 'dataset-custom-fields.png'
+                    screenshot.parent.mkdir(exist_ok=True)
+                    await page.screenshot(path=str(screenshot))
+                assert not errors
+
+    run_browser(scenario())

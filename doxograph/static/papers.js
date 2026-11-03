@@ -97,6 +97,13 @@ $('continue-reading').addEventListener('click', (event) => {
 });
 
 let libraryHTML = null;
+// Each author's name opens their page in People.
+function authorLinks(authors, text) {
+  if (!authors?.length) return 'Authors unknown';
+  return authors.map(name => `<button type="button" class="author-link" data-act="open-person" data-author="${esc(name)}"
+    title="Open ${esc(name)} in People">${text(name)}</button>`).join(', ');
+}
+
 function renderLibrary() {
   const papers = visiblePapers();
   const highlight = queryHighlighter();
@@ -121,7 +128,7 @@ function renderLibrary() {
         <h3><a class="library-paper-link" href="#${esc(params.toString())}" data-act="library-open-paper" data-paper="${esc(p.key)}">${highlight(p.title || p.key)}</a></h3>
         <span class="reading-status ${esc(entry?.status || 'unread')}">${status}</span>
       </div>
-      <p class="library-paper-meta">${highlight((p.authors || []).join(', ') || 'Authors unknown')} · ${esc(p.year || 'Year unknown')}${entry?.status === 'reading' && entry.page ? ` · Page ${esc(entry.page)}` : ''}</p>
+      <p class="library-paper-meta">${authorLinks(p.authors, highlight)} · ${esc(p.year || 'Year unknown')}${entry?.status === 'reading' && entry.page ? ` · Page ${esc(entry.page)}` : ''}</p>
       <p class="library-paper-summary${p.summary ? '' : ' hint'}">${esc(p.summary || 'No summary yet.')}</p>
       <div class="library-paper-topics" aria-label="Topics">${tags.length
         ? tags.map(tag => `<button type="button" class="tag" data-tag="${esc(tag)}">${esc(tag)}</button>`).join(' ')
@@ -144,7 +151,8 @@ function renderLibrary() {
   const focused = document.activeElement;
   const key = focused.closest('[data-library-paper]')?.dataset.libraryPaper;
   const selector = focused.matches('[data-select-paper]') ? '[data-select-paper]'
-    : focused.matches('[data-tag]') ? `[data-tag="${CSS.escape(focused.dataset.tag)}"]` : '.library-paper-link';
+    : focused.matches('[data-tag]') ? `[data-tag="${CSS.escape(focused.dataset.tag)}"]`
+    : focused.matches('[data-author]') ? `[data-author="${CSS.escape(focused.dataset.author)}"]` : '.library-paper-link';
   $('content').innerHTML = html;
   if (key) $('content').querySelector(`[data-library-paper="${CSS.escape(key)}"] ${selector}`)?.focus({preventScroll: true});
 }
@@ -249,7 +257,7 @@ function readingHeader(p, title, reading) {
   const progress = (S.notebook?.reading || []).find(r => r.paper === p.key);
   return `<div class="paperhead reading-head">
     <div class="reading-title"><h2>${title}</h2>
-      <p class="pm">${esc((p.authors || []).join(', ') || 'Authors unknown')}${p.year ? ` · ${esc(p.year)}` : ''}${p.venue ? ` · ${esc(p.venue)}` : ''}</p></div>
+      <p class="pm">${authorLinks(p.authors, esc)}${p.year ? ` · ${esc(p.year)}` : ''}${p.venue ? ` · ${esc(p.venue)}` : ''}</p></div>
     <div class="reading-actions" data-paper="${key}">
       <button type="button" class="primary" data-tool="reader" data-paper="${key}" ${p.has_pdf ? '' : 'disabled'}
         ${p.has_pdf ? '' : 'title="Add a PDF to read this paper"'}>Read</button>

@@ -416,12 +416,15 @@ papers that support, contradict, refine, or supply a method for them; a
 link marked independent is not drawn. A slider hides topic
 links below a chosen number of shared claims; it starts at the median so
 a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
-and click a paper to read it. Turn on **my notes** to include each paper’s saved
+and click a paper to read it. The map fills the window; drag its bottom edge
+to make it shorter or taller (hold the edge at the bottom of the window to keep
+growing it), and double-click the edge to fill the window again. Turn on **my notes** to include each paper’s saved
 personal note as a document node connected to that paper. Hover to preview a
 note and click it to open the paper’s note. Empty notes are omitted, and notes
 share their paper’s publication date in the timeline. Clicking a topic filters to it.
 
 In the map, choose **X axis → Publication date** to place papers on a timeline.
+The dates spread across the map's full width, however many papers share a date.
 Imports retain the publication day when arXiv, DOI metadata, or a forum supplies
 it. Dates with only a month or year are centered in that period and labeled
 as such in the tooltip; papers without a date appear in **Undated**. Older
@@ -643,7 +646,9 @@ writing space are stored locally in `note-images/`.
   as you type, and leaving the catalog saves at once; a new record saves once
   it has a name. Each record has its own link. Add a record with a name, description, source URL or local path, version,
   license, access notes, and roles (training, evaluation, reference, or project
-  output). Add **Labels** separated by commas, such as `open source` or
+  output). **Add field** under **Custom fields** records any other detail as a
+  name and value, such as `Model` for a dataset a model generated; names used on
+  other records are suggested, and each record's field names must differ. Add **Labels** separated by commas, such as `open source` or
   `needs review`; labels appear in the inventory and are included in dataset
   search and workspace exports. Labels preserve your spelling and ignore case
   when deduplicating. Search the inventory and link records to papers and individual claims.
@@ -679,6 +684,21 @@ writing space are stored locally in `note-images/`.
   available across restarts. Keep using the same browser and source path and
   export reviews before moving files. An occupied port reports an error; it
   never opens an unrelated server. Dataset files stay unchanged.
+- **People**, under Library, gives every author in the workspace a page with
+  their papers, the claims extracted from them, and their coauthors. Click an
+  author's name on a paper card or in a paper's header to open it. Names match
+  regardless of case, accents, and punctuation, so `Schölkopf, B.` and
+  `scholkopf b` are one author, but `B. Schölkopf` and `Bernhard Schölkopf` stay
+  two until you say otherwise. **Add notes on this person** turns an author's
+  page into a record with notes, an affiliation, a web page, and labels. List
+  the other spellings author lists use under **Other names in author lists**
+  and their papers join the same page. One spelling can belong to one record
+  only. **Add person** keeps notes on someone with no papers in the workspace,
+  and **Link other papers** adds papers they did not write, such as ones they
+  recommended. Edits save as you type, as in Datasets. Records stay in the
+  selected workspace in `people.json`, work with AI disabled, and have automatic
+  backups with conflict protection. Workspace archives include the original
+  records and a readable `people.md`.
 - **Research notes** are a separate writing space for arguments, literature
   reviews, derivations, and experiment plans. Open **Research notes** in the
   sidebar to create, search, rename, and write notes in Markdown with a live
@@ -878,6 +898,7 @@ ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 research-notes.json  your long-form Markdown notes, with per-note revisions
 research-note-revisions.json  revision counters retained across note deletion and restoration
+people.json          your notes on authors, and the spellings of their names
 note-images/        local images embedded in workspace and research notes
 chats/<id>.json     saved paper and library conversations, one file each
 backups/            previous versions captured before document edits

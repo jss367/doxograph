@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import backups, bib, chats, config, datasets, notebook, research_notes, storage, store
+from . import backups, bib, chats, config, datasets, notebook, people, research_notes, storage, store
 
 router = APIRouter(prefix='/api/workspace')
 _downloads: dict[str, tuple[Path, str, float]] = {}
@@ -28,8 +28,9 @@ CLAIM_DETAILS = (('evidence', 'Evidence'), ('conditions', 'Conditions'), ('limit
                  ('evidence_origin', 'Evidence origin'), ('evidence_relationship', 'Replication assessment'), ('note', 'My note'))
 DATASET_DETAILS = (('description', 'Description'), ('source', 'Source'), ('version', 'Version'),
                    ('license', 'License'), ('access_notes', 'Access notes'))
+PERSON_DETAILS = (('affiliation', 'Affiliation'), ('homepage', 'Web page'))
 README = ('# Portable research workspace\n\nOpen index.md in a Markdown reader. '
-          'The papers, notes, datasets, boards, images, PDFs, and references work without a running Doxograph server. '
+          'The papers, notes, datasets, people, boards, images, PDFs, and references work without a running Doxograph server. '
           'Dataset records contain source references; external dataset files are not copied into this archive. '
           'Original workspace files are under data/. Keep a copy before copying those files into an empty workspace data directory. '
           'The archive excludes installation settings, credential files, active job inputs, and other workspaces. '
@@ -78,7 +79,7 @@ def _snapshot_locks() -> Iterator[list[str]]:
     while True:
         locks = contextlib.ExitStack()
         try:
-            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'datasets', 'context', 'ledger',
+            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'datasets', 'people', 'context', 'ledger',
                          'agreements', 'tensions', 'syntheses', 'retired-keys', 'chats'):
                 locks.enter_context(store.document_lock(name, blocking=False))
             keys = store.paper_keys()
@@ -150,6 +151,7 @@ def build() -> Path:
             keys = [key for key in keys if store.paper_path(key).is_file()]
             notes = research_notes.load()
             saved_datasets = datasets.load()
+            saved_people = people.load()
             saved_notebook = notebook.load()
             note_names = {n['id']: f'{(store.slugify(n["title"]) or "note")[:80]}-{n["id"]}.md' for n in notes}
             with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
@@ -159,6 +161,7 @@ def build() -> Path:
                 for note in notes:
                     out.write('notes/' + note_names[note['id']], '# ' + notebook.md(note['title']) + '\n\n' + portable_links(note['body'], note_names))
                 out.write('datasets.md', _datasets_markdown(saved_datasets, saved_papers))
+                out.write('people.md', _people_markdown(saved_people, saved_papers, note_names))
                 out.write('workspace-notes.md', portable_links(saved_notebook['notes'], note_names, '.'))
                 _write_boards(out, saved_notebook['boards'], saved_papers)
                 out.write('references.bib', '\n\n'.join(bib.entry(p) for p in saved_papers))
@@ -267,6 +270,9 @@ def _datasets_markdown(saved_datasets: list[dict[str, Any]], saved_papers: list[
         for field_name, label in DATASET_DETAILS:
             if dataset[field_name]:
                 lines.extend([label + ': ' + notebook.md(dataset[field_name]), ''])
+        for custom in dataset['custom_fields']:
+            if custom['value']:
+                lines.extend([notebook.md(custom['name']) + ': ' + notebook.md(custom['value']), ''])
         lines.extend(['Roles: ' + ', '.join(role.replace('-', ' ') for role in dataset['roles']), ''])
         if dataset['labels']:
             lines.extend(['Labels: ' + notebook.md(', '.join(dataset['labels'])), ''])
@@ -304,6 +310,42 @@ def _dataset_sources(dataset: dict[str, Any], saved_papers: list[dict[str, Any]]
     return lines
 
 
+def _people_markdown(saved_people: list[dict[str, Any]], saved_papers: list[dict[str, Any]],
+                     note_names: dict[str, str]) -> str:
+    lines = ['# People', '']
+    papers_by_key = {paper['key']: paper for paper in saved_papers}
+    for person in sorted(saved_people, key=lambda person: people.name_key(person['name'])):
+        lines.extend(['## ' + notebook.md(person['name']), ''])
+        if person['other_names']:
+            lines.extend(['Other names: ' + notebook.md(', '.join(person['other_names'])), ''])
+        for field_name, label in PERSON_DETAILS:
+            if person[field_name]:
+                lines.extend([label + ': ' + notebook.md(person[field_name]), ''])
+        if person['labels']:
+            lines.extend(['Labels: ' + notebook.md(', '.join(person['labels'])), ''])
+        if person['notes']:
+            lines.extend(['### My notes', '', portable_links(person['notes'], note_names, '.'), ''])
+        authored = people.authored(person, saved_papers)
+        if authored:
+            lines.extend(['### Papers', ''])
+            lines.extend(_paper_link(paper['key'], papers_by_key) for paper in authored)
+            lines.append('')
+        # A linked paper that lists the person as an author is already above.
+        others = [key for key in person['papers'] if key not in {paper['key'] for paper in authored}]
+        if others:
+            lines.extend(['### Other papers', ''])
+            lines.extend(_paper_link(key, papers_by_key) for key in others)
+            lines.append('')
+    return '\n'.join(lines)
+
+
+def _paper_link(key: str, papers_by_key: dict[str, dict[str, Any]]) -> str:
+    paper = papers_by_key.get(key)
+    if paper is None:
+        return '- Missing paper: ' + notebook.md(key)
+    return f'- [{notebook.md(paper.get("title") or key)}](papers/{key}.md) ({paper.get("year") or "year unknown"})'
+
+
 def _write_boards(out: _Archive, boards: list[dict[str, Any]], saved_papers: list[dict[str, Any]]) -> None:
     for board in boards:
         response = notebook.export_selection(notebook.Selection(board=board['id']))
@@ -316,7 +358,7 @@ def _write_boards(out: _Archive, boards: list[dict[str, Any]], saved_papers: lis
 
 def _index_markdown(saved_papers: list[dict[str, Any]], notes: list[dict[str, Any]], note_names: dict[str, str]) -> str:
     return ('# ' + notebook.md(_workspace_name()) + '\n\n'
-            + '[Project datasets](datasets.md)\n\n'
+            + '[Project datasets](datasets.md) · [People](people.md)\n\n'
             + '\n'.join(f'- [{notebook.md(p.get("title") or p["key"])}](papers/{p["key"]}.md)' for p in saved_papers)
             + '\n\n## Research notes\n\n'
             + '\n'.join(f'- [{notebook.md(n["title"])}](notes/{note_names[n["id"]]})' for n in notes))

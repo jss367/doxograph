@@ -13,6 +13,7 @@
     if (version.path === 'notebook.json') return 'Workspace notes and research tools';
     if (version.path === 'research-notes.json') return 'Research notes';
     if (version.path === 'datasets.json') return 'Datasets';
+    if (version.path === 'people.json') return 'People';
     if (version.path === 'context.md') return 'Research context';
     if (version.path.startsWith('papers/')) {
       const key = version.path.slice(7, -5);
@@ -77,6 +78,8 @@
         headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':owner}, body:JSON.stringify({expected:version.expected})});
       workspaceClient.invalidateState();
       await refreshAll();
+      // The People page keeps its records while open. A restored file replaces them.
+      await People.reload();
       await load();
       $('backups-status').textContent = 'Restored. The version replaced is also available here.';
     } catch (error) { $('backups-status').textContent = error.message; }
