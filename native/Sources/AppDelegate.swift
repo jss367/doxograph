@@ -499,12 +499,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
             }
-            self.probeBeforeQuitting()
+            self.probeBeforeQuitting(acceptedWriting: saved ? nil : self.window.unsavedWritingSnapshot)
         }
         return .terminateLater
     }
 
-    private func probeBeforeQuitting() {
+    private func probeBeforeQuitting(acceptedWriting: String? = nil) {
         // Count the uploads on both sides of the question, because either
         // reading alone can miss work the other sees. The server answers a POST
         // only once it has staged the file and made the job, so an upload that
@@ -538,19 +538,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
             }
-            self.saveDraftsAgainBeforeQuitting(acceptedStarts: startsAsked)
+            self.saveDraftsAgainBeforeQuitting(acceptedStarts: startsAsked, acceptedWriting: acceptedWriting)
         }
     }
 
     /// Saves once more, right before the quit is let through.
     ///
-    /// The first save ran before the server was asked about its work, and the
-    /// page stays live while that question is in the air — and longer, if it
-    /// turned into a prompt the user is reading. Anything typed in that gap
-    /// dirtied an editor after the only save, and saying yes to the quit would
-    /// drop it without a word. So the writing is saved again here, at the last
-    /// moment it still can be, and writing that could not be saved gets the
-    /// same question the first save asks.
+    /// Input remains frozen after the first save, but asynchronous writing can
+    /// still finish during the health probe. Save again and carry a previous
+    /// unsaved-writing acceptance only when the page identifies the same writing.
+    /// A missing snapshot (including a timeout) never counts as prior consent.
     ///
     /// A paper dropped on the Dock or the window since the question was asked
     /// is work that question never saw. That is told by how many uploads have
@@ -570,15 +567,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     ///
     /// Staying is handled the way every other refusal is: the relaunch was only
     /// meant to follow this quit, so it is called off too.
-    private func saveDraftsAgainBeforeQuitting(acceptedStarts: Int) {
+    private func saveDraftsAgainBeforeQuitting(acceptedStarts: Int, acceptedWriting: String? = nil) {
         window.saveDrafts(freezeEditing: true) { saved in
-            if !saved, !self.confirmQuitWithUnsavedWriting() {
+            let snapshot = self.window.unsavedWritingSnapshot
+            let alreadyAccepted = self.window.editingFrozen && snapshot != nil && snapshot == acceptedWriting
+            if !saved && !alreadyAccepted, !self.confirmQuitWithUnsavedWriting() {
                 self.window.resumeEditingAfterCancelledQuit()
                 self.relaunchAfterQuit = false
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
             }
-            guard Uploader.uploadsStarted == acceptedStarts else { return self.probeBeforeQuitting() }
+            // Writing consent never covers new uploads or the jobs they created.
+            guard Uploader.uploadsStarted == acceptedStarts else {
+                return self.probeBeforeQuitting(acceptedWriting: saved ? nil : snapshot)
+            }
             NSApp.reply(toApplicationShouldTerminate: true)
         }
     }

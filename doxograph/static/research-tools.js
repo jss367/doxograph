@@ -1748,8 +1748,10 @@ const ResearchTools = (() => {
   // time were never agreed to; ask about them before the switch commits.
   async function beforeWorkspaceSelect() {
     if (busy) return false;
-    return writing() === discarding
-      || await confirmDialog('Discard the changes you made while the switch was waiting?', {ok:'Discard changes'});
+    if (writing() !== discarding
+        && !await confirmDialog('Discard the changes you made while the switch was waiting?', {ok:'Discard changes'})) return false;
+    discarding = writing();
+    return true;
   }
   async function historyChanged() {
     if (markEditor && !highlightDrafting()) {
@@ -1768,7 +1770,9 @@ const ResearchTools = (() => {
       notebook = null; dirty = false; edits = noEdits(); connectionDraft = false; historyData = null; boardId = null;
       wanted = loaded = null; modalWorkspace = null;
     },
-    sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,beforeWorkspaceSelect,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+    sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,beforeWorkspaceSelect,
+    writingSnapshot: writing,
+    canWorkspaceSelect: () => !busy && writing() === discarding, mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     hasUnsavedChanges: () => Boolean(unsaved() || busy),
     // A board from the command palette. From outside the tools it opens as a
     // sidebar tool does, once mayEnter agrees.

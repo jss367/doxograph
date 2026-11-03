@@ -149,6 +149,13 @@ def test_same_content_replacement_core_identity_needs_new_consent(engine, kind):
             await page.route(f'**/api/papers/study/claims/{removed}', hold)
             with _server() as url:
                 await remove_and_wait(page, url, removed)
+                if kind == 'paper-note':
+                    async def refuse(route):
+                        if route.request.method == 'PATCH':
+                            await route.fulfill(status=503, json={'detail':'Synthetic unsaved note'})
+                        else:
+                            await route.continue_()
+                    await page.route('**/api/papers/*', refuse)
                 field, _ = await editor(page, kind, claims)
                 await field.fill('Identical writing')
                 await page.evaluate('id => { window.switching = switchWorkspace(id); }', destination)
@@ -156,7 +163,9 @@ def test_same_content_replacement_core_identity_needs_new_consent(engine, kind):
                 try:
                     await asyncio.wait_for(held.wait(), 5)
                     action = {'claim':'cancel', 'synthesis':'cancel-synth', 'paper-note':'cancel-note'}[kind]
-                    await page.locator(f'[data-act="{action}"]').first.click()
+                    if kind != 'paper-note':
+                        await page.locator(f'[data-act="{action}"]').first.click()
+                    # Opening the other paper parks the first note's failed draft.
                     field, _ = await editor(page, kind, claims, second=True)
                     await field.fill('Identical writing')
                     release.set()
@@ -208,14 +217,14 @@ def test_save_started_during_held_delete_vetoes_selection_until_it_finishes(engi
                     if kind.startswith('claim'):
                         await page.locator(f'form[data-form="{claim_id}"] button[type="submit"]').click()
                     else:
-                        await page.locator('[data-act="save-synth"]' if kind == 'synthesis' else '[data-act="save-note"]').click()
+                        await page.locator('[data-act="save-synth"]' if kind == 'synthesis' else '[data-act="done-note"]').click()
                     release.set()
                     await asyncio.wait_for(saving.wait(), 5)
                     await page.evaluate('window.switching')
                     assert await page.evaluate('workspaceClient.workspaceId') == 'default'
                     await expect(page.locator('#toasts')).to_contain_text('Wait for the current change')
                     save_release.set()
-                    await page.wait_for_function('workspaceClient.pendingMutations === 0 && !savingClaims.size && !V.synthSaving && !V.noteSaving')
+                    await page.wait_for_function('workspaceClient.pendingMutations === 0 && !savingClaims.size && !V.synthSaving && !paperNotesSaving()')
                     assert await page.evaluate('workspaceClient.workspaceId') == 'default'
                     if kind == 'claim-conflict':
                         assert next(row for row in store.claim_rows() if row['id'] == claim_id)['text'] == 'Stored claim'

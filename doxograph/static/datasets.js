@@ -12,7 +12,8 @@ const Datasets = (() => {
   const conflict = 'This dataset changed in another window. Your edits are still here. Reload the saved version before saving.';
   // The draft the reader agreed to discard when a workspace switch began.
   let discarding = null;
-  const writing = () => dirty() ? JSON.stringify([draft.id, body(draft)]) : null;
+  const writing = () => draft && (dirty() || autosave.unconfirmed || autosave.saving)
+    ? JSON.stringify([draft?.id, body(draft), autosave.generation, autosave.unconfirmed]) : null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
@@ -445,7 +446,12 @@ const Datasets = (() => {
     // Held deletes leave the editor open while they finish. Edits made in
     // that time were never agreed to; ask about them before the switch commits.
     async beforeWorkspaceSelect() {
-      if (busy) return false;
-      return writing() === discarding || await discard();
-    }};
+      if (busy || autosave.saving) return false;
+      if (writing() !== discarding && !await discard()) return false;
+      discarding = writing();
+      return true;
+    },
+    // No asynchronous gap remains between this check and committed selection.
+    writingSnapshot: writing,
+    canWorkspaceSelect: () => !busy && !autosave.saving && (writing() === null || writing() === discarding)};
 })();

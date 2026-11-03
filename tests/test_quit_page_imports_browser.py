@@ -15,7 +15,7 @@ def native_contract():
     save = source.split('webView.callAsyncJavaScript(', 1)[1].split(chr(34)*3)[1]
     resume = source.split('func resumeEditingAfterCancelledQuit()', 1)[1].split(chr(34)*3)[1]
     delegate = Path('native/Sources/AppDelegate.swift').read_text()
-    initial = delegate.split('func applicationShouldTerminate(', 1)[1].split('private func probeBeforeQuitting()', 1)[0]
+    initial = delegate.split('func applicationShouldTerminate(', 1)[1].split('private func probeBeforeQuitting(', 1)[0]
     return save, resume, 'window.saveDrafts(freezeEditing: true)' in initial
 
 
@@ -34,7 +34,7 @@ async def initialize(page, url):
     await expect(page.locator('#workspace-notes')).to_be_visible()
     save, resume, first_freezes = native_contract()
     await page.evaluate('() => { window.quitMockJobs = 0; window.quitHealth = null; '
-                        'window.nativeQuitSave = async freezeEditing => {' + save + '}; }')
+                        'window.nativeQuitSave = async freezeEditing => { const report = await (async () => {' + save + '})(); return report.saved; }; }')
     return resume, first_freezes
 
 

@@ -52,6 +52,7 @@ function createAutosave({current, dirty, blocked = () => '', write, changed, del
       while (saving) await saving;
     },
     resume() { if (held && unsaved(current())) arm(); held = false; },
+    get generation() { return edits; },
     get saving() { return Boolean(saving); },
     // Whether the draft's last write went out without an answer.
     get unconfirmed() { const target = current(); return Boolean(target) && unconfirmed === target; },

@@ -6,7 +6,8 @@ const ResearchNotes = (() => {
   let requested = null, revealed = null;
   // The writing the reader agreed to discard when a workspace switch began.
   let discarding = null;
-  const writing = () => isDirty() ? JSON.stringify([draft.id, draft.title, draft.body]) : null;
+  const writing = () => draft && (isDirty() || autosave.unconfirmed || autosave.saving)
+    ? JSON.stringify([draft?.id, [draft.title, draft.body], autosave.generation, autosave.unconfirmed]) : null;
   const el = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   let workspace, notes = [], draft = null, saved = null, busy = false, uploading = null, previewTimer;
@@ -382,7 +383,12 @@ const ResearchNotes = (() => {
     // Held deletes leave the editor open while they finish. Writing done in
     // that time was never agreed to; ask about it before the switch commits.
     async beforeWorkspaceSelect() {
-      if (busy) return false;
-      return writing() === discarding || await discard();
-    }};
+      if (busy || autosave.saving) return false;
+      if (writing() !== discarding && !await discard()) return false;
+      discarding = writing();
+      return true;
+    },
+    // No asynchronous gap remains between this check and committed selection.
+    writingSnapshot: writing,
+    canWorkspaceSelect: () => !busy && !autosave.saving && (writing() === null || writing() === discarding)};
 })();

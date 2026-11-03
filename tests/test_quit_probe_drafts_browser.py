@@ -70,7 +70,7 @@ def test_typing_during_quit_probe_needs_a_final_flush(engine, editor, finish):
                 await page.route('**/api/health?quit-probe=1', probe)
                 native = Path('native/Sources/WebWindow.swift').read_text()
                 save_js = native.split('webView.callAsyncJavaScript(', 1)[1].split(chr(34) * 3)[1]
-                await page.evaluate('() => { window.nativeQuitSave = async freezeEditing => {' + save_js + '}; }')
+                await page.evaluate('() => { window.nativeQuitSave = async freezeEditing => { const report = await (async () => {' + save_js + '})(); return report.saved; }; }')
                 await page.evaluate('''final => {
                   window.quitProbeReply = null;
                   void (async () => {

@@ -987,6 +987,12 @@ def test_dataset_edits_during_held_deletes_are_asked_about_before_a_switch(engin
                 await route.continue_()
 
             await page.route(f'**/api/papers/study/claims/{claim}', hold_delete)
+            async def refuse(route):
+                if route.request.method == 'PUT':
+                    await route.fulfill(status=503, json={'detail':'Synthetic unsaved draft'})
+                else:
+                    await route.continue_()
+            await page.route('**/api/datasets/*', refuse)
             with _server() as url:
                 httpx.post(url + '/api/datasets', json={'name': 'Corpus'}).raise_for_status()
                 await page.goto(url + '/#view=claims')

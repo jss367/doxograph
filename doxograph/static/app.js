@@ -537,9 +537,15 @@ function workspaceWritingSnapshot() {
   const synthesis = V.synthEditing && document.querySelector(`textarea[data-synth="${CSS.escape(V.synthEditing)}"]`);
   const note = V.noteEditing && document.querySelector(`textarea[data-note="${CSS.escape(V.noteEditing)}"]`);
   if (synthesis) V.synthDrafts[V.synthEditing] = synthesis.value;
-  if (note) V.noteDrafts[V.noteEditing] = note.value;
+  if (note && (note.value !== storedNote(V.noteEditing) || noteAutosave(V.noteEditing).unconfirmed)) {
+    V.noteDrafts[V.noteEditing] = note.value;
+  }
+  const noteWrites = Object.keys(V.noteDrafts).map(key => {
+    const saver = noteAutosave(key);
+    return [key, saver.generation, saver.unconfirmed];
+  });
   return JSON.stringify([workspaceClient.workspaceId, V.editing, V.drafts, V.newClaim, V.parkedNewClaims,
-    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, V.researchDraft]);
+    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft]);
 }
 let discardedWorkspaceWriting = null;
 let discardedWorkspaceId = null;
@@ -564,6 +570,14 @@ function canRestoreSavedVersion() {
 window.doxographSaveDrafts = async () =>
   (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), flushPaperNotes(),
     typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
+
+// Consent to lose writing belongs to its content and identity, not a quit
+// attempt alone. Native compares this only while input remains frozen.
+window.doxographQuitWritingSnapshot = () => JSON.stringify([
+  workspaceWritingSnapshot(), ResearchNotes.writingSnapshot(), Datasets.writingSnapshot(),
+  ResearchTools.writingSnapshot(), [...document.querySelectorAll('input:not([type="password"]):not([type="file"]),textarea,select,[contenteditable="true"]')]
+    .map(field => [field.id, field.name, field.value ?? field.textContent, field.checked]),
+]);
 
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
@@ -604,6 +618,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     // This synchronous last check runs after beforeSelect's Promise and
     // immediately before selection, so a late save/draft cannot slip through.
     if (!canLeaveWorkspace()) return false;
+    if (!ResearchNotes.canWorkspaceSelect() || !Datasets.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
     if (hasWorkspaceDrafts() && workspaceWritingSnapshot() !== discardedWorkspaceWriting) {
       toast('Your writing changed. Switch workspaces again to review it.', { tone: 'warn' });
       return false;

@@ -111,11 +111,15 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// nothing is left unsaved, and false when something could not be saved
     /// or the page did not answer in time; the caller asks rather than
     /// waiting on a page that may never answer.
+    private(set) var unsavedWritingSnapshot: String?
+
     func saveDrafts(freezeEditing: Bool = false, _ done: @escaping (Bool) -> Void) {
         var answered = false
-        let finish = { (saved: Bool) in
+        unsavedWritingSnapshot = nil
+        let finish = { (saved: Bool, snapshot: String?) in
             guard !answered else { return }
             answered = true
+            self.unsavedWritingSnapshot = snapshot
             done(saved)
         }
         if freezeEditing {
@@ -139,13 +143,16 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
                 }
                 document.body.inert = true;
             }
-            return window.doxographSaveDrafts ? await window.doxographSaveDrafts() : true;
+            const saved = window.doxographSaveDrafts ? await window.doxographSaveDrafts() : true;
+            return {saved, snapshot: saved ? null : window.doxographQuitWritingSnapshot?.() ?? null};
             """,
             arguments: ["freezeEditing": freezeEditing], in: nil, in: .page
         ) { result in
-            if case .success(let saved) = result { finish((saved as? Bool) ?? false) } else { finish(false) }
+            if case .success(let value) = result, let report = value as? [String: Any] {
+                finish((report["saved"] as? Bool) ?? false, report["snapshot"] as? String)
+            } else { finish(false, nil) }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(false, nil) }
     }
 
     func resumeEditingAfterCancelledQuit() {

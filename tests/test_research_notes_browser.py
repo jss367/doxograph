@@ -519,6 +519,12 @@ def test_writing_during_held_deletes_is_asked_about_before_a_switch(engine):
                 await route.continue_()
 
             await page.route(f'**/api/papers/study/claims/{claim}', hold_delete)
+            async def refuse(route):
+                if route.request.method == 'PUT':
+                    await route.fulfill(status=503, json={'detail':'Synthetic unsaved draft'})
+                else:
+                    await route.continue_()
+            await page.route('**/api/research-notes/*', refuse)
             with _server() as url:
                 httpx.post(url+'/api/research-notes', json={'title':'Working argument'}).raise_for_status()
                 await page.goto(url+'/#view=claims')

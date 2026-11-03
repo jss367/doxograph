@@ -42,7 +42,7 @@ def test_final_quit_does_not_lose_edit_in_an_already_flushed_editor(engine):
                 native = Path('native/Sources/WebWindow.swift').read_text()
                 body = native.split('webView.callAsyncJavaScript(', 1)[1]
                 script = body.split(chr(34) * 3)[1] if body.lstrip().startswith(chr(34) * 3) else body.split(chr(34))[1]
-                await page.evaluate('() => { window.finalNativeFlush = async freezeEditing => {' + script + '}; }')
+                await page.evaluate('() => { window.finalNativeFlush = async freezeEditing => { const report = await (async () => {' + script + '})(); return report.saved; }; }')
                 await page.evaluate('''() => {
                   window.finalQuitReply = null;
                   void window.finalNativeFlush(true).then(result => { window.finalQuitReply = result; });
