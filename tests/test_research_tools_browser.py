@@ -1776,3 +1776,60 @@ def test_back_during_a_tool_load_keeps_the_newer_destination(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_clicking_the_open_boards_tab_keeps_the_board_and_back(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': board, 'kind': 'board', 'title': title, 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}
+                                      for board, title in [('b1', 'First board'), ('b2', 'Second board')]]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=reading')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                nav = page.locator('.research-tools-nav')
+                await nav.get_by_role('button', name='Evidence boards', exact=True).click()
+                await ready(page)
+                assert 'tool=boards' in page.url and 'board=b1' in page.url
+                await page.locator('#board-picker').select_option('b2')
+                await ready(page)
+                assert 'board=b2' in page.url
+                entries = await page.evaluate('history.length')
+                # The open tab, from the sidebar and from the tab strip, is not a move.
+                await nav.get_by_role('button', name='Evidence boards', exact=True).click()
+                await ready(page)
+                await view.locator('[data-tab="boards"]').click()
+                await ready(page)
+                assert 'board=b2' in page.url
+                assert await page.evaluate('history.length') == entries
+                assert await page.locator('#board-title').input_value() == 'Second board'
+                # So Back goes to the board before, then to the tab before.
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('board=b1')")
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'First board'
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                await ready(page)
+                assert 'board=' not in page.url
+                # A different tab still opens, without a board.
+                await nav.get_by_role('button', name='Evidence boards', exact=True).click()
+                await ready(page)
+                assert 'tool=boards' in page.url and 'board=' in page.url
+                await view.get_by_role('button', name='Reading queue', exact=True).click()
+                await ready(page)
+                assert 'tool=reading' in page.url and 'board=' not in page.url
+                assert not errors
+
+    run_browser(scenario())

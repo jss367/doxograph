@@ -230,6 +230,13 @@ const ResearchTools = (() => {
     navigate(tab, boardId);
     render();
   }
+  // A tab opens at no particular board; the boards tab then shows the one
+  // last open, or the first. Choosing the tab already open keeps its board:
+  // the click is not a move, so the URL keeps the board and history gets no
+  // second copy of it.
+  function openTab(name) {
+    navigate(name, shown && wanted?.tab === name ? wanted.board : null);
+  }
   // The URL follows a tab or board chosen here without asking for a reload.
   // A move that arrived while the work drawing this was out is newer: the URL
   // is left to it, and run() brings it on screen.
@@ -1362,7 +1369,7 @@ const ResearchTools = (() => {
   }
   async function action(name, target) {
     const data = target.dataset;
-    if (name === 'tab') { navigate(data.tab, null); await load(); return; }
+    if (name === 'tab') { openTab(data.tab); await load(); return; }
     if (name === 'reload') {
       if (!notebook) { loaded = null; await load(); return; }
       if (!await discardDrafts()) return;
@@ -1552,7 +1559,7 @@ const ResearchTools = (() => {
       if (TABS.includes(name) || !shown) {
         // An unsaved workspace note would be hidden by the tools; keep it on screen.
         if (!shown && !await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
-        navigate(TABS.includes(name) ? name : shown ? tab : 'compare', null);
+        openTab(TABS.includes(name) ? name : shown ? tab : 'compare');
         await load();
         if (TABS.includes(name) || !notebook) return;
       }
