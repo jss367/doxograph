@@ -1,10 +1,39 @@
-/* Reader-owned workflows. Stored with the active workspace; never sent to a model. */
+/* Reader-owned workflows. Stored with the active workspace; never sent to a model.
+   The tools are a view in the main pane: leaving it keeps unsaved edits for the next visit. */
 const ResearchTools = (() => {
-  let client;
+  let client, navigate, select;
+  // The tab and board the URL names, the ones on screen, and the library view
+  // a saved search is taken from.
+  let shown = false, wanted = null, loaded = null, origin = 'library';
+  const TABS = ['compare', 'boards', 'questions', 'connections', 'reading', 'marks', 'searches'];
+  const tabKey = target => target && `${target.tab}\u0000${target.board || ''}`;
+  // Whether the tools are up and no move has come since some work took the
+  // navigation number it began at (app.js's navigationVersion). A move is a
+  // tab, a board, Back or Forward, a link, or leaving the tools, and counts
+  // even when it comes back to the same tab and board. Work checks after each
+  // wait and gives way to a newer move, which stands; `overtaken` then has
+  // run() draw the tools again once the work returns.
+  let overtaken = false;
+  const still = move => {
+    if (shown && navigationVersion() === move) return true;
+    overtaken = true;
+    return false;
+  };
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
-  let epoch = 0;
+  // Edits to boards and to connection explanations not yet saved. They are
+  // held apart from the notebook, so a save made for anything else, such as a
+  // reading status or a saved search, cannot carry them, and the notebook can
+  // be read again around them when the reader comes back from a paper.
+  // Each keeps the saved version it started from, so a save can tell when
+  // another window changed or removed the same board or connection meanwhile.
+  // An explanation also keeps its connection, to show it if that is removed.
+  // `dirty` is the notebook itself differing from the saved one: a failed save.
+  const noEdits = () => ({boards:{}, notes:{}, boardBases:{}, noteBases:{}, noteConnections:{}});
+  const dropNote = id => { delete edits.notes[id]; delete edits.noteBases[id]; delete edits.noteConnections[id]; };
+  let edits = noEdits();
+  const editing = () => Object.keys(edits.boards).length + Object.keys(edits.notes).length > 0;
   // The paper open beside its notes in the main pane. Separate from the modal:
   // it stays up while the research tools are opened and closed over it.
   let reader = null, readerEpoch = 0, mountSeq = 0;
@@ -29,7 +58,7 @@ const ResearchTools = (() => {
   // page asks first, as it does for a board or a connection being edited.
   const highlightDrafting = () => Boolean(markEditor) && markEditor.text !== markEditor.saved;
   const markEditorOn = paper => markEditor?.workspace === client.workspaceId && markEditor.paper === paper;
-  const unsaved = () => dirty || connectionDraft || highlightDrafting();
+  const unsaved = () => dirty || editing() || connectionDraft || highlightDrafting();
   const refKey = r => JSON.stringify([r.paper, r.claim || r.id]);
   const refs = () => [...claims].map(s => { const [paper, claim] = JSON.parse(s); return {paper, claim}; });
   const resolve = ref => client.state.claims.find(c => c.paper === ref.paper && c.id === ref.claim);
@@ -41,6 +70,7 @@ const ResearchTools = (() => {
     try { sessionStorage.setItem(`doxograph-selection:${workspace}`, JSON.stringify({claims:[...claims], papers:[...papers]})); } catch (_) { /* optional */ }
   }
   function sync() {
+    if (['library', 'claims'].includes(V.view)) origin = V.view;
     if (workspace !== client.workspaceId) {
       workspace = client.workspaceId;
       // The switch has happened: an editor open on a mark of the workspace
@@ -116,37 +146,138 @@ const ResearchTools = (() => {
     el('research-tools').classList.toggle('is-busy', value);
     el('research-tools').setAttribute('aria-busy', String(value));
   }
-  async function save() {
-    dirty = true;
-    notebook = await request('', 'PUT', notebook);
+  // Saves the notebook. `board` or `notes` also saves those held edits, merged
+  // into the notebook as last read, so whatever changed there meanwhile stays.
+  async function save({board = null, notes = false} = {}) {
+    const merging = Boolean(board && edits.boards[board]) || (notes && Object.keys(edits.notes).length > 0);
+    let next = notebook;
+    if (merging) {
+      // The board or connection this edit started from has changed since, here
+      // or in another window: saving would overwrite that, or bring it back.
+      // Refuse, as the server does for a stale notebook; the edits stay on screen.
+      const changed = (board && edits.boards[board] && edits.boardBases[board] !== JSON.stringify(notebook.boards.find(b => b.id === board) ?? null))
+        || (notes && Object.keys(edits.notes).some(id => {
+          // Gone counts as changed even when the note it had was empty, which
+          // reads the same as a missing one.
+          const connection = notebook.connections.find(c => c.id === id);
+          return !connection || edits.noteBases[id] !== JSON.stringify(connection.note ?? null);
+        }));
+      if (changed) throw new Error('Research tools changed in another window. Reload the saved version before trying again.');
+      next = structuredClone(notebook);
+      if (board && edits.boards[board]) {
+        const i = next.boards.findIndex(b => b.id === board);
+        if (i < 0) next.boards.push(edits.boards[board]); else next.boards[i] = edits.boards[board];
+      }
+      if (notes) for (const [id, note] of Object.entries(edits.notes)) {
+        const connection = next.connections.find(c => c.id === id);
+        if (connection) connection.note = note;
+      }
+    } else dirty = true;
+    notebook = await request('', 'PUT', next);
     dirty = false;
+    if (board) { delete edits.boards[board]; delete edits.boardBases[board]; }
+    if (notes) { edits.notes = {}; edits.noteBases = {}; edits.noteConnections = {}; }
     await refreshAll();
     message('Saved.');
   }
-  async function close({duringOperation = false} = {}) {
-    if (busy && !duringOperation) return;
-    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return;
-    epoch++;
-    dirty = false; connectionDraft = false;
-    el('research-tools').close();
-  }
-  async function open(next = 'compare', requestedBoard = null) {
-    if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return false; }
-    sync();
-    modalWorkspace = workspace;
-    tab = next;
-    el('research-tools').showModal();
-    el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
-    message('');
-    if (next === 'reading') await flushReadingProgress();
-    notebook = await request();
-    if (requestedBoard !== null) {
-      boardId = requestedBoard;
-      if (!currentBoard()) throw new Error('That board no longer exists.');
+  // Brings the tab the URL names on screen. Unsaved board edits are held
+  // beside the notebook and stay through a change of tab; a connection being
+  // written lives only in its form, so leaving its tab asks first.
+  async function load() {
+    const target = wanted, same = tabKey(target) === tabKey(loaded), move = navigationVersion();
+    // This load answers every move made so far.
+    overtaken = false;
+    if (same && notebook && modalWorkspace === client.workspaceId && (dirty || connectionDraft)) return;
+    if (!same && connectionDraft) {
+      if (!await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) {
+        // The draft's tab stays and its entry names it again, unless a move
+        // made while this asked is newer.
+        if (still(move) && loaded) { wanted = loaded; select(loaded.tab, loaded.board); }
+        return;
+      }
+      connectionDraft = false;
     }
-    dirty = false;
+    // After each wait, a newer move stops this load without drawing or naming
+    // its tab.
+    if (!still(move)) return;
+    loaded = target;
+    const flushed = await WorkspaceNotes.flush();
+    if (!still(move)) return;
+    if (!flushed) {
+      notebook = null;
+      el('research-tabs').innerHTML = '';
+      el('research-body').innerHTML = `<p class="warn">Your workspace notes could not be saved, so the research tools stay closed until they are. ${button('reload', 'Try again')}</p>`;
+      return;
+    }
+    sync();
+    const keep = dirty && notebook && modalWorkspace === workspace;
+    modalWorkspace = workspace;
+    tab = target.tab === 'history' && !historyData ? 'compare' : target.tab;
+    if (!keep) {
+      el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
+      message('');
+      // Leaving a paper for the tools saves its reading progress on the way
+      // out. Read the notebook after that save, or the next save conflicts.
+      await flushReadingProgress();
+      if (!still(move)) return;
+      const fresh = await request();
+      if (!still(move)) return;
+      notebook = fresh;
+      dirty = false;
+    }
+    if (target.board) {
+      boardId = target.board;
+      if (!currentBoard()) { boardId = null; message('That board no longer exists.', true); }
+    }
     render();
-    return true;
+  }
+  function show(next, requestedBoard = null) {
+    const target = {tab: TABS.includes(next) || next === 'history' ? next : 'compare', board: requestedBoard || null};
+    if (shown && tabKey(target) === tabKey(wanted)) return;
+    wanted = target;
+    shown = true;
+    el('research-tools').hidden = false;
+    // Work already running drains the newest target when it finishes.
+    if (!busy) void run(load);
+  }
+  function hide() {
+    shown = false;
+    el('research-tools').hidden = true;
+  }
+  // A board chosen here is a destination of its own, as a tab is: the URL
+  // names it and Back returns to the board before.
+  function chooseBoard(id) {
+    boardId = id || null;
+    navigate(tab, boardId);
+    render();
+  }
+  // A tab opens at no particular board; the boards tab then shows the one
+  // last open, or the first. Choosing the tab already open keeps its board:
+  // the click is not a move, so the URL keeps the board and history gets no
+  // second copy of it. `replace` is for a tab that takes over the entry the
+  // same click made in opening the tools.
+  function openTab(name, replace = false) {
+    navigate(name, shown && wanted?.tab === name ? wanted.board : null, replace);
+  }
+  // A tab an action ends on is a move of its own, as a tab click is. When the
+  // click that ran the action also opened the tools, that opening has already
+  // made an entry and the tab takes it over: one click, one step back.
+  async function arrive(name, replace) {
+    if (shown && tab === name) { render(); return; }
+    openTab(name, replace);
+    await load();
+  }
+  // Writes the tab and board on screen over the current entry, for what the
+  // reader did not choose: a default board, none in place of a deleted one,
+  // or the same tab and board again. Every tab or board the reader chooses is
+  // a move and goes through navigate(), which takes a history entry; nothing
+  // here may stand in for that. A move that arrived while the work drawing
+  // this was out is newer: the URL is left to it, and run() brings it on screen.
+  function syncLocation() {
+    const board = ['boards', 'questions'].includes(tab) ? boardId : null, next = {tab, board};
+    if (tabKey(wanted) !== tabKey(loaded) && tabKey(wanted) !== tabKey(next)) return;
+    wanted = loaded = next;
+    select(tab, board);
   }
   function citation(row) {
     return `${(row.paper_authors || []).join(', ') || row.paper} · ${row.paper_year || 'year unknown'} · ${row.locator || 'no page recorded'}`;
@@ -163,6 +294,7 @@ const ResearchTools = (() => {
       ${button('source', 'Open source', `data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}`;
   }
   function render() {
+    if (!notebook) return;
     const labels = {compare:'Compare & organize', boards:'Evidence boards', questions:'Research questions', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
     el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : tab === 'questions' ? 'Research questions' : 'Your research tools';
     el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
@@ -174,6 +306,7 @@ const ResearchTools = (() => {
     if (tab === 'marks') renderMarks();
     if (tab === 'searches') renderSearches();
     if (tab === 'history') renderHistory();
+    syncLocation();
   }
   function renderCompare() {
     el('research-body').innerHTML = `<p class="hint">Selections stay pinned while you browse other papers or topics. Select claims or papers using their checkboxes.</p>
@@ -209,10 +342,24 @@ const ResearchTools = (() => {
       }).join('') : '<p class="hint">No evidence assigned yet.</p>'}</div>`;
     }).join('')}</section>`;
   }
-  function currentBoard() { return notebook.boards.find(b => b.id === boardId); }
+  // The boards as they stand on screen: saved ones with their held edits, and
+  // an edited board removed elsewhere meanwhile, kept so its text can be copied.
+  function boards() {
+    const listed = notebook.boards.map(b => edits.boards[b.id] || b);
+    return listed.concat(Object.values(edits.boards).filter(b => !notebook.boards.some(n => n.id === b.id)));
+  }
+  function currentBoard() { return boards().find(b => b.id === boardId); }
+  // The board on screen, to be changed: a copy held until Save board.
+  function editBoard() {
+    if (!edits.boards[boardId]) {
+      edits.boardBases[boardId] = JSON.stringify(notebook.boards.find(b => b.id === boardId) ?? null);
+      edits.boards[boardId] = structuredClone(currentBoard());
+    }
+    return edits.boards[boardId];
+  }
   function renderBoards() {
     const questioning = tab === 'questions';
-    const available = notebook.boards.filter(b => !questioning || isQuestion(b));
+    const available = boards().filter(b => !questioning || isQuestion(b));
     if (!available.some(b => b.id === boardId)) boardId = available[0]?.id || null;
     const board = currentBoard();
     el('research-body').innerHTML = `<div class="tool-actions"><label>${questioning ? 'Question' : 'Board'}<select id="board-picker"><option value="">${questioning ? 'Choose a question' : 'Choose a board'}</option>${available.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
@@ -229,6 +376,12 @@ const ResearchTools = (() => {
         </article>`).join('')}</div>${!board.entries.length ? '<p class="empty">Add selected claims, then arrange headings and commentary around the evidence.</p>' : ''}`
         : questioning ? '<p class="empty">Create a research question. Select claims in the library, then add them here as evidence.</p>' : '<p class="empty">Create a board for a question, argument, or section you are writing.</p>'}`;
   }
+  // The connections as they stand on screen, as boards() has them: an edited
+  // connection removed elsewhere meanwhile is kept so its explanation can be copied.
+  function connections() {
+    const removed = Object.keys(edits.notes).filter(id => !notebook.connections.some(c => c.id === id));
+    return notebook.connections.concat(removed.map(id => ({...edits.noteConnections[id], removed:true})));
+  }
   function renderConnections() {
     const options = refs().map(r => `<option value="${html(refKey(r))}">${html(resolve(r)?.text || r.claim)}</option>`).join('');
     el('research-body').innerHTML = `<p class="hint">Select at least two claims in the library to connect them. “Qualifies” runs from the first claim to the second.</p>
@@ -237,9 +390,9 @@ const ResearchTools = (() => {
       <label>Relationship<select id="connection-relation"><option value="agrees">Agrees with</option><option value="contradicts">Contradicts</option><option value="qualifies">Qualifies</option></select></label>
       <label>Second claim<select id="connection-target">${options}</select></label>
       ${area('Your explanation', 'connection-note')}${button('create-connection','Create connection', claims.size < 2 ? 'disabled' : '')}</fieldset>
-      ${notebook.connections.map(c => `<article class="board-entry" data-connection="${html(c.id)}"><strong>${html(c.relation)}</strong>
+      ${connections().map(c => `<article class="board-entry" data-connection="${html(c.id)}">${c.removed ? '<p class="warn" role="status">This connection was removed in another window. Your unsaved explanation is kept here.</p>' : ''}<strong>${html(c.relation)}</strong>
         <div class="connection-pair"><div>${claimSummary(c.source)}</div><div>${claimSummary(c.target)}</div></div>
-        <label>Your explanation<textarea data-connection-note="${html(c.id)}">${html(c.note)}</textarea></label>
+        <label>Your explanation<textarea data-connection-note="${html(c.id)}">${html(edits.notes[c.id] ?? c.note)}</textarea></label>
         ${button('save-connection','Save explanation')}${button('delete-connection','Remove connection')}</article>`).join('')}`;
     if (el('connection-target')?.options.length > 1) el('connection-target').selectedIndex = 1;
   }
@@ -286,7 +439,7 @@ const ResearchTools = (() => {
     await save();
   }
   async function download(format, board = null) {
-    if (dirty) await save();
+    if (board && edits.boards[board]) await save({board});
     if (!board && !claims.size && !papers.size) throw new Error('Select claims or papers to export first.');
     const response = await client.response('/api/notebook/export', {method:'POST', headers:{'Content-Type':'application/json','X-Doxograph-Workspace':modalWorkspace},
       body:JSON.stringify({format,board,claims:refs(),papers:[...papers]})});
@@ -303,12 +456,16 @@ const ResearchTools = (() => {
     const response = await client.response(`/api/notebook/annotated/${encodeURIComponent(paper)}`, {headers:{'X-Doxograph-Workspace':ws}});
     await saveFile(response, `${paper}-annotated.pdf`);
     const skipped = Number(response.headers.get('X-Doxograph-Skipped-Marks') || 0);
-    (el('research-tools').open ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
+    (shown ? message : text => toast(text))(skipped ? `Annotated copy exported. ${skipped} mark${skipped === 1 ? ' is' : 's are'} past the last page of this PDF and ${skipped === 1 ? 'was' : 'were'} left out.` : 'Annotated copy exported. The original PDF is unchanged.', skipped > 0);
   }
-  async function showHistory(paper, claim = null) {
-    historyPaper = paper; historyClaim = claim;
-    historyData = await request(`/history/${encodeURIComponent(paper)}`);
-    tab = 'history'; render();
+  // Opens the edit history of a paper, or of one of its claims. `move` is the
+  // navigation number the request for it began at.
+  async function showHistory(paper, claim, move, replace = false) {
+    const data = await request(`/history/${encodeURIComponent(paper)}`);
+    if (!still(move)) return false;
+    historyPaper = paper; historyClaim = claim; historyData = data;
+    await arrive('history', replace);
+    return true;
   }
   function renderHistory() {
     const entries = historyData.entries.filter(e => !historyClaim || e.claim === historyClaim);
@@ -1070,7 +1227,7 @@ const ResearchTools = (() => {
     V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
     V.selectedId = claim;
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
-    scheduleTextSearch(); renderAll(); syncHash(true); scrollToSelected();
+    scheduleTextSearch(); syncHash(true); renderAll(); scrollToSelected();
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
     'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);
@@ -1129,19 +1286,26 @@ const ResearchTools = (() => {
     // joins it and a queued one is marked as being read; a finished one is
     // left as it is.
     if (name === 'reader') {
-      const navigation = navigationVersion(), ws = client.workspaceId;
-      if (el('research-tools').open) {
-        if (!await discardDrafts()) return;
-        await close({duringOperation:true});
-        if (el('research-tools').open) return;
-      }
+      const ws = client.workspaceId;
       const paper = data.paper;
-      const saved = await mutateNotebook(ws, n => {
+      const resume = () => mutateNotebook(ws, n => {
         const entry = n.reading.find(r => r.paper === paper);
         if (!entry) { n.reading.push({paper, status:'reading', page:1, bookmarks:[]}); return; }
         if (entry.status !== 'queued') return false;
         entry.status = 'reading';
       }, {history:false});
+      // From the tools, the paper takes their place at once, at the page the
+      // queue on screen names; the queue records the resume afterwards.
+      if (shown) {
+        const page = Number(data.page) || notebook?.reading.find(r => r.paper === paper)?.page || 1;
+        askPage(paper, ws, page, data.mark || null);
+        if (V.pdfHidden) { V.pdfHidden = false; storePdfHidden(); }
+        goToPaper(paper);
+        await resume();
+        return;
+      }
+      const navigation = navigationVersion();
+      const saved = await resume();
       // Moved on while the request was out: the paper chosen since stands.
       if (client.workspaceId !== ws || navigationVersion() !== navigation) return;
       const page = Number(data.page) || saved.reading.find(r => r.paper === paper)?.page || 1;
@@ -1240,32 +1404,35 @@ const ResearchTools = (() => {
     }
   }
   async function discardDrafts() {
-    if ((dirty || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
+    if ((dirty || editing() || connectionDraft) && !await confirmDialog('Discard unsaved changes before leaving this view?',{ok:'Discard changes'})) return false;
     if (dirty) { notebook = await request(); dirty = false; }
+    edits = noEdits();
     connectionDraft = false;
     return true;
   }
-  async function action(name, target) {
+  // `opened` is whether the click that ran this action opened the tools for it.
+  async function action(name, target, opened = false) {
     const data = target.dataset;
-    if (name === 'close') { await close({duringOperation:true}); return; }
-    if (name === 'tab' || name === 'reload') {
+    // Whatever waits below gives way to a move made meanwhile.
+    const move = navigationVersion();
+    if (name === 'tab') { openTab(data.tab); await load(); return; }
+    if (name === 'reload') {
+      if (!notebook) { loaded = null; await load(); return; }
       if (!await discardDrafts()) return;
-      const nextTab = data.tab || (tab === 'history' ? 'compare' : tab);
-      epoch++;
+      // The history on screen was read with the version being dropped, so the
+      // tools return to Compare in its place: not a move the reader chose.
+      const nextTab = tab === 'history' ? 'compare' : tab;
       if (nextTab === 'reading') {
         el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
         await flushReadingProgress();
       }
       notebook = await request();
+      if (!still(move)) return;
       tab = nextTab; render(); return;
     }
     if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
     if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
-    if (name === 'source') {
-      if (!await discardDrafts()) return;
-      await close({duringOperation:true}); if (el('research-tools').open) return;
-      goToPaper(data.paper, data.claim || null); return;
-    }
+    if (name === 'source') { goToPaper(data.paper, data.claim || null); return; }
     if (name === 'bulk') {
       const values = el('bulk-values').value.split(',').map(s=>s.trim()).filter(Boolean);
       const mode = el('bulk-mode').value;
@@ -1276,56 +1443,76 @@ const ResearchTools = (() => {
     }
     if (name === 'export-selection') { await download(data.format); return; }
     if (name === 'export-board') { await download(data.format, boardId); return; }
-    if (name === 'queue-selection') { await queue(selectedPapers()); tab = 'reading'; render(); return; }
-    if (name === 'queue-paper') { await queue([data.paper]); tab = 'reading'; render(); return; }
+    if (name === 'queue-selection' || name === 'queue-paper') {
+      await queue(name === 'queue-paper' ? [data.paper] : selectedPapers());
+      if (still(move)) await arrive('reading', opened);
+      return;
+    }
     if (name === 'new-board' || name === 'new-question') {
       if (!await discardDrafts()) return;
       const asking = name === 'new-question';
       const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
-      if (!title?.trim()) return;
+      if (!title?.trim() || !still(move)) return;
       const board = {id:uid(),kind:asking ? 'question' : 'board',title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
-      notebook.boards.push(board); boardId = board.id; await save(); renderBoards(); return;
+      // With no board open, the tab's entry names none, and going back to it
+      // would open this board anyway: the new board takes that entry in place.
+      const before = boardId;
+      notebook.boards.push(board); boardId = board.id; await save();
+      // A move made during the save is newer, even one back to this tab and
+      // board: the board is saved, not opened.
+      if (!still(move)) { boardId = before; return; }
+      if (before) chooseBoard(board.id); else render();
+      return;
     }
-    if (name === 'add-board') { tab = 'boards'; render(); message('Choose or create a board, then add the selected claims.'); return; }
+    if (name === 'add-board') {
+      await arrive('boards', opened);
+      if (!overtaken) message('Choose or create a board, then add the selected claims.');
+      return;
+    }
     if (name === 'board-add-selection') {
       if (!claims.size) throw new Error('Select claims in the library first.');
-      const board = currentBoard();
+      const board = editBoard();
       for (const reference of refs()) if (!board.entries.some(e => e.reference && refKey(e.reference) === refKey(reference))) board.entries.push({id:uid(),kind:'claim',reference,text:''});
-      await save(); renderBoards(); return;
+      await save({board:boardId}); renderBoards(); return;
     }
     if (name === 'board-heading' || name === 'board-note') {
-      currentBoard().entries.push({id:uid(),kind:name === 'board-heading' ? 'heading' : 'note',text:'',reference:null}); dirty = true; renderBoards(); return;
+      editBoard().entries.push({id:uid(),kind:name === 'board-heading' ? 'heading' : 'note',text:'',reference:null}); renderBoards(); return;
     }
     if (name === 'question-board') {
-      const board = currentBoard();
-      board.kind = 'question'; board.question ||= board.title; dirty = true;
-      await save(); renderBoards(); return;
+      const board = editBoard();
+      board.kind = 'question'; board.question ||= board.title;
+      await save({board:boardId}); renderBoards(); return;
     }
-    if (name === 'save-board' || name === 'save-connection') { await save(); return; }
+    if (name === 'save-board') { await save({board:boardId}); return; }
+    if (name === 'save-connection') { await save({notes:true}); return; }
     if (name === 'delete-board') {
       if (!await confirmDialog('Delete this evidence board? Source claims will remain in the library.',{ok:'Delete board'})) return;
-      notebook.boards = notebook.boards.filter(b=>b.id !== boardId); await save(); renderBoards(); return;
+      const id = boardId;
+      notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id]; delete edits.boardBases[id];
+      // The URL stops naming the board deleted.
+      if (still(move)) render();
+      return;
     }
     if (name.startsWith('entry-')) {
-      const entries = currentBoard().entries, id = target.closest('[data-entry]').dataset.entry;
+      const entries = editBoard().entries, id = target.closest('[data-entry]').dataset.entry;
       const i = entries.findIndex(e=>e.id === id);
       if (name === 'entry-remove') entries.splice(i,1);
       else { const j = i + (name === 'entry-up' ? -1 : 1); if (j >= 0 && j < entries.length) [entries[i],entries[j]] = [entries[j],entries[i]]; }
-      dirty = true; renderBoards(); return;
+      renderBoards(); return;
     }
     if (name === 'create-connection') {
       const from = JSON.parse(el('connection-source').value), to = JSON.parse(el('connection-target').value);
       if (JSON.stringify(from) === JSON.stringify(to)) throw new Error('Choose two different claims.');
       const relation = el('connection-relation').value;
       const existing = notebook.connections.find(c => refKey(c.source) === JSON.stringify(from) && refKey(c.target) === JSON.stringify(to) && c.relation === relation);
-      if (existing) existing.note = el('connection-note').value;
+      if (existing) { existing.note = el('connection-note').value; dropNote(existing.id); }
       else notebook.connections.push({id:uid(),source:{paper:from[0],claim:from[1]},target:{paper:to[0],claim:to[1]},relation,note:el('connection-note').value});
       await save(); connectionDraft = false; renderConnections(); return;
     }
     if (name === 'delete-connection') {
       const id = target.closest('[data-connection]').dataset.connection;
       if (!await confirmDialog('Remove this manual connection?',{ok:'Remove connection'})) return;
-      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); renderConnections(); return;
+      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); dropNote(id); renderConnections(); return;
     }
     if (name.startsWith('reading-')) {
       const key = target.closest('[data-reading]').dataset.reading, items = notebook.reading;
@@ -1337,15 +1524,16 @@ const ResearchTools = (() => {
     if (name === 'save-search') {
       const title = await promptDialog('Name this saved search', '', {ok:'Save search'});
       if (!title?.trim()) return;
-      const search = {id:uid(),name:title.trim(),view:V.view === 'library' ? 'library' : 'claims'};
+      const search = {id:uid(),name:title.trim(),view:origin};
       for (const field of ['q','paper','tag','label','facet','kind','unreviewed','unverified','group']) search[field] = V[field];
-      notebook.searches.push(search); await save(); tab = 'searches'; render(); return;
+      notebook.searches.push(search); await save();
+      if (still(move)) await arrive('searches', opened);
+      return;
     }
     if (['apply-search','rename-search','delete-search'].includes(name)) {
       const id = target.closest('[data-search]').dataset.search, search = notebook.searches.find(s=>s.id === id);
       if (name === 'apply-search') {
-        if (!await discardDrafts()) return;
-        await close({duringOperation:true}); if (el('research-tools').open) return; captureOpenEditor();
+        captureOpenEditor();
         const params = new URLSearchParams();
         params.set('view', search.view || 'claims');
         if (workspace !== 'default') params.set('ws',workspace);
@@ -1364,22 +1552,44 @@ const ResearchTools = (() => {
       notebook.highlights.find(h => h.id === target.closest('[data-highlight]').dataset.highlight).question = false;
       await save(); renderMarks(); message('Question marked answered. The mark and its note remain.'); return;
     }
-    if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper,data.claim); return; }
+    if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper, data.claim || null, move, opened); return; }
     if (name === 'restore') {
       const entry = historyData.entries.find(e => e.id === data.revision);
       const prompt = entry?.fields === null ? 'Restore this deletion? The claim will be removed and its wording kept in history.' : 'Restore this earlier version? The current version will remain in history.';
       if (!await confirmDialog(prompt,{ok:entry?.fields === null ? 'Restore deletion' : 'Restore version'})) return;
       const restored = await request(`/history/${encodeURIComponent(historyPaper)}/restore`,'POST',{revision:data.revision,expected:historyData.expected});
-      await refreshAll(); await showHistory(historyPaper,historyClaim);
+      await refreshAll();
+      if (!await showHistory(historyPaper, historyClaim, move)) return;
       message(restored.deleted ? 'Claim removed. Its wording remains in history.' : restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
+  }
+  // Whether the tools may open from outside them at `name`. An unsaved
+  // workspace note would be hidden by them, so it is saved first, and a
+  // connection still being written from an earlier visit is asked about
+  // before, as load() would ask after. Either refusal leaves the reader on
+  // the page they were on, with no history entry for a move not taken. A
+  // move made meanwhile is newer than this one; the tools are not up, so that
+  // is still()'s check without its `shown`.
+  async function mayEnter(name) {
+    const move = navigationVersion();
+    if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return false; }
+    const leaving = connectionDraft && loaded?.tab !== name;
+    if (leaving && !await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) return false;
+    if (navigationVersion() !== move) return false;
+    if (leaving) connectionDraft = false;
+    return true;
   }
   async function run(task) {
     if (busy) return;
     setBusy(true);
     try { await task(); }
-    catch (error) { message(error.message,true); if (!el('research-tools').open) toast(error.message,{tone:'warn'}); }
-    finally { setBusy(false); }
+    catch (error) { message(error.message,true); if (!shown) toast(error.message,{tone:'warn'}); }
+    finally {
+      setBusy(false);
+      // A move can arrive during other work. Drain the latest target, and
+      // draw it again if work gave way to a move that came back to it.
+      if (shown && (overtaken || tabKey(wanted) !== tabKey(loaded))) void run(load);
+    }
   }
   document.addEventListener('selectionchange', trackSelection);
   document.addEventListener('pointerdown', event => {
@@ -1430,11 +1640,21 @@ const ResearchTools = (() => {
     if (name === 'notes') { WorkspaceNotes.open(); return; }
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
-      if (!el('research-tools').open) {
-        if (!await open(['boards','questions','reading','marks','searches','connections','compare'].includes(name) ? name : 'compare')) return;
-        if (['boards','questions','reading','marks','searches','connections','compare'].includes(name)) return;
+      // A tab, or a tool used from the library, opens the research tools first.
+      let opened = false;
+      if (TABS.includes(name) || !shown) {
+        // An action used from outside runs on Compare; the tab it ends on
+        // takes over this entry (see arrive), so history gains one step.
+        const opening = TABS.includes(name) ? name : 'compare';
+        if (!shown) {
+          if (!await mayEnter(opening)) return;
+          opened = true;
+        }
+        openTab(opening);
+        await load();
+        if (TABS.includes(name) || !notebook || overtaken) return;
       }
-      await action(name,target);
+      await action(name, target, opened);
     });
   }, true);
   document.addEventListener('change', event => {
@@ -1446,13 +1666,15 @@ const ResearchTools = (() => {
       target.checked ? papers.add(target.dataset.selectPaper) : papers.delete(target.dataset.selectPaper); remember(); sync(); return;
     }
     if (target.id === 'board-picker') run(async () => {
-      const next = target.value;
+      const next = target.value, move = navigationVersion();
+      // "Choose a board" names none, and the redraw would open the first one:
+      // it is not a move, so the open board stays and history gets no entry.
+      if (!next) { target.value = boardId || ''; return; }
       if (!await discardDrafts()) { target.value = boardId || ''; return; }
-      boardId = next; renderBoards();
+      if (still(move)) chooseBoard(next);
     });
     if (target.matches('[data-entry-stance]')) {
-      currentBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
-      dirty = true;
+      editBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
       const overview = el('research-body').querySelector('.question-overview');
       if (overview) { const summary = overview.previousElementSibling; summary.insertAdjacentHTML('beforebegin', questionOverview(currentBoard())); summary.remove(); overview.remove(); }
     }
@@ -1464,7 +1686,7 @@ const ResearchTools = (() => {
     if (target.id === 'marks-filter') { marksFilter = target.value; renderMarks(); }
     if (target.matches('[data-highlight-question]')) run(async () => {
       const id = target.dataset.highlightQuestion, question = target.checked;
-      if (el('research-tools').open) {
+      if (shown && notebook) {
         notebook.highlights.find(h => h.id === id).question = question;
         await save(); return;
       }
@@ -1482,12 +1704,17 @@ const ResearchTools = (() => {
     }
     if (!el('research-tools')?.contains(target)) return;
     if (target.id.startsWith('connection-')) connectionDraft = true;
-    if (target.id.startsWith('board-') && ['title','question','conclusion','open_questions'].includes(target.id.slice(6))) { currentBoard()[target.id.slice(6)] = target.value; dirty = true; }
-    if (target.dataset.entryText) { currentBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value; dirty = true; }
-    if (target.dataset.connectionNote) { notebook.connections.find(c=>c.id === target.dataset.connectionNote).note = target.value; dirty = true; }
-  });
-  document.addEventListener('DOMContentLoaded', () => {
-    el('research-tools').addEventListener('cancel', event => { event.preventDefault(); close(); });
+    if (target.id.startsWith('board-') && ['title','question','conclusion','open_questions'].includes(target.id.slice(6))) editBoard()[target.id.slice(6)] = target.value;
+    if (target.dataset.entryText) editBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value;
+    if (target.dataset.connectionNote) {
+      const id = target.dataset.connectionNote;
+      if (!Object.hasOwn(edits.notes, id)) {
+        const connection = notebook.connections.find(c => c.id === id);
+        edits.noteBases[id] = JSON.stringify(connection.note ?? null);
+        edits.noteConnections[id] = structuredClone(connection);
+      }
+      edits.notes[id] = target.value;
+    }
   });
   window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   async function beforeWorkspaceSwitch() {
@@ -1495,13 +1722,11 @@ const ResearchTools = (() => {
     // it started in and open its paper over the one switched to.
     if (busy) {
       const text = 'Finish the current operation before switching workspaces.';
-      if (el('research-tools').open) message(text, true); else toast(text, {tone:'warn'});
+      if (shown) message(text, true); else toast(text, {tone:'warn'});
       return false;
     }
-    if (el('research-tools').open) {
-      await close();
-      if (el('research-tools').open) return false;
-    }
+    // A later guard may still refuse. Only committed selection clears drafts.
+    if ((dirty || editing() || connectionDraft) && !await confirmDialog('Discard unsaved changes in research tools?', {ok:'Discard changes'})) return false;
     // A highlight note being written in the rail is state app.js cannot see;
     // the switch would hide its editor and the next edit would overwrite it.
     if (highlightDrafting()) {
@@ -1518,12 +1743,27 @@ const ResearchTools = (() => {
       if (mark) markEditor.text = markEditor.saved = mark.note;
       else markEditor = null;
     }
-    if (el('research-tools').open && !unsaved()) { notebook = await request(); render(); }
+    if (shown && notebook && !unsaved()) { notebook = await request(); render(); }
     redrawContent();
   }
   return {selection: () => ({papers: selectedPapers(), focus: refs().map(r => ({paper: r.paper, claim: r.claim}))}),
     historyChanged,
-    connect(value) { client = value; }, sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+    connect(value, {open: opening, selected}) { client = value; navigate = opening; select = selected; }, show, hide,
+    resetWorkspace() {
+      hide();
+      notebook = null; dirty = false; edits = noEdits(); connectionDraft = false; historyData = null; boardId = null;
+      wanted = loaded = null; modalWorkspace = null;
+    },
+    sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     hasUnsavedChanges: () => Boolean(unsaved() || busy),
-    openBoard: id => run(() => open('boards', id))};
+    // A board from the command palette. From outside the tools it opens as a
+    // sidebar tool does, once mayEnter agrees.
+    openBoard(id) {
+      if (shown) { navigate('boards', id); return; }
+      void run(async () => {
+        if (!await mayEnter('boards')) return;
+        navigate('boards', id);
+        await load();
+      });
+    }};
 })();

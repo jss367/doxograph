@@ -63,7 +63,7 @@ const NEW_CLAIM_ID = '__new__';
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
 const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
-            drafts: {}, error: null, view: 'library', dataset: null, note: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+            drafts: {}, error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {}, noteSaving: null,
             graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false }, paperSort: null,
@@ -144,7 +144,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'notes'];
+const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'notes', 'tools'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -166,6 +166,10 @@ function currentHash() {
   if (V.view === 'claims' && V.selectedId) params.set('sel', V.selectedId);
   if (V.view === 'datasets' && V.dataset) params.set('dataset', V.dataset);
   if (V.view === 'notes' && V.note) params.set('note', V.note);
+  if (V.view === 'tools') {
+    params.set('tool', V.tool || 'compare');
+    if (V.board) params.set('board', V.board);
+  }
   if (V.tensionStatus) params.set('tstatus', V.tensionStatus);
   if (V.agreementStatus) params.set('astatus', V.agreementStatus);
   return params.toString();
@@ -178,15 +182,33 @@ function currentHash() {
 // before `applyHash` ever saw them.
 let restoringHistory = false;
 
-// A route can change away and back while a reader request waits. Record
-// each transition, including history traversal, rather than comparing only
-// the final paper/view. Background claim selection is not navigation.
+// A route can change away and back while a request waits. Record each
+// transition, including history traversal, rather than comparing only the
+// final route: work that waits takes this number first, and goes on only if
+// no move came between. The record a page view names (a note, a dataset, the
+// research tools' tab and board) is part of the route, as in the URL.
+// Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
+function navigationRouteNow() {
+  const record = {notes: V.note, datasets: V.dataset, tools: [V.tool, V.board]}[V.view] ?? null;
+  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
+    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, record]);
+}
 function navigationVersion() {
-  const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
-    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden]);
+  const route = navigationRouteNow();
   if (route !== navigationRoute) { navigationRoute = route; navigationSeq++; }
   return navigationSeq;
+}
+
+// The research tools naming what they show when the reader did not choose it:
+// a default board, none in place of a deleted one, or the tab kept when leaving
+// it was refused. The entry on screen is rewritten, and this is not a move, so
+// work waiting on the reader's last move goes on.
+function followTools(tool, board) {
+  navigationVersion();
+  V.tool = tool; V.board = board;
+  navigationRoute = navigationRouteNow();
+  syncHash();
 }
 
 function syncHash(push = false) {
@@ -271,6 +293,8 @@ function applyHash() {
   V.selectedId = params.get('sel') || null;
   V.dataset = params.get('dataset') || null;
   V.note = params.get('note') || null;
+  V.tool = params.get('tool') || null;
+  V.board = params.get('board') || null;
   V.tensionStatus = readStatus(params.get('tstatus'));
   V.agreementStatus = readStatus(params.get('astatus'));
   V.editing = null;
@@ -473,15 +497,13 @@ function resetWorkspaceView() {
   $('sync-status').hidden = true;
   // Retire the page views as soon as selection commits, before the new read
   // can pause or fail. Earlier draft checks can still refuse a workspace switch.
-  for (const [page, button] of Object.values(pageViews())) {
-    page.resetWorkspace();
-    $(button).removeAttribute('aria-current');
-  }
+  for (const [page] of Object.values(pageViews())) page.resetWorkspace();
+  document.querySelectorAll('.research-tools-nav button[aria-current]').forEach(button => button.removeAttribute('aria-current'));
   document.body.classList.remove('page-view');
   Object.assign(V, {
     paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
-    error: null, view: 'library', dataset: null, note: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+    error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {}, noteSaving: null,
     graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false },
@@ -658,6 +680,7 @@ function showView(view) {
   const destination = {library: 'papers', claims: 'papers', graph: 'graph-nav', research: 'research-nav',
     tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', notes: 'btn-research-notes'}[view];
   if (destination) revealSidebar($(destination));
+  if (view === 'tools') revealSidebar(toolButton());
   if (view === V.view) return;
   if (V.view === 'research') captureResearchDraft();
   // Neither the tensions view nor the map has an editor. Park any open one
@@ -734,30 +757,40 @@ function restoreNoteCursor(cursor) {
   field.setSelectionRange(cursor.start, cursor.end);
 }
 
-// The dataset catalog and the research notes each keep their own page in the
-// main pane, and their drafts while the reader is away. Showing one that is
-// already up is a no-op, so every redraw can come through here.
+// The dataset catalog, the research notes, and the research tools each keep
+// their own page in the main pane, and their drafts while the reader is away.
+// Showing one that is already up is a no-op, so every redraw can come through here.
 function pageViews() {
-  return {datasets: [Datasets, 'btn-datasets', V.dataset], notes: [ResearchNotes, 'btn-research-notes', V.note]};
+  return {datasets: [Datasets, [V.dataset], $('btn-datasets')],
+    notes: [ResearchNotes, [V.note], $('btn-research-notes')],
+    tools: [ResearchTools, [V.tool, V.board], toolButton()]};
+}
+
+function toolButton() {
+  return document.querySelector(`.research-tools-nav [data-tool="${CSS.escape(V.tool || 'compare')}"]`);
 }
 
 function drawPageViews() {
   const pages = pageViews();
   const open = Object.hasOwn(pages, V.view);
   document.body.classList.toggle('page-view', open);
-  for (const [view, [page, button, id]] of Object.entries(pages)) {
-    if (view === V.view) { $(button).setAttribute('aria-current', 'page'); page.show(id); }
-    else { $(button).removeAttribute('aria-current'); page.hide(); }
+  document.querySelectorAll('.research-tools-nav button[aria-current]').forEach(button => button.removeAttribute('aria-current'));
+  for (const [view, [page, args, button]] of Object.entries(pages)) {
+    if (view === V.view) { button?.setAttribute('aria-current', 'page'); page.show(...args); }
+    else page.hide();
   }
   return open;
 }
 
-// Opens a page view at a record, or at the one last open there.
-function openPageView(view, id = null) {
-  const moving = V.view !== view;
+// Opens a page view at a record or tab, or at the one last open there. Each
+// destination gets its own history entry, so Back retraces them. `replace`
+// moves the current entry instead, for a destination that takes over the one
+// the same click has just made.
+function openPageView(view, fields = {}, replace = false) {
+  const before = currentHash();
+  for (const [key, value] of Object.entries(fields)) if (value !== undefined) V[key] = value;
   showView(view);
-  if (id) V[{datasets: 'dataset', notes: 'note'}[view]] = id;
-  if (moving) syncHash(true);
+  if (currentHash() !== before) syncHash(!replace);
   renderAll();
 }
 
@@ -1435,12 +1468,13 @@ async function updateFromPoll() {
 
 async function boot() {
   WorkspaceNotes.connect(workspaceClient);
-  ResearchNotes.connect(workspaceClient, {open: (id) => openPageView('notes', id), follow: followToPaper,
+  ResearchNotes.connect(workspaceClient, {open: (id) => openPageView('notes', {note: id || undefined}), follow: followToPaper,
     selected: (id) => { V.note = id; syncHash(); }});
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
   $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
   $('btn-research-notes').addEventListener('click', () => openPageView('notes'));
-  ResearchTools.connect(workspaceClient);
+  ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
+    selected: followTools});
   window.FocusedReview.connect(workspaceClient);
   connectPaperMap(workspaceClient);
   AppStartup.phase('connection');

@@ -577,6 +577,9 @@ writing space are stored locally in `note-images/`.
   downloads a copy of the paper with its marks written in as standard PDF
   highlight and rectangle annotations, carrying your notes and questions, so
   other PDF readers show them. The stored PDF is never changed.
+- The research tools that follow open in the main pane beside the sidebar.
+  Each tab and board has its own link, **Back** retraces them, and unsaved
+  board edits are still there when you return from a paper.
 - **Compare & organize** uses the checkboxes on claim cards and beside paper
   titles. Selections stay pinned across filters and navigation, and survive a
   reload in the same browser tab. Compare sources, quotes, evidence, and notes
