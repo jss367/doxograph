@@ -21,7 +21,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from pydantic import BaseModel, Field
 
 from . import (__version__, activity, analysis_api, backups, bib, chat_api, chats, codex_cli, config, datasets, export,
-               fingerprint, job_journal, job_queue, loupe, notebook, origins, papers_api, query, records,
+               fingerprint, job_journal, job_queue, loupe, notebook, origins, papers_api, people, query, records,
                research_notes, storage, store, workspace_archive)
 from .model_errors import ModelSetupError
 
@@ -64,6 +64,7 @@ app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.include_router(research_notes.router)
 app.include_router(datasets.router)
+app.include_router(people.router)
 app.include_router(chats.router)
 app.include_router(query.router)
 app.include_router(backups.router)
@@ -375,6 +376,7 @@ def _build_state() -> dict[str, Any]:
         "tag_counts": store.tag_counts(rows),
         "label_counts": store.label_counts(papers),
         "label_keys": store.label_keys(papers),
+        "author_keys": people.author_keys(papers),
         "facets": facets,
         "facet_counts": (facet_counts := store.facet_counts(rows, facets)),
         "facet_value_keys": store.facet_value_keys(facet_counts),

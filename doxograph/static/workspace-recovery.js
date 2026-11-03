@@ -13,6 +13,7 @@
     if (version.path === 'notebook.json') return 'Workspace notes and research tools';
     if (version.path === 'research-notes.json') return 'Research notes';
     if (version.path === 'datasets.json') return 'Datasets';
+    if (version.path === 'people.json') return 'People';
     if (version.path === 'context.md') return 'Research context';
     if (version.path.startsWith('papers/')) {
       const key = version.path.slice(7, -5);

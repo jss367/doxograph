@@ -64,7 +64,7 @@ const NEW_CLAIM_ID = '__new__';
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
 const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
-            drafts: {}, error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+            drafts: {}, error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
             noteEditing: null, noteDrafts: {},
             graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false }, paperSort: null,
@@ -145,7 +145,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'notes', 'tools'];
+const HASH_VIEWS = ['library', 'claims', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'people', 'notes', 'tools'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -166,6 +166,8 @@ function currentHash() {
   if (!V.group) params.set('group', '0');
   if (V.view === 'claims' && V.selectedId) params.set('sel', V.selectedId);
   if (V.view === 'datasets' && V.dataset) params.set('dataset', V.dataset);
+  if (V.view === 'people' && V.person) params.set('person', V.person);
+  else if (V.view === 'people' && V.author) params.set('author', V.author);
   if (V.view === 'notes' && V.note) params.set('note', V.note);
   if (V.view === 'tools') {
     params.set('tool', V.tool || 'compare');
@@ -191,7 +193,7 @@ let restoringHistory = false;
 // Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
 function navigationRouteNow() {
-  const record = {notes: V.note, datasets: V.dataset, tools: [V.tool, V.board]}[V.view] ?? null;
+  const record = {notes: V.note, datasets: V.dataset, people: [V.person, V.author], tools: [V.tool, V.board]}[V.view] ?? null;
   return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, record]);
 }
@@ -293,6 +295,8 @@ function applyHash() {
   V.group = params.get('group') !== '0';
   V.selectedId = params.get('sel') || null;
   V.dataset = params.get('dataset') || null;
+  V.person = params.get('person') || null;
+  V.author = V.person ? null : params.get('author') || null;
   V.note = params.get('note') || null;
   V.tool = params.get('tool') || null;
   V.board = params.get('board') || null;
@@ -504,7 +508,7 @@ function resetWorkspaceView() {
   Object.assign(V, {
     paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
-    error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+    error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     noteEditing: null, noteDrafts: {},
     graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false },
@@ -565,14 +569,14 @@ function canLeaveWorkspace() {
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
     && !V.synthSaving && !paperNotesSaving() && !V.researchSaving && !trash.size
-    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !Datasets.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
+    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !Datasets.hasUnsavedChanges() && !People.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
 }
 
 // The native app calls this before quitting. Writing saves itself a moment
 // after typing stops, and the words typed in that moment are saved here.
 window.doxographSaveDrafts = async () => {
   workspaceWritingSnapshot();
-  const saved = (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), flushPaperNotes(),
+  const saved = (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), People.flush(), flushPaperNotes(),
     typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
   // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
   // writing after the waits too, and warn rather than silently saving a judgment.
@@ -583,7 +587,7 @@ window.doxographSaveDrafts = async () => {
 // Consent to lose writing belongs to its content and identity, not a quit
 // attempt alone. Native compares this only while input remains frozen.
 window.doxographQuitWritingSnapshot = () => JSON.stringify([
-  workspaceWritingSnapshot(), ResearchNotes.writingSnapshot(), Datasets.writingSnapshot(),
+  workspaceWritingSnapshot(), ResearchNotes.writingSnapshot(), Datasets.writingSnapshot(), People.writingSnapshot(),
   ResearchTools.writingSnapshot(), [...document.querySelectorAll('input:not([type="password"]):not([type="file"]),textarea,select,[contenteditable="true"]')]
     .map(field => [field.id, field.name, field.value ?? field.textContent, field.checked]),
 ]);
@@ -593,7 +597,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     // A paper note that cannot save is a draft, which confirmLeave asks about.
     await flushPaperNotes();
     return await WorkspaceNotes.beforeWorkspaceSwitch()
-      && await ResearchNotes.beforeWorkspaceSwitch() && await Datasets.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+      && await ResearchNotes.beforeWorkspaceSwitch() && await Datasets.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave: canLeaveWorkspace,
@@ -608,7 +612,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   beforeLeave: flushTrash,
   async beforeSelect() {
     if (!await WorkspaceNotes.beforeWorkspaceSwitch()) return false;
-    if (!await ResearchNotes.beforeWorkspaceSelect() || !await Datasets.beforeWorkspaceSelect()
+    if (!await ResearchNotes.beforeWorkspaceSelect() || !await Datasets.beforeWorkspaceSelect() || !await People.beforeWorkspaceSelect()
         || !await ResearchTools.beforeWorkspaceSelect()) return false;
     // All earlier waits leave core editors interactive. Consent applies only
     // to the snapshot shown when asking, not later writing or pending saves.
@@ -627,7 +631,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     // This synchronous last check runs after beforeSelect's Promise and
     // immediately before selection, so a late save/draft cannot slip through.
     if (!canLeaveWorkspace()) return false;
-    if (!ResearchNotes.canWorkspaceSelect() || !Datasets.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
+    if (!ResearchNotes.canWorkspaceSelect() || !Datasets.canWorkspaceSelect() || !People.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
     if (hasWorkspaceDrafts() && workspaceWritingSnapshot() !== discardedWorkspaceWriting) {
       toast('Your writing changed. Switch workspaces again to review it.', { tone: 'warn' });
       return false;
@@ -758,7 +762,7 @@ function renderStorageWarnings() {
 
 function showView(view) {
   const destination = {library: 'papers', claims: 'papers', graph: 'graph-nav', research: 'research-nav',
-    tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', notes: 'btn-research-notes'}[view];
+    tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people', notes: 'btn-research-notes'}[view];
   if (destination) revealSidebar($(destination));
   if (view === 'tools') revealSidebar(toolButton());
   if (view === V.view) return;
@@ -837,11 +841,12 @@ function restoreNoteCursor(cursor) {
   field.setSelectionRange(cursor.start, cursor.end);
 }
 
-// The dataset catalog, the research notes, and the research tools each keep
+// The dataset catalog, the people, the research notes, and the research tools each keep
 // their own page in the main pane, and their drafts while the reader is away.
 // Showing one that is already up is a no-op, so every redraw can come through here.
 function pageViews() {
   return {datasets: [Datasets, [V.dataset], $('btn-datasets')],
+    people: [People, [V.person, V.author], $('btn-people')],
     notes: [ResearchNotes, [V.note], $('btn-research-notes')],
     tools: [ResearchTools, [V.tool, V.board], toolButton()]};
 }
@@ -872,6 +877,11 @@ function openPageView(view, fields = {}, replace = false) {
   showView(view);
   if (currentHash() !== before) syncHash(!replace);
   renderAll();
+}
+
+// An author's name on a paper opens their page, or the record that goes by it.
+function openPerson(name) {
+  openPageView('people', {person: null, author: name});
 }
 
 // Following a source out of a page view, the way the paper list opens one.
@@ -1106,6 +1116,10 @@ $('panes').addEventListener('click', async (event) => {
       await deleteLater('claim', claim,
                         `/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`,
                         'the claim', { paper });
+      return;
+    }
+    if (act === 'open-person') {
+      openPerson(button.dataset.author);
       return;
     }
     if (act === 'library-open-paper') {
@@ -1548,6 +1562,7 @@ async function updateFromPoll() {
   if (!editorHolds()) renderContent();
   syncHash();
   syncAnalysisControls();
+  People.sync();
   ResearchTools.sync();
   WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
@@ -1559,6 +1574,8 @@ async function boot() {
     selected: (id) => { V.note = id; syncHash(); }});
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
   $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
+  People.connect(workspaceClient, followToPaper, (id, author) => { V.person = id; V.author = author; syncHash(); });
+  $('btn-people').addEventListener('click', () => openPageView('people'));
   $('btn-research-notes').addEventListener('click', () => openPageView('notes'));
   ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
     selected: followTools});

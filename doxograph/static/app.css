@@ -296,7 +296,7 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .library-paper-link { color: var(--ink); text-decoration: none; }
 .library-paper-link::after { content: ''; position: absolute; inset: 0; border-radius: 10px; }
 .library-paper-link:focus-visible { outline: none; }
-.library-paper .paper-selection, .library-paper-topics button { position: relative; z-index: 1; }
+.library-paper .paper-selection, .library-paper-topics button, .library-paper .author-link { position: relative; z-index: 1; }
 .library-paper-meta { margin: .45rem 0 .65rem; font-size: .8rem; color: var(--muted); }
 .library-paper-summary { margin: 0 0 .8rem; font-size: .88rem; line-height: 1.6;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
