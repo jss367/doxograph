@@ -14,11 +14,11 @@ def _identity(parts: SplitResult) -> LinkKey:
             parts.path, parts.query, parts.fragment)
 
 # Repositories named in the paper's own abstract or arXiv comment. Only hosts
-# whose first two path segments are an owner and a repository are recognized,
-# so a link to a user, an organization, or a project page is not taken for one.
+# with at least a namespace and project are recognized. GitLab namespaces may
+# be nested; the other supported hosts use owner/repository paths.
 _REPOSITORY = re.compile(
     r"(?<![\w.-])(?:https?://)?(?:www\.)?"
-    r"(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)/([\w.-]+)/([\w.-]+)",
+    r"(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)/([\w.-]+(?:/[\w.-]+)+)",
     re.I,
 )
 
@@ -57,10 +57,19 @@ def normalize(values: list[str]) -> list[str]:
 def find(text: str) -> list[str]:
     """Repository addresses a paper's own text names, in the order it names them."""
     links: dict[LinkKey, str] = {}
-    for host, owner, repository in _REPOSITORY.findall(text or ""):
+    for host, path in _REPOSITORY.findall(text or ""):
+        parts = path.split("/")
+        if host.lower() == "gitlab.com":
+            # GitLab separates repository views from a nested project with /-/.
+            if "-" in parts:
+                parts = parts[:parts.index("-")]
+        else:
+            parts = parts[:2]
+        if len(parts) < 2:
+            continue
         # A sentence can end on the address, and a clone address ends in `.git`.
-        repository = re.sub(r"\.git$", "", repository.rstrip("."), flags=re.I)
-        if repository:
-            link = f"https://{host.lower()}/{owner}/{repository}"
+        parts[-1] = re.sub(r"\.git$", "", parts[-1].rstrip("."), flags=re.I)
+        if parts[-1]:
+            link = f"https://{host.lower()}/{'/'.join(parts)}"
             links.setdefault(_identity(urlsplit(link)), link)
     return list(links.values())[:MAX_LINKS]
