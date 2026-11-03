@@ -104,6 +104,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         webView.callAsyncJavaScript(
             """
             if (freezeEditing) {
+                if (typeof pageImports !== 'undefined') pageImports.freeze();
                 window.doxographQuitInert ??= document.body.inert;
                 window.doxographQuitFocus ??= document.activeElement;
                 document.activeElement?.blur();
@@ -129,6 +130,7 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     func resumeEditingAfterCancelledQuit() {
         editingFrozen = false
         webView.evaluateJavaScript("""
+            if (typeof pageImports !== 'undefined') pageImports.resume();
             if (window.doxographQuitInert !== undefined) {
                 document.body.inert = window.doxographQuitInert;
                 delete window.doxographQuitInert;

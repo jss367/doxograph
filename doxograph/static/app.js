@@ -516,7 +516,8 @@ function canRestoreSavedVersion() {
 // The native app calls this before quitting. Writing saves itself a moment
 // after typing stops, and the words typed in that moment are saved here.
 window.doxographSaveDrafts = async () =>
-  (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), flushPaperNotes()])).every(Boolean);
+  (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), flushPaperNotes(),
+    typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
 
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {

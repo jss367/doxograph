@@ -490,8 +490,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Writing saves itself a moment after typing stops, so the last words
         // typed before a quit may still be waiting. Save them first; only
         // writing that could not be saved is worth a question.
-        window.saveDrafts { saved in
+        // Freeze page import admission and settle admitted transfers before
+        // the health snapshot, which must see the reading jobs they created.
+        window.saveDrafts(freezeEditing: true) { saved in
             if !saved, !self.confirmQuitWithUnsavedWriting() {
+                self.window.resumeEditingAfterCancelledQuit()
                 self.relaunchAfterQuit = false
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
