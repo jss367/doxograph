@@ -339,7 +339,12 @@ function editForm(row, tagListId = 'taglist') {
 // --- actions --------------------------------------------------------------
 
 function cancelEdit() {
-  if (V.editing) delete V.drafts[V.editing];   // discard only this claim's draft
+  if (isSaving(V.editing)) return;
+  if (V.editing) {
+    delete V.drafts[V.editing]; // discard only this claim's draft
+    delete V.quitClaimBases[V.editing];
+    delete V.unconfirmedClaims[V.editing];
+  }
   // Only the new-claim editor's own Cancel drops the held new claim. Cancelling
   // an existing claim while one is held must leave it reachable via Resume.
   if (V.editing === NEW_CLAIM_ID) V.newClaim = null;
@@ -778,9 +783,12 @@ async function saveClaim(wrap, patch) {
   }
 
   V.editing = null;
+  V.unconfirmedClaims[wrap.dataset.claim] = true;
   try {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, claimRequestBody(patch));
     delete V.drafts[wrap.dataset.claim];
+    delete V.quitClaimBases[wrap.dataset.claim];
+    delete V.unconfirmedClaims[wrap.dataset.claim];
     // `render` leaves the content alone while another editor is open — a
     // synthesis, a note — so the saved claim's form would stay on screen with
     // nothing tracking it, and text typed into it afterwards would be thrown

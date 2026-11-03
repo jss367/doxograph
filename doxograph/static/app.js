@@ -66,6 +66,7 @@ const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', u
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
+    quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
             noteEditing: null, noteDrafts: {},
             graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
@@ -506,6 +507,7 @@ function resetWorkspaceView() {
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
+    quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
     noteEditing: null, noteDrafts: {},
     graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false },
     quoteContext: null, textSearch: null, similar: null,
@@ -530,6 +532,20 @@ function hasWorkspaceDrafts() {
     || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
 }
 
+// Opening a manual editor is not new writing. Keep its opened baseline
+// independent of later polls, and keep uncertain writes unsaved even on revert.
+function hasQuitWriting() {
+  const changedClaims = Object.entries(V.drafts).some(([id, draft]) => {
+    const base = V.quitClaimBases[id];
+    return !base || Object.keys(base).some(key => JSON.stringify(draft[key]) !== JSON.stringify(base[key]));
+  });
+  const changedSyntheses = Object.entries(V.synthDrafts).some(([topic, text]) =>
+    !Object.hasOwn(V.quitSynthBases, topic) || text !== V.quitSynthBases[topic]);
+  return Boolean(changedClaims || changedSyntheses || V.newClaim || Object.keys(V.parkedNewClaims).length
+    || Object.keys(V.unconfirmedClaims).length || Object.keys(V.unconfirmedSyntheses).length
+    || Object.keys(V.noteDrafts).length || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
+}
+
 // Core editors keep some writing only in their visible form. Snapshot it
 // without closing that form, including the identity of every parked draft.
 function workspaceWritingSnapshot() {
@@ -548,7 +564,8 @@ function workspaceWritingSnapshot() {
     return [key, saver.generation, saver.unconfirmed];
   });
   return JSON.stringify([workspaceClient.workspaceId, V.editing, V.drafts, V.newClaim, V.parkedNewClaims,
-    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft]);
+    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft,
+    V.unconfirmedClaims, V.unconfirmedSyntheses]);
 }
 let discardedWorkspaceWriting = null;
 let discardedWorkspaceId = null;
@@ -577,7 +594,7 @@ window.doxographSaveDrafts = async () => {
   // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
   // writing after the waits too, and warn rather than silently saving a judgment.
   workspaceWritingSnapshot();
-  return saved && !hasWorkspaceDrafts() && !savingClaims.size && !V.synthSaving && !V.researchSaving;
+  return saved && !hasQuitWriting() && !savingClaims.size && !V.synthSaving && !V.researchSaving;
 };
 
 // Consent to lose writing belongs to its content and identity, not a quit
@@ -1008,6 +1025,10 @@ $('panes').addEventListener('click', async (event) => {
       captureOpenEditor();
       V.editing = claim;
       renderContent();
+      if (!Object.hasOwn(V.quitClaimBases, claim) && !V.drafts[claim]) {
+        const form = document.querySelector(`form[data-form="${CSS.escape(claim)}"]`);
+        if (form) V.quitClaimBases[claim] = readForm(form);
+      }
       return;
     }
     if (act === 'cancel') { cancelEdit(); return; }
@@ -1207,6 +1228,9 @@ $('panes').addEventListener('click', async (event) => {
       captureOpenEditor();
       parkSynthEditor();
       V.synthEditing = button.dataset.topic;
+      if (!Object.hasOwn(V.quitSynthBases, V.synthEditing) && V.synthDrafts[V.synthEditing] === undefined) {
+        V.quitSynthBases[V.synthEditing] = synthesisFor(V.synthEditing)?.text;
+      }
       renderContent();
       return;
     }
@@ -1256,12 +1280,15 @@ $('panes').addEventListener('click', async (event) => {
         // been told so, and a basis recorded against it would be a judgment
         // about a corpus nobody can see.
         if (!headers) return;
+        V.unconfirmedSyntheses[topic] = true;
         await api(`/api/syntheses/${encodeURIComponent(topic)}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ text }),
         });
         V.synthEditing = null;
         delete V.synthDrafts[topic];
+        delete V.quitSynthBases[topic];
+        delete V.unconfirmedSyntheses[topic];
       } catch (error) {
         V.synthDrafts[topic] = text;   // keep what was typed so the save can be retried
         V.error = `Could not save the synthesis: ${error.message}`;
