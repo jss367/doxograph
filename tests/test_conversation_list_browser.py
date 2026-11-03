@@ -10,6 +10,11 @@ from browser_support import browser_session, run_browser
 from doxograph import config
 from test_browser import _server
 
+# A tall window shows the conversation list without scrolling the docked Ask
+# pane. When the pane must scroll, Linux WebKit moves it as a click takes focus
+# off the composer, so the button slides out from under the pointer.
+VIEWPORT = {'width': 1100, 'height': 1100}
+
 
 def seed_conversations(url):
     config.set_ai_provider('codex')
@@ -32,7 +37,7 @@ def seed_conversations(url):
 def test_conversations_list_archive_restore_reload_and_keep_drafts(engine):
     async def scenario(url):
         async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={'width': 1100, 'height': 1100})
+            page = await browser.new_page(viewport=VIEWPORT)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             await page.goto(url)
@@ -109,7 +114,7 @@ def test_conversations_list_archive_restore_reload_and_keep_drafts(engine):
 def test_archive_failure_and_lost_response_keep_saved_conversations(engine):
     async def scenario(url):
         async with browser_session(engine) as browser:
-            page = await browser.new_page()
+            page = await browser.new_page(viewport=VIEWPORT)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
             archive = page.locator(f'[data-thread-archive="{"a" * 32}"]')
@@ -156,7 +161,7 @@ def test_archive_failure_and_lost_response_keep_saved_conversations(engine):
 def test_lost_active_archive_response_selects_a_usable_conversation(engine, other_active):
     async def scenario(url, original):
         async with browser_session(engine) as browser:
-            page = await browser.new_page()
+            page = await browser.new_page(viewport=VIEWPORT)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             await page.goto(url)
@@ -211,7 +216,7 @@ def test_lost_active_archive_response_selects_a_usable_conversation(engine, othe
 def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
     async def scenario(url, original):
         async with browser_session(engine) as browser:
-            page = await browser.new_page()
+            page = await browser.new_page(viewport=VIEWPORT)
             errors, writes, note_reads = [], [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.on('request', lambda request: writes.append(request.url)
@@ -302,7 +307,7 @@ def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
 def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive_views(engine, other_active):
     async def scenario(url):
         async with browser_session(engine) as browser:
-            reader, archiver = await browser.new_page(), await browser.new_page()
+            reader, archiver = await browser.new_page(viewport=VIEWPORT), await browser.new_page(viewport=VIEWPORT)
             errors = []
             reader.on('pageerror', lambda error: errors.append(str(error)))
             archiver.on('pageerror', lambda error: errors.append(str(error)))
@@ -354,7 +359,7 @@ def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive
 def test_lost_archive_reconciliation_keeps_note_actions_blocked_when_reopened(engine):
     async def scenario(url):
         async with browser_session(engine) as browser:
-            page = await browser.new_page()
+            page = await browser.new_page(viewport=VIEWPORT)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
             await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()

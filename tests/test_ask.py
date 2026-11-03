@@ -289,7 +289,10 @@ def test_large_focus_uses_stdin_and_combined_input_budget(monkeypatch, tmp_path)
         ask_context.active.reset(token)
 
 
-@pytest.mark.parametrize('payload', ['{}', '[1]', '[]', '["../outside"]', 'x' * 2_100_001])
+# A short ID keeps the oversized payload out of test names. A 2 MB name in the
+# verbose output stalls the GitHub Actions runner until the job is cancelled.
+@pytest.mark.parametrize('payload', ['{}', '[1]', '[]', '["../outside"]',
+                                     pytest.param('x' * 2_100_001, id='oversized')])
 def test_invalid_snapshot_file_never_starts_an_unscoped_server(payload, monkeypatch, tmp_path):
     path = tmp_path / 'papers.json'
     path.write_text(payload)
