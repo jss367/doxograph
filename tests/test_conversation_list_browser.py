@@ -402,3 +402,29 @@ def test_lost_archive_reconciliation_keeps_note_actions_blocked_when_reopened(en
     with _server() as url:
         seed_conversations(url)
         run_browser(scenario(url))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_conversation_list_keeps_rows_visible_in_short_windows(engine):
+    async def scenario(url):
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
+            await page.goto(url)
+            await page.locator('#btn-agent:enabled').click()
+            first = page.locator('#agent-thread li').first
+            await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(3)
+            # Laptop heights once squeezed the list to its heading.
+            for height in [720, 800, 850, 900]:
+                await page.set_viewport_size({'width': 1440, 'height': height})
+                listed = await page.locator('#library-agent > .chat-conversations').bounding_box()
+                heading = await page.locator('.chat-conversations h3').bounding_box()
+                row = await first.bounding_box()
+                assert listed['height'] >= heading['height'] + row['height'] * 1.5, height
+                await page.locator('#agent-send').scroll_into_view_if_needed()
+                send = await page.locator('#agent-send').bounding_box()
+                assert send['y'] + send['height'] <= height, height
+
+    with _server() as url:
+        seed_conversations(url)
+        run_browser(scenario(url))
