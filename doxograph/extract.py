@@ -1163,9 +1163,11 @@ def synthesize_topic(topic: str, rows: list[dict[str, Any]] | None = None,
     A topic whose synthesis is on file and not stale is skipped: no claim and
     no tension in it has changed since it was written, so the model would be
     asked the same question, and a text somebody corrected by hand would be
-    replaced by a model's for nothing. `force` writes it again anyway, which
-    is also how to rewrite after editing the research context, since that is
-    not part of what makes a synthesis stale.
+    replaced by a model's for nothing. A new prompt, model, or topic wording
+    does put a model's text back in the queue, but not a hand correction,
+    which no prompt wrote. `force` writes it again anyway, which is also how
+    to rewrite after editing the research context, since that is not part of
+    what makes a synthesis stale.
     """
     config.require_ai_enabled()
     all_rows = rows if rows is not None else store.claim_rows()
@@ -1181,9 +1183,11 @@ def synthesize_topic(topic: str, rows: list[dict[str, Any]] | None = None,
         # The prompt as well as the claims and tensions: a synthesis written
         # under an older prompt, or under the topic's old name or description,
         # is worth writing again, and nothing in the corpus changing would
-        # ever say so.
+        # ever say so. Not one corrected by hand, though: no prompt wrote it,
+        # so a new one has nothing to improve on, and a version bump would
+        # otherwise write over every correction in the workspace at once.
         if (current and not current["stale"]
-                and current.get("prompt_basis") == basis):
+                and (current.get("prompt_basis") == basis or current.get("source") == "hand")):
             return {"written": False, "skipped": True, "claims": len(rows), "papers": len(papers)}
     description = next((t.get("description", "") for t in tags if t["name"] == topic), "")
     shown = {r["id"]: r for r in rows}

@@ -1089,12 +1089,15 @@ Changing `DOXOGRAPH_MODEL` counts too: a different model is a different answer.
 the research context, which is not part of what makes one stale. **Rewrite** on
 a synthesis forces it too: it is an instruction, not a request. Bumping
 `PASS_VERSION` in `config.py` after changing one of these prompts puts every
-topic back in the queue once.
+topic back in the queue once; `SYNTHESIS_VERSION` does the same for the
+synthesis prompt alone.
 
 This costs nothing in findings: a pair the model does not return is kept
 anyway, so a repeat call over unchanged claims could only re-derive what is
 there. Skipping also leaves a synthesis you corrected by hand alone, where a
-rerun used to write over it.
+rerun used to write over it: no prompt wrote it, so a new prompt, model, or
+topic wording does not put it back in the queue either. Only a change to its
+claims or tensions, **Rewrite**, or `--force` replaces it.
 
 ## Notes of your own
 
