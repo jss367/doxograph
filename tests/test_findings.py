@@ -81,6 +81,8 @@ def test_a_stage_that_fails_in_one_topic_does_not_stop_the_later_stages(monkeypa
 
     def agreements(topic, rows=None, tags=None, force=False):
         asked.append(("agreements", topic))
+        if topic == "scaling":
+            raise RuntimeError("timed out")
         return {"added": 0, "grown": 0, "reopened": 0, "kept": 0, "returned": 0, "skipped": True}
 
     def synthesize(topic, rows=None, tags=None, force=False):
@@ -95,8 +97,10 @@ def test_a_stage_that_fails_in_one_topic_does_not_stop_the_later_stages(monkeypa
     assert sorted(asked) == sorted([(s, t) for s in ("tensions", "agreements", "syntheses")
                                     for t in ("recovery-rate", "scaling")])
     assert job["state"] == "error"
+    # One topic failed twice: counted once, with both failures on record.
     assert job["detail"] == ("1 of 2 topics failed, 1 tensions new, 0 agreements new, 2 syntheses written; "
-                             "tensions in scaling: RuntimeError: refused")
+                             "tensions in scaling: RuntimeError: refused; "
+                             "agreements in scaling: RuntimeError: timed out")
 
 
 def test_a_reworded_synthesis_prompt_moves_the_synthesis_basis_and_not_the_tension_basis(monkeypatch):

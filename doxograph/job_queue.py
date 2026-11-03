@@ -403,8 +403,12 @@ def _run_findings(job: dict[str, Any], topics: list[str], force: bool = False) -
             ("syntheses", lambda t: extract.synthesize_topic(t, rows, tags, force=force),
              lambda r: 1 if r["written"] else 0, "written"),
         ]
-        failed = 0
-        last_failure = ""
+        # Three stages can each fail the same topic, so the count is of topics
+        # rather than of attempts, and every failure is kept: the last one
+        # alone would hide a tension pass that failed under a synthesis that
+        # did not.
+        failed_topics: set[str] = set()
+        failures: list[str] = []
         summary = []
         for name, work, count, verb in stages:
             got = done = 0
@@ -412,14 +416,14 @@ def _run_findings(job: dict[str, Any], topics: list[str], force: bool = False) -
             for topic, result, exc in extract.run_concurrently(topics, work):
                 done += 1
                 if exc is not None:
-                    failed += 1
-                    last_failure = f"{name} in {topic}: {type(exc).__name__}: {exc}"
+                    failed_topics.add(topic)
+                    failures.append(f"{name} in {topic}: {type(exc).__name__}: {exc}")
                     traceback.print_exception(exc)
                 else:
                     got += count(result)
                 _set(job, detail=f"{name} · {done} of {len(topics)} topics")
             summary.append(f"{got} {name} {verb}")
-        _finish_pass(job, len(topics), "topics", failed, last_failure, ", ".join(summary))
+        _finish_pass(job, len(topics), "topics", len(failed_topics), "; ".join(failures), ", ".join(summary))
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
