@@ -502,6 +502,29 @@ agreement list is narrowed to. A reload lands where you left off,
 Back walks the papers and topics you went through rather than every keystroke,
 and a link to a topic is something you can keep or send.
 
+A paper, a claim, and each of your own claims also has an address for other
+documents to cite: `/paper/<key>`, `/claim/<id>`, and `/ledger/<id>`, with
+`?workspace=<id>` outside the Default workspace. A claim restored with an id
+that does not start with its paper's key carries `?paper=<key>` too, since two
+papers can hold such an id. Keys and claim ids are never
+reissued, so a brief that cites
+`http://127.0.0.1:8765/claim/doe2026recovery-c3` keeps opening that claim
+however the app's own URL changes. A paper opens with its claims, a claim
+opens selected on its paper, and one of your own claims opens the claims
+linked to it. **link** on a claim, **Paper actions → Copy link**, and **link**
+beside a saved claim of your own in *What I am studying* copy the address.
+The query API and the MCP tools return it as `url` on every paper and claim.
+
+The HTML export has matching anchors, `#paper-<key>`, `#claim-<id>`, and
+`#ledger-<id>`, and a **#** beside each one links to it. A document kept beside
+the export can cite `Doxograph.html#claim-doe2026recovery-c3` and it works
+offline; following one clears any filter that hides its target. The export's
+head carries its title, a one-line `description` of what it holds, and the
+`date` it was generated, which is what a card in an index of documents needs.
+`doxograph export --out <path>` writes it to a fixed place, such as beside
+that index, and `DOXOGRAPH_EXPORT` sends the Default workspace's **Export
+HTML** there too.
+
 The search box narrows the claims and the paper list together. It matches
 claim text, evidence, quotes, topics, paper titles, authors, keys, and
 years, so a word from a title finds the paper even when nothing has been
@@ -1034,6 +1057,10 @@ claims:
     text: >-
       Recovery under steering is a path-dependent outcome.
 ```
+
+Removing a claim, or changing its id, lists the old id under `retired`, and a
+new claim cannot take it: `/ledger/<id>` and the export's `#ledger-<id>` keep
+naming the claim they were made for. **Add a claim** skips retired ids.
 
 These are your own claims. Extraction links a paper's claims to them, which is
 what turns the corpus into an answer to "what external evidence do I have for

@@ -42,10 +42,31 @@ def load_ledger() -> list[dict[str, Any]]:
     return _ledger().get("claims") or []
 
 
+def retired_ledger_ids() -> list[str]:
+    return _ledger().get("retired") or []
+
+
+class RetiredLedgerId(ValueError):
+    """A new claim of your own was given the id of one removed or renamed."""
+
+
 def save_ledger(claims: list[dict[str, Any]]) -> None:
+    """Replace your own claims. An id that leaves the ledger is retired, and a
+    retired id is refused to a new claim: `/ledger/<id>` and the export's
+    anchor are permanent, and would otherwise name a different claim."""
     with store.document_lock("ledger"):
         payload = _ledger()
         existing = {claim["id"]: claim for claim in payload.get("claims") or []}
+        retired = list(payload.get("retired") or [])
+        reused = [claim["id"] for claim in claims if claim["id"] in retired and claim["id"] not in existing]
+        if reused:
+            raise RetiredLedgerId(
+                f"{reused[0]} belonged to a claim you removed, and links to it still name that "
+                "claim. Give this one another id.")
+        kept = {claim["id"] for claim in claims}
+        retired.extend(claim_id for claim_id in existing if claim_id not in kept)
+        if retired:
+            payload["retired"] = retired
         payload["claims"] = [{**existing.get(claim["id"], {}), **claim} for claim in claims]
         workspace_metadata.ResearchLedger.model_validate(payload, strict=True)
         store.write_atomic(

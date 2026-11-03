@@ -862,6 +862,7 @@ function graphOpenPaper(key, openNote = false) {
   // onto anything.
   keepLabelFor(key);
   keepFacetFor(key);
+  keepLedgerFor(key);
   V.paper = key; V.tag = null; V.selectedId = null;
   syncHash(true);   // leaving the map is navigation: Back returns to it
   renderAll();

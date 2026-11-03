@@ -129,6 +129,8 @@ function claimCard(row, shown, group = '') {
         <button type="button" data-act="review" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}">
           ${row.reviewed ? 'reviewed' : 'mark reviewed'}</button>
         <button type="button" data-act="edit" data-claim="${esc(row.id)}">edit</button>
+        <button type="button" data-act="copy-link" data-kind="claim" data-id="${esc(row.id)}" data-paper="${esc(row.paper)}"
+          title="Copy a link to this claim that other documents can keep">link</button>
         <button type="button" data-act="similar" data-claim="${esc(row.id)}" data-paper="${esc(row.paper)}"
           data-group="${esc(group)}"
           title="Claims from other papers that use the same words">${similarOpen(row.id, group) ? 'hide alike' : 'alike'}</button>

@@ -62,7 +62,7 @@ const NEW_CLAIM_ID = '__new__';
 // judgment but the reader's, so unlike a synthesis it is saved without
 // flushing the held deletes: no claim is read to write one.
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
-const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+const V = { paper: null, tag: null, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
@@ -160,6 +160,7 @@ function currentHash() {
   if (V.tag) params.set('tag', V.tag);
   if (V.label) params.set('label', V.label);
   if (V.facet) params.set('facet', V.facet);
+  if (V.ledger) params.set('ledger', V.ledger);
   if (V.q.trim()) params.set('q', V.q);
   if (V.kind) params.set('kind', V.kind);
   if (V.unreviewed) params.set('unreviewed', '1');
@@ -195,7 +196,7 @@ let restoringHistory = false;
 let navigationSeq = 0, navigationRoute = null;
 function navigationRouteNow() {
   const record = {notes: V.note, datasets: V.dataset, people: [V.person, V.author], tools: [V.tool, V.board]}[V.view] ?? null;
-  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
+  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet, V.ledger,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, record]);
 }
 function navigationVersion() {
@@ -263,6 +264,9 @@ function dropMissingFilters() {
     const value = filter && values.find((v) => facetValueKey(v) === facetValueKey(filter.value));
     V.facet = value ? `${filter.name}:${value}` : null;
   }
+  // One of the reader's own claims, named by a link from outside the app, can
+  // be removed or renumbered from the research form.
+  if (V.ledger && !(S.ledger || []).some((own) => own.id === V.ledger)) V.ledger = null;
   if (V.kind && !(S.kinds || []).includes(V.kind)) {
     V.kind = '';
     $('kind').value = '';
@@ -274,6 +278,7 @@ function dropMissingFilters() {
   // every other path that opens one.
   keepLabelFor(V.paper);
   keepFacetFor(V.paper);
+  keepLedgerFor(V.paper);
 }
 
 // Sets the view from the URL without drawing it. The controls are set here too:
@@ -289,6 +294,7 @@ function applyHash() {
   V.tag = params.get('tag') || null;
   V.label = params.get('label') || null;
   V.facet = params.get('facet') || null;
+  V.ledger = params.get('ledger') || null;
   V.q = params.get('q') || '';
   V.kind = params.get('kind') || '';
   V.unreviewed = params.get('unreviewed') === '1';
@@ -486,6 +492,19 @@ function workspaceQuery() {
   return `workspace=${encodeURIComponent(workspaceClient.workspaceId || 'default')}`;
 }
 
+// The address another document can keep for a paper, a claim, or one of the
+// reader's own claims: `permalinks.py` resolves it to wherever the app shows
+// that record, so it does not depend on the fragment's current shape. A claim
+// whose id does not name its paper carries the paper, as `permalinks.path` does.
+function permalink(kind, id, paper = '') {
+  const workspace = workspaceClient.workspaceId || 'default';
+  const url = new URL(`/${kind}/${encodeURIComponent(id)}`, location.origin);
+  const derived = paper && id.startsWith(`${paper}-c`) && /^\d+$/.test(id.slice(paper.length + 2));
+  if (kind === 'claim' && paper && !derived) url.searchParams.set('paper', paper);
+  if (workspace !== 'default') url.searchParams.set('workspace', workspace);
+  return url.href;
+}
+
 function renderWorkspacePicker() {
   $('workspace').innerHTML = workspaceClient.workspaces.map((workspace) =>
     `<option value="${esc(workspace.id)}">${esc(workspace.name)}</option>`).join('');
@@ -508,7 +527,7 @@ function resetWorkspaceView() {
   document.querySelectorAll('.research-tools-nav button[aria-current]').forEach(button => button.removeAttribute('aria-current'));
   document.body.classList.remove('page-view');
   Object.assign(V, {
-    paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+    paper: null, tag: null, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
@@ -953,7 +972,7 @@ function openPerson(name) {
 // Following a source out of a page view, the way the paper list opens one.
 function followToPaper(paper, claim = null) {
   captureOpenEditor(); parkNewClaimForNavigation(paper);
-  V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.q = ''; V.kind = '';
+  V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
   V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
   $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
   scheduleTextSearch(); syncHash(true); renderAll();
@@ -1094,7 +1113,9 @@ $('panes').addEventListener('click', async (event) => {
       const rows = $('ledger-rows');
       const count = rows.querySelectorAll('[data-ledger-row]').length;
       // The first id nobody uses, not the row count: L1 and L3 get L2, not a second L3.
-      const taken = new Set([...rows.querySelectorAll('[name="ledger-id"]')].map((f) => f.value.trim()));
+      // Nor one a removed claim had, which links elsewhere still name.
+      const taken = new Set([...rows.querySelectorAll('[name="ledger-id"]')].map((f) => f.value.trim())
+        .concat(S.ledger_retired || []));
       let n = 1;
       while (taken.has(`L${n}`)) n += 1;
       rows.insertAdjacentHTML('beforeend', ledgerRow({ id: `L${n}`, text: '' }, count));
@@ -1124,6 +1145,10 @@ $('panes').addEventListener('click', async (event) => {
       const group = button.dataset.group || '';
       if (similarOpen(claim, group)) { closeSimilar(); captureOpenEditor(); renderContent(); return; }
       await showSimilar(paper, claim, group);
+      return;
+    }
+    if (act === 'copy-link') {
+      await copyText(permalink(button.dataset.kind, button.dataset.id, paper), 'Link copied.');
       return;
     }
     if (act === 'copy-quote') {
@@ -1399,6 +1424,7 @@ $('panes').addEventListener('click', async (event) => {
         if (V.paper && row.paper !== V.paper) V.paper = null;
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
         if (!hasFacetFilter(row)) V.facet = null;
+        if (!hasLedgerFilter(row)) V.ledger = null;
         keepLabelFor(row.paper);
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
         if (V.unreviewed && row.reviewed) { V.unreviewed = false; $('only-unreviewed').checked = false; }
@@ -1706,6 +1732,9 @@ async function boot() {
   // URL naming Research — a bookmark, or a reload of the page while on it —
   // with an active nav entry and a blank main pane. Draw it once here.
   if (V.view === 'research') renderContent();
+  // A link to one claim, from another document or a reload, lands on it
+  // rather than at the top of a paper that may hold dozens.
+  if (V.view === 'claims' && V.selectedId) scrollToSelected();
   libraryInitialized = true;
   $('btn-refresh-library').disabled = false;
   poller.start();

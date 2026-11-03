@@ -658,6 +658,8 @@ from .store_ledger import (
     save_context as save_context,
     _ledger as _ledger,
     load_ledger as load_ledger,
+    retired_ledger_ids as retired_ledger_ids,
+    RetiredLedgerId as RetiredLedgerId,
     save_ledger as save_ledger,
 )
 from .store_views import (

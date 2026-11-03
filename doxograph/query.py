@@ -6,10 +6,10 @@ import re
 from collections import Counter
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from . import config, notebook, quotes, records, research_notes, search, store
+from . import config, notebook, permalinks, quotes, records, research_notes, search, store
 
 router = APIRouter(prefix="/api/query", dependencies=[Depends(store.recover_storage)])
 Limit = Annotated[int, Query(ge=1, le=100)]
@@ -42,6 +42,12 @@ def matches(q: str, *values: object) -> bool:
     return all(term in text for term in terms)
 
 
+def link(request: Request, kind: str, identifier: str, paper: str | None = None) -> str:
+    """The address a document citing this record can keep. The Host it is built
+    from has already been checked against the names this server answers for."""
+    return str(request.base_url).rstrip("/") + permalinks.path(kind, identifier, paper=paper)
+
+
 def page(rows: list[dict[str, Any]], limit: int, offset: int, **extra: Any) -> dict[str, Any]:
     end = offset + limit
     return {"workspace": config.workspace_id(), "items": rows[offset:end],
@@ -69,10 +75,11 @@ def papers_and_issues(paper_keys: list[str] | None = None) -> tuple[list[dict[st
 
 @router.get("/papers")
 @router.post("/papers")
-def papers(q: QueryText = "", topic: str = "", label: str = "",
+def papers(request: Request, q: QueryText = "", topic: str = "", label: str = "",
            limit: Limit = 20, offset: Offset = 0, paper_keys: PaperScope = None) -> dict[str, Any]:
     saved, issues = papers_and_issues(paper_keys)
-    rows = [{key: value for key, value in store.summarize(p).items() if key != "notes"} for p in saved
+    rows = [{**{key: value for key, value in store.summarize(p).items() if key != "notes"},
+             "url": link(request, "paper", p["key"])} for p in saved
             if (not topic or any(topic in c.get("tags", []) for c in p.get("claims", [])))
             and (not label or store.has_label(p, label))
             and matches(q, p["key"], p.get("title"), p.get("authors"), p.get("year"),
@@ -81,7 +88,7 @@ def papers(q: QueryText = "", topic: str = "", label: str = "",
 
 
 @router.get("/papers/{key}")
-def paper(key: str, omit_notes: OmitNotes = False) -> dict[str, Any]:
+def paper(request: Request, key: str, omit_notes: OmitNotes = False) -> dict[str, Any]:
     try:
         saved = store.load_paper(key)
     except KeyError:
@@ -91,12 +98,13 @@ def paper(key: str, omit_notes: OmitNotes = False) -> dict[str, Any]:
     return {"workspace": config.workspace_id(),
             "paper": {**{k: v for k, v in store.summarize(saved).items() if not (omit_notes and k == "notes")},
                       "abstract": saved.get("abstract", ""),
-                      "doi": saved.get("doi"), "source": saved.get("source")}}
+                      "doi": saved.get("doi"), "source": saved.get("source"),
+                      "url": link(request, "paper", key)}}
 
 
 @router.get("/claims")
 @router.post("/claims")
-def claims(q: QueryText = "", topic: str = "", paper: str = "",
+def claims(request: Request, q: QueryText = "", topic: str = "", paper: str = "",
            reviewed: bool | None = None, limit: Limit = 20, offset: Offset = 0,
            omit_notes: OmitNotes = False, paper_keys: PaperScope = None) -> dict[str, Any]:
     saved, issues = papers_and_issues(paper_keys)
@@ -110,7 +118,9 @@ def claims(q: QueryText = "", topic: str = "", paper: str = "",
     rows.sort(key=lambda c: (c["paper"], c["id"]))
     if omit_notes:
         rows = [{k: v for k, v in c.items() if k not in PERSONAL_CLAIM_FIELDS} for c in rows]
-    return page(rows, limit, offset, storage_issues=issues)
+    result = page(rows, limit, offset, storage_issues=issues)
+    result["items"] = [{**c, "url": link(request, "claim", c["id"], paper=c["paper"])} for c in result["items"]]
+    return result
 
 
 @router.get("/topics")

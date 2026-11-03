@@ -13,7 +13,7 @@ function focusClaimSearch() {
 
 // --- filtering ------------------------------------------------------------
 
-const FILTER_DEFAULTS = { paper: null, tag: null, label: null, facet: null, q: '', kind: '',
+const FILTER_DEFAULTS = { paper: null, tag: null, label: null, facet: null, ledger: null, q: '', kind: '',
   unreviewed: false, unverified: false, tensionStatus: '', agreementStatus: '',
   tensionFocus: null, agreementFocus: null };
 let activeFiltersHTML = null;
@@ -25,6 +25,8 @@ function renderActiveFilters() {
   add('tag', `Topic: ${V.tag}`);
   add('label', `Label: ${V.label}`);
   if (facetFilter()) add('facet', `${facetFilter().name}: ${facetFilter().value}`);
+  const own = V.ledger && (S.ledger || []).find((c) => c.id === V.ledger);
+  add('ledger', `Bears on ${V.ledger}${own?.text ? `: ${own.text}` : ''}`);
   if (V.q.trim()) add('q', `Search: ${V.q.trim()}`);
   add('kind', `Kind: ${V.kind}`);
   add('unreviewed', 'Unreviewed');
@@ -368,10 +370,11 @@ function matchingPapers() {
 // A paper appears once, even when several of its claims match. Papers without
 // extracted claims still belong in the library and can match their metadata.
 function visiblePapers() {
-  const claimFilters = V.tag || V.facet || V.kind || V.unreviewed || V.unverified;
+  const claimFilters = V.tag || V.facet || V.ledger || V.kind || V.unreviewed || V.unverified;
   const owners = claimFilters ? new Set(S.claims.filter(row =>
     (!V.tag || (row.tags || []).includes(V.tag))
     && hasFacetFilter(row)
+    && hasLedgerFilter(row)
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)).map(row => row.paper)) : null;
@@ -408,6 +411,11 @@ function keepLabelFor(key) {
 // would open with every claim filtered away, so the filter gives way to it.
 function keepFacetFor(key) {
   if (V.facet && key && !S.claims.some((row) => row.paper === key && hasFacetFilter(row))) V.facet = null;
+}
+
+// And for one of the reader's own claims, which a paper may have no evidence on.
+function keepLedgerFor(key) {
+  if (V.ledger && key && !S.claims.some((row) => row.paper === key && hasLedgerFilter(row))) V.ledger = null;
 }
 
 // The keys the label filter allows, or null when no label is chosen. A label
@@ -448,6 +456,12 @@ function hasFacetFilter(row) {
   return (facetEntry(row.facets, filter.name) || []).some((value) => facetValueKey(value) === key);
 }
 
+// The claims linked to one of the reader's own claims, whatever the relation:
+// where a link to a ledger entry lands, to show the evidence bearing on it.
+function hasLedgerFilter(row) {
+  return !V.ledger || (row.ledger_links || []).some((link) => link.claim === V.ledger);
+}
+
 // The defined facets' values on a claim, in the order the facets are defined.
 function claimFacetValues(row) {
   return (S.facets || []).flatMap((facet) =>
@@ -483,6 +497,7 @@ function visibleClaims() {
     && (!labelled || labelled.has(row.paper))
     && (!V.tag || (row.tags || []).includes(V.tag))
     && hasFacetFilter(row)
+    && hasLedgerFilter(row)
     && (!V.kind || row.kind === V.kind)
     && (!V.unreviewed || !row.reviewed)
     && (!V.unverified || row.quote_verified === false)
