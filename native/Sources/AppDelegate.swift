@@ -523,8 +523,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // A relaunch was only ever meant to follow this quit. If the user
             // keeps the app open, the next quit is an ordinary one and must not
             // bring the app back.
-            if !quitting { self.relaunchAfterQuit = false }
-            NSApp.reply(toApplicationShouldTerminate: quitting)
+            guard quitting else {
+                self.relaunchAfterQuit = false
+                NSApp.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            self.saveDraftsAgainBeforeQuitting()
+        }
+    }
+
+    /// Saves once more, right before the quit is let through.
+    ///
+    /// The first save ran before the server was asked about its work, and the
+    /// page stays live while that question is in the air — and longer, if it
+    /// turned into a prompt the user is reading. Anything typed in that gap
+    /// dirtied an editor after the only save, and saying yes to the quit would
+    /// drop it without a word. So the writing is saved again here, at the last
+    /// moment it still can be, and writing that could not be saved gets the
+    /// same question the first save asks.
+    ///
+    /// Staying is handled the way every other refusal is: the relaunch was only
+    /// meant to follow this quit, so it is called off too.
+    private func saveDraftsAgainBeforeQuitting() {
+        window.saveDrafts { saved in
+            if !saved, !self.confirmQuitWithUnsavedWriting() {
+                self.relaunchAfterQuit = false
+                NSApp.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            NSApp.reply(toApplicationShouldTerminate: true)
         }
     }
 
