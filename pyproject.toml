@@ -72,7 +72,7 @@ files = [
     "doxograph/datasets.py",
     "doxograph/loupe.py",
     "doxograph/analysis_api.py",
-    "doxograph/agent.py", "doxograph/backups.py", "doxograph/bib.py",
+    "doxograph/agent.py", "doxograph/backups.py", "doxograph/bib.py", "doxograph/code_links.py",
     "doxograph/chat.py", "doxograph/chats.py", "doxograph/cites.py",
     "doxograph/config.py", "doxograph/export.py", "doxograph/extract.py",
     "doxograph/fingerprint.py", "doxograph/ingest.py", "doxograph/job_journal.py",

@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from . import cites, config, extract, ingest, job_journal, job_queue, pairs, query, search, store
+from . import cites, code_links, config, extract, ingest, job_journal, job_queue, pairs, query, search, store
 from .model_errors import ModelSetupError
 from .publication_dates import PublicationDate
 
@@ -139,6 +139,7 @@ class PaperPatch(BaseModel):
     # `error`, which is the machine's to write and not offered here.
     notes: str = ""
     labels: list[str] | None = None
+    code: list[str] | None = None
 
     @model_validator(mode="after")
     def _consistent_date(self) -> PaperPatch:
@@ -154,6 +155,12 @@ class PaperPatch(BaseModel):
         # `label_counts` walks it, the page joins it — and writing None would
         # leave a paper none of them can read.
         return store.normalize_labels(value or [])
+
+    @field_validator("code")
+    @classmethod
+    def _normalize_code(cls, value: list[str] | None) -> list[str] | None:
+        # A null clears them, as with labels.
+        return code_links.normalize(value or [])
 
 
 def _settled(key: str | None, do_extract: bool) -> str | None:

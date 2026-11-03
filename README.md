@@ -444,7 +444,7 @@ Shortcuts button in the header. A paper that arrives with a dozen claims you
 have read in one go has "Mark N reviewed" in its header; the notice that
 follows offers to take it back, and takes back only what that click changed.
 
-`Command-Z` or `Ctrl-Z` undoes saved document titles, labels and
+`Command-Z` or `Ctrl-Z` undoes saved document titles, labels, code links and
 notes, claim edits and review decisions, PDF highlights and their colors, and
 saved changes to boards, bookmarks, connections, and searches. Add Shift to
 redo. Each workspace keeps its own history for the current session; reloading
@@ -545,7 +545,7 @@ writing space are stored locally in `note-images/`.
   library** makes more room for the paper; **All papers** returns to the library.
   **Claim filters** reveals filters and selection tools, with an indicator when
   a filter is active. **Paper overview** brings the summary, relevance, notes,
-  labels, and reading progress together in the rail. **Read**, **Ask about this
+  labels, code links, and reading progress together in the rail. **Read**, **Ask about this
   paper**, and the reading queue are available in the header; less frequent
   commands live under **Paper actions**. In narrow windows, the overview and
   notes appear below the PDF. The reader is offline; the PDF is drawn in the
@@ -553,6 +553,14 @@ writing space are stored locally in `note-images/`.
   **Paper actions → Hide PDF** lists the claims full width instead, and the
   choice is kept in this browser. A claim's **PDF p.N** link scrolls the open
   paper to that page.
+- **Code links.** **Paper actions → Code links** (or **Add code links…** on
+  the paper's menu in the sidebar) records where the paper's repositories are.
+  Paste one or more web addresses separated by spaces or commas; an address
+  without `https://` gets it. When a paper is added, GitHub, GitLab, Bitbucket,
+  and Codeberg repositories named in its abstract or arXiv comment are filled
+  in, and papers added earlier get the ones their abstract names. The links
+  appear under **Code** in the paper overview, in the HTML export, in
+  workspace archives, and in what the agent connection returns for a paper.
 - **Passages.** Select text on a page and a **Highlight** button appears under
   it. One click draws the highlight over the text, lists it in the rail with
   its page, and opens a note of your own on it, ready to type into. The

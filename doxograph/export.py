@@ -53,6 +53,7 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .paper .authors, .paper .rel { font-size: .87rem; color: var(--muted); }
 .paper .summary { font-size: .92rem; margin: .4rem 0 0; }
 .paper .labels { margin: .4rem 0 0; }
+.paper .code { margin: .4rem 0 0; font-size: .9em; overflow-wrap: anywhere; }
 .label { display: inline-block; font-size: .74rem; padding: .05rem .4rem; margin-right: .35rem;
   border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
 .note { border-left: 2px solid var(--accent); background: var(--panel); border-radius: 0 4px 4px 0;
@@ -119,6 +120,11 @@ apply();
 
 def _e(value: object) -> str:
     return html.escape(str(value or ""))
+
+
+def _web_links(links: list[str] | None) -> list[str]:
+    # Stored links are checked when saved; a hand-edited file is not.
+    return [link for link in links or [] if link.lower().startswith(("https://", "http://"))]
 
 
 def _authors(authors: list[str]) -> str:
@@ -333,6 +339,7 @@ def render(title: str = "Doxograph") -> str:
         source = paper.get("source") or {}
         link = source.get("url") or ""
         heading = _e(paper.get("title") or paper["key"])
+        code = _web_links(paper.get("code"))
         if link:
             heading = f'<a href="{_e(link)}">{heading}</a>'
         body.append(
@@ -347,6 +354,9 @@ def render(title: str = "Doxograph") -> str:
             + (('<div class="labels">'
                 + "".join(f'<span class="label">{_e(l)}</span>' for l in paper.get("labels") or [])
                 + "</div>") if paper.get("labels") else "")
+            + (('<p class="code">Code: '
+                + ", ".join(f'<a href="{_e(url)}">{_e(url)}</a>' for url in code)
+                + "</p>") if code else "")
             + _note_html(paper.get("notes") or "", "my note")
             + "</div>"
         )

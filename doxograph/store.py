@@ -29,7 +29,7 @@ from typing import Any, Concatenate
 import yaml
 from pydantic import ValidationError
 
-from . import config, quotes, records, storage, workspace_metadata
+from . import code_links, config, quotes, records, storage, workspace_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -462,6 +462,11 @@ def _migrate(paper: dict[str, Any]) -> dict[str, Any]:
         moves = note.startswith(LEGACY_ERROR)
         paper["error"] = note if moves else ""
         paper["notes"] = "" if moves else note
+    # A paper added before code links has none recorded, and its abstract is
+    # what an import now reads them from. A list the reader has emptied is
+    # left empty: only a missing field is filled.
+    if "code" not in paper:
+        paper["code"] = code_links.find(paper.get("abstract") or "")
     ensure_claim_seq(paper)
     return paper
 
@@ -574,6 +579,9 @@ def new_paper(key: str, **fields: Any) -> dict[str, Any]:
         # prompt, and a topic there is something the model is asked to find in
         # the text. Nothing in a paper's text says it is on your reading list.
         "labels": [],
+        # Where the paper's code is, as web addresses: found in its abstract
+        # (and arXiv comment) when it is added, and edited by hand after that.
+        "code": [],
         "claims": [],
         # What the reader writes about the paper: no model reads it and no pass
         # writes it. `error` is the other half of what `notes` used to be —
@@ -582,6 +590,8 @@ def new_paper(key: str, **fields: Any) -> dict[str, Any]:
         "error": "",
     }
     paper.update(fields)
+    if "code" not in fields:
+        paper["code"] = code_links.find(str(paper["abstract"] or ""))
     return paper
 
 
@@ -1750,6 +1760,7 @@ def summarize(paper: dict[str, Any]) -> dict[str, Any]:
         "venue": paper.get("venue", ""),
         "status": paper.get("status", "fetched"),
         "labels": paper.get("labels") or [],
+        "code": paper.get("code") or [],
         "summary": paper.get("summary", ""),
         "relevance": paper.get("relevance", ""),
         # The reader's note travels with the listing rather than behind a fetch
