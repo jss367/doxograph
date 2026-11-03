@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/vendor/katex.min.css">
 <link rel="stylesheet" href="/research-notes.css">
 <link rel="stylesheet" href="/datasets.css">
+<link rel="stylesheet" href="/people.css">
 </head>
 <body>
 <header>
@@ -235,6 +236,7 @@
       </div>
       <div class="sec research-tools-nav">
         <button type="button" id="btn-datasets" title="Datasets used or produced by this project"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5 M4 12c0 4 16 4 16 0"/></svg>Datasets</button>
+        <button type="button" id="btn-people" title="The authors of your papers, and your notes on them"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5 M16 4.8a3.5 3.5 0 0 1 0 6.4 M18 13.8c2.2.7 3.5 2.8 3.5 6.2"/></svg>People</button>
         <button type="button" data-tool="searches"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg>Saved searches</button>
       </div>
       <div class="sec" id="labels-sec" hidden>
@@ -424,6 +426,22 @@
         <div id="dataset-document"></div>
       </div>
     </section>
+    <section id="people-sheet" class="people-sheet main-page" aria-labelledby="people-heading" hidden>
+      <div class="sheet-head">
+        <div><h2 id="people-heading">People</h2><span class="hint">The authors of your papers, and what you know about them.</span></div>
+      </div>
+      <p id="people-status" class="hint" role="status" aria-live="polite"></p>
+      <div class="people-layout">
+        <aside class="people-library">
+          <button type="button" id="person-new" data-person-action="new" class="primary">Add person</button>
+          <label for="people-search" class="sr-only">Search people</label>
+          <input type="search" id="people-search" placeholder="Search people…">
+          <p id="people-count" class="hint"></p>
+          <nav id="people-list" aria-label="People"></nav>
+        </aside>
+        <div id="person-document"></div>
+      </div>
+    </section>
     <section id="research-notes" class="notes-sheet main-page" aria-labelledby="notes-heading" hidden>
       <div class="sheet-head">
         <div><h2 id="notes-heading">Research notes</h2><span class="hint">Long-form documents for arguments, reviews, and plans, connected to your library.</span></div>
@@ -584,6 +602,7 @@
 <script src="/workspace-notes.js"></script>
 <script src="/research-notes.js"></script>
 <script src="/datasets.js"></script>
+<script src="/people.js"></script>
 <script src="/research-tools.js"></script>
 <script src="/appearance.js"></script>
 <script src="/paper-map.js"></script>

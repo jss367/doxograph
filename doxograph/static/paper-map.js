@@ -24,6 +24,7 @@ const GRAPH = {
   autofit: true,           // keep everything in view until the user takes over
   canvas: null, ctx: null, observer: null, signature: '', maxShared: 1, minShared: 1,
   timeline: null,
+  height: 0,               // map height chosen by dragging its bottom edge; 0 fills the window
 };
 
 function graphReset() {
@@ -352,6 +353,9 @@ function graphSync() {
 // Only the vertical position is simulated in timeline mode. Missing dates
 // (including the ledger's own claims) get a separate, explicitly undated lane.
 function graphTimeline() {
+  // A poll keeps the width the autofit stretched the axis to, so a map the
+  // user has zoomed into does not shrink back under them.
+  const kept = GRAPH.timeline?.width;
   GRAPH.timeline = null;
   // Keep the persisted option value for existing views and saved searches.
   if (V.graph.xAxis !== 'year' || !GRAPH.nodes.size) return;
@@ -359,11 +363,18 @@ function graphTimeline() {
   const dates = nodes.filter((n) => n.time != null).map((n) => n.time);
   const min = dates.length ? Math.min(...dates) : null;
   const max = dates.length ? Math.max(...dates) : null;
-  const width = min !== max ? Math.max(640, 100 * Math.sqrt(nodes.length)) : 0;
-  const undatedX = dates.length ? width / 2 + 160 : 0;
-  GRAPH.timeline = { min, max, width, undatedX, hasUndated: nodes.some((n) => n.time == null) };
-  for (const n of nodes) {
-    n.timelineX = n.time == null ? undatedX : min === max ? 0 : (n.time - min) / (max - min) * width - width / 2;
+  GRAPH.timeline = { min, max, width: 0, undatedX: 0, hasUndated: nodes.some((n) => n.time == null) };
+  graphTimelinePlace(min !== max ? kept || Math.max(640, 100 * Math.sqrt(nodes.length)) : 0);
+}
+
+// Lay the dated nodes across `width` world units, with the undated lane after them.
+function graphTimelinePlace(width) {
+  const timeline = GRAPH.timeline;
+  const { min, max } = timeline;
+  timeline.width = width;
+  timeline.undatedX = min != null ? width / 2 + 160 : 0;
+  for (const n of GRAPH.nodes.values()) {
+    n.timelineX = n.time == null ? timeline.undatedX : min === max ? 0 : (n.time - min) / (max - min) * width - width / 2;
     n.x = n.timelineX;
     n.vx = 0;
   }
@@ -561,13 +572,22 @@ function graphEdgeBadge(ctx, path, text, color, colors) {
 function graphAutofit(w, h) {
   const nodes = [...GRAPH.nodes.values()];
   if (!nodes.length) return;
+  const pad = 48;
+  const axisHeight = GRAPH.timeline ? 44 : 0;
+  // On a date axis the width is free: zoom to fit the stacked nodes' height,
+  // then stretch the dates across whatever width that zoom leaves.
+  if (GRAPH.timeline?.width) {
+    const ys = nodes.map((n) => n.y), r = Math.max(...nodes.map((n) => n.r));
+    const height = Math.max(...ys) - Math.min(...ys) + 2 * r;
+    const zoom = Math.max(0.2, Math.min(2, (h - axisHeight - 2 * pad) / Math.max(height, 1)));
+    const lane = GRAPH.timeline.hasUndated ? 160 : 0;
+    graphTimelinePlace(Math.max(160, (w - 2 * pad) / zoom - 2 * r - lane));
+  }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const n of nodes) {
     x0 = Math.min(x0, n.x - n.r); y0 = Math.min(y0, n.y - n.r);
     x1 = Math.max(x1, n.x + n.r); y1 = Math.max(y1, n.y + n.r);
   }
-  const pad = 48;
-  const axisHeight = GRAPH.timeline ? 44 : 0;
   const zoom = Math.min(2, (w - 2 * pad) / Math.max(x1 - x0, 1), (h - axisHeight - 2 * pad) / Math.max(y1 - y0, 1));
   GRAPH.zoom = Math.max(0.2, zoom);
   GRAPH.tx = -((x0 + x1) / 2) * GRAPH.zoom;
@@ -944,12 +964,58 @@ function graphFit() {
   const visibleHeight = Math.min(main.clientHeight, window.innerHeight - mainRect.top);
   // A wrapped legend or the timeline hint can leave less than 18rem.
   // Let the canvas shrink with the available space instead of clipping its bottom.
-  const height = Math.max(160, visibleHeight - top - 16);
+  const height = GRAPH.height || Math.max(160, visibleHeight - top - 16);
   wrap.style.height = `${height}px`;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(wrap.clientWidth * dpr);
   canvas.height = Math.round(height * dpr);
   graphDraw();
+}
+
+// Dragging the map's bottom edge sets its height by hand. Holding the pointer
+// at the bottom of the pane scrolls it, so the map can grow past the window.
+// A double-click goes back to filling the window.
+function graphBindResize(handle) {
+  let drag = null;
+  // The height the drag started from plus how far the pointer and the pane
+  // have moved since, so the edge does not jump to the pointer on the press.
+  const apply = () => {
+    const height = Math.max(160, Math.round(drag.height + drag.y - drag.from + $('main').scrollTop - drag.scroll));
+    if (height !== GRAPH.height) { GRAPH.height = height; graphFit(); }
+  };
+  const scroll = () => {
+    const main = $('main');
+    const bottom = Math.min(main.getBoundingClientRect().bottom, window.innerHeight);
+    // The edge of a map that fills the window already sits in this strip, so
+    // only a pointer that has moved down from where it took hold scrolls.
+    if (drag.y > drag.from && drag.y > bottom - 24) { main.scrollTop += 12; apply(); }
+    drag.frame = requestAnimationFrame(scroll);
+  };
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();   // no text selection under the drag
+    drag = { pointer: event.pointerId, from: event.clientY, y: event.clientY, frame: 0,
+      height: handle.parentElement.getBoundingClientRect().height, scroll: $('main').scrollTop };
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-graph');
+    graphTip(null);
+    scroll();
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    drag.y = event.clientY;
+    apply();
+  });
+  const release = (event) => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    cancelAnimationFrame(drag.frame);
+    drag = null;
+    document.body.classList.remove('resizing-graph');
+  };
+  handle.addEventListener('pointerup', release);
+  handle.addEventListener('pointercancel', release);
+  handle.addEventListener('lostpointercapture', release);
+  handle.addEventListener('dblclick', () => { GRAPH.height = 0; graphFit(); });
 }
 
 function graphHeader() {
@@ -959,7 +1025,7 @@ function graphHeader() {
     <p class="ps">Each circle is a paper, sized by how many claims it makes and colored by the
       topic it speaks to most, or by a facet you choose. Squares are your own claims.
       Turn on my notes to show saved paper notes; hover to preview and click to open. Drag a node to move it, scroll to
-      zoom, drag the background to pan, and click a paper to read it.
+      zoom, drag the background to pan, drag the map's bottom edge to resize it, and click a paper to read it.
       Hover over a paper or connection to see who cites whom.</p>
     <p class="ps" data-graph-timeline-hint ${opts.xAxis === 'year' ? '' : 'hidden'}>Earlier papers are on the left, later papers on the right, using their publication date.
       Month-only and year-only dates are centered in their known period and labeled in the tooltip.
@@ -1077,11 +1143,13 @@ function renderGraph() {
     graphSync();
     content.innerHTML = graphHeader()
       + (mapClient.state.papers.length ? '' : '<p class="empty">Nothing to map yet. Add a paper or two and come back.</p>')
-      + '<div class="graph-wrap"><canvas></canvas><div class="graph-tip" hidden></div></div>';
+      + '<div class="graph-wrap"><canvas></canvas><div class="graph-tip" hidden></div>'
+      + '<div class="graph-resize" title="Drag to resize the map. Double-click to fit the window."></div></div>';
     wrap = content.querySelector('.graph-wrap');
     GRAPH.canvas = wrap.querySelector('canvas');
     GRAPH.ctx = GRAPH.canvas.getContext('2d');
     graphBindCanvas(GRAPH.canvas);
+    graphBindResize(wrap.querySelector('.graph-resize'));
     // Watch the pane, not the wrapper: graphFit sets the wrapper's height
     // itself, so a vertical-only window resize changes the pane and leaves the
     // wrapper's box as it was, which would never fire an observer on it.

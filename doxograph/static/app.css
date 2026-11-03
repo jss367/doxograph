@@ -296,7 +296,7 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .library-paper-link { color: var(--ink); text-decoration: none; }
 .library-paper-link::after { content: ''; position: absolute; inset: 0; border-radius: 10px; }
 .library-paper-link:focus-visible { outline: none; }
-.library-paper .paper-selection, .library-paper-topics button { position: relative; z-index: 1; }
+.library-paper .paper-selection, .library-paper-topics button, .library-paper .author-link { position: relative; z-index: 1; }
 .library-paper-meta { margin: .45rem 0 .65rem; font-size: .8rem; color: var(--muted); }
 .library-paper-summary { margin: 0 0 .8rem; font-size: .88rem; line-height: 1.6;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
@@ -609,6 +609,11 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .graph-wrap canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 .graph-wrap canvas.hover { cursor: pointer; }
 .graph-wrap canvas.drag { cursor: grabbing; }
+/* The map's bottom edge: 8px of grab area that shows a line under the pointer. */
+.graph-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; z-index: 4;
+  cursor: ns-resize; touch-action: none; }
+.graph-resize:hover, body.resizing-graph .graph-resize { border-bottom: 2px solid var(--accent); }
+body.resizing-graph { cursor: ns-resize; user-select: none; }
 .graph-tip { position: absolute; pointer-events: none; max-width: 22rem; z-index: 3;
   background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
   padding: .35rem .5rem; font-size: .82rem; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
@@ -671,6 +676,9 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .agent-guidance summary { cursor: pointer; color: var(--muted); }
 #library-agent > .chat-conversations { flex: 0 1 auto; min-height: 0;
   max-height: min(18dvh, 10rem); overflow-y: auto; }
+/* Keep one conversation and part of the next in view, so the list never
+   shrinks to its heading while the transcript and composer take the room. */
+#library-agent > .chat-conversations:has(li + li, #agent-archive:not([hidden])) { min-height: 5.75rem; }
 #library-agent .chat-threads { gap: .4rem; font-size: .8rem; }
 #library-agent .chat-threads label { width: 100%; }
 #library-agent .chat-threads select { flex: 1; min-width: 0; max-width: 100%; width: 0; }
@@ -700,7 +708,7 @@ body.agent-docked #library-agent #agent-messages { overflow: visible; }
 body.agent-docked #library-agent #agent-form { max-height: none; overflow: visible; }
 body.agent-docked #library-agent .agent-guidance { max-height: none; }
 /* Short panes scroll as a whole so every control remains reachable. */
-@media (max-height: 700px) {
+@media (max-height: 840px) {
   #library-agent { display: block; overflow-y: auto; }
   #library-agent > .row:first-child { position: sticky; top: -1rem; z-index: 1;
     background: var(--bg); padding-block: .5rem; }
