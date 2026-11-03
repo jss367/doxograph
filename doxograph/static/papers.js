@@ -84,7 +84,7 @@ $('continue-reading').addEventListener('click', (event) => {
   parkSynthEditor();
   parkNoteEditor();
   showView('claims');
-  V.paper = key; V.tag = null; V.label = null; V.facet = null;
+  V.paper = key; V.tag = null; V.label = null; V.facet = null; V.ledger = null;
   V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false; V.editing = null;
   $('q').value = ''; $('kind').value = '';
   $('only-unreviewed').checked = false; $('only-unverified').checked = false;
@@ -266,6 +266,7 @@ function readingHeader(p, title, reading) {
           <button type="button" data-act="labels" data-paper="${key}">Labels</button>
           <button type="button" data-act="code" data-paper="${key}">Code links</button>
           <button type="button" data-act="edit-title" data-paper="${key}">Edit title…</button>
+          <button type="button" data-act="copy-link" data-kind="paper" data-id="${key}">Copy link</button>
           <button type="button" data-tool="history" data-paper="${key}">Edit history</button>
           <hr>
           <button type="button" data-act="reextract" data-paper="${key}" data-ai-action ${ai}>Re-read paper</button>

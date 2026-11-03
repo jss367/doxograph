@@ -1223,7 +1223,7 @@ const ResearchTools = (() => {
   function dropMarkDraft(paper) { if (markEditorOn(paper)) markEditor = null; }
   function goToPaper(paper, claim = null) {
     captureOpenEditor(); parkNewClaimForNavigation(paper);
-    V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null;
+    V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.ledger = null;
     V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
     V.selectedId = claim;
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;

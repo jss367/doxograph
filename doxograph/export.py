@@ -3,6 +3,10 @@
 No external assets and no network calls, so the file can be read anywhere and
 stored alongside other notes. Claims are grouped by topic, because the point of
 the export is to see what several papers say about the same question.
+
+Every paper, claim, and ledger entry has an anchor named by its identifier,
+`#paper-<key>`, `#claim-<id>`, and `#ledger-<id>`, so another document can
+link to one and the link survives the next export.
 """
 
 from __future__ import annotations
@@ -12,8 +16,9 @@ import json
 import re
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
-from . import config, store
+from . import __version__, config, store
 
 CSS = """
 :root {
@@ -39,6 +44,11 @@ h3 { font-size: 1rem; margin: 1.75rem 0 .5rem; }
 .claim .text { margin: 0 0 .3rem; }
 .claim .meta { font-size: .82rem; color: var(--muted); }
 .claim .meta a { color: var(--accent); }
+.permalink { color: var(--muted); text-decoration: none; margin-left: .35rem; font-size: .82rem; }
+.permalink:hover { color: var(--accent); }
+:target { scroll-margin-top: 4.5rem; }
+.claim:target, .paper:target, .ledger:target { background: var(--panel); outline: 2px solid var(--accent);
+  outline-offset: 2px; border-radius: 3px; }
 .claim .evidence { font-size: .88rem; margin: .35rem 0 0; }
 .claim blockquote { margin: .4rem 0 0; padding-left: .7rem; border-left: 2px solid var(--line);
   color: var(--muted); font-size: .86rem; }
@@ -115,11 +125,38 @@ function apply() {
 }
 [q, kindSel, tagSel].forEach(el => el.addEventListener('input', apply));
 apply();
+
+// A link from another document names one paper, claim, or ledger entry. If
+// the filters hide it, they are cleared, so the link never lands on nothing.
+function reveal() {
+  let target = null;
+  try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch (_) {}
+  target = target || document.getElementById(location.hash.slice(1));
+  if (!target) return;
+  if (target.closest('[hidden]')) {
+    q.value = ''; kindSel.value = ''; tagSel.value = '';
+    apply();
+  }
+  target.scrollIntoView();
+}
+window.addEventListener('hashchange', reveal);
+if (location.hash) reveal();
 """
 
 
 def _e(value: object) -> str:
     return html.escape(str(value or ""))
+
+
+def anchor(kind: str, identifier: str) -> str:
+    """The id of a paper's, claim's, or ledger entry's element. Ledger ids are
+    typed by hand and may hold spaces, which an id cannot."""
+    return f"{kind}-{quote(identifier, safe='')}"
+
+
+def _permalink(kind: str, identifier: str) -> str:
+    return (f'<a class="permalink" href="#{_e(anchor(kind, identifier))}" '
+            f'title="Link to this {"entry" if kind == "ledger" else kind}">#</a>')
 
 
 def _web_links(links: list[str] | None) -> list[str]:
@@ -190,7 +227,11 @@ def _note_html(text: str, label: str) -> str:
     return f'<div class="note"><span class="who">{_e(label)}</span>{body}</div>'
 
 
-def _claim_html(row: dict[str, Any], ledger_by_id: dict[str, dict[str, Any]]) -> str:
+def _claim_html(row: dict[str, Any], ledger_by_id: dict[str, dict[str, Any]],
+                anchored: set[str] | None = None) -> str:
+    """One claim. A claim is drawn once per topic and again in each agreement,
+    tension, and ledger entry it is part of; its anchor goes on the first
+    drawing, recorded in `anchored`, and every drawing links to that one."""
     hay = " ".join([
         row.get("text", ""), row.get("evidence", ""), row.get("quote", ""),
         row.get("note", ""), row.get("paper_notes", ""),
@@ -199,15 +240,19 @@ def _claim_html(row: dict[str, Any], ledger_by_id: dict[str, dict[str, Any]]) ->
     ]).lower()
     cite = f"{_authors(row.get('paper_authors', []))} ({row.get('paper_year') or 'n.d.'})"
     tags = "".join(f'<span class="tag">#{_e(t)}</span>' for t in row.get("tags", []))
+    own_id = ""
+    if anchored is not None and row["id"] not in anchored:
+        anchored.add(row["id"])
+        own_id = f'id="{_e(anchor("claim", row["id"]))}" '
     parts = [
-        f'<div class="claim {_e(row.get("strength"))}" data-claim '
+        f'<div class="claim {_e(row.get("strength"))}" {own_id}data-claim '
         f'data-kind="{_e(row.get("kind"))}" data-tags="{_e(" ".join(row.get("tags", [])))}" '
         f'data-hay="{_e(hay)}">',
         f'<p class="text"><span class="kind {_e(row.get("kind"))}">{_e(row.get("kind"))}</span>'
         f'{_e(row.get("text"))}</p>',
         f'<div class="meta">{tags}{_e(cite)}'
         + (f' · {_e(row.get("locator"))}' if row.get("locator") else "")
-        + "</div>",
+        + _permalink("claim", row["id"]) + "</div>",
     ]
     if row.get("evidence"):
         parts.append(f'<p class="evidence">{_e(row["evidence"])}</p>')
@@ -249,11 +294,15 @@ def render(title: str = "Doxograph") -> str:
     agreements = [a for a in store.agreement_rows(rows) if a.get("status") != "dismissed"]
     syntheses = {s["topic"]: s for s in store.synthesis_rows(rows)}
     rows_by_id = {r["id"]: r for r in rows}
+    anchored: set[str] = set()
+    generated = store.now()
+    # The same line twice: on the page, and in the head where a hand-kept index
+    # of documents reads the title, date, and description for a card.
+    tally = f"{len(papers)} papers · {len(rows)} claims · {len(counts)} topics"
 
     body = [
         f"<h1>{_e(title)}</h1>",
-        f'<p class="sub">{len(papers)} papers · {len(rows)} claims · {len(counts)} topics '
-        f"· generated {_e(store.now())}</p>",
+        f'<p class="sub">{tally} · generated <time datetime="{_e(generated)}">{_e(generated)}</time></p>',
         '<div class="controls">',
         '<input id="q" type="search" placeholder="Filter claims, papers, quotes">',
         '<select id="kind"><option value="">every kind</option>'
@@ -277,14 +326,14 @@ def render(title: str = "Doxograph") -> str:
             body.append(_synthesis_html(syntheses[tag], rows_by_id))
         for row in rows:
             if tag in row.get("tags", []):
-                body.append(_claim_html(row, ledger_by_id))
+                body.append(_claim_html(row, ledger_by_id, anchored))
         body.append("</section>")
 
     untagged = [r for r in rows if not r.get("tags")]
     if untagged:
         body.append(f'<section data-group><h3>untagged '
                     f'<span class="count" data-total="{len(untagged)}">{len(untagged)}</span></h3>')
-        body.extend(_claim_html(r, ledger_by_id) for r in untagged)
+        body.extend(_claim_html(r, ledger_by_id, anchored) for r in untagged)
         body.append("</section>")
 
     if agreements:
@@ -326,8 +375,9 @@ def render(title: str = "Doxograph") -> str:
         body.append("<h2>Bearing on my own claims</h2>")
         for own in ledger:
             linked = [r for r in rows if any(l.get("claim") == own["id"] for l in r.get("ledger_links", []))]
-            body.append('<div class="ledger">')
-            body.append(f'<p class="own">{_e(own["id"])} · {_e(own.get("text"))}</p>')
+            body.append(f'<div class="ledger" id="{_e(anchor("ledger", own["id"]))}">')
+            body.append(f'<p class="own">{_e(own["id"])} · {_e(own.get("text"))}'
+                        f'{_permalink("ledger", own["id"])}</p>')
             if linked:
                 body.extend(_claim_html(r, ledger_by_id) for r in linked)
             else:
@@ -343,8 +393,8 @@ def render(title: str = "Doxograph") -> str:
         if link:
             heading = f'<a href="{_e(link)}">{heading}</a>'
         body.append(
-            '<div class="paper">'
-            f'<div class="title">{heading}</div>'
+            f'<div class="paper" id="{_e(anchor("paper", paper["key"]))}">'
+            f'<div class="title">{heading}{_permalink("paper", paper["key"])}</div>'
             f'<div class="authors">{_e(_authors(paper.get("authors") or []))}'
             + (f' · {_e(paper.get("year"))}' if paper.get("year") else "")
             + (f' · {_e(paper.get("venue"))}' if paper.get("venue") else "")
@@ -366,6 +416,9 @@ def render(title: str = "Doxograph") -> str:
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_e(title)}</title>
+<meta name="description" content="{_e(tally)}">
+<meta name="date" content="{_e(generated)}">
+<meta name="generator" content="Doxograph {_e(__version__)}">
 <style>{CSS}</style></head>
 <body><main>{''.join(body)}</main>
 <script>window.__DOXOGRAPH__ = {payload};{SCRIPT}</script>

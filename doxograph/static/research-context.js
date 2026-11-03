@@ -19,10 +19,15 @@ function renderResearchNav() {
 // extraction returns, and both used to need a text editor outside the app.
 // One form edits both; Save writes both.
 
+// A saved claim has a link other documents can keep. One not saved yet, or
+// under an id not saved yet, has none to give.
 function ledgerRow(claim, i) {
+  const saved = (S.ledger || []).some((own) => own.id === claim.id);
   return `<div class="linkrow" data-ledger-row="${i}">
     <input name="ledger-id" value="${esc(claim.id || '')}" placeholder="L${i + 1}" size="6" aria-label="Claim id">
     <input name="ledger-text" value="${esc(claim.text || '')}" placeholder="One of my own claims, as a sentence" aria-label="Claim text">
+    ${saved ? `<button type="button" data-act="copy-link" data-kind="ledger" data-id="${esc(claim.id)}"
+      title="Copy a link to this claim and the evidence bearing on it">link</button>` : ''}
     <button type="button" data-act="drop-ledger" title="Remove this claim">×</button>
   </div>`;
 }
