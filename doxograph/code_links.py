@@ -17,6 +17,18 @@ def _identity(parts: SplitResult) -> LinkKey:
             parts.path, parts.query, parts.fragment)
 
 
+def _unicode_domain_label(label: str) -> str:
+    if not label.startswith('xn--'):
+        return label
+    encoded = label[4:]
+    decoded = encoded.encode('ascii').decode('punycode')
+    # An A-label encodes a non-ASCII label in its normalized UTS46 spelling.
+    if (not decoded or decoded.isascii() or idna.uts46_remap(decoded, std3_rules=False) != decoded
+            or decoded.encode('punycode').decode('ascii') != encoded):
+        raise ValueError('Invalid encoded domain label')
+    return decoded
+
+
 def _domain_host(host: str) -> str:
     if re.search(r"%(?![0-9a-fA-F]{2})", host):
         raise ValueError("Malformed host escape")
@@ -24,7 +36,10 @@ def _domain_host(host: str) -> str:
     # Decode before checking: escapes cannot hide forbidden host characters.
     if any(ord(char) <= 32 or ord(char) == 127 or char in "%#/:<>?@[\\]^|" for char in host):
         raise ValueError("Forbidden host character")
-    for label in host.split("."):
+    labels = [_unicode_domain_label(label) for label in host.split('.')]
+    for label in labels:
+        if any(ord(char) <= 32 or ord(char) == 127 or char in ".%#/:<>?@[\\]^|" for char in label):
+            raise ValueError('Forbidden encoded domain character')
         if label:
             # Browsers use non-strict UTS46: underscores, empty labels, emoji
             # and edge hyphens are allowed, but bidi/joiner rules still apply.
@@ -33,7 +48,7 @@ def _domain_host(host: str) -> str:
             if any(char in "\u200c\u200d" and not idna.valid_contextj(label, index)
                    for index, char in enumerate(label)):
                 raise ValueError("Invalid domain joiner")
-    return host
+    return '.'.join(labels)
 
 
 def _canonical_host(host: str) -> str | None:
