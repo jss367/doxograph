@@ -148,7 +148,7 @@ function createEditHistory() {
       } else if (previous) {
         const keys = Object.keys(body).filter(key => key !== 'expected_revision');
         if (!match[2] && (keys.includes('year') || keys.includes('publication_date'))) keys.push('year', 'publication_date');
-        const defaults = {labels: [], tags: [], facets: {}, ledger_links: [], reviewed: false,
+        const defaults = {labels: [], code: [], tags: [], facets: {}, ledger_links: [], reviewed: false,
           kind: 'finding', strength: 'supporting', evidence_relationship: 'unassessed'};
         const pick = row => Object.fromEntries([...new Set(keys)].map(key => [key, copy(row[key] ?? defaults[key] ?? (['year', 'publication_date'].includes(key) ? null : ''))]));
         const before = pick(previous), after = pick(result);

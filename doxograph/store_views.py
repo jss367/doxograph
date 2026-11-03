@@ -180,6 +180,7 @@ def summarize(paper: dict[str, Any]) -> dict[str, Any]:
         "venue": paper.get("venue", ""),
         "status": paper.get("status", "fetched"),
         "labels": paper.get("labels") or [],
+        "code": paper.get("code") or [],
         "summary": paper.get("summary", ""),
         "relevance": paper.get("relevance", ""),
         # The reader's note travels with the listing rather than behind a fetch

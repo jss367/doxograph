@@ -27,7 +27,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from . import config, fingerprint, posts, publication_dates, search, store
+from . import code_links, config, fingerprint, posts, publication_dates, search, store
 
 
 class InvalidPDFUpload(ValueError):
@@ -251,6 +251,7 @@ def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict[str, Any]:
     published = text_of(f"{ATOM}published")
     doi_node = entry.find(f"{ARXIV_NS}doi")
     journal_node = entry.find(f"{ARXIV_NS}journal_ref")
+    abstract = text_of(f"{ATOM}summary")
     return {
         "title": text_of(f"{ATOM}title"),
         "authors": [
@@ -259,7 +260,10 @@ def fetch_arxiv(arxiv_id: str, client: httpx.Client) -> dict[str, Any]:
         ],
         "year": int(published[:4]) if published[:4].isdigit() else None,
         "publication_date": publication_dates.from_timestamp(published),
-        "abstract": text_of(f"{ATOM}summary"),
+        "abstract": abstract,
+        # Authors announce their repository in the abstract or in the comment
+        # ("Code: https://github.com/..."), which is kept for nothing else.
+        "code": code_links.find(f"{abstract} {text_of(f'{ARXIV_NS}comment')}"),
         "venue": (journal_node.text or "").strip() if journal_node is not None else "arXiv",
         "doi": (doi_node.text or "").strip() if doi_node is not None else "",
         "source": {

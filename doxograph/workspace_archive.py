@@ -228,6 +228,8 @@ def _paper_markdown(key: str, paper: dict[str, Any], marks: list[dict[str, Any]]
     source = (paper.get('source') or {}).get('url')
     if source:
         lines.extend(['Source: ' + notebook.md(source), ''])
+    if paper.get('code'):
+        lines.extend(['Code: ' + notebook.md(', '.join(paper['code'])), ''])
     for label, value in (('Summary', paper.get('summary')), ('My paper notes', paper.get('notes'))):
         if value:
             lines.extend(['## ' + label, '', portable_links(value, note_names), ''])

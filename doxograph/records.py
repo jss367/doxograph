@@ -109,6 +109,7 @@ class Paper(Document):
     extraction: Extraction | None = None
     proposed_tags: list["Topic"] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
+    code: list[str] = Field(default_factory=list)
     claims: list[Claim] = Field(default_factory=list)
     history: list[HistoryEntry] = Field(default_factory=list)
     claim_seq: int = Field(default=0, ge=0)
