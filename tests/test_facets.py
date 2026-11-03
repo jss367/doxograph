@@ -8,7 +8,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from doxograph import config, extract, job_queue, server, store
+from doxograph import config, extract, job_queue, server, store, store_facets
 
 
 class FakeResponse:
@@ -539,14 +539,19 @@ def _fail_once(monkeypatch, module, name: str, after: int = 0):
     return original
 
 
-@pytest.mark.parametrize("failing, after", [("save_paper", 1), ("_save_facets", 0)])
-def test_an_interrupted_value_rename_finishes_on_the_next_lock(monkeypatch, failing, after):
+# Each write is patched where the facet change reaches it: `save_paper`
+# through the `store` facade, `_save_facets` within `store_facets` itself.
+@pytest.mark.parametrize("module, failing, after", [
+    pytest.param(store, "save_paper", 1, id="save_paper-1"),
+    pytest.param(store_facets, "_save_facets", 0, id="_save_facets-0"),
+])
+def test_an_interrupted_value_rename_finishes_on_the_next_lock(monkeypatch, module, failing, after):
     first, second = _two_papers_with("gpt4")
-    original = _fail_once(monkeypatch, store, failing, after)
+    original = _fail_once(monkeypatch, module, failing, after)
     with pytest.raises(store.StorageRecoveryError):
         store.rewrite_facet_values("model", ["gpt4"], "GPT-4")
     assert store.facet_change_path().exists()
-    monkeypatch.setattr(store, failing, original)
+    monkeypatch.setattr(module, failing, original)
 
     store.recover_storage()
 
@@ -558,10 +563,10 @@ def test_an_interrupted_value_rename_finishes_on_the_next_lock(monkeypatch, fail
 
 def test_an_interrupted_removal_does_not_let_the_value_come_back(monkeypatch):
     first, second = _two_papers_with("none")
-    original = _fail_once(monkeypatch, store, "_save_facets")
+    original = _fail_once(monkeypatch, store_facets, "_save_facets")
     with pytest.raises(store.StorageRecoveryError):
         store.rewrite_facet_values("model", ["none"], "")
-    monkeypatch.setattr(store, "_save_facets", original)
+    monkeypatch.setattr(store_facets, "_save_facets", original)
 
     # Any later facet edit takes the lock and finishes the change first.
     store.update_claim("a2026", first, {"facets": {"model": ["None", "GPT-4"]}})
