@@ -15,14 +15,22 @@ function focusPaperImport() {
 const pageImports = (() => {
   let frozen = Boolean(window.doxographQuitBlockInput);
   let failedReferences = false;
+  let acknowledgedReferences = '', editedSinceAcknowledgment = false;
   const pending = new Set();
   return {
     freeze() { frozen = true; },
     resume() { frozen = false; },
     referencesFailed() { failedReferences = true; },
+    referencesEdited() { editedSinceAcknowledgment = true; },
     // An acknowledgment clears failure even if unknown lines remain. Text
     // edited during the request was not submitted and still needs protection.
-    referencesSubmitted(unchanged) { failedReferences = !unchanged && Boolean($('refs').value.trim()); },
+    referencesSubmitted(unchanged) {
+      failedReferences = false;
+      if (unchanged) {
+        acknowledgedReferences = $('refs').value.trim();
+        editedSinceAcknowledgment = false;
+      } else editedSinceAcknowledgment = true;
+    },
     async run(path, options) {
       if (frozen) throw new Error('Wait for quitting to finish before adding papers.');
       const transfer = api(path, options);
@@ -33,10 +41,13 @@ const pageImports = (() => {
     async settle() {
       const results = await Promise.allSettled([...pending]);
       if (!$('refs').value.trim()) failedReferences = false;
-      return results.every(result => result.status === 'fulfilled') && !failedReferences;
+      const text = $('refs').value.trim();
+      return results.every(result => result.status === 'fulfilled') && !failedReferences
+        && (!text || (!editedSinceAcknowledgment && text === acknowledgedReferences));
     },
   };
 })();
+$('refs').addEventListener('input', pageImports.referencesEdited);
 
 const pendingJobActions = new Set();
 const jobTimeouts = new Map();

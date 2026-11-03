@@ -32,7 +32,6 @@ async def drop_pdf(page):
 async def initialize(page, url):
     await page.goto(url)
     await expect(page.locator('#workspace-notes')).to_be_visible()
-    await page.locator('#refs').fill('Keep this reference draft')
     save, resume, first_freezes = native_contract()
     await page.evaluate('() => { window.quitMockJobs = 0; window.quitHealth = null; '
                         'window.nativeQuitSave = async freezeEditing => {' + save + '}; }')
@@ -94,7 +93,7 @@ def test_admitted_pdf_settles_before_the_quit_health_snapshot(engine, completion
                     # A Stay decision reopens admission without changing the reference draft.
                     await page.evaluate('() => {' + resume + '}')
                     assert await page.evaluate('document.body.inert') is False
-                    await expect(page.locator('#refs')).to_have_value('Keep this reference draft')
+                    await expect(page.locator('#refs')).to_have_value('')
                     await drop_pdf(page)
                     await page.wait_for_function('workspaceClient.pendingMutations === 0')
                     assert len(requests) == 2
@@ -167,8 +166,10 @@ def test_queued_reference_callback_cannot_admit_work_while_frozen(engine):
             with _server() as url:
                 resume, freeze = await initialize(page, url)
                 await page.route('**/api/ingest', ingest)
+                await page.locator('#refs').fill('Keep this reference draft')
                 await begin_quit(page, freeze)
-                await page.wait_for_function('window.quitHealth !== null')
+                await page.wait_for_function('window.quitReady !== null')
+                assert await page.evaluate('window.quitReady') is False
                 # Model a callback queued before the freeze; DOM inert alone cannot stop it.
                 await page.evaluate('addReferences()')
                 assert requests == []

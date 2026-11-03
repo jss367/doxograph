@@ -38,6 +38,7 @@ def test_failed_references_block_quit_and_stay_allows_explicit_retry(engine, fai
             with _server() as url:
                 resume, freeze = await initialize(page, url)
                 await page.route('**/api/ingest', ingest)
+                await page.locator('#refs').fill('Keep this reference draft')
                 await page.evaluate('void addReferences()')
                 await asyncio.wait_for(started.wait(), 5)
                 try:
@@ -78,6 +79,7 @@ def test_clearing_failed_reference_text_explicitly_allows_quit(engine):
             with _server() as url:
                 resume, freeze = await initialize(page, url)
                 await page.route('**/api/ingest', lambda route: route.fulfill(status=503, json={'detail':'Synthetic refusal'}))
+                await page.locator('#refs').fill('Keep this reference draft')
                 await page.evaluate('addReferences()')
                 await begin_quit(page, freeze)
                 await page.wait_for_function('window.quitReady !== null')
