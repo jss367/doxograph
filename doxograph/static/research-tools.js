@@ -156,7 +156,12 @@ const ResearchTools = (() => {
       // or in another window: saving would overwrite that, or bring it back.
       // Refuse, as the server does for a stale notebook; the edits stay on screen.
       const changed = (board && edits.boards[board] && edits.boardBases[board] !== JSON.stringify(notebook.boards.find(b => b.id === board) ?? null))
-        || (notes && Object.keys(edits.notes).some(id => edits.noteBases[id] !== JSON.stringify(notebook.connections.find(c => c.id === id)?.note ?? null)));
+        || (notes && Object.keys(edits.notes).some(id => {
+          // Gone counts as changed even when the note it had was empty, which
+          // reads the same as a missing one.
+          const connection = notebook.connections.find(c => c.id === id);
+          return !connection || edits.noteBases[id] !== JSON.stringify(connection.note ?? null);
+        }));
       if (changed) throw new Error('Research tools changed in another window. Reload the saved version before trying again.');
       next = structuredClone(notebook);
       if (board && edits.boards[board]) {
@@ -1558,6 +1563,22 @@ const ResearchTools = (() => {
       message(restored.deleted ? 'Claim removed. Its wording remains in history.' : restored.omitted_topics.length ? `Version restored. Topics no longer in the vocabulary were omitted: ${restored.omitted_topics.join(', ')}.` : 'Version restored.'); return;
     }
   }
+  // Whether the tools may open from outside them at `name`. An unsaved
+  // workspace note would be hidden by them, so it is saved first, and a
+  // connection still being written from an earlier visit is asked about
+  // before, as load() would ask after. Either refusal leaves the reader on
+  // the page they were on, with no history entry for a move not taken. A
+  // move made meanwhile is newer than this one; the tools are not up, so that
+  // is still()'s check without its `shown`.
+  async function mayEnter(name) {
+    const move = navigationVersion();
+    if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return false; }
+    const leaving = connectionDraft && loaded?.tab !== name;
+    if (leaving && !await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) return false;
+    if (navigationVersion() !== move) return false;
+    if (leaving) connectionDraft = false;
+    return true;
+  }
   async function run(task) {
     if (busy) return;
     setBusy(true);
@@ -1622,26 +1643,14 @@ const ResearchTools = (() => {
       // A tab, or a tool used from the library, opens the research tools first.
       let opened = false;
       if (TABS.includes(name) || !shown) {
-        // An unsaved workspace note would be hidden by the tools; keep it on screen.
-        if (!shown) {
-          const move = navigationVersion();
-          if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
-          // A connection still being written from an earlier visit is asked
-          // about before the tools open, as load() would ask after: refusing
-          // then leaves the reader on the page they clicked from, with no
-          // history entry for a move not taken.
-          const leaving = connectionDraft && loaded?.tab !== (TABS.includes(name) ? name : 'compare');
-          if (leaving && !await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) return;
-          // A move made while the note was saved, or while that was asked, is
-          // newer than this click. The tools are not up, so this is still()'s
-          // check without its `shown`.
-          if (navigationVersion() !== move) return;
-          if (leaving) connectionDraft = false;
-          opened = true;
-        }
         // An action used from outside runs on Compare; the tab it ends on
         // takes over this entry (see arrive), so history gains one step.
-        openTab(TABS.includes(name) ? name : 'compare');
+        const opening = TABS.includes(name) ? name : 'compare';
+        if (!shown) {
+          if (!await mayEnter(opening)) return;
+          opened = true;
+        }
+        openTab(opening);
         await load();
         if (TABS.includes(name) || !notebook || overtaken) return;
       }
@@ -1747,5 +1756,14 @@ const ResearchTools = (() => {
     },
     sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     hasUnsavedChanges: () => Boolean(unsaved() || busy),
-    openBoard: id => navigate('boards', id)};
+    // A board from the command palette. From outside the tools it opens as a
+    // sidebar tool does, once mayEnter agrees.
+    openBoard(id) {
+      if (shown) { navigate('boards', id); return; }
+      void run(async () => {
+        if (!await mayEnter('boards')) return;
+        navigate('boards', id);
+        await load();
+      });
+    }};
 })();

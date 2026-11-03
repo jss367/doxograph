@@ -2215,3 +2215,89 @@ def test_keeping_a_connection_draft_leaves_an_action_from_a_paper_on_the_paper(e
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_choosing_another_research_note_while_workspace_notes_save_keeps_that_note(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                first = httpx.post(url + '/api/research-notes', json={'title': 'First note'}).json()['id']
+                second = httpx.post(url + '/api/research-notes', json={'title': 'Second note'}).json()['id']
+                await page.goto(f'{url}/#view=claims')
+                await page.wait_for_function("V.view === 'claims'")
+                nav = page.locator('.research-tools-nav')
+                await nav.get_by_role('button', name='Workspace notes', exact=True).click()
+                started, release = asyncio.Event(), asyncio.Event()
+                async def hold(route):
+                    started.set(); await release.wait(); await route.continue_()
+                await page.route('**/api/notebook/notes', hold, times=1)
+                await page.locator('#workspace-notes').fill('A workspace note being saved')
+                await asyncio.wait_for(started.wait(), 10)
+                await page.evaluate(f"openPageView('notes', {{note: '{first}'}})")
+                await page.wait_for_function(f"V.view === 'notes' && V.note === '{first}'")
+                # A tool asked for while the note saves, then another research note.
+                await nav.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.evaluate(f"openPageView('notes', {{note: '{second}'}})")
+                release.set()
+                await page.wait_for_function("ResearchTools.hasUnsavedChanges() === false")
+                await page.wait_for_function("document.querySelector('#workspace-notes-status')?.textContent === 'Saved'")
+                await ready(page)
+                # The note chosen last is the newer move: the tools stay closed.
+                assert await page.locator('#research-tools').is_hidden()
+                assert await page.evaluate('[V.view, V.note]') == ['notes', second]
+                assert f'note={second}' in page.url
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_board_from_the_palette_keeps_an_unsaved_workspace_note_on_screen(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=claims')
+                await page.wait_for_function("V.view === 'claims'")
+                nav = page.locator('.research-tools-nav')
+                await nav.get_by_role('button', name='Workspace notes', exact=True).click()
+                async def fail_save(route):
+                    await route.fulfill(status=503, content_type='application/json', body='{"detail":"Temporary connection failure"}')
+                await page.route('**/api/notebook/notes', fail_save)
+                await page.locator('#workspace-notes').fill('A note that cannot be saved yet')
+                await page.wait_for_function("document.querySelector('#workspace-notes-status')?.textContent.includes('save')")
+                origin, entries = await page.evaluate('location.hash'), await page.evaluate('history.length')
+                # The palette's board waits on the note, as a sidebar tool does.
+                await page.evaluate("ResearchTools.openBoard('b1')")
+                await ready(page)
+                await page.wait_for_function("document.querySelector('#workspace-notes-status')?.textContent.includes('save')")
+                assert await page.locator('#research-tools').is_hidden()
+                assert await page.locator('#workspace-notes').input_value() == 'A note that cannot be saved yet'
+                assert await page.evaluate('location.hash') == origin
+                assert await page.evaluate('history.length') == entries
+                # Once the note saves, the board opens.
+                await page.unroute('**/api/notebook/notes')
+                await page.evaluate("ResearchTools.openBoard('b1')")
+                await page.locator('#research-tools').wait_for(state='visible')
+                await page.wait_for_function("location.hash.includes('board=b1')")
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'First board'
+                assert not errors
+
+    run_browser(scenario())

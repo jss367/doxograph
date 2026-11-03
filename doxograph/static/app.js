@@ -185,12 +185,14 @@ let restoringHistory = false;
 // A route can change away and back while a request waits. Record each
 // transition, including history traversal, rather than comparing only the
 // final route: work that waits takes this number first, and goes on only if
-// no move came between. The research tools' tab and board are part of the
-// route. Background claim selection is not navigation.
+// no move came between. The record a page view names (a note, a dataset, the
+// research tools' tab and board) is part of the route, as in the URL.
+// Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
 function navigationRouteNow() {
+  const record = {notes: V.note, datasets: V.dataset, tools: [V.tool, V.board]}[V.view] ?? null;
   return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
-    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, V.view === 'tools' ? [V.tool, V.board] : null]);
+    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, record]);
 }
 function navigationVersion() {
   const route = navigationRouteNow();
