@@ -198,9 +198,10 @@ const ResearchNotes = (() => {
     });
   }
   function hide() {
+    const wasShown = shown;
     shown = false;
     el('research-notes').hidden = true;
-    void autosave.flush();
+    if (wasShown) void autosave.flush();
   }
   function insert(before, after = '', fallback = '') {
     const field = el('note-body');

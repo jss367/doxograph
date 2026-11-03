@@ -276,9 +276,10 @@ const Datasets = (() => {
     });
   }
   function hide() {
+    const wasShown = shown;
     shown = false;
     el('datasets-sheet').hidden = true;
-    void autosave.flush();
+    if (wasShown) void autosave.flush();
   }
   async function action(name, target) {
     if (name === 'new') {

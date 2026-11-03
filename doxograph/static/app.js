@@ -502,7 +502,7 @@ function resetWorkspaceView() {
 }
 
 function hasWorkspaceDrafts() {
-  return Boolean(V.editing || V.synthEditing || V.noteEditing || V.newClaim
+  return Boolean(V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty());
 }
