@@ -526,14 +526,17 @@ function resetWorkspaceView() {
 function hasWorkspaceDrafts() {
   return Boolean(V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
-    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty());
+    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length
+    || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
 }
 
 // Core editors keep some writing only in their visible form. Snapshot it
 // without closing that form, including the identity of every parked draft.
 function workspaceWritingSnapshot() {
   captureOpenEditor();
-  captureResearchDraft();
+  // A completed research save has left the view before its trailing redraw.
+  // Its old form must not resurrect the draft that Save just acknowledged.
+  if (V.view === 'research') captureResearchDraft();
   const synthesis = V.synthEditing && document.querySelector(`textarea[data-synth="${CSS.escape(V.synthEditing)}"]`);
   const note = V.noteEditing && document.querySelector(`textarea[data-note="${CSS.escape(V.noteEditing)}"]`);
   if (synthesis) V.synthDrafts[V.synthEditing] = synthesis.value;
@@ -567,9 +570,15 @@ function canRestoreSavedVersion() {
 
 // The native app calls this before quitting. Writing saves itself a moment
 // after typing stops, and the words typed in that moment are saved here.
-window.doxographSaveDrafts = async () =>
-  (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), flushPaperNotes(),
+window.doxographSaveDrafts = async () => {
+  workspaceWritingSnapshot();
+  const saved = (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), flushPaperNotes(),
     typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
+  // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
+  // writing after the waits too, and warn rather than silently saving a judgment.
+  workspaceWritingSnapshot();
+  return saved && !hasWorkspaceDrafts() && !savingClaims.size && !V.synthSaving && !V.researchSaving;
+};
 
 // Consent to lose writing belongs to its content and identity, not a quit
 // attempt alone. Native compares this only while input remains frozen.

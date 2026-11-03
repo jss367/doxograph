@@ -487,9 +487,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return confirmInterruption(.quit, uploading: uploading, reading: 0)
                 ? .terminateNow : .terminateCancel
         }
-        // Writing saves itself a moment after typing stops, so the last words
-        // typed before a quit may still be waiting. Save them first; only
-        // writing that could not be saved is worth a question.
+        // Autosaved writing may still be waiting after the last keystroke.
+        // Save it first; manual editors report their unsaved writing so the
+        // reader can choose whether to leave it behind.
         // Freeze page import admission and settle admitted transfers before
         // the health snapshot, which must see the reading jobs they created.
         window.saveDrafts(freezeEditing: true) { saved in
@@ -721,12 +721,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// Asks whether to quit with writing the page could not save. True means
-    /// quit. The page keeps the writing and says why on screen, so staying
-    /// is a way back to it.
+    /// Asks whether to quit with writing the page has not saved. True means
+    /// quit. Staying returns to manual editors and any failed autosaves.
     private func confirmQuitWithUnsavedWriting() -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Some of your writing couldn’t be saved."
+        alert.messageText = "Some of your writing hasn’t been saved."
         alert.informativeText = "Quitting now loses it. Stay to see what needs attention."
         alert.addButton(withTitle: "Quit Anyway")
         alert.addButton(withTitle: "Don’t Quit")
