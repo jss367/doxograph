@@ -191,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
                 guard let self else { return }
                 guard response == .alertFirstButtonReturn else {
-                    if self.ready { self.window.hideStatus() }
+                    if self.ready && !self.updating { self.window.hideStatus() }
                     // The old bundle keeps running, but the Python is new, and a
                     // server that failed to start may start now.
                     if self.serverFailed { self.startServer() }
