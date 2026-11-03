@@ -4,6 +4,8 @@
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
+  // Each record's linked research, gathered for the table being drawn.
+  let researched = new WeakMap();
   let requested = null, revealed = null;
   // The new draft whose create has gone out, and each body it sent.
   let posted = null;
@@ -52,8 +54,8 @@ const Datasets = (() => {
     const kept = JSON.parse(localStorage.getItem(TABLE_KEY)) || {};
     if (['list','table'].includes(kept.view)) table.view = kept.view;
     if (Array.isArray(kept.columns)) table.columns = Object.keys(columns).filter(column => kept.columns.includes(column));
-    if (['name', ...table.columns].includes(kept.sort)) table.sort = kept.sort;
-    table.descending = kept.descending === true;
+    // A direction without its column would reverse the name order unasked.
+    if (['name', ...table.columns].includes(kept.sort)) Object.assign(table, {sort:kept.sort, descending:kept.descending === true});
   } catch (_) { /* optional */ }
   const remember = () => { try { localStorage.setItem(TABLE_KEY, JSON.stringify(table)); } catch (_) { /* preference remains for this page */ } };
   const button = (action, text, attrs = '') => `<button type="button" data-dataset-action="${action}" ${attrs}>${text}</button>`;
@@ -151,7 +153,13 @@ const Datasets = (() => {
   const labelChips = item => item.labels.length ? `<span class="dataset-labels">${item.labels.map(label => `<span class="dataset-label">${esc(label)}</span>`).join('')}</span>` : '';
   function cell(item, column) {
     const value = item[column];
-    if (column === 'papers' || column === 'claims') return value.length;
+    // Counts match the editor's Linked research, which is costly to gather,
+    // so each render gathers it once per record.
+    if (column === 'papers' || column === 'claims') {
+      if (!researched.has(item)) researched.set(item, research(item));
+      const linked = researched.get(item);
+      return column === 'papers' ? linked.papers.length : linked.claims.length + linked.missing.length;
+    }
     if (column === 'roles') return value.map(role => roles[role]).join(', ');
     if (column === 'created' || column === 'updated') return value ? new Date(value).toLocaleDateString() : '';
     return Array.isArray(value) ? value.join(', ') : value;
@@ -166,6 +174,7 @@ const Datasets = (() => {
   }
   function renderTable(rows) {
     if (!rows.length) return '';
+    researched = new WeakMap();
     const header = column => {
       const sorted = table.sort === column;
       return `<th scope="col" aria-sort="${sorted ? (table.descending ? 'descending' : 'ascending') : 'none'}">${button('sort',
@@ -313,20 +322,25 @@ const Datasets = (() => {
     comparison.hidden = false;
     comparison.innerHTML = '<h3>Saved version</h3>' + renderSavedVersion(version) + button('replace','Replace draft with saved version');
   }
-  function matches(claim) {
-    const names = new Set([draft.name, ...draft.facet_values].map(key).filter(Boolean));
-    return Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
+  // A record's research as the editor lists it: its own links, the papers of
+  // linked claims, claims whose dataset facets match it, and removed sources.
+  function research(item) {
+    const names = new Set([item.name, ...item.facet_values].map(key).filter(Boolean));
+    const matches = claim => Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
       && values.some(value => names.has(key(value))));
+    const manual = new Set(item.claims.map(ref => ref.paper + ':' + ref.claim));
+    const claims = client.state.claims.filter(claim => manual.has(claim.paper + ':' + claim.id) || matches(claim));
+    const missing = item.claims.filter(ref => !claims.some(c => c.paper === ref.paper && c.id === ref.claim));
+    const papers = [...new Set([...item.papers, ...item.claims.map(ref => ref.paper), ...claims.map(c => c.paper)])];
+    return {papers, claims, missing};
   }
   function renderResearch() {
     if (!draft) return;
-    const manual = new Set(draft.claims.map(ref => ref.paper + ':' + ref.claim));
-    const claims = client.state.claims.filter(claim => manual.has(claim.paper + ':' + claim.id) || matches(claim));
-    const papers = new Set([...draft.papers, ...draft.claims.map(ref => ref.paper), ...claims.map(c => c.paper)]);
-    const rows = [...papers].map(paper => {
+    const {papers, claims, missing} = research(draft);
+    const rows = papers.map(paper => {
       const source = client.state.papers.find(p => p.key === paper);
       const linked = claims.filter(c => c.paper === paper);
-      const removed = draft.claims.filter(ref => ref.paper === paper && !linked.some(c => c.id === ref.claim));
+      const removed = missing.filter(ref => ref.paper === paper);
       return `<div class="dataset-source">${source ? button('follow',esc(source.title || paper),`data-paper="${esc(paper)}"`)
         : `<p class="hint">Missing paper: ${esc(paper)}</p>`}
         ${linked.map(claim => button('follow',esc(claim.text),`class="dataset-claim-link" data-paper="${esc(paper)}" data-claim="${esc(claim.id)}"`)).join('')}
