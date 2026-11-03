@@ -359,7 +359,10 @@ def _build_state() -> dict[str, Any]:
     syntheses: list[dict[str, Any]] = _state_section(lambda: store.synthesis_rows(rows, tensions=tensions), [], issues)
     tags: list[dict[str, Any]] = _state_section(store.load_tags, [], issues)
     facets: list[dict[str, Any]] = _state_section(store.load_facets, [], issues)
-    ledger: list[dict[str, Any]] = _state_section(store.load_ledger, [], issues)
+    # One read, so a damaged ledger.yaml is reported once.
+    saved_ledger: dict[str, Any] = _state_section(store._ledger, {}, issues)
+    ledger: list[dict[str, Any]] = saved_ledger.get("claims") or []
+    ledger_retired: list[str] = saved_ledger.get("retired") or []
     context = _state_section(store.load_context, "", issues)
     _state_section(store.retired_keys, set[str](), issues)
     if any(issue["path"] == str(store.tensions_path()) for issue in issues):
@@ -384,6 +387,7 @@ def _build_state() -> dict[str, Any]:
         "facets_stale": store.stale_facet_papers(papers, facets),
         "facet_papers_to_fill": sum(1 for p in papers if store.stale_facets(p, facets)),
         "ledger": ledger,
+        "ledger_retired": ledger_retired,
         "context": context,
         "tensions": tensions,
         "agreements": agreements,

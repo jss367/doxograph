@@ -88,6 +88,9 @@ class LedgerEntry(Metadata):
 
 class ResearchLedger(Metadata):
     claims: list[LedgerEntry] | None = None
+    # Ids of removed or renamed claims, never issued again: a link to one names
+    # the claim it was made for, as a retired paper key does.
+    retired: list[str] | None = None
 
     @model_validator(mode="after")
     def unique_ids(self) -> Self:

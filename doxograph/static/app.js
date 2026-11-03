@@ -1108,7 +1108,9 @@ $('panes').addEventListener('click', async (event) => {
       const rows = $('ledger-rows');
       const count = rows.querySelectorAll('[data-ledger-row]').length;
       // The first id nobody uses, not the row count: L1 and L3 get L2, not a second L3.
-      const taken = new Set([...rows.querySelectorAll('[name="ledger-id"]')].map((f) => f.value.trim()));
+      // Nor one a removed claim had, which links elsewhere still name.
+      const taken = new Set([...rows.querySelectorAll('[name="ledger-id"]')].map((f) => f.value.trim())
+        .concat(S.ledger_retired || []));
       let n = 1;
       while (taken.has(`L${n}`)) n += 1;
       rows.insertAdjacentHTML('beforeend', ledgerRow({ id: `L${n}`, text: '' }, count));

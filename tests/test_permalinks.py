@@ -149,3 +149,22 @@ def test_the_export_head_describes_it_for_an_index_card():
     assert "<title>ESR</title>" in html
     assert '<meta name="description" content="1 papers · 1 claims · 2 topics">' in html
     assert re.search(r'<meta name="date" content="\d{4}-\d\d-\d\dT[^"]+">', html)
+
+
+def test_a_removed_ledger_id_is_never_given_to_another_claim(client):
+    """`/ledger/L1` in a brief names the claim it was made for. Removing that
+    claim, or renaming its id, must not let a new claim take the address."""
+    build_corpus()
+    assert client.put("/api/ledger", json={"claims": [{"id": "my claim", "text": "Kept."}]}).status_code == 200
+    assert client.get("/api/state").json()["ledger_retired"] == ["L1"]
+    refused = client.put("/api/ledger", json={"claims": [{"id": "my claim", "text": "Kept."},
+                                                          {"id": "L1", "text": "Something else."}]})
+    assert refused.status_code == 409
+    assert "L1 belonged to a claim you removed" in refused.json()["detail"]
+    assert [c["id"] for c in store.load_ledger()] == ["my claim"]
+    assert client.get("/ledger/L1", follow_redirects=False).status_code == 404
+    # A rename retires the old id too, and editing a claim's text keeps its id.
+    client.put("/api/ledger", json={"claims": [{"id": "L2", "text": "Kept."}]})
+    client.put("/api/ledger", json={"claims": [{"id": "L2", "text": "Kept, reworded."}]})
+    assert store.retired_ledger_ids() == ["L1", "my claim"]
+    assert store.load_ledger() == [{"id": "L2", "text": "Kept, reworded."}]

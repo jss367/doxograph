@@ -310,7 +310,10 @@ def put_ledger(body: LedgerBody) -> dict[str, Any]:
             raise HTTPException(422, f"ledger id {claim_id!r} is used twice")
         seen.add(claim_id)
         claims.append({"id": claim_id, "text": item.text.strip()})
-    store.save_ledger(claims)
+    try:
+        store.save_ledger(claims)
+    except store.RetiredLedgerId as exc:
+        raise HTTPException(409, str(exc)) from None
     return {"ledger": store.load_ledger()}
 
 

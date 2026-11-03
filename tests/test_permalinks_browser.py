@@ -95,3 +95,20 @@ def test_a_link_into_the_export_clears_filters_that_hide_its_target(engine, tmp_
             await expect(page.locator("#q")).to_have_value("")
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_a_new_claim_of_my_own_skips_retired_ids(engine):
+    store.save_ledger([{"id": "L1", "text": "Removed."}, {"id": "L2", "text": "Kept."}])
+    store.save_ledger([{"id": "L2", "text": "Kept."}])
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#view=research")
+                await page.get_by_role("button", name="Add a claim", exact=True).click()
+                await expect(page.locator('[name="ledger-id"]').last).to_have_value("L3")
+
+    run_browser(scenario())

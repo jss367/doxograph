@@ -1040,6 +1040,10 @@ claims:
       Recovery under steering is a path-dependent outcome.
 ```
 
+Removing a claim, or changing its id, lists the old id under `retired`, and a
+new claim cannot take it: `/ledger/<id>` and the export's `#ledger-<id>` keep
+naming the claim they were made for. **Add a claim** skips retired ids.
+
 These are your own claims. Extraction links a paper's claims to them, which is
 what turns the corpus into an answer to "what external evidence do I have for
 this" rather than a pile of notes. The file can be edited by hand or from the
