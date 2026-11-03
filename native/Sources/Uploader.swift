@@ -25,6 +25,7 @@ enum Uploader {
 
     private static let counter = NSLock()
     private static var inFlight = 0
+    private static var started = 0
 
     /// How many papers this app is still copying or sending.
     ///
@@ -40,11 +41,25 @@ enum Uploader {
         return inFlight
     }
 
+    /// How many uploads this app has ever begun. It only rises.
+    ///
+    /// `uploadsInFlight` cannot tell one upload from another: a paper that
+    /// finishes while a new one starts leaves the count where it was. A quit
+    /// that has already asked about the uploads it saw compares this against
+    /// what it read then, so a paper begun since is noticed even when the live
+    /// count did not move.
+    static var uploadsStarted: Int {
+        counter.lock()
+        defer { counter.unlock() }
+        return started
+    }
+
     /// Count files before an asynchronous workspace lookup hands them here.
     /// The matching reserved upload keeps this count held until it settles.
     static func reserveForUpload(_ urls: [URL]) {
         counter.lock()
         inFlight += urls.count
+        started += urls.count
         counter.unlock()
     }
 
@@ -66,6 +81,7 @@ enum Uploader {
         if !alreadyReserved {
             counter.lock()
             inFlight += papers
+            started += papers
             counter.unlock()
         }
         var settled = false

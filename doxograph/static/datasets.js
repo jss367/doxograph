@@ -1,23 +1,90 @@
 /* Workspace dataset inventory, including links to the evidence that uses it.
-   A view in the main pane: leaving it keeps the draft for the next visit. */
+   A view in the main pane. Edits save themselves shortly after typing stops,
+   and leaving the view saves at once; a draft that cannot save stays put. */
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
   let requested = null, revealed = null;
+  // The new draft whose create has gone out, and each body it sent.
+  let posted = null;
+  // A draft whose record another window changed before this one heard back.
+  let conflicted = null;
+  const conflict = 'This dataset changed in another window. Your edits are still here. Reload the saved version before saving.';
   // The draft the reader agreed to discard when a workspace switch began.
   let discarding = null;
-  const writing = () => dirty() ? JSON.stringify([draft.id, body(draft)]) : null;
+  const writing = () => draft && (dirty() || autosave.unconfirmed || autosave.saving)
+    ? JSON.stringify([draft?.id, body(draft), autosave.generation, autosave.unconfirmed]) : null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
   const fields = ['name','description','source','version','license','access_notes','roles','labels','facet_values','papers','claims'];
   const body = item => Object.fromEntries(fields.map(key => [key, item[key]]));
   const dirty = () => !!draft && (!saved || JSON.stringify(body(draft)) !== JSON.stringify(body(saved)));
+  const unique = (values, by = value => value) => values.filter((value, i) => values.findIndex(other => by(other) === by(value)) === i);
+  // Python's str.strip(). JavaScript's trim() also drops U+FEFF and keeps
+  // U+001C–001F and U+0085.
+  const strip = value => value.replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu, '');
+  // Python orders strings by code point, JavaScript by UTF-16 unit.
+  const byCodePoint = (a, b) => {
+    const x = [...a], y = [...b];
+    for (let i = 0; i < Math.min(x.length, y.length); i++)
+      if (x[i] !== y[i]) return x[i].codePointAt(0) - y[i].codePointAt(0);
+    return x.length - y.length;
+  };
+  // A body as the server stores it: the name and facet names stripped and
+  // repeats dropped, and labels as `store.normalize_labels` leaves them, with
+  // spacing collapsed, one spelling per label, sorted by key and then spelling.
+  const stored = item => JSON.stringify({...body(item), name:strip(item.name),
+    labels:unique(item.labels.map(normalizeLabel).filter(Boolean), labelKey)
+      .sort((a, b) => byCodePoint(labelKey(a), labelKey(b)) || byCodePoint(a, b)),
+    facet_values:unique(item.facet_values.map(strip))});
   const key = value => facetValueKey(value);
   const button = (action, text, attrs = '') => `<button type="button" data-dataset-action="${action}" ${attrs}>${text}</button>`;
   function status(message, error = false) {
     el('datasets-status').textContent = message;
     el('datasets-status').className = error ? 'warn' : 'hint';
+  }
+  const autosave = createAutosave({current: () => draft, dirty,
+    blocked: () => conflicted === draft ? conflict : draft.name.trim() ? '' : 'Give your dataset a name.',
+    async write(target) {
+      const sent = body(target), first = !saved;
+      let item;
+      if (first) {
+        if (posted?.target !== target) posted = {target, bodies:[]};
+        const retry = posted.bodies.length > 0;
+        posted.bodies.push(sent);
+        item = await request('','POST',sent);
+        // A create retried after its answer was lost finds the record already
+        // stored, and the server answers with it, not this draft. Save the
+        // draft over it only while it is still what this draft created.
+        if (retry && draft === target && stored(item) !== stored(sent)) {
+          if (!posted.bodies.some(earlier => stored(earlier) === stored(item))) {
+            // Another window changed it since. Keep the draft, as any other
+            // conflict does, and hold saves until the writer reloads.
+            saved = structuredClone(item); conflicted = target;
+            items = [...items.filter(row => row.id !== item.id), item];
+            select(item.id); renderActions(); renderList();
+            throw new Error(conflict);
+          }
+          item = await request('/' + item.id,'PUT',{...sent,revision:item.revision});
+        }
+      } else item = await request('/' + saved.id,'PUT',{...sent,revision:saved.revision});
+      if (draft !== target) return;
+      saved = structuredClone(item);
+      // Take the stored spelling (a trimmed name, merged labels) unless the
+      // writer has typed past it; the fields keep showing what was typed.
+      if (JSON.stringify(body(target)) === JSON.stringify(sent)) {
+        Object.assign(target, structuredClone(body(item)));
+        const labels = el('dataset-labels');
+        if (labels && document.activeElement !== labels) labels.value = target.labels.join(', ');
+      }
+      items = [...items.filter(row => row.id !== item.id), item];
+      if (first) { select(item.id); renderActions(); }
+      renderList();
+    },
+    changed: () => progress()});
+  function progress() {
+    if (draft) status(autosave.describe(), Boolean(autosave.failure));
   }
   async function request(path = '', method = 'GET', data) {
     return client.request('/api/datasets' + path, {method,
@@ -34,10 +101,13 @@ const Datasets = (() => {
   async function run(task) {
     if (busy) return;
     setBusy(true);
-    try { await task(); }
+    // Actions read the saved revision, so a save under way lands first. A
+    // pending one is held while the editor is frozen and resumes after.
+    try { await autosave.settle(); await task(); }
     catch (error) { status(error.message, true); }
     finally {
       setBusy(false);
+      autosave.resume();
       if (focusName) { el('dataset-name')?.focus(); focusName = false; }
       // Hash navigation can arrive during a load, save, or discard prompt.
       // Drain the latest target once that work releases the editor.
@@ -67,7 +137,7 @@ const Datasets = (() => {
       return;
     }
     el('dataset-document').innerHTML = `<form id="dataset-form">
-      <div class="dataset-actions">${button('save','Save dataset','class="primary"')}${saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel','Cancel')}</div>
+      <div class="dataset-actions"></div>
       <div class="dataset-fields">${input('name','Dataset name')}${input('version','Version')}
       ${input('description','Description',true,'',20000)}
       ${input('source','Source URL or local path',false,'Use a local conversation JSON/JSONL file, survey export, or Gloom directory to inspect it in Loupe.',4000)}
@@ -83,8 +153,16 @@ const Datasets = (() => {
       <section aria-label="Linked research"><h3>Linked research</h3><p class="hint">Includes your links and claims whose dataset facets match this record.</p><div id="dataset-research"></div></section>
       <div id="dataset-saved-version" hidden></div>
     </form>`;
-    renderPicker(); renderResearch(); renderSource();
+    renderActions(); renderPicker(); renderResearch(); renderSource();
     if (busy) setBusy(true);
+  }
+  // A new record's first save swaps Cancel for the saved record's actions
+  // without rebuilding the fields under the cursor.
+  function renderActions() {
+    const actions = el('dataset-form')?.querySelector('.dataset-actions');
+    if (!actions) return;
+    actions.innerHTML = saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel','Discard new dataset');
+    if (busy) actions.querySelectorAll('button').forEach(field => field.disabled = true);
   }
   function renderSource() {
     const container = el('dataset-source-link');
@@ -113,7 +191,7 @@ const Datasets = (() => {
         const url = new URL(result.url);
         if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) throw new Error('Loupe returned an invalid local address.');
         if (viewer && !viewer.closed) viewer.location.replace(url.href);
-        status(dirty() ? 'Loupe is ready. Your dataset edits are still unsaved. ' : 'Loupe is ready. ');
+        status('Loupe is ready. ');
         const link = document.createElement('a');
         link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open viewer';
         el('datasets-status').append(link);
@@ -178,20 +256,30 @@ const Datasets = (() => {
       || '<p class="hint">No matching papers or claims.</p>';
   }
   async function discard() {
-    return !dirty() || await confirmDialog('Discard unsaved changes to this dataset?', {ok:'Discard changes'});
+    if (await autosave.flush()) return true;
+    return confirmDialog(`This dataset couldn’t be saved. ${autosave.failure} Discard your changes?`, {ok:'Discard changes'});
+  }
+  // The record a new draft's create stored, and whether it still holds only
+  // what this draft wrote. A record another window changed since is theirs.
+  async function created(target) {
+    if (saved) return {item:saved, ours:conflicted !== target};
+    if (posted?.target !== target) return {};
+    const item = (await request()).datasets.find(row => row.id === target.id);
+    return {item, ours:!!item && posted.bodies.some(sent => stored(sent) === stored(item))};
   }
   function choose(item) {
     inspectedRevision = undefined;
     saved = structuredClone(item); draft = structuredClone(item);
-    select(item.id); renderList(); renderDocument(); status('');
+    select(item.id); renderList(); renderDocument(); progress();
   }
   function reset() {
+    void autosave.settle();
     workspace = client.workspaceId; items = []; draft = saved = null; loaded = false; inspectedRevision = undefined;
     el('datasets-search').value = '';
   }
   // The record a URL names, or else the one last open, or else the first.
   async function reveal(id, current) {
-    if (dirty() && (!id || id === draft.id)) { renderList(); status('Unsaved changes'); return; }
+    if ((dirty() || autosave.unconfirmed) && (!id || id === draft.id)) { renderList(); progress(); return; }
     if (id && id !== draft?.id && !await discard()) {
       if (current()) select(saved?.id || null);
       return;
@@ -229,22 +317,18 @@ const Datasets = (() => {
     shown = true;
     el('datasets-sheet').hidden = false;
     if (workspace !== client.workspaceId) reset();
-    renderList(); renderDocument(); status(dirty() ? 'Unsaved changes' : 'Loading datasets…');
+    renderList(); renderDocument();
+    if (dirty()) progress(); else status('Loading datasets…');
     await run(async () => {
       items = (await request()).datasets; loaded = true;
       await revealRequested();
     });
   }
   function hide() {
+    const wasShown = shown;
     shown = false;
     el('datasets-sheet').hidden = true;
-  }
-  async function save() {
-    if (!draft?.name.trim()) throw new Error('Give your dataset a name before saving.');
-    if (!el('dataset-form').reportValidity()) return;
-    const item = saved ? await request('/' + saved.id,'PUT',{...body(draft),revision:saved.revision})
-      : await request('','POST',body(draft));
-    items = [...items.filter(row => row.id !== item.id),item]; choose(item); status('Saved.');
+    if (wasShown) void autosave.flush();
   }
   async function action(name, target) {
     if (name === 'new') {
@@ -253,16 +337,31 @@ const Datasets = (() => {
       inspectedRevision = undefined;
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
       draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',roles:[],labels:[],facet_values:[],papers:[],claims:[]};
-      select(null); renderList(); renderDocument(); status('New dataset · Unsaved changes');
+      select(null); renderList(); renderDocument(); status('New dataset. It saves once it has a name.');
       focusName = true;
     } else if (name === 'open') {
       if (draft?.id === target.dataset.id || !await discard()) return;
       choose(items.find(item => item.id === target.dataset.id));
-    } else if (name === 'save') await save();
-    else if (name === 'cancel') {
-      if (!await discard()) return;
-      draft = saved = null; renderDocument(); renderList(); status('');
+    } else if (name === 'cancel') {
+      if (!await confirmDialog('Discard this new dataset?', {ok:'Discard dataset'})) return;
+      // Its create can land while the prompt waits, or land with its answer
+      // lost. Discarding the draft also deletes the record it made.
+      await autosave.settle();
+      const {item, ours} = await created(draft);
+      if (item && !ours) {
+        // Another window changed the record, so it is theirs to keep.
+        items = [...items.filter(row => row.id !== item.id), item];
+        choose(item);
+        status('Another window changed this dataset, so it was kept. This is its saved version.');
+        return;
+      }
+      if (item) {
+        await request('/' + item.id + '?' + new URLSearchParams({revision:item.revision}),'DELETE');
+        items = items.filter(row => row.id !== item.id);
+      }
+      draft = saved = null; select(null); renderDocument(); renderList(); status('');
     } else if (name === 'reload') {
+      await autosave.flush();
       const latest = (await request()).datasets;
       const version = latest.find(item => item.id === saved.id);
       // Always leave the draft intact while the reader inspects the disk version.
@@ -277,7 +376,8 @@ const Datasets = (() => {
         status('The saved version changed again. Your draft is still here. Inspect the updated comparison before replacing it.');
         return;
       }
-      if (!await discard()) return;
+      // Replacing is the point here, so the draft is not saved first.
+      if (dirty() && !await confirmDialog('Discard unsaved changes to this dataset?', {ok:'Discard changes'})) return;
       if (version) choose(version);
       else { draft = saved = null; select(null); renderList(); renderDocument(); status('This dataset record has been deleted.'); }
     } else if (name === 'delete') {
@@ -297,7 +397,7 @@ const Datasets = (() => {
     if (target.dataset.datasetAction === 'loupe') { openInLoupe(); return; }
     run(() => action(target.dataset.datasetAction,target));
   });
-  el('datasets-sheet').addEventListener('submit', event => { event.preventDefault(); run(save); });
+  el('datasets-sheet').addEventListener('submit', event => { event.preventDefault(); if (!busy) void autosave.flush(); });
   el('datasets-search').addEventListener('input', renderList);
   el('datasets-sheet').addEventListener('input', event => {
     if (event.target.id === 'dataset-link-search') return renderPicker();
@@ -305,7 +405,7 @@ const Datasets = (() => {
     if (!draft || !field) return;
     draft[field] = field === 'labels' ? event.target.value.split(',').map(normalizeLabel).filter(Boolean)
       : field === 'facet_values' ? event.target.value.split('\n').map(v => v.trim()).filter(Boolean) : event.target.value;
-    status('Unsaved changes');
+    autosave.schedule();
     if (['name','facet_values'].includes(field)) renderResearch();
     if (field === 'source') renderSource();
   });
@@ -324,17 +424,19 @@ const Datasets = (() => {
       }
       renderResearch();
     } else return;
-    status('Unsaved changes');
+    autosave.schedule();
   });
   el('datasets-sheet').addEventListener('keydown', event => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); run(save); }
+    // Saving is automatic. The shortcut saves now, or retries a failed save.
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!busy) void autosave.flush(); }
   });
   window.addEventListener('beforeunload', event => {
-    if (dirty() || busy) { event.preventDefault(); event.returnValue = ''; }
+    if (dirty() || busy || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
-  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide,
-    resetWorkspace() { hide(); reset(); },
-    hasUnsavedChanges:() => dirty() || busy,
+  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, flush: () => autosave.flush(),
+    // Reset first: a draft the writer chose to discard must not save on hide.
+    resetWorkspace() { reset(); hide(); },
+    hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,
     async beforeWorkspaceSwitch() {
       // A later guard may still refuse. Only committed selection clears drafts.
       if (busy || !await discard()) return false;
@@ -344,7 +446,12 @@ const Datasets = (() => {
     // Held deletes leave the editor open while they finish. Edits made in
     // that time were never agreed to; ask about them before the switch commits.
     async beforeWorkspaceSelect() {
-      if (busy) return false;
-      return writing() === discarding || await discard();
-    }};
+      if (busy || autosave.saving) return false;
+      if (writing() !== discarding && !await discard()) return false;
+      discarding = writing();
+      return true;
+    },
+    // No asynchronous gap remains between this check and committed selection.
+    writingSnapshot: writing,
+    canWorkspaceSelect: () => !busy && !autosave.saving && (writing() === null || writing() === discarding)};
 })();

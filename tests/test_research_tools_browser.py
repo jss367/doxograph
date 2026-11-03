@@ -199,7 +199,7 @@ def test_paper_reads_beside_its_notes(engine):
                 assert await rail.locator('.claim').count() == 1
                 # The note is written in the rail and stays there.
                 await rail.locator('textarea[data-note="paper"]').fill('Read this for the task differences.')
-                await rail.get_by_role('button', name='Save', exact=True).click()
+                await rail.get_by_role('button', name='Done', exact=True).click()
                 await rail.locator('.note p', has_text='task differences').wait_for()
                 assert next(p for p in httpx.get(url+'/api/state').json()['papers'] if p['key'] == 'paper')['notes'] == 'Read this for the task differences.'
                 # One click keeps a selected passage as a highlight, drawn over the

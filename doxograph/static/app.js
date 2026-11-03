@@ -56,16 +56,17 @@ const NEW_CLAIM_ID = '__new__';
 // away the first one's text. synthSaving is the topic whose hand save is in
 // flight: its editor is frozen, as a claim form is while it saves, because
 // success redraws from the server value and typing meanwhile would be lost.
-// noteEditing, noteDrafts and noteSaving are the same three for the note a
-// reader writes on a paper, keyed by paper key. A note is nobody's judgment
-// but the reader's, so unlike a synthesis it is saved without flushing the
-// held deletes: no claim is read to write one.
+// noteEditing and noteDrafts are the same two for the note a reader writes on
+// a paper, keyed by paper key. A note saves itself as it is typed (see
+// `noteAutosave`), so no editor is frozen while one saves. A note is nobody's
+// judgment but the reader's, so unlike a synthesis it is saved without
+// flushing the held deletes: no claim is read to write one.
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
 const V = { paper: null, tag: null, label: null, facet: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-            noteEditing: null, noteDrafts: {}, noteSaving: null,
+            noteEditing: null, noteDrafts: {},
             graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false }, paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
@@ -505,7 +506,7 @@ function resetWorkspaceView() {
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'library', dataset: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
-    noteEditing: null, noteDrafts: {}, noteSaving: null,
+    noteEditing: null, noteDrafts: {},
     graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false },
     quoteContext: null, textSearch: null, similar: null,
   });
@@ -523,29 +524,38 @@ function resetWorkspaceView() {
 }
 
 function hasWorkspaceDrafts() {
-  return Boolean(V.editing || V.synthEditing || V.noteEditing || V.newClaim
+  return Boolean(V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
-    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length || researchFormDirty());
+    || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length
+    || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
 }
 
 // Core editors keep some writing only in their visible form. Snapshot it
 // without closing that form, including the identity of every parked draft.
 function workspaceWritingSnapshot() {
   captureOpenEditor();
-  captureResearchDraft();
+  // A completed research save has left the view before its trailing redraw.
+  // Its old form must not resurrect the draft that Save just acknowledged.
+  if (V.view === 'research') captureResearchDraft();
   const synthesis = V.synthEditing && document.querySelector(`textarea[data-synth="${CSS.escape(V.synthEditing)}"]`);
   const note = V.noteEditing && document.querySelector(`textarea[data-note="${CSS.escape(V.noteEditing)}"]`);
   if (synthesis) V.synthDrafts[V.synthEditing] = synthesis.value;
-  if (note) V.noteDrafts[V.noteEditing] = note.value;
+  if (note && (note.value !== storedNote(V.noteEditing) || noteAutosave(V.noteEditing).unconfirmed)) {
+    V.noteDrafts[V.noteEditing] = note.value;
+  }
+  const noteWrites = Object.keys(V.noteDrafts).map(key => {
+    const saver = noteAutosave(key);
+    return [key, saver.generation, saver.unconfirmed];
+  });
   return JSON.stringify([workspaceClient.workspaceId, V.editing, V.drafts, V.newClaim, V.parkedNewClaims,
-    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, V.researchDraft]);
+    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft]);
 }
 let discardedWorkspaceWriting = null;
 let discardedWorkspaceId = null;
 
 function canLeaveWorkspace() {
   if (deletingWorkspace) return false;
-  if (workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || V.noteSaving || V.researchSaving) {
+  if (workspaceClient.pendingMutations || savingClaims.size || V.synthSaving || paperNotesSaving() || V.researchSaving) {
     toast('Wait for the current change to finish before switching workspaces.', { tone: 'warn' });
     return false;
   }
@@ -554,12 +564,34 @@ function canLeaveWorkspace() {
 
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
-    && !V.synthSaving && !V.noteSaving && !V.researchSaving && !trash.size
+    && !V.synthSaving && !paperNotesSaving() && !V.researchSaving && !trash.size
     && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !Datasets.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
 }
 
+// The native app calls this before quitting. Writing saves itself a moment
+// after typing stops, and the words typed in that moment are saved here.
+window.doxographSaveDrafts = async () => {
+  workspaceWritingSnapshot();
+  const saved = (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), flushPaperNotes(),
+    typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
+  // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
+  // writing after the waits too, and warn rather than silently saving a judgment.
+  workspaceWritingSnapshot();
+  return saved && !hasWorkspaceDrafts() && !savingClaims.size && !V.synthSaving && !V.researchSaving;
+};
+
+// Consent to lose writing belongs to its content and identity, not a quit
+// attempt alone. Native compares this only while input remains frozen.
+window.doxographQuitWritingSnapshot = () => JSON.stringify([
+  workspaceWritingSnapshot(), ResearchNotes.writingSnapshot(), Datasets.writingSnapshot(),
+  ResearchTools.writingSnapshot(), [...document.querySelectorAll('input:not([type="password"]):not([type="file"]),textarea,select,[contenteditable="true"]')]
+    .map(field => [field.id, field.name, field.value ?? field.textContent, field.checked]),
+]);
+
 const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
+    // A paper note that cannot save is a draft, which confirmLeave asks about.
+    await flushPaperNotes();
     return await WorkspaceNotes.beforeWorkspaceSwitch()
       && await ResearchNotes.beforeWorkspaceSwitch() && await Datasets.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
@@ -595,6 +627,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     // This synchronous last check runs after beforeSelect's Promise and
     // immediately before selection, so a late save/draft cannot slip through.
     if (!canLeaveWorkspace()) return false;
+    if (!ResearchNotes.canWorkspaceSelect() || !Datasets.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
     if (hasWorkspaceDrafts() && workspaceWritingSnapshot() !== discardedWorkspaceWriting) {
       toast('Your writing changed. Switch workspaces again to review it.', { tone: 'warn' });
       return false;
@@ -1191,8 +1224,7 @@ $('panes').addEventListener('click', async (event) => {
       if (field) field.focus();
       return;
     }
-    if (act === 'cancel-note') { cancelNoteEdit(); return; }
-    if (act === 'save-note') { await saveNote(button.dataset.paper); return; }
+    if (act === 'done-note') { await closeNoteEditor(); return; }
     if (act === 'cancel-synth') { cancelSynthEdit(); return; }
     if (act === 'save-synth') {
       if (V.synthSaving) return;   // a save is in flight
@@ -1451,6 +1483,10 @@ $('panes').addEventListener('input', (e) => {
   if (e.target.matches('textarea[data-note]')) {
     V.noteEditing = e.target.dataset.note;
     V.noteDrafts[V.noteEditing] = e.target.value;
+    // An empty note's editor is drawn before anyone edits it; typing opens it.
+    const done = e.target.closest('.note')?.querySelector('[data-act="done-note"]');
+    if (done) done.hidden = false;
+    noteAutosave(V.noteEditing).schedule();
   }
 });
 

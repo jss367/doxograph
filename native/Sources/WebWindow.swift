@@ -20,6 +20,10 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     /// message is taken down by the next page that loads; an update's progress
     /// line is the updater's to take down.
     private var showingFailure = false
+    /// Whether the final quit save has frozen the page. Reloading or going
+    /// back then would drop writing that save is still waiting on.
+    private(set) var editingFrozen = false
+    private var editingTransition = 0
     private let downloads: DownloadController
 
     init(downloads: DownloadController = DownloadController()) {
@@ -101,6 +105,100 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
                 NSApp.sendAction(Selector((redo ? "redo:" : "undo:")), to: nil, from: nil)
             }
         }
+    }
+
+    /// Saves writing the page is still waiting to save. Answers true once
+    /// nothing is left unsaved, and false when something could not be saved
+    /// or the page did not answer in time; the caller asks rather than
+    /// waiting on a page that may never answer.
+    private(set) var unsavedWritingSnapshot: String?
+
+    func saveDrafts(freezeEditing: Bool = false, _ done: @escaping (Bool) -> Void) {
+        var answered = false
+        unsavedWritingSnapshot = nil
+        let finish = { (saved: Bool, snapshot: String?) in
+            guard !answered else { return }
+            answered = true
+            self.unsavedWritingSnapshot = snapshot
+            done(saved)
+        }
+        if freezeEditing {
+            editingTransition += 1
+            editingFrozen = true
+        }
+        webView.callAsyncJavaScript(
+            """
+            if (freezeEditing) {
+                if (typeof pageImports !== 'undefined') pageImports.freeze();
+                window.doxographQuitInert ??= document.body.inert;
+                window.doxographQuitFocus ??= document.activeElement;
+                document.activeElement?.blur();
+                // WebKit can still deliver keyboard input to a control that
+                // held focus when its ancestor became inert.
+                window.doxographQuitBlockInput ??= event => {
+                    event.preventDefault(); event.stopImmediatePropagation();
+                };
+                for (const type of ['beforeinput', 'keydown', 'pointerdown', 'click', 'paste', 'cut', 'drop']) {
+                    window.addEventListener(type, window.doxographQuitBlockInput, true);
+                }
+                document.body.inert = true;
+            }
+            const saved = window.doxographSaveDrafts ? await window.doxographSaveDrafts() : true;
+            return {saved, snapshot: saved ? null : window.doxographQuitWritingSnapshot?.() ?? null};
+            """,
+            arguments: ["freezeEditing": freezeEditing], in: nil, in: .page
+        ) { result in
+            if case .success(let value) = result, let report = value as? [String: Any] {
+                finish((report["saved"] as? Bool) ?? false, report["snapshot"] as? String)
+            } else { finish(false, nil) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(false, nil) }
+    }
+
+    func resumeEditingAfterCancelledQuit() {
+        editingTransition += 1
+        let transition = editingTransition
+        var answered = false
+        let finish = { (error: Error?) in
+            guard !answered, self.editingTransition == transition else { return }
+            answered = true
+            self.editingFrozen = false
+            if error != nil {
+                self.showStatus("The page could not restore editing. Reloading may discard unsaved writing.")
+            }
+        }
+        webView.evaluateJavaScript("""
+            if (typeof pageImports !== 'undefined') pageImports.resume();
+            if (window.doxographQuitInert !== undefined) {
+                document.body.inert = window.doxographQuitInert;
+                delete window.doxographQuitInert;
+                for (const type of ['beforeinput', 'keydown', 'pointerdown', 'click', 'paste', 'cut', 'drop']) {
+                    window.removeEventListener(type, window.doxographQuitBlockInput, true);
+                }
+                delete window.doxographQuitBlockInput;
+                if (window.doxographQuitFocus?.isConnected) window.doxographQuitFocus.focus({preventScroll:true});
+                delete window.doxographQuitFocus;
+            }
+            """) { _, error in finish(error) }
+        // A dead page must not permanently trap native navigation. Keep it
+        // protected unless the reader explicitly accepts losing its writing.
+        func checkRestoration() {
+            guard !answered, self.editingTransition == transition else { return }
+            let allow = self.confirmNavigationWhileRestoringEditing()
+            guard !answered, self.editingTransition == transition else { return }
+            if allow { finish(nil) }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: checkRestoration) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: checkRestoration)
+    }
+
+    private func confirmNavigationWhileRestoringEditing() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "The page has not restored editing yet"
+        alert.informativeText = "Keep waiting to preserve your writing. Allowing Reload and Back may discard unsaved writing."
+        alert.addButton(withTitle: "Keep Waiting")
+        alert.addButton(withTitle: "Allow Navigation")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func load(_ url: URL) {

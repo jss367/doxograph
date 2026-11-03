@@ -36,6 +36,12 @@ def test_held_delete_discard_consent_includes_record_identity(engine, editor, de
             await page.route(f'**/api/papers/study/claims/{claim}', hold_delete)
             with _server() as url:
                 if editor == 'dataset':
+                    async def refuse(route):
+                        if route.request.method == 'PUT':
+                            await route.fulfill(status=503, json={'detail':'Synthetic unsaved draft'})
+                        else:
+                            await route.continue_()
+                    await page.route('**/api/datasets/*', refuse)
                     first = httpx.post(url+'/api/datasets', json={'name':'Dataset A'}).json()
                     second = httpx.post(url+'/api/datasets', json={'name':'Dataset B'}).json()
                 else:

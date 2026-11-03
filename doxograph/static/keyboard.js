@@ -319,7 +319,7 @@ document.addEventListener('keydown', async (event) => {
     if (event.target.closest('.synth')) {
       if (V.synthEditing && !V.synthSaving) cancelSynthEdit();
     } else if (event.target.closest('.note')) {
-      if (V.noteEditing && !V.noteSaving) cancelNoteEdit();
+      if (V.noteEditing) void closeNoteEditor();
     } else if (V.editing && event.target.closest('form[data-form]')) {
       // And only from inside the claim's own form. Escape in the new-topic
       // box, the add-papers textarea, the reader's page field or a mark's

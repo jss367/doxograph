@@ -10,6 +10,45 @@ function focusPaperImport() {
   $('refs').focus();
 }
 
+// Native quit closes admission before its health snapshot. Already admitted
+// requests settle first: a finished transfer may have created a reading job.
+const pageImports = (() => {
+  let frozen = Boolean(window.doxographQuitBlockInput);
+  let failedReferences = false;
+  let acknowledgedReferences = '', editedSinceAcknowledgment = false;
+  const pending = new Set();
+  return {
+    freeze() { frozen = true; },
+    resume() { frozen = false; },
+    referencesFailed() { failedReferences = true; },
+    referencesEdited() { editedSinceAcknowledgment = true; },
+    // An acknowledgment clears failure even if unknown lines remain. Text
+    // edited during the request was not submitted and still needs protection.
+    referencesSubmitted(unchanged) {
+      failedReferences = false;
+      if (unchanged) {
+        acknowledgedReferences = $('refs').value.trim();
+        editedSinceAcknowledgment = false;
+      } else editedSinceAcknowledgment = true;
+    },
+    async run(path, options) {
+      if (frozen) throw new Error('Wait for quitting to finish before adding papers.');
+      const transfer = api(path, options);
+      pending.add(transfer);
+      try { return await transfer; }
+      finally { pending.delete(transfer); }
+    },
+    async settle() {
+      const results = await Promise.allSettled([...pending]);
+      if (!$('refs').value.trim()) failedReferences = false;
+      const text = $('refs').value.trim();
+      return results.every(result => result.status === 'fulfilled') && !failedReferences
+        && (!text || (!editedSinceAcknowledgment && text === acknowledgedReferences));
+    },
+  };
+})();
+$('refs').addEventListener('input', pageImports.referencesEdited);
+
 const pendingJobActions = new Set();
 const jobTimeouts = new Map();
 
@@ -130,7 +169,8 @@ $('jobs').addEventListener('click', async (event) => {
       if (S.papers.some((paper) => paper.key === button.dataset.paper)) openPaper(button.dataset.paper);
       else toast('This paper is no longer in this workspace.', { tone: 'warn' });
     }
-    await api(`/api/jobs/${button.dataset.jobId}${retry ? '/retry' : ''}`, {
+    const send = retry ? pageImports.run : api;
+    await send(`/api/jobs/${button.dataset.jobId}${retry ? '/retry' : ''}`, {
       method: retry ? 'POST' : 'DELETE', headers: { 'X-Doxograph-Workspace': workspace },
     });
     await refresh();
@@ -156,13 +196,14 @@ async function addReferences() {
   $('import-status').textContent = 'Submitting references…';
   let result;
   try {
-    result = await api('/api/ingest', {
+    result = await pageImports.run('/api/ingest', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, extract: $('auto-extract').checked }),
     });
   } catch (error) {
     // What was pasted stays in the box either way: a refused request is a
     // reason to try again, not a reason to lose the list.
+    pageImports.referencesFailed();
     toast(`Could not add these references: ${error.message}`, { tone: 'warn' });
     $('import-status').textContent = `Could not add these references: ${error.message}`;
     return;
@@ -175,7 +216,9 @@ async function addReferences() {
   // workspace it was submitted in, as do the references it would clear.
   if (workspace !== workspaceClient.workspaceId) return;
   const unknown = result.unknown || [];
-  if ($('refs').value.trim() === text) $('refs').value = unknown.join('\n');
+  const unchanged = $('refs').value.trim() === text;
+  if (unchanged) $('refs').value = unknown.join('\n');
+  pageImports.referencesSubmitted(unchanged);
   $('import-status').hidden = !result.queued;
   if (result.queued) $('import-status').textContent =
     `Import started for ${result.queued} ${result.queued === 1 ? 'paper' : 'papers'}. Progress appears in the notifications.`;
@@ -258,9 +301,9 @@ document.addEventListener('drop', async (event) => {
     if (files.length) {
       const body = new FormData();
       files.forEach((file) => body.append('files', file, file.name));
-      await api(`/api/upload?extract_now=${$('auto-extract').checked}`, { method: 'POST', body });
+      await pageImports.run(`/api/upload?extract_now=${$('auto-extract').checked}`, { method: 'POST', body });
     } else if (text && text.trim()) {
-      reportKnown(await api('/api/ingest', {
+      reportKnown(await pageImports.run('/api/ingest', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, extract: $('auto-extract').checked }),
       }));
