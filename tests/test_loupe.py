@@ -151,6 +151,35 @@ def test_slow_download_does_not_hold_up_other_datasets_and_stops_on_close(tmp_pa
     assert not loupe._sessions
 
 
+def test_close_during_readiness_does_not_publish_a_stopped_viewer(tmp_path, monkeypatch):
+    ready = threading.Event()
+    read, lock = loupe.os.pread, loupe._lock
+
+    def pread(*args):
+        data = read(*args)
+        if b'Loupe: ' in data:
+            ready.set()
+        return data
+
+    class CloseFirst:
+        # Shut down between the readiness check and publishing the session.
+        def __enter__(self):
+            if ready.is_set():
+                ready.clear()
+                loupe.close()
+            return lock.__enter__()
+
+        def __exit__(self, *exc):
+            return lock.__exit__(*exc)
+
+    monkeypatch.setattr(loupe.os, 'pread', pread)
+    monkeypatch.setattr(loupe, '_lock', CloseFirst())
+    with pytest.raises(HTTPException, match='stopped while it was starting') as error:
+        loupe.open_dataset(str(conversation(tmp_path)))
+    assert error.value.status_code == 503
+    assert not loupe._sessions
+
+
 def test_hugging_face_needs_a_current_loupe_and_reports_timeouts(local_loupe, monkeypatch):
     monkeypatch.setattr(loupe, 'HF_START_TIMEOUT', 0)
     with pytest.raises(HTTPException, match='download and load') as error:

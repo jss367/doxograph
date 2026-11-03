@@ -201,9 +201,12 @@ def open_dataset(source: str) -> str:
                     if f"Loupe: {url}\n" in message:
                         with _lock:
                             _launching.discard(process)
-                            _sessions[key] = Session(process, signature, url)
-                        started = True
-                        return url
+                            # close() may have stopped it since the check above.
+                            if process.poll() is None:
+                                _sessions[key] = Session(process, signature, url)
+                                started = True
+                                return url
+                        raise HTTPException(503, "Loupe stopped while it was starting. Try again.")
                     time.sleep(0.05)
                 if hub:
                     raise HTTPException(504, "Loupe took too long to download and load this dataset. It is intended for small collections; choose a smaller dataset.")
