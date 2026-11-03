@@ -179,6 +179,7 @@ const Datasets = (() => {
   function setView(view) {
     if (table.view === view) return;
     showView(view); remember(); renderList();
+    select(saved?.id ?? null);
   }
   function sortBy(column) {
     table.descending = table.sort === column && !table.descending;
@@ -368,6 +369,8 @@ const Datasets = (() => {
     finally { revealed = target; }
   }
   async function show(id) {
+    // A link to a record is a request to read it, whatever layout was last used.
+    if (id && table.view === 'table') { showView('list'); remember(); renderList(); }
     // The URL catching up with a record picked here is not a new destination,
     // and must not rebuild the editor under the cursor.
     if (shown && id && id === draft?.id) { requested = revealed = {id}; return; }
@@ -512,7 +515,12 @@ const Datasets = (() => {
   window.addEventListener('beforeunload', event => {
     if (dirty() || busy || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
-  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, flush: () => autosave.flush(),
+  return {connect(value, follow, selected) {
+      client = value; navigate = follow;
+      // The table names no record, so its address does not either. An address
+      // that names one opens it in the editor.
+      select = id => selected(table.view === 'table' ? null : id);
+    }, show, hide, flush: () => autosave.flush(),
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
     hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,

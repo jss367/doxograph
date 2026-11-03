@@ -1107,7 +1107,9 @@ def test_dataset_table_shows_chosen_columns_sorted_and_remembers_them(engine):
                 await choices.get_by_label('Version', exact=True).uncheck()
                 assert await headers.all_inner_texts() == ['Name ↑', 'Source', 'Roles', 'Labels']
 
-                # The layout, columns, and sort survive a reload.
+                # The table names no record in the address, so the layout,
+                # columns, and sort survive a reload.
+                assert 'dataset=' not in page.url
                 await page.reload()
                 await page.locator('#datasets-sheet').wait_for(state='visible')
                 await ready(page)
@@ -1120,6 +1122,18 @@ def test_dataset_table_shows_chosen_columns_sorted_and_remembers_them(engine):
                 assert f'dataset={ids["Benchmark"]}' in page.url
                 assert await view.get_by_role('button', name='List', exact=True).get_attribute('aria-pressed') == 'true'
                 assert await view.get_by_label('Dataset name', exact=True).input_value() == 'Benchmark'
+                assert not await table.count()
+
+                # A link to a record opens it in the editor even after the table was used.
+                await view.get_by_role('button', name='Table', exact=True).click()
+                await table.wait_for()
+                await page.goto(url + '/#view=datasets&dataset=' + ids['Corpus'])
+                await page.reload()
+                await page.locator('#datasets-sheet').wait_for(state='visible')
+                await ready(page)
+                assert await view.get_by_label('Dataset name', exact=True).input_value() == 'Corpus'
+                assert await page.locator('#dataset-document').is_visible()
+                assert await view.get_by_role('button', name='List', exact=True).get_attribute('aria-pressed') == 'true'
                 assert not await table.count()
                 assert not errors
 
