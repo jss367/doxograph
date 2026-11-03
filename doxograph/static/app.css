@@ -594,6 +594,57 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .synth textarea { width: 100%; min-height: 8rem; font: inherit; font-size: .92rem; }
 .group h3 .mini { font-size: .72rem; font-weight: 400; margin-left: .4rem; }
 
+
+/* The findings page: a section per topic, the synthesis as one line until
+   opened, and each agreement or tension as a row whose claims are a click
+   away. The claims inside reuse the tension card's drawing. */
+.findings-view #main > :is(.library-heading, #workspace-notes-home, #continue-reading, #reading-navigation, #reading-claim-tools),
+.findings-view #workspace-notes-reading { display: none; }
+.findings-head .row { align-items: flex-start; gap: .6rem; margin-top: .6rem; }
+.findings-head .row > .primary { white-space: nowrap; }
+.ftoc { display: flex; flex-wrap: wrap; gap: .35rem; }
+.ftoc .chip { font-size: .8rem; padding: .1rem .6rem; border-radius: 999px; }
+.ftoc .chip.is-stale { border-color: var(--warn); }
+.ftopic { border-top: 1px solid var(--line); padding-top: .9rem; margin: 1.4rem 0 0; }
+.ftopic h2 { font-size: 1.05rem; margin: 0 0 .3rem; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.ftopic h2 .tag { font-size: inherit; }
+.ftopic .fcounts { margin-left: auto; color: var(--muted); font-size: .82rem; font-weight: 400; }
+.ftopic .fdesc { margin: 0 0 .4rem; color: var(--muted); font-size: .88rem; }
+.pill { font-size: .7rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  padding: .05rem .5rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.pill.stale { color: var(--warn); border-color: var(--warn); }
+.pill.fresh { color: var(--ok); border-color: var(--ok); }
+.fsynth { margin: 0 0 .6rem; }
+.fsynth > summary { cursor: pointer; list-style: none; font-size: .95rem; }
+.fsynth > summary::-webkit-details-marker { display: none; }
+.fsynth .fmore { color: var(--accent); font-size: .85rem; white-space: nowrap; }
+.fsynth[open] > summary .fmore { display: none; }
+.fsynth[open] > summary .flead { display: none; }
+.flead.empty { padding: 0; margin: 0 0 .6rem; }
+.frow { border: 1px solid var(--line); border-radius: 7px; margin: .4rem 0; }
+.frow[open] { background: var(--panel); }
+.frow.dismissed { opacity: .6; }
+.frow.confirmed { border-color: var(--ok); }
+.frow > summary { display: flex; gap: .6rem; align-items: baseline; padding: .5rem .7rem; cursor: pointer; list-style: none; }
+.frow > summary::-webkit-details-marker { display: none; }
+.ftag { font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: .1rem .4rem; border-radius: 4px; flex: 0 0 auto; background: var(--panel); }
+.ftag.tension { color: var(--warn); }
+.ftag.agreement { color: var(--ok); }
+.frow .fsent { flex: 1; }
+.frow > summary .st { text-transform: uppercase; font-size: .7rem; letter-spacing: .04em; color: var(--muted); }
+.frow > summary .st.confirmed { color: var(--ok); }
+.frow .fwho { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+.frow .fbody { padding: 0 .7rem .7rem; }
+.frow .fnote { margin: .2rem 0 .5rem; font-size: .92rem; }
+.frow .frests { color: var(--warn); font-size: .82rem; margin: 0 0 .4rem; }
+.frow .stale { color: var(--warn); font-size: .82rem; margin: 0 0 .4rem; }
+.frow .tpair { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+.frow .tgroup { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: .6rem; }
+.frow .tpair .claim, .frow .tgroup .claim { margin: 0; background: var(--bg); }
+.frow .cact { margin-top: .5rem; display: flex; gap: .4rem; }
+@media (max-width: 800px) { .frow .tpair { grid-template-columns: 1fr; } .frow .fwho { display: none; } }
+
 /* The map: papers as nodes on a canvas. The wrapper is sized from JS to fill
    what is left of #main below the header, so the whole graph is on screen. */
 #main:has(.graph-wrap) { padding: 1.25rem; }

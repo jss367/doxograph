@@ -67,6 +67,12 @@ class AgreementStatusBody(BaseModel):
     status: str
 
 
+class FindingsBody(BaseModel):
+    topics: list[str] | None = None
+    # A topic nothing has changed in is not asked about again. This asks anyway.
+    force: bool = False
+
+
 class SynthesesBody(BaseModel):
     topics: list[str] | None = None
     # A topic nothing has changed in is not asked about again. This asks anyway.
@@ -248,6 +254,24 @@ def remove_agreement(agreement_id: str) -> dict[str, Any]:
     except KeyError:
         raise HTTPException(404, f"no agreement {agreement_id}") from None
     return {"deleted": agreement_id}
+
+
+@router.post("/api/findings")
+def update_findings(body: FindingsBody) -> dict[str, Any]:
+    """Queue tensions, agreements and syntheses, in that order, as one job.
+
+    The topics are those where two papers could disagree, which are also the
+    ones worth a synthesis by default. Named topics are kept only where that
+    holds, as the three passes keep them on their own.
+    """
+    job_queue._require_analysis()
+    possible = store.tension_topics()
+    topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
+    if not topics:
+        return {"queued": 0}
+    job = job_queue._new_job(f"findings in {len(topics)} topics")
+    job_queue._submit_job(job_queue._run_findings, job, topics, body.force)
+    return {"queued": len(topics)}
 
 
 @router.post("/api/syntheses")

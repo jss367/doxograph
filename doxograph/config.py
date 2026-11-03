@@ -198,6 +198,10 @@ SCHEMA_VERSION = 1
 # compare against, a changed prompt would never reach a topic already answered.
 PASS_VERSION = 1
 
+# The same for the synthesis prompt alone, so a reworded synthesis does not
+# send the tension and agreement passes back over topics they have answered.
+SYNTHESIS_VERSION = 2
+
 CLAIM_KINDS = ["finding", "method", "definition", "negative", "conjecture"]
 CLAIM_STRENGTHS = ["headline", "supporting", "aside"]
 LEDGER_RELATIONS = ["supports", "contradicts", "method-for", "refines", "independent"]

@@ -1081,14 +1081,22 @@ def find_tensions(topic: str, rows: list[dict[str, Any]] | None = None,
 
 SYNTHESIS_SYSTEM = """\
 You write the state of one question from research claims drawn from several
-papers.
+papers, for a reader who will open the claims themselves when a number matters.
 
 You are given every claim in one topic, grouped by paper, and any disagreements
-between them that have already been noted. Write what the papers, taken
-together, hold on the topic: where they agree, where they differ and what might
-account for that, and what none of them settles. Say what the evidence is, not
-merely that some exists: name the models, scales, metrics and effect sizes that
-carry the weight.
+between them that have already been noted. Write three short paragraphs:
+
+1. What the papers settle: the findings two or more of them make, in one or
+   two sentences.
+2. What they contest: where they pull against each other, and what difference
+   in model, scale, task, metric or sweep might account for it.
+3. What none of them tests: the question the reader is left with.
+
+Lead each paragraph with the point, not the paper. Keep the prose to the
+finding and the condition it holds under; models, sample sizes and effect
+sizes belong in the claims you cite, not in the sentence, unless the size of
+an effect is itself the point. Where the papers are few or thin, say less and
+leave a paragraph out rather than pad it.
 
 Stay inside the claims you are given. Do not add findings from your own
 knowledge, do not soften or sharpen a claim beyond how it is written, and do not
@@ -1098,8 +1106,8 @@ putting their ids in square brackets at the end of the sentence, like
 [doe2026recovery-c3] or [doe2026recovery-c3, li2025steer-c1]. Every sentence
 that states a finding carries at least one citation.
 
-One to three short paragraphs, in plain language, with no headings and no
-bullet points. Where the papers are few or thin, say less."""
+Plain language, no headings and no bullet points. About a hundred and fifty
+words in all."""
 
 SYNTHESIS_SCHEMA = {
     "type": "object",

@@ -1114,6 +1114,21 @@ common, "recovers in 46% of rollouts" against "almost never returns to the
 task", and filtering the prompt by word overlap would quietly throw those
 away.
 
+## Findings
+
+**Findings**, in the header, is the page to read once a few papers share a
+topic. It has one section per topic, in the order of your vocabulary: the
+synthesis as a single sentence until you open it, then the agreements, then
+the tensions, each as one row naming the papers. A row opens to the model's
+note on the pair and the claims it rests on, with their quotes, and the same
+confirm and dismiss decisions as the tensions and agreements pages. A topic is
+marked stale when a claim under it changed after its findings were written.
+
+**Update findings** runs the three passes below in sequence as one job:
+tensions, then agreements, then a synthesis per topic, since the synthesis
+reads the tensions on file. `doxograph tensions`, `doxograph agreements` and
+`doxograph synthesize` do the same from the command line, one at a time.
+
 ## Where papers disagree
 
 A doxography is only interesting where the recorded opinions differ, so
