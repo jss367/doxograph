@@ -30,15 +30,29 @@ def test_encoded_host_offline_api_matches_url_constructor(host, valid):
     result = subprocess.run(['node', '-e',
                              'try { new URL(process.argv[1]); process.exit(0); } catch { process.exit(1); }',
                              address], capture_output=True, timeout=5)
-    # Both supported cached browsers accept these ACE spellings, while this
-    # Node build rejects them. Preserve existing browser-accepted inputs.
-    node_valid = valid and host not in {'xn--.com', 'xn--a.com', 'xn--abc-.com'}
-    assert (result.returncode == 0) is node_valid
+    # Node/ICU versions disagree on these ACE spellings. The application policy
+    # is checked below and in both supported browsers, independently of Node.
+    if host not in {'xn--.com', 'xn--a.com', 'xn--abc-.com'}:
+        assert (result.returncode == 0) is valid
     store.save_paper(store.new_paper('synthetic', title='Synthetic encoded domain'))
     with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
         response = client.patch('/api/papers/synthetic', json={'code':[address]})
     assert response.status_code == (200 if valid else 422)
     assert store.load_paper('synthetic')['code'] == ([address] if valid else [])
+
+
+@pytest.mark.parametrize('node_exit', [0, 1])
+def test_ace_application_policy_is_independent_of_node_version(monkeypatch, node_exit):
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: subprocess.CompletedProcess(args, node_exit))
+    test_encoded_host_offline_api_matches_url_constructor('xn--abc-.com', True)
+
+
+def test_node_version_exception_does_not_mask_malformed_host_rejection(monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: subprocess.CompletedProcess(args, 0))
+    with pytest.raises(AssertionError):
+        test_encoded_host_offline_api_matches_url_constructor('a%2Fb.com', False)
+    with pytest.raises(ValueError):
+        code_links.normalize(['https://a%2Fb.com/Repo'])
 
 
 @pytest.mark.browser
