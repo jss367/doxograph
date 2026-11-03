@@ -17,9 +17,23 @@ const Datasets = (() => {
   const body = item => Object.fromEntries(fields.map(key => [key, item[key]]));
   const dirty = () => !!draft && (!saved || JSON.stringify(body(draft)) !== JSON.stringify(body(saved)));
   const unique = (values, by = value => value) => values.filter((value, i) => values.findIndex(other => by(other) === by(value)) === i);
-  // A body as the server stores it: names trimmed, repeated values dropped.
-  const stored = item => JSON.stringify({...body(item), name:item.name.trim(),
-    labels:unique(item.labels, labelKey), facet_values:unique(item.facet_values)});
+  // Python's str.strip(). JavaScript's trim() also drops U+FEFF and keeps
+  // U+001C–001F and U+0085.
+  const strip = value => value.replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu, '');
+  // Python orders strings by code point, JavaScript by UTF-16 unit.
+  const byCodePoint = (a, b) => {
+    const x = [...a], y = [...b];
+    for (let i = 0; i < Math.min(x.length, y.length); i++)
+      if (x[i] !== y[i]) return x[i].codePointAt(0) - y[i].codePointAt(0);
+    return x.length - y.length;
+  };
+  // A body as the server stores it: the name and facet names stripped and
+  // repeats dropped, and labels as `store.normalize_labels` leaves them, with
+  // spacing collapsed, one spelling per label, sorted by key and then spelling.
+  const stored = item => JSON.stringify({...body(item), name:strip(item.name),
+    labels:unique(item.labels.map(normalizeLabel).filter(Boolean), labelKey)
+      .sort((a, b) => byCodePoint(labelKey(a), labelKey(b)) || byCodePoint(a, b)),
+    facet_values:unique(item.facet_values.map(strip))});
   const key = value => facetValueKey(value);
   const button = (action, text, attrs = '') => `<button type="button" data-dataset-action="${action}" ${attrs}>${text}</button>`;
   function status(message, error = false) {

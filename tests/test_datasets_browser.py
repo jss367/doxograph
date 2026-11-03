@@ -760,3 +760,80 @@ def test_discarding_a_new_dataset_deletes_the_record_its_create_stored(engine, c
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('then', ['retry', 'edit', 'discard'])
+def test_a_lost_create_recognizes_the_record_in_its_stored_form(engine, then):
+    """The server sorts and merges labels, trims the name, and drops repeated
+    facet names. A record that differs from the draft only in that way is
+    still the one this draft created, not another window's change."""
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            creates, updates = [], []
+
+            async def lose_first_answer(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                creates.append(route.request.post_data_json)
+                if len(creates) == 1:
+                    await route.fetch()
+                    await route.fulfill(status=503, json={'detail': 'The connection dropped.'})
+                else:
+                    await route.continue_()
+
+            async def count_updates(route):
+                if route.request.method == 'PUT':
+                    updates.append(route.request.post_data_json)
+                await route.continue_()
+
+            await page.route('**/api/datasets', lose_first_answer)
+            await page.route('**/api/datasets/*', count_updates)
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Labels', exact=True).fill('zeta, alpha, Alpha')
+                await dialog.get_by_label('Other dataset names in findings', exact=True).fill('Eval set\nEval set')
+                await dialog.get_by_label('Dataset name', exact=True).fill(' Evaluation corpus ')
+                await page.wait_for_function(
+                    "document.querySelector('#datasets-status').textContent.includes('connection dropped')")
+                [stored] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert stored['name'] == 'Evaluation corpus'
+                assert stored['labels'] == ['alpha', 'zeta']
+                assert stored['facet_values'] == ['Eval set']
+
+                if then == 'discard':
+                    await dialog.get_by_role('button', name='Discard new dataset', exact=True).click()
+                    await _answer(page, 'Discard dataset')
+                    await ready(page)
+                    assert httpx.get(url + '/api/datasets').json()['datasets'] == []
+                    assert not errors
+                    return
+                description = dialog.get_by_label('Description', exact=True)
+                if then == 'edit':
+                    await description.fill('Written after the answer was lost.')
+                else:
+                    await description.press('Control+s')
+                await settled(page)
+                assert len(creates) == 2
+                assert len(updates) == (1 if then == 'edit' else 0)
+                [saved] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert saved['id'] == stored['id']
+                assert saved['labels'] == ['alpha', 'zeta']
+                assert saved['description'] == ('Written after the answer was lost.' if then == 'edit' else '')
+                assert await dialog.get_by_label('Labels', exact=True).input_value() == 'alpha, zeta'
+                await dialog.get_by_role('button', name='Delete record', exact=True).wait_for()
+                assert not errors
+
+    run_browser(scenario())
