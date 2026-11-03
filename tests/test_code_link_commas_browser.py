@@ -68,3 +68,46 @@ def test_comma_urls_roundtrip_the_offline_paper_api(link):
         assert response.status_code == 200
         assert response.json()['code'] == [link]
     assert store.load_paper('synthetic')['code'] == [link]
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('entry', ['paste', 'enter-key'])
+def test_multiline_code_editor_accepts_paste_and_enter_without_submitting(engine, entry):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('synthetic', title='Synthetic multiline URL'))
+    links = ['https://example.org/Repo?ref=A,B', 'https://example.org/Other,Repo']
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url + '/#paper=synthetic')
+                await page.locator('.paper-actions > summary').click()
+                await page.get_by_role('button', name='Code links', exact=True).click()
+                field = page.locator('#ask-lines')
+                assert await field.evaluate('node => node.tagName') == 'TEXTAREA'
+                if entry == 'paste':
+                    await field.focus()
+                    await page.keyboard.insert_text('\n'.join(links))
+                else:
+                    await field.fill(links[0])
+                    await field.press('End')
+                    await field.press('Enter')
+                    await page.keyboard.insert_text(links[1])
+                await expect(field).to_have_value('\n'.join(links))
+                await expect(page.locator('#ask')).to_be_visible()
+                assert store.load_paper('synthetic')['code'] == []
+                await page.locator('#ask').get_by_role('button', name='OK', exact=True).click()
+                await expect(page.locator('#ask')).not_to_be_visible()
+                assert store.load_paper('synthetic')['code'] == links
+                # A later ordinary prompt is one line again, and Enter submits it.
+                await page.evaluate('void askDialog({title:"Synthetic ordinary prompt",input:{value:""}})')
+                single = page.locator('#ask-input')
+                await expect(field).to_be_hidden()
+                assert await single.evaluate('node => node.tagName') == 'INPUT'
+                await single.fill('Ordinary prompt')
+                await single.press('Enter')
+                await expect(page.locator('#ask')).not_to_be_visible()
+
+    run_browser(scenario())
