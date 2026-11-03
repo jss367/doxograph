@@ -2,7 +2,9 @@
 
 import re
 from ipaddress import IPv6Address
-from urllib.parse import SplitResult, urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit
+
+import idna
 
 MAX_LINKS = 20
 MAX_LENGTH = 2000
@@ -11,8 +13,27 @@ LinkKey = tuple[str, str | None, int | None, str | None, str | None, str, str, s
 
 def _identity(parts: SplitResult) -> LinkKey:
     # Scheme/hostname ignore case; credentials, path, query and fragment do not.
-    return (parts.scheme.lower(), parts.hostname, parts.port, parts.username, parts.password,
+    return (parts.scheme.lower(), parts.hostname.lower() if parts.hostname else None, parts.port, parts.username, parts.password,
             parts.path, parts.query, parts.fragment)
+
+
+def _domain_host(host: str) -> str:
+    if re.search(r"%(?![0-9a-fA-F]{2})", host):
+        raise ValueError("Malformed host escape")
+    host = idna.uts46_remap(unquote(host, errors="strict"), std3_rules=False)
+    # Decode before checking: escapes cannot hide forbidden host characters.
+    if any(ord(char) <= 32 or ord(char) == 127 or char in "%#/:<>?@[\\]^|" for char in host):
+        raise ValueError("Forbidden host character")
+    for label in host.split("."):
+        if label:
+            # Browsers use non-strict UTS46: underscores, empty labels, emoji
+            # and edge hyphens are allowed, but bidi/joiner rules still apply.
+            idna.check_initial_combiner(label)
+            idna.check_bidi(label)
+            if any(char in "\u200c\u200d" and not idna.valid_contextj(label, index)
+                   for index, char in enumerate(label)):
+                raise ValueError("Invalid domain joiner")
+    return host
 
 
 def _valid_host(host: str) -> bool:
@@ -21,6 +42,7 @@ def _valid_host(host: str) -> bool:
             return False
         IPv6Address(host)
         return True
+    host = _domain_host(host)
     if "." not in host:
         return False
     # Browser URLs recognize dotted decimal, octal, hex, and shortened IPv4.
