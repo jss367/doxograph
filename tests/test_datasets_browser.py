@@ -1110,3 +1110,151 @@ def test_dataset_custom_fields(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_dataset_table_shows_chosen_columns_sorted_and_remembers_them(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                for body in [{'name': 'Benchmark', 'version': 'v10', 'license': 'MIT', 'roles': ['evaluation'], 'labels': ['open source']},
+                             {'name': 'Archive', 'license': 'CC BY 4.0', 'source': 'https://example.org/archive'},
+                             {'name': 'Corpus', 'version': 'v2', 'license': 'Proprietary', 'roles': ['training', 'reference']}]:
+                    httpx.post(url + '/api/datasets', json=body).raise_for_status()
+                ids = {d['name']: d['id'] for d in httpx.get(url + '/api/datasets').json()['datasets']}
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                view = page.locator('#datasets-sheet')
+                await ready(page)
+                await view.get_by_role('button', name='Table', exact=True).click()
+                table = view.locator('#datasets-table table')
+                assert await view.get_by_role('button', name='Table', exact=True).get_attribute('aria-pressed') == 'true'
+                assert not await page.locator('#dataset-document').is_visible()
+                headers = table.locator('thead th')
+                assert await headers.all_inner_texts() == ['Name ↑', 'Version', 'License', 'Roles', 'Labels']
+
+                async def column(index):
+                    return [text.strip() for text in await table.locator(f'tbody tr > :nth-child({index})').all_inner_texts()]
+
+                assert await column(1) == ['Archive', 'Benchmark', 'Corpus']
+                assert await column(4) == ['', 'Evaluation', 'Training, Reference']
+                # Versions sort by number, and records without one go last either way.
+                await headers.get_by_role('button', name='Version').click()
+                assert await column(2) == ['v2', 'v10', '']
+                assert await headers.nth(1).get_attribute('aria-sort') == 'ascending'
+                await headers.get_by_role('button', name='Version').click()
+                assert await column(2) == ['v10', 'v2', '']
+                assert await page.evaluate('document.activeElement.dataset.column') == 'version'
+                # Searching filters the table as it does the list.
+                await view.get_by_placeholder('Search datasets…').fill('proprietary')
+                assert await column(1) == ['Corpus']
+                await view.get_by_placeholder('Search datasets…').fill('')
+
+                await view.get_by_text('Columns', exact=True).click()
+                choices = view.locator('#dataset-column-options')
+                await choices.get_by_label('License', exact=True).uncheck()
+                await choices.get_by_label('Source', exact=True).check()
+                assert await headers.all_inner_texts() == ['Name', 'Version ↓', 'Source', 'Roles', 'Labels']
+                assert await column(3) == ['', '', 'https://example.org/archive']
+                if engine == 'chromium':
+                    screenshot = Path(__file__).parents[1] / '.context' / 'datasets-table.png'
+                    screenshot.parent.mkdir(exist_ok=True)
+                    await page.screenshot(path=str(screenshot))
+                # Hiding the sorted column sorts by name again.
+                await choices.get_by_label('Version', exact=True).uncheck()
+                assert await headers.all_inner_texts() == ['Name ↑', 'Source', 'Roles', 'Labels']
+
+                # The table names no record in the address, so the layout,
+                # columns, and sort survive a reload.
+                assert 'dataset=' not in page.url
+                await page.reload()
+                await page.locator('#datasets-sheet').wait_for(state='visible')
+                await ready(page)
+                await table.wait_for()
+                assert await headers.all_inner_texts() == ['Name ↑', 'Source', 'Roles', 'Labels']
+
+                # Opening a row shows the record in the editor.
+                await table.locator('tbody tr').filter(has_text='Benchmark').locator('td').first.click()
+                await ready(page)
+                assert f'dataset={ids["Benchmark"]}' in page.url
+                assert await view.get_by_role('button', name='List', exact=True).get_attribute('aria-pressed') == 'true'
+                assert await view.get_by_label('Dataset name', exact=True).input_value() == 'Benchmark'
+                assert not await table.count()
+
+                # A link to a record opens it in the editor even after the table was used.
+                await view.get_by_role('button', name='Table', exact=True).click()
+                await table.wait_for()
+                await page.goto(url + '/#view=datasets&dataset=' + ids['Corpus'])
+                await page.reload()
+                await page.locator('#datasets-sheet').wait_for(state='visible')
+                await ready(page)
+                assert await view.get_by_label('Dataset name', exact=True).input_value() == 'Corpus'
+                assert await page.locator('#dataset-document').is_visible()
+                assert await view.get_by_role('button', name='List', exact=True).get_attribute('aria-pressed') == 'true'
+                assert not await table.count()
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_dataset_table_counts_research_as_the_editor_does_and_ignores_a_stale_sort(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+    store.save_paper(store.new_paper('review', title='Survey of benchmarks'))
+    linked = store.add_claim('study', {'text': 'A claim linked by hand.'})
+    matched = store.add_claim('study', {'text': 'A claim whose facet names the dataset.'})
+    store.add_facet('dataset', 'Datasets used')
+    store.update_claim('study', matched['id'], {'facets': {'dataset': ['Eval corpus']}})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                # A claim linked without its paper still counts that paper.
+                httpx.post(url + '/api/datasets', json={'name': 'Claim only',
+                    'claims': [{'paper': 'study', 'claim': linked['id']}]}).raise_for_status()
+                # A facet match counts its claim and paper beside a linked paper.
+                httpx.post(url + '/api/datasets', json={'name': 'Eval corpus', 'papers': ['review']}).raise_for_status()
+                httpx.post(url + '/api/datasets', json={'name': 'Unlinked'}).raise_for_status()
+                await page.goto(url)
+                # A remembered sort whose column is gone keeps no direction either.
+                await page.evaluate('''localStorage.setItem('doxograph-dataset-table', JSON.stringify(
+                    {view: 'table', columns: ['papers', 'claims'], sort: 'retired', descending: true}))''')
+                await page.goto(url + '/#view=datasets')
+                await page.reload()
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                table = view.locator('#datasets-table table')
+                await table.wait_for()
+                headers = table.locator('thead th')
+                assert await headers.all_inner_texts() == ['Name ↑', 'Linked papers', 'Linked claims']
+
+                async def column(index):
+                    return [text.strip() for text in await table.locator(f'tbody tr > :nth-child({index})').all_inner_texts()]
+
+                assert await column(1) == ['Claim only', 'Eval corpus', 'Unlinked']
+                assert await column(2) == ['1', '2', '0']
+                assert await column(3) == ['1', '1', '0']
+                await headers.get_by_role('button', name='Linked papers').click()
+                assert await column(1) == ['Unlinked', 'Claim only', 'Eval corpus']
+
+                # The editor lists the same research the table counted.
+                await table.locator('tbody tr').filter(has_text='Eval corpus').locator('td').first.click()
+                await ready(page)
+                research = view.locator('#dataset-research')
+                assert await research.locator('.dataset-source').count() == 2
+                assert await research.locator('.dataset-claim-link').all_inner_texts() == [matched['text']]
+                assert not errors
+
+    run_browser(scenario())
