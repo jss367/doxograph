@@ -3,6 +3,9 @@
 const ResearchNotes = (() => {
   let client, navigate, follow, select, shown = false, loaded = false;
   let requested = null, revealed = null;
+  // The writing the reader agreed to discard when a workspace switch began.
+  let discarding = null;
+  const writing = () => isDirty() ? JSON.stringify([draft.id, draft.title, draft.body]) : null;
   const el = id => document.getElementById(id);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   let workspace, notes = [], draft = null, saved = null, busy = false, previewTimer;
@@ -144,6 +147,12 @@ const ResearchNotes = (() => {
       return;
     }
     if (!current()) return;
+    // A note saved since the list was read, from Ask or another window.
+    if (id && !notes.some(n => n.id === id)) {
+      const ws = workspace, latest = (await request()).notes;
+      if (!current() || ws !== client.workspaceId) return;
+      notes = latest;
+    }
     const last = notes.some(n => n.id === draft?.id) ? draft.id : null;
     const note = notes.find(n => n.id === (id || last)) || (!id && [...notes].sort((a,b) => b.updated.localeCompare(a.updated))[0]);
     if (note) {
@@ -341,6 +350,14 @@ const ResearchNotes = (() => {
     hasUnsavedChanges: () => Boolean(isDirty() || busy),
     async beforeWorkspaceSwitch() {
       // A later guard may still refuse. Only committed selection clears drafts.
-      return !busy && await discard();
+      if (busy || !await discard()) return false;
+      discarding = writing();
+      return true;
+    },
+    // Held deletes leave the editor open while they finish. Writing done in
+    // that time was never agreed to; ask about it before the switch commits.
+    async beforeWorkspaceSelect() {
+      if (busy) return false;
+      return writing() === discarding || await discard();
     }};
 })();

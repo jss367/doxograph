@@ -1717,6 +1717,12 @@ const ResearchTools = (() => {
     }
   });
   window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
+  // Everything a workspace switch would discard, to tell whether it changed
+  // after the reader agreed to discard it.
+  let discarding = null;
+  const writing = () => JSON.stringify([dirty && notebook, edits, connectionDraft
+    && [...document.querySelectorAll('#research-body [id^="connection-"]')].map(field => field.value),
+    highlightDrafting() && markEditor.text]);
   async function beforeWorkspaceSwitch() {
     // A reader action waiting on the notebook would finish in the workspace
     // it started in and open its paper over the one switched to.
@@ -1735,7 +1741,15 @@ const ResearchTools = (() => {
     // Agreed to, not yet done: the editor is closed by sync() once the
     // workspace has actually changed, so a guard after this one refusing the
     // switch leaves the note where it was.
+    discarding = writing();
     return true;
+  }
+  // Held deletes leave the tools open while they finish. Edits made in that
+  // time were never agreed to; ask about them before the switch commits.
+  async function beforeWorkspaceSelect() {
+    if (busy) return false;
+    return writing() === discarding
+      || await confirmDialog('Discard the changes you made while the switch was waiting?', {ok:'Discard changes'});
   }
   async function historyChanged() {
     if (markEditor && !highlightDrafting()) {
@@ -1754,7 +1768,7 @@ const ResearchTools = (() => {
       notebook = null; dirty = false; edits = noEdits(); connectionDraft = false; historyData = null; boardId = null;
       wanted = loaded = null; modalWorkspace = null;
     },
-    sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
+    sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,beforeWorkspaceSelect,mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
     hasUnsavedChanges: () => Boolean(unsaved() || busy),
     // A board from the command palette. From outside the tools it opens as a
     // sidebar tool does, once mayEnter agrees.

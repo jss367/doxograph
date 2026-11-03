@@ -2301,3 +2301,52 @@ def test_a_board_from_the_palette_keeps_an_unsaved_workspace_note_on_screen(engi
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_board_edits_during_held_deletes_are_asked_about_before_a_switch(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+    claim = store.add_claim('study', {'text': 'Accuracy improves.'})['id']
+    other = config.create_workspace('Another project')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            deletes, release = [], asyncio.Event()
+
+            async def hold_delete(route, request):
+                if request.method == 'DELETE':
+                    deletes.append(request.url)
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f'**/api/papers/study/claims/{claim}', hold_delete)
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(url + '/#view=claims')
+                await page.locator(f'.claim[data-claim="{claim}"] [data-act="del"]').click()
+                await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
+                await page.locator('.research-tools-nav').get_by_role('button', name='Evidence boards', exact=True).click()
+                await page.locator('#research-tools').wait_for(state='visible')
+                await ready(page)
+                await page.locator('#board-title').fill('Agreed to discard')
+                await page.evaluate("id => { window.switching = switchWorkspace(id); }", other['id'])
+                await _answer(page, 'Discard changes')
+                for _ in range(50):
+                    if deletes:
+                        break
+                    await page.wait_for_timeout(100)
+                assert deletes
+                await page.locator('#board-title').fill('Typed while the delete was held')
+                release.set()
+                await _answer(page, 'Cancel')
+                await page.evaluate('window.switching')
+                assert await page.locator('#board-title').input_value() == 'Typed while the delete was held'
+                assert await page.locator('#workspace').input_value() == 'default'
+
+    run_browser(scenario())

@@ -555,6 +555,8 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   beforeLeave: flushTrash,
   async beforeSelect() {
     if (!await WorkspaceNotes.beforeWorkspaceSwitch()) return false;
+    if (!await ResearchNotes.beforeWorkspaceSelect() || !await Datasets.beforeWorkspaceSelect()
+        || !await ResearchTools.beforeWorkspaceSelect()) return false;
     if (typeof rememberAskCatalog === 'function') rememberAskCatalog();
     return true;
   },
