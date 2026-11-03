@@ -61,7 +61,15 @@ function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK
   $('ask-title').textContent = title;
   $('ask-note').textContent = note;
   $('ask-note').hidden = !note;
-  const field = $('ask-input');
+  let field = $('ask-input');
+  const tag = input?.multiline ? 'TEXTAREA' : 'INPUT';
+  if (field.tagName !== tag) {
+    const next = document.createElement(tag);
+    for (const attribute of field.attributes) next.setAttribute(attribute.name, attribute.value);
+    field.replaceWith(next); field = next;
+    field.addEventListener('input', syncAskLabels);
+  }
+  if (input?.multiline) field.rows = 5;
   field.hidden = input === null;
   field.value = input ? (input.value || '') : '';
   field.placeholder = input ? (input.placeholder || '') : '';

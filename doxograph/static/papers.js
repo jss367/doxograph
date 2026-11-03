@@ -514,8 +514,8 @@ async function editCode(key) {
   const workspace = workspaceClient.workspaceId;
   const answer = await askDialog({
     title: `Code for ${paper.title || key}`,
-    note: 'Paste links to the paper\'s repositories, separated by spaces. Commas are part of a link.',
-    input: {placeholder: 'https://github.com/owner/repository', value: (paper.code || []).join(' ')},
+    note: 'Paste links to the paper\'s repositories, one URL per line. Commas are part of a link.',
+    input: {multiline: true, placeholder: 'https://github.com/owner/repository', value: (paper.code || []).join('\n')},
     async onSubmit(text) {
       try {
         await api(`/api/papers/${encodeURIComponent(key)}`, {

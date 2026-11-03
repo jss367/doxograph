@@ -152,7 +152,7 @@ def test_code_links_are_edited_from_paper_actions_and_shown_in_the_overview(engi
                 await target.click(button="right")
                 await page.locator("#ctxmenu").get_by_role("button", name="Edit code links…").click()
                 await expect(page.locator("#ask-input")).to_have_value(
-                    "https://github.com/doe/study https://gitlab.com/doe/data")
+                    "https://github.com/doe/study\nhttps://gitlab.com/doe/data")
                 await _answer(page, "OK", "")
                 await expect(page.locator(".paper-code")).to_have_count(0)
                 assert store.load_paper("doe2026study")["code"] == []
