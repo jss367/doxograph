@@ -764,6 +764,71 @@ def test_discarding_a_new_dataset_deletes_the_record_its_create_stored(engine, c
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_discarding_a_new_dataset_keeps_a_record_another_window_changed(engine):
+    """A create can store the record and lose its answer, and another window
+    can change that record before the discard is confirmed. The record is
+    theirs then, so discarding keeps it and opens their version."""
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            held, release, lost = asyncio.Event(), asyncio.Event(), asyncio.Event()
+            deletes = []
+
+            async def lose_create(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                held.set()
+                await release.wait()
+                await route.fetch()
+                await route.fulfill(status=503, json={'detail': 'The connection dropped.'})
+                lost.set()
+
+            async def count_deletes(route):
+                if route.request.method == 'DELETE':
+                    deletes.append(route.request.url)
+                await route.continue_()
+
+            await page.route('**/api/datasets', lose_create)
+            await page.route('**/api/datasets/*', count_deletes)
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Dataset name', exact=True).fill('Evaluation corpus')
+                await asyncio.wait_for(held.wait(), timeout=5)
+                await dialog.get_by_role('button', name='Discard new dataset', exact=True).click()
+                release.set()
+                await asyncio.wait_for(lost.wait(), timeout=5)
+                [stored] = httpx.get(url + '/api/datasets').json()['datasets']
+                fields = {key: value for key, value in stored.items()
+                          if key not in ('id', 'revision', 'created', 'updated')}
+                httpx.put(url + '/api/datasets/' + stored['id'], json={
+                    **fields, 'version': 'From another window', 'revision': stored['revision']}).raise_for_status()
+
+                await _answer(page, 'Discard dataset')
+                await ready(page)
+                assert deletes == []
+                [current] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert current['version'] == 'From another window'
+                assert await page.locator('#datasets-count').text_content() == '1 dataset'
+                assert await dialog.get_by_label('Version', exact=True).input_value() == 'From another window'
+                assert 'another window changed this dataset' in (
+                    await page.locator('#datasets-status').text_content()).lower()
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('then', ['retry', 'edit', 'discard'])
 def test_a_lost_create_recognizes_the_record_in_its_stored_form(engine, then):
     """The server sorts and merges labels, trims the name, and drops repeated

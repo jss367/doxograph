@@ -255,13 +255,13 @@ const Datasets = (() => {
     if (await autosave.flush()) return true;
     return confirmDialog(`This dataset couldn’t be saved. ${autosave.failure} Discard your changes?`, {ok:'Discard changes'});
   }
-  // The record a new draft's create stored, while it still holds only what
-  // this draft wrote. A record another window changed since is left alone.
+  // The record a new draft's create stored, and whether it still holds only
+  // what this draft wrote. A record another window changed since is theirs.
   async function created(target) {
-    if (saved) return conflicted === target ? null : saved;
-    if (posted?.target !== target) return null;
+    if (saved) return {item:saved, ours:conflicted !== target};
+    if (posted?.target !== target) return {};
     const item = (await request()).datasets.find(row => row.id === target.id);
-    return item && posted.bodies.some(sent => stored(sent) === stored(item)) ? item : null;
+    return {item, ours:!!item && posted.bodies.some(sent => stored(sent) === stored(item))};
   }
   function choose(item) {
     inspectedRevision = undefined;
@@ -337,7 +337,14 @@ const Datasets = (() => {
       // Its create can land while the prompt waits, or land with its answer
       // lost. Discarding the draft also deletes the record it made.
       await autosave.settle();
-      const item = await created(draft);
+      const {item, ours} = await created(draft);
+      if (item && !ours) {
+        // Another window changed the record, so it is theirs to keep.
+        items = [...items.filter(row => row.id !== item.id), item];
+        choose(item);
+        status('Another window changed this dataset, so it was kept. This is its saved version.');
+        return;
+      }
       if (item) {
         await request('/' + item.id + '?' + new URLSearchParams({revision:item.revision}),'DELETE');
         items = items.filter(row => row.id !== item.id);
