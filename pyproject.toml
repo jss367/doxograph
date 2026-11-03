@@ -54,7 +54,12 @@ target-version = "py313"
 
 [tool.ruff.lint]
 # Syntax, correctness, and bug-prone patterns, without restyling the repository.
-select = ["E9", "F", "B"]
+# C901 holds function complexity at or below today's worst; lower the limit as
+# the most complex functions are split.
+select = ["E9", "F", "B", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
 
 [tool.mypy]
 python_version = "3.13"
