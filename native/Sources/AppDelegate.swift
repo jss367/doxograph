@@ -528,7 +528,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
             }
-            self.saveDraftsAgainBeforeQuitting()
+            // Uploads in flight now were part of the question just answered.
+            self.saveDraftsAgainBeforeQuitting(acceptedUploads: Uploader.uploadsInFlight)
         }
     }
 
@@ -542,16 +543,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// moment it still can be, and writing that could not be saved gets the
     /// same question the first save asks.
     ///
+    /// A paper dropped on the Dock or the window during this save starts an
+    /// upload the earlier question never saw, so it is asked about here.
+    ///
     /// Staying is handled the way every other refusal is: the relaunch was only
     /// meant to follow this quit, so it is called off too.
-    private func saveDraftsAgainBeforeQuitting() {
+    private func saveDraftsAgainBeforeQuitting(acceptedUploads: Int) {
         window.saveDrafts(freezeEditing: true) { saved in
-            if !saved, !self.confirmQuitWithUnsavedWriting() {
+            let stay = {
                 self.window.resumeEditingAfterCancelledQuit()
                 self.relaunchAfterQuit = false
                 NSApp.reply(toApplicationShouldTerminate: false)
-                return
             }
+            if !saved, !self.confirmQuitWithUnsavedWriting() { return stay() }
+            let uploading = Uploader.uploadsInFlight
+            if uploading > acceptedUploads,
+               !self.confirmInterruption(.quit, uploading: uploading, reading: 0) { return stay() }
             NSApp.reply(toApplicationShouldTerminate: true)
         }
     }
