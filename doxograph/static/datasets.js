@@ -5,14 +5,21 @@ const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
   let requested = null, revealed = null;
-  // The new draft whose create has gone out at least once.
+  // The new draft whose create has gone out, and each body it sent.
   let posted = null;
+  // A draft whose record another window changed before this one heard back.
+  let conflicted = null;
+  const conflict = 'This dataset changed in another window. Your edits are still here. Reload the saved version before saving.';
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
   const fields = ['name','description','source','version','license','access_notes','roles','labels','facet_values','papers','claims'];
   const body = item => Object.fromEntries(fields.map(key => [key, item[key]]));
   const dirty = () => !!draft && (!saved || JSON.stringify(body(draft)) !== JSON.stringify(body(saved)));
+  const unique = (values, by = value => value) => values.filter((value, i) => values.findIndex(other => by(other) === by(value)) === i);
+  // A body as the server stores it: names trimmed, repeated values dropped.
+  const stored = item => JSON.stringify({...body(item), name:item.name.trim(),
+    labels:unique(item.labels, labelKey), facet_values:unique(item.facet_values)});
   const key = value => facetValueKey(value);
   const button = (action, text, attrs = '') => `<button type="button" data-dataset-action="${action}" ${attrs}>${text}</button>`;
   function status(message, error = false) {
@@ -20,19 +27,29 @@ const Datasets = (() => {
     el('datasets-status').className = error ? 'warn' : 'hint';
   }
   const autosave = createAutosave({current: () => draft, dirty,
-    blocked: () => draft.name.trim() ? '' : 'Give your dataset a name.',
+    blocked: () => conflicted === draft ? conflict : draft.name.trim() ? '' : 'Give your dataset a name.',
     async write(target) {
       const sent = body(target), first = !saved;
       let item;
       if (first) {
-        const retry = posted === target;
-        posted = target;
+        if (posted?.target !== target) posted = {target, bodies:[]};
+        const retry = posted.bodies.length > 0;
+        posted.bodies.push(sent);
         item = await request('','POST',sent);
-        // A create retried after its answer was lost finds the first attempt
-        // stored, and the server answers with that record, not this draft.
-        // Save the draft over it so edits made since are not dropped.
-        if (retry && draft === target && JSON.stringify(body(item)) !== JSON.stringify(sent))
+        // A create retried after its answer was lost finds the record already
+        // stored, and the server answers with it, not this draft. Save the
+        // draft over it only while it is still what this draft created.
+        if (retry && draft === target && stored(item) !== stored(sent)) {
+          if (!posted.bodies.some(earlier => stored(earlier) === stored(item))) {
+            // Another window changed it since. Keep the draft, as any other
+            // conflict does, and hold saves until the writer reloads.
+            saved = structuredClone(item); conflicted = target;
+            items = [...items.filter(row => row.id !== item.id), item];
+            select(item.id); renderActions(); renderList();
+            throw new Error(conflict);
+          }
           item = await request('/' + item.id,'PUT',{...sent,revision:item.revision});
+        }
       } else item = await request('/' + saved.id,'PUT',{...sent,revision:saved.revision});
       if (draft !== target) return;
       saved = structuredClone(item);

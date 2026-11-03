@@ -625,3 +625,87 @@ def test_a_retried_create_keeps_edits_made_after_its_answer_was_lost(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('edited', [True, False])
+def test_a_retried_create_keeps_changes_another_window_made_after_its_answer_was_lost(engine, edited):
+    """Another window can change the record while this one has not heard back
+    from its create. The retry finds that newer record, and saving this draft
+    over it would erase the other window's change, edited draft or not."""
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            creates, updates = [], []
+
+            async def lose_first_answer(route):
+                if route.request.method != 'POST':
+                    await route.continue_()
+                    return
+                creates.append(route.request.post_data_json)
+                if len(creates) == 1:
+                    await route.fetch()
+                    await route.fulfill(status=503, json={'detail': 'The connection dropped.'})
+                else:
+                    await route.continue_()
+
+            async def count_updates(route):
+                if route.request.method == 'PUT':
+                    updates.append(route.request.post_data_json)
+                await route.continue_()
+
+            await page.route('**/api/datasets', lose_first_answer)
+            await page.route('**/api/datasets/*', count_updates)
+            with _server() as url:
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await ready(page)
+                dialog = page.locator('#datasets-sheet')
+                await dialog.get_by_role('button', name='Add dataset', exact=True).click()
+                await ready(page)
+                await dialog.get_by_label('Dataset name', exact=True).fill('Evaluation corpus')
+                await page.wait_for_function(
+                    "document.querySelector('#datasets-status').textContent.includes('connection dropped')")
+                [stored] = httpx.get(url + '/api/datasets').json()['datasets']
+                fields = {key: value for key, value in stored.items()
+                          if key not in ('id', 'revision', 'created', 'updated')}
+                httpx.put(url + '/api/datasets/' + stored['id'], json={
+                    **fields, 'version': 'From another window', 'revision': stored['revision']}).raise_for_status()
+
+                description = dialog.get_by_label('Description', exact=True)
+                if edited:
+                    await description.fill('Written after the answer was lost.')
+                else:
+                    await description.press('Control+s')
+                await page.wait_for_function(
+                    "document.querySelector('#datasets-status').textContent.includes('changed in another window')")
+                assert len(creates) == 2
+                assert updates == []
+                [current] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert current['version'] == 'From another window'
+                assert current['description'] == ''
+                assert await description.input_value() == ('Written after the answer was lost.' if edited else '')
+
+                # Saving again still holds the draft back until the writer reloads.
+                await description.fill('Typed after the conflict.')
+                await description.press('Control+s')
+                await page.wait_for_function(
+                    "document.querySelector('#datasets-status').textContent.includes('changed in another window')")
+                assert updates == []
+                assert httpx.get(url + '/api/datasets').json()['datasets'][0]['description'] == ''
+
+                await dialog.get_by_role('button', name='Reload saved version', exact=True).click()
+                await ready(page)
+                await dialog.get_by_role('button', name='Replace draft with saved version', exact=True).click()
+                await _answer(page, 'Discard changes')
+                await settled(page)
+                assert await dialog.get_by_label('Version', exact=True).input_value() == 'From another window'
+                assert await description.input_value() == ''
+                assert not errors
+
+    run_browser(scenario())
