@@ -708,6 +708,7 @@ async function removePaper(paper) {
     // covered by it.
     if (V.newClaim && V.newClaim.paper === paper) frozen.push(NEW_CLAIM_ID);
     frozen.forEach((id) => markSaving(id, true));
+    const retiredClaims = frozen.filter(id => id !== NEW_CLAIM_ID).map(id => [id, manualQuitState('claim', id)]);
     try {
       await api(`/api/papers/${encodeURIComponent(paper)}`, { method: 'DELETE', headers });
     } catch (error) {
@@ -731,7 +732,7 @@ async function removePaper(paper) {
     // other paper's claim stays open, which is why this ends in `refreshAll`:
     // `refresh` would leave the claim list alone while an editor is open and
     // the deleted paper's cards would stay on screen with buttons that 404.
-    S.claims.filter((c) => c.paper === paper).forEach((c) => delete V.drafts[c.id]);
+    retiredClaims.forEach(([id, seen]) => retireManualQuitState('claim', id, seen));
     if (V.editing && V.editing !== NEW_CLAIM_ID) {
       const row = S.claims.find((c) => c.id === V.editing);
       if (!row || row.paper === paper) V.editing = null;

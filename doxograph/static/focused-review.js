@@ -22,7 +22,7 @@ window.FocusedReview = (() => {
     `<button type="button" data-focus="${action}" ${disabled ? 'disabled' : ''} ${primary ? 'class="primary"' : ''}>${label}</button>`;
 
   function parkDraft() {
-    if (workspace !== client.workspaceId) return;
+    if (!dialog.open || workspace !== client.workspaceId) return;
     const form = body.querySelector('form[data-form]');
     if (editing && form && current) V.drafts[current] = readForm(form);
   }
@@ -115,6 +115,7 @@ window.FocusedReview = (() => {
         </section>
       </div>
       <p class="hint focus-shortcuts">j / k: next / previous · r: reviewed & next · e: edit · n: next unreviewed · Esc: exit. Shortcuts pause while typing.</p>`;
+    if (editing) rememberClaimQuitBase(item.id, body.querySelector('form[data-form]'));
     // The shared editor's labels predate explicit associations. Give this copy
     // associations, both for assistive technology and click-to-focus behavior.
     body.querySelectorAll('form label').forEach((label, i) => {
@@ -220,6 +221,9 @@ window.FocusedReview = (() => {
     const item = row();
     if (!item || busy || isSaving(item.id) || refuseWhileRemoving(item.paper, 'a review or edit')) return;
     parkDraft();
+    const full = editing;
+    const seen = manualQuitState('claim', item.id);
+    const marker = full ? beginManualQuitWrite('claim', item.id) : null;
     busy = true;
     markSaving(item.id, true);
     dialog.setAttribute('aria-busy', 'true');
@@ -231,8 +235,11 @@ window.FocusedReview = (() => {
       if (workspace !== client.workspaceId) return;
       // A successful write stays successful even if refreshing the list fails.
       Object.assign(item, saved);
-      if (editing) delete V.drafts[item.id];
-      else if (V.drafts[item.id]) V.drafts[item.id].reviewed = patch.reviewed;
+      if (full) acknowledgeClaimQuitSave(item.id, patch, seen, marker);
+      else {
+        advanceClaimQuitBase(item.id, patch, workspace);
+        if (V.drafts[item.id]) V.drafts[item.id] = {...V.drafts[item.id], reviewed: patch.reviewed};
+      }
       editing = false;
       try { await refreshAll(); } catch (_) { /* the next poll retries the read */ }
       if (advance) move(1); else render();
@@ -304,7 +311,10 @@ window.FocusedReview = (() => {
     else if (name === 'next') move(1);
     else if (name === 'unreviewed') move(1, true);
     else if (name === 'edit') { editing = true; render(); body.querySelector('textarea[name="text"]').focus(); }
-    else if (name === 'cancel') { delete V.drafts[current]; editing = false; render(); }
+    else if (name === 'cancel') {
+      if (isSaving(current)) return;
+      retireManualQuitState('claim', current, manualQuitState('claim', current)); editing = false; render();
+    }
     else if (name === 'review' && !editing) {
       if (row()?.reviewed) move(1); else await write({ reviewed: true }, true);
     } else if (name === 'unreview' && !editing) await write({ reviewed: false });
@@ -343,5 +353,5 @@ window.FocusedReview = (() => {
   window.addEventListener('beforeunload', event => {
     if (dialog.open && editing) { parkDraft(); event.preventDefault(); event.returnValue = ''; }
   });
-  return {connect(value) { client = value; },  open, sync };
+  return {connect(value) { client = value; }, captureDraft: parkDraft, open, sync };
 })();

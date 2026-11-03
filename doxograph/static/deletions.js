@@ -245,6 +245,8 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
     // it on file, and the callers waiting on this — an export, a retag, a model
     // pass — would go on to read a corpus that still holds a claim the reader
     // watched disappear. They are told, rather than left to assume it settled.
+    const retired = workspaceClient.workspaceId === workspace && ['claim', 'synthesis'].includes(kind)
+      ? manualQuitState(kind, id) : null;
     entry.sending = (async () => {
       let sent = true;
       try {
@@ -262,6 +264,7 @@ async function deleteLater(kind, id, path, label, { paper = null } = {}) {
           keepalive: true,
           headers: { 'X-Doxograph-Workspace': workspace },
         });
+        if (retired) retireManualQuitState(kind, id, retired);
       } catch (error) {
         sent = false;
         editHistory.forget(workspace, undoEntry);

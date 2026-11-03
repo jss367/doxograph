@@ -339,7 +339,12 @@ function editForm(row, tagListId = 'taglist') {
 // --- actions --------------------------------------------------------------
 
 function cancelEdit() {
-  if (V.editing) delete V.drafts[V.editing];   // discard only this claim's draft
+  if (isSaving(V.editing)) return;
+  if (V.editing) {
+    delete V.drafts[V.editing]; // discard only this claim's draft
+    delete V.quitClaimBases[V.editing];
+    delete V.unconfirmedClaims[V.editing];
+  }
   // Only the new-claim editor's own Cancel drops the held new claim. Cancelling
   // an existing claim while one is held must leave it reachable via Resume.
   if (V.editing === NEW_CLAIM_ID) V.newClaim = null;
@@ -406,6 +411,7 @@ async function toggleReviewed(row) {
   // grouped mode — and the `r` key, so both keep an open editor in step.
   if (isSaving(row.id)) return false;   // a request for it is in flight
   const reviewed = !row.reviewed;
+  const owner = workspaceClient.workspaceId;
   if (V.editing === row.id) captureOpenEditor();
   // Freeze the claim's form for the toggle too. A full-form save started
   // during it carries the old checkbox and would land afterwards, putting the
@@ -425,6 +431,7 @@ async function toggleReviewed(row) {
   // different claim's editor. Recapturing the DOM only makes sense in the first
   // case, but this claim's stored draft has to be corrected either way — it
   // holds the pre-toggle value, and saving it later would undo the toggle.
+  if (workspaceClient.workspaceId !== owner) return true;
   const stillOpen = V.editing === row.id;
   if (stillOpen) captureOpenEditor();
   if (V.drafts[row.id]) V.drafts[row.id] = { ...V.drafts[row.id], reviewed };
@@ -482,6 +489,7 @@ async function reviewWholePaper(paper) {
   } finally {
     frozen.forEach((id) => markSaving(id, false));
   }
+  if (workspaceClient.workspaceId !== workspace) return;
   syncDraftReviews(changed, true);
   await refreshAll();
   if (!changed.length) return;
@@ -533,6 +541,7 @@ async function reviewWholePaper(paper) {
 function syncDraftReviews(ids, reviewed) {
   ids.forEach((id) => {
     if (V.drafts[id]) V.drafts[id] = { ...V.drafts[id], reviewed };
+    advanceClaimQuitBase(id, {reviewed});
     const box = document.querySelector(`form[data-form="${CSS.escape(id)}"] [name="reviewed"]`);
     if (box) box.checked = reviewed;
   });
@@ -610,9 +619,11 @@ async function usePaperWording(paper, claim) {
     return;
   }
   V.error = null;
+  const owner = workspaceClient.workspaceId;
   markSaving(claim, true);
   try {
     await patchClaim(paper, claim, { quote: wording });
+    if (workspaceClient.workspaceId !== owner) return;
     if (V.drafts[claim]) V.drafts[claim] = { ...V.drafts[claim], quote: wording };
     V.quoteContext = null;
   } catch (error) {
@@ -633,11 +644,13 @@ async function patchClaim(paper, claim, patch) {
   if (('quote' in patch || 'locator' in patch) && V.quoteContext && V.quoteContext.claim === claim) {
     V.quoteContext = null;
   }
+  const owner = workspaceClient.workspaceId;
   await api(`/api/papers/${encodeURIComponent(paper)}/claims/${encodeURIComponent(claim)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
+  advanceClaimQuitBase(claim, patch, owner);
   // The write has landed by here. A failure only to read it back must not reach
   // the callers, who would report a save that happened as refused — and the `r`
   // key would stay on a claim the server has marked reviewed. The poll reads
@@ -777,10 +790,13 @@ async function saveClaim(wrap, patch) {
     return;
   }
 
+  V.drafts[wrap.dataset.claim] = {...V.drafts[wrap.dataset.claim], ...patch};
+  const seen = manualQuitState('claim', wrap.dataset.claim);
+  const marker = beginManualQuitWrite('claim', wrap.dataset.claim);
   V.editing = null;
   try {
     await patchClaim(wrap.dataset.paper, wrap.dataset.claim, claimRequestBody(patch));
-    delete V.drafts[wrap.dataset.claim];
+    acknowledgeClaimQuitSave(wrap.dataset.claim, patch, seen, marker);
     // `render` leaves the content alone while another editor is open — a
     // synthesis, a note — so the saved claim's form would stay on screen with
     // nothing tracking it, and text typed into it afterwards would be thrown
@@ -798,7 +814,9 @@ async function saveClaim(wrap, patch) {
     captureOpenEditor();
     // Keep what was typed so the save can be retried; the server row is stale.
     const id = wrap.dataset.claim;
-    V.drafts[id] = { ...V.drafts[id], ...patch };
+    if (workspaceClient.workspaceId === seen.workspace && (!V.drafts[id] || V.drafts[id] === seen.draft)) {
+      V.drafts[id] = {...patch};
+    }
     // Reopen this claim's editor only where it can actually be seen. The user
     // may have moved to another paper or filter while the request ran, and an
     // editor the list cannot render is an editor nobody can reach — it would

@@ -355,6 +355,11 @@ function parkSynthEditor() {
 }
 
 function cancelSynthEdit() {
+  if (V.synthSaving === V.synthEditing && V.synthSaving) return;
+  if (V.synthEditing) {
+    delete V.quitSynthBases[V.synthEditing];
+    delete V.unconfirmedSyntheses[V.synthEditing];
+  }
   captureOpenEditor();   // a claim editor open alongside keeps its text through the redraw
   if (V.synthEditing) delete V.synthDrafts[V.synthEditing];   // discard only this topic's draft
   V.synthEditing = null;
