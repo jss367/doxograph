@@ -676,6 +676,7 @@ function render() {
   if (!editorHolds()) renderContent();
   renderJobs();
   syncAnalysisControls();
+  People.sync();
   ResearchTools.sync();
   WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
@@ -711,6 +712,7 @@ function renderAll() {
   renderContent();
   renderJobs();
   syncAnalysisControls();
+  People.sync();
   ResearchTools.sync();
   WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();

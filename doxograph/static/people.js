@@ -37,7 +37,7 @@ const People = (() => {
   // `people.name_key`: case, accents, punctuation, and spacing do not make
   // two names. An author spelling already in the library takes the server's key.
   const nameKey = name => Object.hasOwn(client.state.author_keys || {}, name) ? client.state.author_keys[name]
-    : foldLabel((name.normalize('NFKD').replace(/\p{Mn}/gu, '').match(/[\p{L}\p{N}]+/gu) || []).join(' '));
+    : foldLabel((name.normalize('NFKD').replace(/\p{Mn}/gu, '').replace(/['\u2019\u02bc]/gu, '').match(/[\p{L}\p{N}]+/gu) || []).join(' '));
   const names = item => new Set([item.name, ...item.other_names].map(nameKey).filter(Boolean));
   // A body as the server stores it: names stripped and one spelling per key,
   // and labels as `store.normalize_labels` leaves them.
@@ -66,8 +66,13 @@ const People = (() => {
     }
     return '';
   }
+  // The server says only that a name is too long. Say which one.
+  function tooLong(target) {
+    const name = target.other_names.find(value => [...value].length > 300);
+    return name ? `The other name beginning “${[...name].slice(0, 40).join('')}…” is longer than 300 characters.` : '';
+  }
   const autosave = createAutosave({current: () => draft, dirty,
-    blocked: () => conflicted === draft ? conflict : !nameKey(draft.name) ? 'Give this person a name.' : clash(draft),
+    blocked: () => conflicted === draft ? conflict : !nameKey(draft.name) ? 'Give this person a name.' : tooLong(draft) || clash(draft),
     async write(target) {
       const sent = body(target), first = !saved;
       let item;
@@ -119,6 +124,8 @@ const People = (() => {
     el('people-sheet').setAttribute('aria-busy', String(value));
     el('people-sheet').querySelectorAll('button, input, textarea').forEach(field => field.disabled = value);
     el('person-new').disabled = value || !loaded;
+    // Notes need the saved records, to keep one spelling to one person.
+    el('people-sheet').querySelector('[data-person-action="create"]')?.toggleAttribute('disabled', value || !loaded);
   }
   async function run(task) {
     if (busy) return;
@@ -166,6 +173,34 @@ const People = (() => {
     return client.state.papers.filter(paper => (paper.authors || []).some(name => keys.has(nameKey(name))));
   }
 
+  // A redraw that would change nothing leaves the buttons, and focus, alone.
+  const drawn = new WeakMap();
+  function setHtml(element, html) {
+    if (element && drawn.get(element) !== html) { element.innerHTML = html; drawn.set(element, html); }
+  }
+  // The saved records, read again. Another window or a restored backup may
+  // have changed them. A clean record on screen takes its new saved version;
+  // writing in progress is kept, and saves into a changed record conflict as before.
+  async function refreshItems() {
+    const ws = workspace, latest = (await request()).people;
+    if (ws !== client.workspaceId) return false;
+    items = latest;
+    return true;
+  }
+  async function reload() {
+    if (!shown || !loaded) return;
+    await run(async () => {
+      if (!await refreshItems() || !shown) return;
+      if (draft && saved && !dirty() && !autosave.unconfirmed) {
+        const version = items.find(item => item.id === saved.id);
+        if (!version) {
+          if (authors().has(nameKey(saved.name))) chooseAuthor(saved.name); else clear();
+          status('This person’s record no longer exists.');
+        } else if (version.revision !== saved.revision) choose(version);
+      } else if (!draft && author && recordFor(author)) choose(recordFor(author));
+      renderList();
+    });
+  }
   function renderList() {
     const query = el('people-search').value.toLowerCase().trim();
     const all = authors();
@@ -181,10 +216,10 @@ const People = (() => {
       `data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="page"' : ''}`)).join('');
     const authorRows = others.slice(0, 200).map(entry => button('author', `<strong>${esc(entry.name)}</strong><small>${plural(entry.papers.size, 'paper')}</small>`,
       `data-name="${esc(entry.name)}" ${current === entry.key ? 'aria-current="page"' : ''}`)).join('');
-    el('people-list').innerHTML = (recordRows ? `<h3>Your notes</h3>${recordRows}` : '')
+    setHtml(el('people-list'), (recordRows ? `<h3>Your notes</h3>${recordRows}` : '')
       + (authorRows ? `<h3>Authors in your library</h3>${authorRows}` : '')
       + (others.length > 200 ? '<p class="hint">Search to find the remaining authors.</p>' : '')
-      || `<p class="hint">${query ? 'No one matches your search.' : 'Authors appear here as papers arrive. Add a person to keep notes on anyone else.'}</p>`;
+      || `<p class="hint">${query ? 'No one matches your search.' : 'Authors appear here as papers arrive. Add a person to keep notes on anyone else.'}</p>`);
     el('people-count').textContent = `${plural(items.length, 'record')} · ${plural(others.length + records.length, 'person', 'people')}`;
   }
 
@@ -240,9 +275,10 @@ const People = (() => {
     if (!draft && author) {
       el('person-document').innerHTML = `<article class="person-page">
         <h2>${esc(author)}</h2>
-        <div class="person-actions">${button('create', 'Add notes on this person', 'class="primary"')}</div>
+        <div class="person-actions">${button('create', 'Add notes on this person', `class="primary" ${loaded ? '' : 'disabled'}`)}</div>
         <p class="hint">Notes, an affiliation, and other spellings of this name are kept once you add them.</p>
-        <div id="person-work">${workHtml(new Set([nameKey(author)]))}</div></article>`;
+        <div id="person-work"></div></article>`;
+      setHtml(el('person-work'), workHtml(new Set([nameKey(author)])));
       if (busy) setBusy(true);
       return;
     }
@@ -269,7 +305,7 @@ const People = (() => {
     if (busy) setBusy(true);
   }
   function renderWork() {
-    if (draft && el('person-work')) el('person-work').innerHTML = workHtml(names(draft), draft.papers);
+    if (draft) setHtml(el('person-work'), workHtml(names(draft), draft.papers));
   }
   // A new record's first save swaps Discard for the saved record's actions
   // without rebuilding the fields under the cursor.
@@ -359,11 +395,10 @@ const People = (() => {
       return;
     }
     if (!current()) return;
-    // A record made since the list was read, in another window.
-    if (target.id && !items.some(item => item.id === target.id)) {
-      const ws = workspace, latest = (await request()).people;
-      if (!current() || ws !== client.workspaceId) return;
-      items = latest;
+    // A record made since the list was read, in another window, or one that
+    // now goes by this author's name.
+    if (target.author || (target.id && !items.some(item => item.id === target.id))) {
+      if (!await refreshItems() || !current()) return;
     }
     const item = target.id ? items.find(item => item.id === target.id)
       : target.author ? recordFor(target.author) : draft && items.find(item => item.id === draft.id);
@@ -396,7 +431,14 @@ const People = (() => {
     renderList(); renderDocument();
     if (dirty()) progress(); else status('Loading people…');
     await run(async () => {
-      items = (await request()).people; loaded = true;
+      try { items = (await request()).people; }
+      catch (error) {
+        // An author's page comes from the library, so it still opens. Records
+        // stay closed to edits until they can be read.
+        if (requested?.author && !draft) chooseAuthor(requested.author);
+        throw error;
+      }
+      loaded = true;
       if (!dirty()) status('');
       await revealRequested();
     });
@@ -410,10 +452,10 @@ const People = (() => {
   // Papers arrive and change while the view is open. Redraw what comes from
   // the library without touching the fields being typed in.
   function sync() {
-    if (!shown || !loaded) return;
+    if (!shown) return;
     renderList();
     if (draft) { renderWork(); if (!el('person-link-search')?.value) renderPicker(); }
-    else if (author && el('person-work')) el('person-work').innerHTML = workHtml(new Set([nameKey(author)]));
+    else if (author) setHtml(el('person-work'), workHtml(new Set([nameKey(author)])));
   }
   const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
   const blank = name => ({id:newId(), name, other_names:[], affiliation:'', homepage:'', notes:'', labels:[], papers:[]});
@@ -428,6 +470,10 @@ const People = (() => {
     } else if (name === 'create') {
       // Adding notes on an author is asking to keep them, so the record saves now.
       if (!loaded || !author) return;
+      // Another window may have started notes on them since this page opened.
+      await refreshItems();
+      const existing = recordFor(author);
+      if (existing) { choose(existing); status(`Your notes on ${existing.name} were added in another window.`); return; }
       draft = blank(author); saved = null; author = null; inspectedRevision = undefined;
       renderDocument();
       await autosave.flush();
@@ -436,6 +482,7 @@ const People = (() => {
       if (draft?.id === target.dataset.id || !await discard()) return;
       choose(items.find(item => item.id === target.dataset.id));
     } else if (name === 'author') {
+      if (loaded) await refreshItems();
       const record = recordFor(target.dataset.name);
       if (record ? draft?.id === record.id : !draft && author === target.dataset.name) return;
       if (!await discard()) return;
@@ -523,7 +570,7 @@ const People = (() => {
   window.addEventListener('beforeunload', event => {
     if (dirty() || busy || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
-  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, sync, flush: () => autosave.flush(),
+  return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, sync, reload, flush: () => autosave.flush(),
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
     hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,

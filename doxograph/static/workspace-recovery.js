@@ -78,6 +78,8 @@
         headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':owner}, body:JSON.stringify({expected:version.expected})});
       workspaceClient.invalidateState();
       await refreshAll();
+      // The People page keeps its records while open. A restored file replaces them.
+      await People.reload();
       await load();
       $('backups-status').textContent = 'Restored. The version replaced is also available here.';
     } catch (error) { $('backups-status').textContent = error.message; }

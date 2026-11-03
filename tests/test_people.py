@@ -24,6 +24,8 @@ def test_name_keys_ignore_case_accents_and_punctuation():
     assert people.name_key('B. Schölkopf') == 'b scholkopf'
     assert people.name_key('B. Schölkopf') != people.name_key('Bernhard Schölkopf')
     assert people.name_key(' .- ') == ''
+    # An apostrophe joins a name's parts, in any of its usual characters.
+    assert people.name_key("O'Neil") == people.name_key('O\u2019Neil') == people.name_key('ONeil') == 'oneil'
 
 
 def test_person_lifecycle_and_workspace_isolation(client):

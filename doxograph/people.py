@@ -23,12 +23,18 @@ Token = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 Name = Annotated[str, Field(min_length=1, max_length=300)]
 
 
+APOSTROPHES = "['\u2019\u02bc]"
+
+
 def name_key(name: str) -> str:
     """What makes two spellings of a name one: case, accents, and the
     punctuation and spacing between its parts. "Schölkopf, B." and
     "scholkopf b" are one name; "B. Schölkopf" and "Bernhard Schölkopf" are
     two until a record lists both."""
     letters = "".join(c for c in unicodedata.normalize("NFKD", name) if not unicodedata.combining(c))
+    # An apostrophe joins the parts of a name rather than separating them:
+    # "O'Neil" is "ONeil", not "O Neil".
+    letters = re.sub(APOSTROPHES, "", letters)
     return store.label_key(" ".join(re.findall(r"[^\W_]+", letters)))
 
 

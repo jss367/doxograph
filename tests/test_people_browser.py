@@ -6,7 +6,7 @@ import pytest
 
 from browser_support import browser_session, run_browser
 from doxograph import config, store
-from test_browser import _server
+from test_browser import _answer, _server
 
 
 async def ready(page):
@@ -94,5 +94,83 @@ def test_author_page_becomes_a_record_that_gathers_other_spellings(engine):
                 await page.wait_for_function("document.querySelector('#people-status').textContent.includes('already names Ada Lovelace')")
                 assert len(httpx.get(url + '/api/people').json()['people']) == 1
                 assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_open_people_page_follows_other_windows_restores_and_refreshes(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('engine', title='Notes on the engine', authors=['Ada Lovelace'], year=1843))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1200, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url + '/#view=people&author=Ada+Lovelace')
+                view = page.locator('#people-sheet')
+                document = page.locator('#person-document')
+                await document.get_by_role('heading', name='Ada Lovelace', exact=True).wait_for()
+                await ready(page)
+
+                # Another window starts notes on her; adding notes here opens those.
+                other = httpx.post(url + '/api/people', json={'name': 'Ada Lovelace', 'notes': 'From another window.'}).json()
+                await document.get_by_role('button', name='Add notes on this person', exact=True).click()
+                await ready(page)
+                await page.wait_for_function("id => V.person === id", arg=other['id'])
+                notes = view.get_by_label('Notes', exact=True)
+                assert await notes.input_value() == 'From another window.'
+                assert len(httpx.get(url + '/api/people').json()['people']) == 1
+
+                # Restoring an earlier people.json replaces the record on screen.
+                await notes.fill('Edited here.')
+                await settled(page)
+                backup = next(version for version in httpx.get(url + '/api/workspace/backups').json()['versions']
+                              if version['path'] == 'people.json'
+                              and any(record['notes'] == 'From another window.' for record in
+                                      httpx.get(url + '/api/workspace/backups/' + version['id']).json()))
+                await page.evaluate("document.querySelector('#btn-workspace-backups').click()")
+                await page.locator(f'[data-backup-restore="{backup["id"]}"]').click()
+                await _answer(page, 'Restore version')
+                await page.wait_for_function("document.querySelector('#backups-status').textContent.startsWith('Restored')")
+                await page.locator('#backups-close').click()
+                await ready(page)
+                assert await notes.input_value() == 'From another window.'
+                await notes.fill('Edited after the restore.')
+                await settled(page)
+                assert httpx.get(url + '/api/people').json()['people'][0]['notes'] == 'Edited after the restore.'
+
+                # A paper read in from elsewhere appears on her page after a refresh.
+                store.save_paper(store.new_paper('letters', title='Letters on numbers', authors=['Ada Lovelace']))
+                await page.evaluate('async () => { await refreshAll(); }')
+                await document.get_by_role('button', name='Letters on numbers', exact=True).wait_for()
+
+                # An over-long other name is named before anything is sent.
+                await view.get_by_label('Other names in author lists', exact=True).fill('A. Lovelace\n' + 'x' * 301)
+                await page.wait_for_function("document.querySelector('#people-status').textContent.includes('beginning “xxxx')")
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+def test_author_page_opens_when_records_cannot_be_read():
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('engine', title='Notes on the engine', authors=['Ada Lovelace'], year=1843))
+
+    async def scenario():
+        async with browser_session('chromium') as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.route('**/api/people', lambda route: route.fulfill(status=503, json={'detail': 'people.json could not be read.'}))
+                await page.goto(url + '/#view=people&author=Ada+Lovelace')
+                document = page.locator('#person-document')
+                await document.get_by_role('button', name='Notes on the engine', exact=True).wait_for()
+                await ready(page)
+                assert 'could not be read' in await page.locator('#people-status').inner_text()
+                assert await document.get_by_role('button', name='Add notes on this person', exact=True).is_disabled()
 
     run_browser(scenario())
