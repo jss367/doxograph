@@ -561,3 +561,77 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_dataset_edits_during_held_deletes_are_asked_about_before_a_switch(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+    claim = store.add_claim('study', {'text': 'Accuracy improves.'})['id']
+    other = config.create_workspace('Another project')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            deletes, release = [], asyncio.Event()
+
+            async def hold_delete(route, request):
+                if request.method == 'DELETE':
+                    deletes.append(request.url)
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f'**/api/papers/study/claims/{claim}', hold_delete)
+            with _server() as url:
+                httpx.post(url + '/api/datasets', json={'name': 'Corpus'}).raise_for_status()
+                await page.goto(url + '/#view=claims')
+                await page.locator(f'.claim[data-claim="{claim}"] [data-act="del"]').click()
+                await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                await view.get_by_label('Version', exact=True).fill('Agreed to discard')
+                await page.evaluate("id => { window.switching = switchWorkspace(id); }", other['id'])
+                await _answer(page, 'Discard changes')
+                for _ in range(50):
+                    if deletes:
+                        break
+                    await page.wait_for_timeout(100)
+                assert deletes
+                await view.get_by_label('Version', exact=True).fill('Typed while the delete was held')
+                release.set()
+                await _answer(page, 'Cancel')
+                await page.evaluate('window.switching')
+                assert await view.get_by_label('Version', exact=True).input_value() == 'Typed while the delete was held'
+                assert await page.locator('#workspace').input_value() == 'default'
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_navigating_to_a_dataset_made_since_the_list_was_read(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                httpx.post(url + '/api/datasets', json={'name': 'Corpus'}).raise_for_status()
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                fresh = httpx.post(url + '/api/datasets', json={'name': 'Made in another window'}).json()
+                await page.evaluate("id => { location.hash = 'view=datasets&dataset=' + id; }", fresh['id'])
+                await page.wait_for_function("document.querySelector('#dataset-name')?.value === 'Made in another window'")
+                await ready(page)
+                assert 'no longer exists' not in await page.locator('#datasets-status').inner_text()
+                assert not errors
+
+    run_browser(scenario())

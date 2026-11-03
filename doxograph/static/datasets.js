@@ -4,6 +4,9 @@ const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   let inspectedRevision;
   let requested = null, revealed = null;
+  // The draft the reader agreed to discard when a workspace switch began.
+  let discarding = null;
+  const writing = () => dirty() ? JSON.stringify([draft.id, body(draft)]) : null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
   const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
@@ -194,6 +197,12 @@ const Datasets = (() => {
       return;
     }
     if (!current()) return;
+    // A record made since the list was read, in another window.
+    if (id && !items.some(item => item.id === id)) {
+      const ws = workspace, latest = (await request()).datasets;
+      if (!current() || ws !== client.workspaceId) return;
+      items = latest;
+    }
     const item = items.find(item => item.id === (id || draft?.id)) || (!id && [...items].sort((a,b) => a.name.localeCompare(b.name))[0]);
     if (item) choose(item);
     else {
@@ -328,6 +337,14 @@ const Datasets = (() => {
     hasUnsavedChanges:() => dirty() || busy,
     async beforeWorkspaceSwitch() {
       // A later guard may still refuse. Only committed selection clears drafts.
-      return !busy && await discard();
+      if (busy || !await discard()) return false;
+      discarding = writing();
+      return true;
+    },
+    // Held deletes leave the editor open while they finish. Edits made in
+    // that time were never agreed to; ask about them before the switch commits.
+    async beforeWorkspaceSelect() {
+      if (busy) return false;
+      return writing() === discarding || await discard();
     }};
 })();

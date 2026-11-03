@@ -1,4 +1,5 @@
 """Exercise the offline writing workflow in the browser and native WebKit engine."""
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -328,6 +329,88 @@ def test_notes_view_keeps_the_library_usable_and_the_draft_across_navigation(eng
                 if engine == 'chromium':
                     Path('.context').mkdir(exist_ok=True)
                     await page.screenshot(path='.context/research-notes-view.png')
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine',['chromium','webkit'])
+def test_writing_during_held_deletes_is_asked_about_before_a_switch(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study',title='Evaluation study'))
+    claim = store.add_claim('study',{'text':'Accuracy improves.'})['id']
+    other = config.create_workspace('Another project')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':900})
+            deletes, release = [], asyncio.Event()
+
+            async def hold_delete(route, request):
+                if request.method == 'DELETE':
+                    deletes.append(request.url)
+                    await release.wait()
+                await route.continue_()
+
+            await page.route(f'**/api/papers/study/claims/{claim}', hold_delete)
+            with _server() as url:
+                httpx.post(url+'/api/research-notes', json={'title':'Working argument'}).raise_for_status()
+                await page.goto(url+'/#view=claims')
+                await page.locator(f'.claim[data-claim="{claim}"] [data-act="del"]').click()
+                await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
+                await page.get_by_role('button',name='Research notes',exact=True).click()
+                await page.locator('#research-notes').wait_for(state='visible')
+                await ready(page)
+                await page.locator('#note-body').fill('Agreed to discard this.')
+                await page.evaluate("id => { window.switching = switchWorkspace(id); }", other['id'])
+                await _answer(page,'Discard changes')
+                # The switch now waits for the held delete with the editor still open.
+                for _ in range(50):
+                    if deletes: break
+                    await page.wait_for_timeout(100)
+                assert deletes
+                await page.locator('#note-body').fill('Written while the delete was held.')
+                release.set()
+                await _answer(page,'Cancel')
+                await page.evaluate('window.switching')
+                assert await page.locator('#note-body').input_value() == 'Written while the delete was held.'
+                assert await page.locator('#workspace').input_value() == 'default'
+                # Discarding what was agreed to, with nothing written since, asks once.
+                await page.evaluate("id => { window.switching = switchWorkspace(id); }", other['id'])
+                await _answer(page,'Discard changes')
+                await page.evaluate('window.switching')
+                await page.wait_for_function('id => workspaceClient.workspaceId === id', arg=other['id'])
+                assert await page.locator('#ask').is_hidden()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine',['chromium','webkit'])
+def test_opening_a_note_saved_since_the_list_was_read(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':900})
+            errors = []
+            page.on('pageerror',lambda error: errors.append(str(error)))
+            with _server() as url:
+                httpx.post(url+'/api/research-notes', json={'title':'Working argument'}).raise_for_status()
+                await page.goto(url)
+                await page.get_by_role('button',name='Research notes',exact=True).click()
+                await page.locator('#research-notes').wait_for(state='visible')
+                await ready(page)
+                assert await page.locator('#note-title').input_value() == 'Working argument'
+                # Saved from Ask while the notes are open; Ask opens it the same way.
+                fresh = httpx.post(url+'/api/research-notes', json={'title':'Saved from Ask'}).json()
+                await page.evaluate('id => ResearchNotes.open(id)', fresh['id'])
+                await page.wait_for_function("document.querySelector('#note-title')?.value === 'Saved from Ask'")
+                await ready(page)
+                assert 'no longer exists' not in await page.locator('#notes-status').inner_text()
+                assert 'note='+fresh['id'] in page.url
+                assert await page.locator('#notes-list').get_by_role('button',name='Saved from Ask').count() == 1
                 assert not errors
 
     run_browser(scenario())
