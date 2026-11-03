@@ -1936,3 +1936,58 @@ def test_an_explanation_draft_stays_reachable_after_another_window_removes_its_c
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_back_while_a_new_board_saves_keeps_the_newer_destination(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['boards'] = [{'id': 'b1', 'kind': 'board', 'title': 'First board', 'entries': [],
+                                       'question': '', 'conclusion': '', 'open_questions': ''}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(f'{url}/#view=tools&tool=reading')
+                view = page.locator('#research-tools')
+                await view.wait_for(state='visible')
+                await ready(page)
+                nav = page.locator('.research-tools-nav')
+                await nav.get_by_role('button', name='Evidence boards', exact=True).click()
+                await ready(page)
+                assert 'board=b1' in page.url
+                held, release = [], asyncio.Event()
+                async def hold_put(route):
+                    if route.request.method == 'PUT' and not held: held.append(route); await release.wait()
+                    await route.continue_()
+                await page.route('**/api/notebook', hold_put)
+                await view.get_by_role('button', name='New board', exact=True).click()
+                await _answer(page, 'Create board', 'Second board')
+                deadline = time.monotonic() + 6
+                while not held and time.monotonic() < deadline: await asyncio.sleep(.1)
+                assert held
+                # Back while the new board is being saved: the reading queue stands.
+                await page.go_back()
+                await page.wait_for_function("location.hash.includes('tool=reading')")
+                release.set()
+                await page.wait_for_function("document.querySelector('[data-tab=\"reading\"][aria-current=\"page\"]')")
+                await ready(page)
+                assert 'tool=reading' in page.url and 'board=' not in page.url
+                assert await nav.get_by_role('button', name='Reading queue', exact=True).get_attribute('aria-current') == 'page'
+                assert await page.locator('#board-picker').count() == 0
+                # The board was saved all the same, and history gained no entry for it.
+                titles = [b['title'] for b in httpx.get(url + '/api/notebook').json()['boards']]
+                assert titles == ['First board', 'Second board']
+                await page.unroute('**/api/notebook')
+                await page.go_forward()
+                await page.wait_for_function("location.hash.includes('board=b1')")
+                await ready(page)
+                assert await page.locator('#board-title').input_value() == 'First board'
+                assert not errors
+
+    run_browser(scenario())

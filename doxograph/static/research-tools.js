@@ -7,6 +7,10 @@ const ResearchTools = (() => {
   let shown = false, wanted = null, loaded = null, origin = 'library';
   const TABS = ['compare', 'boards', 'questions', 'connections', 'reading', 'marks', 'searches'];
   const tabKey = target => target && `${target.tab}\u0000${target.board || ''}`;
+  // Whether the tab and board some work began at are still the ones wanted.
+  // Back, a link, or leaving the tools can arrive while it waits; the newer
+  // move then stands, and run() brings it on screen once the work returns.
+  const still = key => shown && tabKey(wanted) === key;
   let workspace = null, claims = new Set(), papers = new Set();
   let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
@@ -178,10 +182,9 @@ const ResearchTools = (() => {
     }
     if (wanted !== target) return;
     loaded = target;
-    // Back, a link, or leaving the tools can arrive during each wait below.
-    // The newer move then stands: this load stops without drawing or naming
-    // its tab, and run() drains the newest target once it returns.
-    const current = () => shown && tabKey(wanted) === tabKey(target);
+    // After each wait below, a newer move stops this load without drawing or
+    // naming its tab.
+    const current = () => still(tabKey(target));
     const flushed = await WorkspaceNotes.flush();
     if (!current()) return;
     if (!flushed) {
@@ -1405,6 +1408,7 @@ const ResearchTools = (() => {
     if (name === 'queue-selection') { await queue(selectedPapers()); tab = 'reading'; render(); return; }
     if (name === 'queue-paper') { await queue([data.paper]); tab = 'reading'; render(); return; }
     if (name === 'new-board' || name === 'new-question') {
+      const from = tabKey(wanted);
       if (!await discardDrafts()) return;
       const asking = name === 'new-question';
       const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
@@ -1414,6 +1418,8 @@ const ResearchTools = (() => {
       // would open this board anyway: the new board takes that entry in place.
       const before = boardId;
       notebook.boards.push(board); boardId = board.id; await save();
+      // A move made during the save is newer: the board is saved, not opened.
+      if (!still(from)) { boardId = before; return; }
       if (before) chooseBoard(board.id); else render();
       return;
     }
@@ -1571,7 +1577,12 @@ const ResearchTools = (() => {
       // A tab, or a tool used from the library, opens the research tools first.
       if (TABS.includes(name) || !shown) {
         // An unsaved workspace note would be hidden by the tools; keep it on screen.
-        if (!shown && !await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
+        if (!shown) {
+          const navigation = navigationVersion();
+          if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
+          // A move made while the note was saved is newer than this click.
+          if (navigationVersion() !== navigation) return;
+        }
         openTab(TABS.includes(name) ? name : shown ? tab : 'compare');
         await load();
         if (TABS.includes(name) || !notebook) return;
@@ -1588,9 +1599,9 @@ const ResearchTools = (() => {
       target.checked ? papers.add(target.dataset.selectPaper) : papers.delete(target.dataset.selectPaper); remember(); sync(); return;
     }
     if (target.id === 'board-picker') run(async () => {
-      const next = target.value;
+      const next = target.value, from = tabKey(wanted);
       if (!await discardDrafts()) { target.value = boardId || ''; return; }
-      chooseBoard(next);
+      if (still(from)) chooseBoard(next);
     });
     if (target.matches('[data-entry-stance]')) {
       editBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
