@@ -837,3 +837,66 @@ def test_a_lost_create_recognizes_the_record_in_its_stored_form(engine, then):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_save_whose_answer_was_lost_is_not_saved_by_restoring_the_old_text(engine):
+    """The lost save may have stored its edit, so typing the old text back must
+    not count as saved while the server holds a change the writer took back."""
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Evaluation study'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            updates = []
+
+            async def lose_first_answer(route):
+                if route.request.method != 'PUT':
+                    await route.continue_()
+                    return
+                updates.append(route.request.post_data_json)
+                if len(updates) == 1:
+                    # The edit is stored, but its answer never arrives.
+                    await route.fetch()
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            with _server() as url:
+                item = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'version': 'Saved'}).json()
+                await page.route('**/api/datasets/*', lose_first_answer)
+                await page.goto(url)
+                await page.get_by_role('button', name='Datasets', exact=True).click()
+                view = page.locator('#datasets-sheet')
+                await view.wait_for(state='visible')
+                await ready(page)
+                field = view.get_by_label('Version', exact=True)
+                await field.fill('Transient')
+                await page.wait_for_function(
+                    "document.querySelector('#datasets-status').textContent.startsWith('Couldn’t save')")
+                [stored] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert stored['version'] == 'Transient'
+
+                await field.fill('Saved')
+                assert await page.evaluate('window.doxographSaveDrafts()') is False
+                assert [update['version'] for update in updates][:2] == ['Transient', 'Saved']
+                # The lost save moved the record on, so the retry is a conflict.
+                [stored] = httpx.get(url + '/api/datasets').json()['datasets']
+                assert stored['version'] == 'Transient'
+                assert await page.locator('#datasets-status').inner_text() != 'Saved'
+                assert await page.evaluate('Datasets.hasUnsavedChanges()') is True
+                # Leaving the catalog and coming back keeps the draft.
+                await page.locator('#papers').get_by_text('Evaluation study').click()
+                await view.wait_for(state='hidden')
+                await page.go_back()
+                await view.wait_for(state='visible')
+                await ready(page)
+                assert f'dataset={item["id"]}' in page.url
+                assert await field.input_value() == 'Saved'
+                assert not errors
+
+    run_browser(scenario())

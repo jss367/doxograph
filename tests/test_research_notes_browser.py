@@ -3,6 +3,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from playwright.async_api import expect
 
 from browser_support import browser_session, run_browser
 from doxograph import config, store
@@ -335,6 +336,67 @@ def test_notes_view_keeps_the_library_usable_and_the_draft_across_navigation(eng
                 if engine == 'chromium':
                     Path('.context').mkdir(exist_ok=True)
                     await page.screenshot(path='.context/research-notes-view.png')
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine',['chromium','webkit'])
+def test_a_save_whose_answer_was_lost_is_not_saved_by_restoring_the_old_text(engine):
+    """The lost save may have stored its edit, so typing the old text back must
+    not count as saved while the server holds a change the writer took back."""
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width':1440,'height':900})
+            errors = []
+            page.on('pageerror',lambda error: errors.append(str(error)))
+            updates = []
+
+            async def lose_first_answer(route):
+                if route.request.method != 'PUT':
+                    await route.continue_()
+                    return
+                updates.append(route.request.post_data_json)
+                if len(updates) == 1:
+                    # The edit is stored, but its answer never arrives.
+                    await route.fetch()
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            with _server() as url:
+                note = httpx.post(url+'/api/research-notes', json={'title':'Working argument'}).json()
+                second = httpx.post(url+'/api/research-notes', json={'title':'Second argument'}).json()
+                await page.route('**/api/research-notes/*', lose_first_answer)
+                await page.goto(url+'/?note='+note['id'])
+                view = page.locator('#research-notes')
+                await view.wait_for(state='visible')
+                await ready(page)
+                body = page.locator('#note-body')
+                await body.fill('A transient paragraph.')
+                await page.wait_for_function(
+                    "document.querySelector('#notes-status').textContent.startsWith('Couldn’t save')")
+                stored = {n['id']: n for n in httpx.get(url+'/api/research-notes').json()['notes']}
+                assert stored[note['id']]['body'] == 'A transient paragraph.'
+
+                await body.fill('')
+                assert await page.evaluate('window.doxographSaveDrafts()') is False
+                assert [update['body'] for update in updates][:2] == ['A transient paragraph.', '']
+                # The lost save moved the revision on, so the retry is a conflict.
+                stored = {n['id']: n for n in httpx.get(url+'/api/research-notes').json()['notes']}
+                assert stored[note['id']]['body'] == 'A transient paragraph.'
+                assert await page.locator('#notes-status').inner_text() != 'Saved'
+                assert await page.evaluate('ResearchNotes.hasUnsavedChanges()') is True
+                # Opening another note asks first instead of leaving silently.
+                await page.locator('#notes-list').get_by_role('button',name='Second argument').click()
+                await expect(page.locator('#ask')).to_be_visible()
+                await page.locator('#ask').get_by_role('button',name='Cancel',exact=True).click()
+                await ready(page)
+                assert 'note='+note['id'] in page.url and 'note='+second['id'] not in page.url
+                assert await body.input_value() == ''
                 assert not errors
 
     run_browser(scenario())

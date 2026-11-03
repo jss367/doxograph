@@ -155,7 +155,7 @@ const ResearchNotes = (() => {
   }
   // The note a URL names, or else the one last open, or else the newest.
   async function reveal(id, current) {
-    if (isDirty() && (!id || id === draft.id)) { renderList(); progress(); return; }
+    if ((isDirty() || autosave.unconfirmed) && (!id || id === draft.id)) { renderList(); progress(); return; }
     if (id && id !== draft?.id && !await discard()) {
       if (current()) select(saved?.id || null);
       return;
@@ -347,13 +347,13 @@ const ResearchNotes = (() => {
     if (file) { event.preventDefault(); event.stopPropagation(); run(() => upload(file)); }
   });
   window.addEventListener('beforeunload', event => {
-    if (isDirty() || autosave.saving) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
+    if (isDirty() || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
   return {connect(value, {open: opening, follow: following, selected}) { client = value; navigate = opening; follow = following; select = selected; },
     show, hide, flush: () => autosave.flush(), open: id => navigate(id),
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
-    hasUnsavedChanges: () => Boolean(isDirty() || busy || autosave.saving),
+    hasUnsavedChanges: () => Boolean(isDirty() || busy || autosave.saving || autosave.unconfirmed),
     async beforeWorkspaceSwitch() {
       // A later guard may still refuse. Only committed selection clears drafts.
       return !busy && await discard();

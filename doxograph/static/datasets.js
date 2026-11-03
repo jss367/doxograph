@@ -275,7 +275,7 @@ const Datasets = (() => {
   }
   // The record a URL names, or else the one last open, or else the first.
   async function reveal(id, current) {
-    if (dirty() && (!id || id === draft.id)) { renderList(); progress(); return; }
+    if ((dirty() || autosave.unconfirmed) && (!id || id === draft.id)) { renderList(); progress(); return; }
     if (id && id !== draft?.id && !await discard()) {
       if (current()) select(saved?.id || null);
       return;
@@ -414,12 +414,12 @@ const Datasets = (() => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!busy) void autosave.flush(); }
   });
   window.addEventListener('beforeunload', event => {
-    if (dirty() || busy || autosave.saving) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
+    if (dirty() || busy || autosave.saving || autosave.unconfirmed) { void autosave.flush(); event.preventDefault(); event.returnValue = ''; }
   });
   return {connect(value, follow, selected) { client = value; navigate = follow; select = selected; }, show, hide, flush: () => autosave.flush(),
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
-    hasUnsavedChanges:() => dirty() || busy || autosave.saving,
+    hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,
     async beforeWorkspaceSwitch() {
       // A later guard may still refuse. Only committed selection clears drafts.
       return !busy && await discard();
