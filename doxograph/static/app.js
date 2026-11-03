@@ -449,6 +449,7 @@ async function refresh() {
 // screen and stays clickable. This keeps the open editor's draft across it.
 async function refreshAll() {
   captureOpenEditor();
+  void People.refresh(true);
   const requestedWorkspace = workspaceClient.workspaceId;
   const changed = await pull();
   if (changed === null || requestedWorkspace !== workspaceClient.workspaceId) return;
@@ -1636,6 +1637,9 @@ async function updateFromPoll() {
   const changed = await pull();
   if (changed === null) return;
   renderJobs();
+  // People records live outside the corpus, so a corpus that has not moved
+  // says nothing about them. The page reads them itself, throttled.
+  void People.refresh();
   if (!changed) {
     if (citationsFailed && V.view === 'graph') loadCitations();
     return;
