@@ -188,7 +188,7 @@ let restoringHistory = false;
 let navigationSeq = 0, navigationRoute = null;
 function navigationVersion() {
   const route = JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet,
-    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden]);
+    V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, V.tool, V.board]);
   if (route !== navigationRoute) { navigationRoute = route; navigationSeq++; }
   return navigationSeq;
 }

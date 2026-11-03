@@ -1405,25 +1405,30 @@ const ResearchTools = (() => {
     }
     if (name === 'export-selection') { await download(data.format); return; }
     if (name === 'export-board') { await download(data.format, boardId); return; }
-    if (name === 'queue-selection') { await queue(selectedPapers()); tab = 'reading'; render(); return; }
-    if (name === 'queue-paper') { await queue([data.paper]); tab = 'reading'; render(); return; }
+    if (name === 'queue-selection' || name === 'queue-paper') {
+      const from = tabKey(wanted), version = navigationVersion();
+      await queue(name === 'queue-selection' ? selectedPapers() : [data.paper]);
+      if (!still(from) || navigationVersion() !== version) return;
+      openTab('reading'); await load(); return;
+    }
     if (name === 'new-board' || name === 'new-question') {
-      const from = tabKey(wanted);
+      const from = tabKey(wanted), version = navigationVersion();
       if (!await discardDrafts()) return;
       const asking = name === 'new-question';
       const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
-      if (!title?.trim()) return;
+      if (!title?.trim() || !still(from) || navigationVersion() !== version) return;
       const board = {id:uid(),kind:asking ? 'question' : 'board',title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
       // With no board open, the tab's entry names none, and going back to it
       // would open this board anyway: the new board takes that entry in place.
       const before = boardId;
       notebook.boards.push(board); boardId = board.id; await save();
-      // A move made during the save is newer: the board is saved, not opened.
-      if (!still(from)) { boardId = before; return; }
+      // Even a move away and back during the save is newer: save the board
+      // without replacing that history entry or opening the new board.
+      if (!still(from) || navigationVersion() !== version) { boardId = before; return; }
       if (before) chooseBoard(board.id); else render();
       return;
     }
-    if (name === 'add-board') { tab = 'boards'; render(); message('Choose or create a board, then add the selected claims.'); return; }
+    if (name === 'add-board') { openTab('boards'); await load(); message('Choose or create a board, then add the selected claims.'); return; }
     if (name === 'board-add-selection') {
       if (!claims.size) throw new Error('Select claims in the library first.');
       const board = editBoard();
@@ -1476,11 +1481,14 @@ const ResearchTools = (() => {
       await save(); renderReading(); return;
     }
     if (name === 'save-search') {
+      const from = tabKey(wanted), version = navigationVersion();
       const title = await promptDialog('Name this saved search', '', {ok:'Save search'});
       if (!title?.trim()) return;
       const search = {id:uid(),name:title.trim(),view:origin};
       for (const field of ['q','paper','tag','label','facet','kind','unreviewed','unverified','group']) search[field] = V[field];
-      notebook.searches.push(search); await save(); tab = 'searches'; render(); return;
+      notebook.searches.push(search); await save();
+      if (!still(from) || navigationVersion() !== version) return;
+      openTab('searches'); await load(); return;
     }
     if (['apply-search','rename-search','delete-search'].includes(name)) {
       const id = target.closest('[data-search]').dataset.search, search = notebook.searches.find(s=>s.id === id);
