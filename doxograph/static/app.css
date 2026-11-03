@@ -671,6 +671,9 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .agent-guidance summary { cursor: pointer; color: var(--muted); }
 #library-agent > .chat-conversations { flex: 0 1 auto; min-height: 0;
   max-height: min(18dvh, 10rem); overflow-y: auto; }
+/* Keep one conversation and part of the next in view, so the list never
+   shrinks to its heading while the transcript and composer take the room. */
+#library-agent > .chat-conversations:has(li + li, #agent-archive:not([hidden])) { min-height: 5.75rem; }
 #library-agent .chat-threads { gap: .4rem; font-size: .8rem; }
 #library-agent .chat-threads label { width: 100%; }
 #library-agent .chat-threads select { flex: 1; min-width: 0; max-width: 100%; width: 0; }
@@ -700,7 +703,7 @@ body.agent-docked #library-agent #agent-messages { overflow: visible; }
 body.agent-docked #library-agent #agent-form { max-height: none; overflow: visible; }
 body.agent-docked #library-agent .agent-guidance { max-height: none; }
 /* Short panes scroll as a whole so every control remains reachable. */
-@media (max-height: 700px) {
+@media (max-height: 840px) {
   #library-agent { display: block; overflow-y: auto; }
   #library-agent > .row:first-child { position: sticky; top: -1rem; z-index: 1;
     background: var(--bg); padding-block: .5rem; }
