@@ -515,6 +515,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // the earlier version did, and the third reading is taken after the
         // upload has finished — so the sample that saw the work was thrown away
         // and the app quit anyway, which is the whole race this is here for.
+        //
+        // Uploads begun before this pass are the ones its question covers, so
+        // that count is taken first and handed on to the final save.
+        let startsAsked = Uploader.uploadsStarted
         let uploadingBefore = Uploader.uploadsInFlight
         let ownsServer = server.ownsServer
         server.probe { probe in
@@ -522,14 +526,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 .quit, probe, ownsServer: ownsServer, uploadingBefore: uploadingBefore)
             // A relaunch was only ever meant to follow this quit. If the user
             // keeps the app open, the next quit is an ordinary one and must not
-            // bring the app back.
+            // bring the app back. A pass sent back here by the final save has
+            // already frozen the page, so staying thaws it; on the first pass
+            // nothing is frozen and this does nothing.
             guard quitting else {
+                self.window.resumeEditingAfterCancelledQuit()
                 self.relaunchAfterQuit = false
                 NSApp.reply(toApplicationShouldTerminate: false)
                 return
             }
-            // Uploads begun by now were part of the question just answered.
-            self.saveDraftsAgainBeforeQuitting(acceptedStarts: Uploader.uploadsStarted)
+            self.saveDraftsAgainBeforeQuitting(acceptedStarts: startsAsked)
         }
     }
 
@@ -543,25 +549,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// moment it still can be, and writing that could not be saved gets the
     /// same question the first save asks.
     ///
-    /// A paper dropped on the Dock or the window during this save starts an
-    /// upload the earlier question never saw, so it is asked about here. That
-    /// is told by how many uploads have begun, not how many are live: a paper
-    /// the question covered can finish just as a new one starts, and the live
-    /// count would not move.
+    /// A paper dropped on the Dock or the window since the question was asked
+    /// is work that question never saw. That is told by how many uploads have
+    /// begun, not how many are live: a paper the question covered can finish
+    /// just as a new one starts, and the live count would not move. Nor is a
+    /// finished upload done with: it has handed the server a paper to read, and
+    /// quitting an owned server stops that. So no new upload is judged here.
+    /// Any of them, still sending or not, sends the quit back through the probe
+    /// the first pass made, which asks about uploads and reading jobs alike,
+    /// and then through this save again.
+    ///
+    /// That cannot go round forever. Each pass counts the uploads begun before
+    /// its own probe and hands that count here, so the only way back is a paper
+    /// begun during that pass, and the first pass during which none begins
+    /// lets the quit through. The page stays frozen across the extra pass, so
+    /// nothing new is typed or reloaded meanwhile, and a refusal there thaws it.
     ///
     /// Staying is handled the way every other refusal is: the relaunch was only
     /// meant to follow this quit, so it is called off too.
     private func saveDraftsAgainBeforeQuitting(acceptedStarts: Int) {
         window.saveDrafts(freezeEditing: true) { saved in
-            let stay = {
+            if !saved, !self.confirmQuitWithUnsavedWriting() {
                 self.window.resumeEditingAfterCancelledQuit()
                 self.relaunchAfterQuit = false
                 NSApp.reply(toApplicationShouldTerminate: false)
+                return
             }
-            if !saved, !self.confirmQuitWithUnsavedWriting() { return stay() }
-            let uploading = Uploader.uploadsInFlight
-            if Uploader.uploadsStarted > acceptedStarts, uploading > 0,
-               !self.confirmInterruption(.quit, uploading: uploading, reading: 0) { return stay() }
+            guard Uploader.uploadsStarted == acceptedStarts else { return self.probeBeforeQuitting() }
             NSApp.reply(toApplicationShouldTerminate: true)
         }
     }
