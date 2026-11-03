@@ -22,7 +22,7 @@ def local_loupe(tmp_path, monkeypatch):
     # A real child process exercises argument handling, readiness, bind errors,
     # and cleanup without requiring a second repository in CI.
     (checkout / 'server.py').write_text('''
-import argparse, json
+import argparse, json, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 def make_handler():
@@ -35,18 +35,23 @@ def make_handler():
     return Handler
 def main():
     p = argparse.ArgumentParser()
-    for flag in ('survey', 'conversations', 'data-dir', 'port'):
+    for flag in ('survey', 'conversations', 'data-dir', 'hf', 'revision', 'port'):
         p.add_argument('--' + flag)
     a = p.parse_args()
-    mode = next(k for k in ('survey', 'conversations', 'data_dir') if getattr(a, k))
+    mode = next(k for k in ('survey', 'conversations', 'data_dir', 'hf') if getattr(a, k))
     source = getattr(a, mode)
     if Path(source).name == 'fail.json':
         p.error('Invalid message in dataset')
+    if source == 'owner/slow':
+        print('Downloading data/train.parquet...', flush=True)
+        time.sleep(30)
     s = ThreadingHTTPServer(('127.0.0.1', int(a.port)), make_handler())
-    Path('opened.json').write_text(json.dumps({'mode': mode, 'source': source}))
+    opened = {'mode': mode, 'source': source}
+    Path('opened.json').write_text(json.dumps({**opened, 'revision': a.revision} if a.hf else opened))
     print(f'Loaded 1 records. Loupe: http://127.0.0.1:{s.server_port}', flush=True)
     s.serve_forever()
 ''')
+    (checkout / 'hf.py').write_text('')
     monkeypatch.setenv('DOXOGRAPH_LOUPE_DIR', str(checkout))
     monkeypatch.setenv('DOXOGRAPH_LOUPE_PYTHON', sys.executable)
     loupe.close()
@@ -102,8 +107,66 @@ def test_reuses_concurrent_launches_and_reloads_changed_sources(tmp_path):
     assert path.read_bytes() != original  # Only the explicit fixture edit changed it.
 
 
+@pytest.mark.parametrize(('source', 'repo', 'revision'), [
+    ('https://huggingface.co/datasets/Syghmon/gloom_data', 'Syghmon/gloom_data', None),
+    (' https://www.huggingface.co/datasets/Syghmon/gloom_data/viewer/default/train?row=3 ', 'Syghmon/gloom_data', None),
+    ('https://huggingface.co/datasets/owner/name/tree/v1.0', 'owner/name', 'v1.0'),
+    ('hf://datasets/owner/name@0492e3e', 'owner/name', '0492e3e'),
+])
+def test_launches_hugging_face_datasets(local_loupe, source, repo, revision):
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.post('/api/datasets/loupe', json={'source': source})
+        assert response.status_code == 200, response.text
+        assert json.loads((local_loupe / 'opened.json').read_text()) == {'mode': 'hf', 'source': repo, 'revision': revision}
+        key = f'hf:{repo}@{revision or "main"}'
+        assert list(loupe._sessions) == [key]
+        # Another URL for the same dataset and revision reuses the viewer.
+        process = loupe._sessions[key].process
+        assert loupe.open_dataset(f'https://huggingface.co/datasets/{repo}' + (f'/tree/{revision}' if revision else '')) == response.json()['url']
+        assert loupe._sessions[key].process is process
+    assert process.poll() is not None
+
+
+def test_slow_download_does_not_hold_up_other_datasets_and_stops_on_close(tmp_path, monkeypatch):
+    children = []
+    start = loupe.subprocess.Popen
+
+    def track(*args, **kwargs):
+        process = start(*args, **kwargs)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(loupe.subprocess, 'Popen', track)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        download = pool.submit(loupe.open_dataset, 'https://huggingface.co/datasets/owner/slow')
+        while not children:
+            threading.Event().wait(0.01)
+        assert loupe.open_dataset(str(conversation(tmp_path))).startswith('http://127.0.0.1:')
+        assert not download.done()
+        loupe.close()
+        with pytest.raises(HTTPException) as error:
+            download.result(timeout=10)
+    assert error.value.status_code == 422
+    assert all(child.poll() is not None for child in children)
+    assert not loupe._sessions
+
+
+def test_hugging_face_needs_a_current_loupe_and_reports_timeouts(local_loupe, monkeypatch):
+    monkeypatch.setattr(loupe, 'HF_START_TIMEOUT', 0)
+    with pytest.raises(HTTPException, match='download and load') as error:
+        loupe.open_dataset('https://huggingface.co/datasets/owner/name')
+    assert error.value.status_code == 504
+    (local_loupe / 'hf.py').unlink()
+    with pytest.raises(HTTPException, match='Update it to 8b68b4a') as error:
+        loupe.open_dataset('https://huggingface.co/datasets/owner/name')
+    assert error.value.status_code == 503
+    assert not loupe._sessions
+
+
 @pytest.mark.parametrize('source', ['https://example.org/data.json', 'relative.json', '',
-                                  'file://elsewhere/data.json', 'file:///tmp/data.json?x=1', 'file://['])
+                                  'file://elsewhere/data.json', 'file:///tmp/data.json?x=1', 'file://[',
+                                  'https://huggingface.co/datasets/owner', 'https://huggingface.co/datasets/owner/na%20me',
+                                  'https://huggingface.co/owner/model'])
 def test_rejects_nonlocal_and_ambiguous_sources(source):
     with pytest.raises(HTTPException) as error:
         loupe.open_dataset(source)

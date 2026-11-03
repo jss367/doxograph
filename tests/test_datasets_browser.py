@@ -85,6 +85,15 @@ def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
                 await source.fill('https://example.org/dataset.json')
                 assert await dialog.get_by_role('button', name='Open in Loupe', exact=True).count() == 0
                 assert await dialog.get_by_role('link', name='Open source', exact=True).get_attribute('href') == 'https://example.org/dataset.json'
+                await source.fill('https://huggingface.co/datasets/Syghmon/gloom_data')
+                assert await dialog.get_by_role('link', name='Open source', exact=True).get_attribute('href') == 'https://huggingface.co/datasets/Syghmon/gloom_data'
+                await page.route('**/api/datasets/loupe', lambda route: route.fulfill(
+                    status=503, json={'detail': 'This Loupe checkout cannot open Hugging Face datasets.'}))
+                await dialog.get_by_role('button', name='Open in Loupe', exact=True).click()
+                await ready(page)
+                assert 'cannot open Hugging Face' in await page.locator('#datasets-status').inner_text()
+                await source.fill('https://huggingface.co/datasets/owner')
+                assert await dialog.get_by_role('button', name='Open in Loupe', exact=True).count() == 0
                 await source.fill('javascript:alert(1)')
                 assert await page.locator('#dataset-source-link').inner_text() == ''
                 assert not errors
