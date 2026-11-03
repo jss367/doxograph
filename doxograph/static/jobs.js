@@ -20,7 +20,9 @@ const pageImports = (() => {
     freeze() { frozen = true; },
     resume() { frozen = false; },
     referencesFailed() { failedReferences = true; },
-    referencesSubmitted() { if (!$('refs').value.trim()) failedReferences = false; },
+    // An acknowledgment clears failure even if unknown lines remain. Text
+    // edited during the request was not submitted and still needs protection.
+    referencesSubmitted(unchanged) { failedReferences = !unchanged && Boolean($('refs').value.trim()); },
     async run(path, options) {
       if (frozen) throw new Error('Wait for quitting to finish before adding papers.');
       const transfer = api(path, options);
@@ -203,8 +205,9 @@ async function addReferences() {
   // workspace it was submitted in, as do the references it would clear.
   if (workspace !== workspaceClient.workspaceId) return;
   const unknown = result.unknown || [];
-  if ($('refs').value.trim() === text) $('refs').value = unknown.join('\n');
-  pageImports.referencesSubmitted();
+  const unchanged = $('refs').value.trim() === text;
+  if (unchanged) $('refs').value = unknown.join('\n');
+  pageImports.referencesSubmitted(unchanged);
   $('import-status').hidden = !result.queued;
   if (result.queued) $('import-status').textContent =
     `Import started for ${result.queued} ${result.queued === 1 ? 'paper' : 'papers'}. Progress appears in the notifications.`;
