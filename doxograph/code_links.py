@@ -1,6 +1,7 @@
 """Links to a paper's code: where its repository is, as a list of web addresses."""
 
 import re
+from ipaddress import IPv6Address
 from urllib.parse import SplitResult, urlsplit
 
 MAX_LINKS = 20
@@ -43,9 +44,13 @@ def normalize(values: list[str]) -> list[str]:
             host = parts.hostname or ""
             # Accessing hostname does not validate a numeric/ranged port.
             identity = _identity(parts)
+            valid_host = "." in host
+            if ":" in host:
+                IPv6Address(host)
+                valid_host = True
         except ValueError:
-            parts, host = None, ""
-        if (parts is None or parts.scheme.lower() not in ("http", "https") or "." not in host
+            parts, valid_host = None, False
+        if (parts is None or parts.scheme.lower() not in ("http", "https") or not valid_host
                 or any(c.isspace() for c in link) or len(link) > MAX_LENGTH):
             raise ValueError(f"{value.strip()!r} is not a web address. Code links start with https://.")
         links.setdefault(identity, link)
