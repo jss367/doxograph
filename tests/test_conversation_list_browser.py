@@ -233,8 +233,6 @@ def test_lost_active_archive_response_selects_a_usable_conversation(engine, othe
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('other_active', [True, False], ids=['other-active', 'last-active'])
 def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive_views(engine, other_active):
     async def scenario(url):

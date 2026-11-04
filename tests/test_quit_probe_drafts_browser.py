@@ -10,7 +10,6 @@ from browser_support import browser_session, run_browser
 from doxograph import config
 from test_ask_browser import _server
 from test_paper_note_revert_browser import no_models as no_models, open_note, seed
-from test_workspace_notes_browser import open_notes
 
 
 @pytest.mark.browser
@@ -48,10 +47,6 @@ def test_typing_during_quit_probe_needs_a_final_flush(engine, editor, finish):
                 if editor == 'paper':
                     await open_note(page, url)
                     field, path, key = 'textarea[data-note="paper"]', '/api/papers/paper', 'notes'
-                elif editor == 'workspace':
-                    await page.goto(url)
-                    await open_notes(page)
-                    field, path, key = '#workspace-notes', '/api/notebook', 'notes'
                 elif editor == 'dataset':
                     item = httpx.post(url + '/api/datasets', json={'name': 'Synthetic quit control'}).json()
                     await page.goto(url + '/?dataset=' + item['id'])
