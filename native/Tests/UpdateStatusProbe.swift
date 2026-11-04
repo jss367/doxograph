@@ -64,58 +64,56 @@ private enum UpdateStatusProbe {
             delegate.finishUpdate(.success(Updater.Outcome(changes: "Synthetic native change", appRebuilt: true)), ownsServer: true)
             precondition(!delegate.updating && pendingPrompts.count == 1)
         }
-        func later() {
+        func answer(_ response: NSApplication.ModalResponse) {
             precondition(pendingPrompts.count == 1)
-            pendingPrompts.removeFirst()(.alertSecondButtonReturn)
+            pendingPrompts.removeFirst()(response)
+        }
+        /// The open prompt admits no update, by menu or by direct call.
+        func expectUpdateBlocked() {
+            let starts = updateStarts
+            precondition(delegate.relaunchOffered)
+            precondition(!delegate.validateMenuItem(updateMenu), "Update must be disabled under a relaunch prompt")
+            delegate.updateDoxograph(nil)
+            precondition(updateStarts == starts && !delegate.updating, "An update started under a relaunch prompt")
+            precondition(window.status.stringValue == "Previous update finished")
         }
 
         finish(ready: true)
-        later()
-        precondition(window.statusBackground.isHidden, "Later should hide finished progress when ready and idle")
-        print("PASS: Later hides completed progress when ready and idle")
+        expectUpdateBlocked()
+        answer(.alertSecondButtonReturn)
+        precondition(!delegate.relaunchOffered)
+        precondition(window.statusBackground.isHidden, "Later should hide finished progress when ready")
+        precondition(delegate.validateMenuItem(updateMenu), "Later should allow another update")
+        delegate.updateDoxograph(nil) // Actual admission/status logic; command dispatch intercepted.
+        precondition(delegate.updating && updateStarts == 1)
+        precondition(window.status.stringValue == "Checking for updates…")
+        delegate.updating = false
+        print("PASS: Update is blocked under a relaunch prompt and admitted after Later")
 
         finish(ready: false)
-        later()
+        expectUpdateBlocked()
+        answer(.alertSecondButtonReturn)
         precondition(!window.statusBackground.isHidden, "Later must retain startup status when not ready")
         print("PASS: Later keeps status when server is not ready")
 
-        finish(ready: true)
-        precondition(delegate.validateMenuItem(updateMenu), "Completed update should allow another update")
-        delegate.updateDoxograph(nil) // Actual admission/status logic; command dispatch intercepted.
-        precondition(delegate.updating && updateStarts == 1)
-        precondition(!delegate.validateMenuItem(updateMenu))
-        delegate.updateDoxograph(nil)
-        precondition(updateStarts == 1, "An active update must reject a duplicate start")
-        later() // The older sheet is dismissed after the newer update starts.
-        precondition(delegate.updating)
-        precondition(!window.statusBackground.isHidden, "Old Later callback hid a newer update's progress")
-        precondition(window.status.stringValue == "Checking for updates…")
-        precondition(!delegate.validateMenuItem(updateMenu))
-        print("PASS: old Later callback preserves newer update progress and menu guard")
-
-        delegate.updating = false
         precondition(serverStarts == 0, "No server was failed, so nothing should have started one")
         delegate.serverFailed = true
         finish(ready: false)
-        delegate.updateDoxograph(nil)
-        precondition(delegate.updating && updateStarts == 2)
-        later()
-        precondition(serverStarts == 0, "Old Later callback started the server during a newer update")
-        delegate.finishUpdate(.failure(.step("pip install", "")), ownsServer: false)
-        precondition(serverStarts == 1, "A failed newer update must make the deferred start")
-        pendingPrompts.removeAll() // The failure's warning sheet.
-        delegate.updating = true
-        delegate.finishUpdate(.failure(.step("pip install", "")), ownsServer: false)
-        precondition(serverStarts == 1, "A deferred start must be made only once")
-        pendingPrompts.removeAll()
-        print("PASS: old Later callback defers a failed server's restart to the newer update")
-
+        expectUpdateBlocked()
+        precondition(serverStarts == 0, "The retry waits for the prompt's answer")
+        answer(.alertSecondButtonReturn)
+        precondition(serverStarts == 1, "Later must retry a failed server start at once")
+        precondition(delegate.validateMenuItem(updateMenu), "A failed start leaves Update as the way out")
         delegate.serverFailed = false
-        delegate.updating = false
+        print("PASS: Later retries a failed server start immediately")
+
         finish(ready: true)
-        pendingPrompts.removeFirst()(.alertFirstButtonReturn)
+        expectUpdateBlocked()
+        answer(.alertFirstButtonReturn)
+        precondition(!delegate.relaunchOffered && !delegate.updating)
         precondition(delegate.relaunchAfterQuit && terminationRequests == 1)
-        print("PASS: Relaunch intent retained with termination intercepted")
+        precondition(delegate.validateMenuItem(updateMenu), "A Relaunch whose quit is declined should allow another update")
+        print("PASS: Relaunch requests termination with no update running, then admits updates again")
         print("PASS: no real updater, download, installation, server or relaunch invoked")
     }
 }

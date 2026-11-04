@@ -15,7 +15,7 @@ for source in (here/'Sources').glob('*.swift'):
         continue
     text=source.read_text()
     if source.name=='AppDelegate.swift':
-        for field in ('window','ready','serverFailed','updating','relaunchAfterQuit'):
+        for field in ('window','ready','serverFailed','updating','relaunchOffered','relaunchAfterQuit'):
             text=text.replace('private let '+field+' =','let '+field+' =').replace('private var '+field+' =','var '+field+' =')
         text=text.replace('private func finishUpdate(', 'func finishUpdate(')
         dispatch='''        DispatchQueue.global().async { [weak self] in

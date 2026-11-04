@@ -12,9 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var pendingDrops: [URL] = []
     /// An update is in progress; a second one must wait for it.
     private var updating = false
-    /// A relaunch prompt's Later found the server failed while a newer update
-    /// was running, and left the retry to that update.
-    private var startAfterUpdate = false
+    /// A relaunch prompt is open, and no new update may start until it is
+    /// answered. The prompt is a sheet, not app-modal, so the Update menu would
+    /// otherwise stay live under it, and a Relaunch answered during a newer
+    /// update would quit, and relaunch from, a bundle half rebuilt. Kept apart
+    /// from `updating`, which the quit reads as an update under way and asks
+    /// about as one.
+    private var relaunchOffered = false
     /// The bundle was replaced by an update, and the quit under way should be
     /// followed by a launch of the new one.
     private var relaunchAfterQuit = false
@@ -130,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// restart: the update still happens, and the alert says the terminal has to
     /// do the rest.
     @objc func updateDoxograph(_ sender: Any?) {
-        guard !updating else { return }
+        guard !updating, !relaunchOffered else { return }
         updating = true
         window.showStatus("Checking for updates…")
         // Finding the command can fall back to a login shell, which is slow.
@@ -150,7 +154,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard let command = command ?? commandForUpdate() else {
             updating = false
             if ready { window.hideStatus() }
-            startDeferredServer()
             return
         }
         guard let repository = Updater.repository(near: command)
@@ -158,7 +161,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             ?? chooseRepository() else {
             updating = false
             if ready { window.hideStatus() }
-            startDeferredServer()
             return
         }
         Updater.remember(repository)
@@ -168,17 +170,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     completion: { [weak self] result in self?.finishUpdate(result, ownsServer: ownsServer) })
     }
 
-    /// Report the update result and offer a relaunch after replacing the bundle.
-    /// A deferred response must preserve any newer update's progress.
     private func finishUpdate(_ result: Result<Updater.Outcome, Updater.Failure>, ownsServer: Bool) {
         updating = false
-        // Every success below retries a failed start, or offers a Later that does.
-        if case .success = result { startAfterUpdate = false }
         switch result {
         case .failure(.step(let name, let output)):
             if ready { window.hideStatus() }
             warn("Update failed at \(name)", output.isEmpty ? "It printed nothing." : output)
-            startDeferredServer()
 
         case .success(let outcome) where outcome.changes.isEmpty:
             if ready { window.hideStatus() }
@@ -198,18 +195,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.informativeText = ownsServer ? outcome.changes : outcome.changes + Self.adoptedServerNote
             alert.addButton(withTitle: "Relaunch")
             alert.addButton(withTitle: "Later")
+            // Either answer is given with no update running, since none may
+            // start while this is open, so neither has a newer one to defer to.
             let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
                 guard let self else { return }
+                self.relaunchOffered = false
                 guard response == .alertFirstButtonReturn else {
-                    if self.ready && !self.updating { self.window.hideStatus() }
+                    if self.ready { self.window.hideStatus() }
                     // The old bundle keeps running, but the Python is new, and a
-                    // server that failed to start may start now. Not while a newer
-                    // update is changing the checkout, though: that update captured
-                    // `ownsServer` before this start and would mistake the server
-                    // for an adopted one, so the retry waits for it to finish.
-                    if self.serverFailed {
-                        if self.updating { self.startAfterUpdate = true } else { self.startServer() }
-                    }
+                    // server that failed to start may start now.
+                    if self.serverFailed { self.startServer() }
                     return
                 }
                 self.relaunchAfterQuit = true
@@ -218,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Run modally from the updater's main-queue callback, this alert
             // was seen to go blank until a screenshot redrew it. A sheet on the
             // window avoids that path, as `inform` and `warn` already do.
+            relaunchOffered = true
             window.present(alert, then: handle)
 
         case .success(let outcome):
@@ -259,14 +255,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     onFailure: { [weak self] failure in self?.report(failure) })
             }
         }
-    }
-
-    /// Retry the start a stale Later deferred, for the ways an update ends
-    /// without retrying it itself.
-    private func startDeferredServer() {
-        guard startAfterUpdate else { return }
-        startAfterUpdate = false
-        if serverFailed { startServer() }
     }
 
     /// Ask where the checkout is, when the command was not installed from one
@@ -826,8 +814,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(addPapers(_:)), #selector(openCommandPalette(_:)): return ready
         // Not while the server is still coming up, since the restart after
         // the update needs to know whether it is owned. A start that failed is
-        // settled, and updating is then the way out.
-        case #selector(updateDoxograph(_:)): return (ready || serverFailed) && !updating
+        // settled, and updating is then the way out. Not under an unanswered
+        // relaunch prompt either, whose Relaunch must not land mid-update.
+        case #selector(updateDoxograph(_:)): return (ready || serverFailed) && !updating && !relaunchOffered
         default: return true
         }
     }
