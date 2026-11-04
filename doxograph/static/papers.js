@@ -336,17 +336,20 @@ function paperTextEdit(paper, field) {
 let paperTextRequest = 0;
 async function editPaperText(key, field) {
   const request = ++paperTextRequest;
+  const dialog = askGeneration, navigation = navigationVersion();
   const workspace = workspaceClient.workspaceId;
+  const current = () => request === paperTextRequest && workspace === workspaceClient.workspaceId
+    && dialog === askGeneration && navigation === navigationVersion();
   let snapshot;
   try {
     snapshot = await api(`/api/papers/${encodeURIComponent(key)}?with_revision=true`, {
       headers: {'X-Doxograph-Workspace': workspace},
     });
   } catch (error) {
-    if (request === paperTextRequest && workspace === workspaceClient.workspaceId) toast(`Could not load the text: ${error.message}`, {tone: 'warn'});
+    if (current()) toast(`Could not load the text: ${error.message}`, {tone: 'warn'});
     return;
   }
-  if (request !== paperTextRequest || workspace !== workspaceClient.workspaceId) return;
+  if (!current()) return;
   const paper = snapshot.paper;
   const answer = await askDialog({
     title: `${PAPER_TEXT[field].heading} for ${paper.title || key}`,

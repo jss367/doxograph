@@ -167,7 +167,8 @@ def test_stale_overview_dialog_keeps_draft_and_newer_saved_text(engine, field):
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('failed', [False, True])
-def test_superseded_text_snapshot_does_not_replace_draft(engine, failed):
+@pytest.mark.parametrize('newer', ['text', 'title', 'closed-title', 'navigation'])
+def test_superseded_text_snapshot_does_not_replace_draft(engine, failed, newer):
     """A delayed snapshot or load error cannot disturb the newer editor."""
     import asyncio
     from playwright.async_api import expect
@@ -201,14 +202,30 @@ def test_superseded_text_snapshot_does_not_replace_draft(engine, failed):
                 await page.route('**/api/papers/*?with_revision=true', snapshot)
                 await page.evaluate("() => { window.olderEditDone = false; void editPaperText('" + KEY + "', 'summary').then(() => { window.olderEditDone = true; }); }")
                 await asyncio.wait_for(pending.wait(), timeout=5)
-                await page.locator('.paper-relevance [data-act="edit-paper-text"]').click()
-                await expect(page.locator('#ask-lines')).to_have_value('Relevance')
-                await page.locator('#ask-lines').fill('Keep this draft')
+                if newer == 'text':
+                    await page.locator('.paper-relevance [data-act="edit-paper-text"]').click()
+                    await expect(page.locator('#ask-lines')).to_have_value('Relevance')
+                    await page.locator('#ask-lines').fill('Keep this draft')
+                elif newer in ('title', 'closed-title'):
+                    await page.evaluate("() => { void editPaperTitle('" + KEY + "'); }")
+                    await page.locator('#ask-input').fill('Keep this title draft')
+                    if newer == 'closed-title':
+                        await page.locator('#ask-cancel').click()
+                else:
+                    # Even a round trip to the same route retires the request.
+                    await page.evaluate("() => { V.paper = null; syncHash(true); V.paper = '" + KEY + "'; syncHash(true); }")
                 release.set()
                 await page.wait_for_function('window.olderEditDone')
-                await expect(page.locator('#ask-title')).to_have_text('Why it matters for Study')
-                await expect(page.locator('#ask-lines')).to_have_value('Keep this draft')
+                if newer == 'text':
+                    await expect(page.locator('#ask-title')).to_have_text('Why it matters for Study')
+                    await expect(page.locator('#ask-lines')).to_have_value('Keep this draft')
+                elif newer == 'title':
+                    await expect(page.locator('#ask-title')).to_have_text('Edit paper title')
+                    await expect(page.locator('#ask-input')).to_have_value('Keep this title draft')
+                else:
+                    await expect(page.locator('#ask')).to_be_hidden()
                 await expect(page.get_by_text('Could not load the text: Superseded load failed', exact=True)).to_have_count(0)
-                await page.locator('#ask-cancel').click()
+                if newer in ('text', 'title'):
+                    await page.locator('#ask-cancel').click()
 
     run_browser(scenario())
