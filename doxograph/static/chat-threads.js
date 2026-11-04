@@ -11,7 +11,7 @@ const ChatThreads = (() => {
     byte => byte.toString(16).padStart(2, '0')).join('');
 
   function agentLabel(agent) {
-    if (agent === 'claude_code') return 'Claude subscription';
+    if (agent === 'claude_code') return `Claude subscription · ${S.claude_code_model}`;
     if (agent === 'codex') return `ChatGPT subscription · ${S.codex_model || 'Codex default'}`;
     const provider = S.provider || 'anthropic';
     const name = $('ai-provider').querySelector(`option[value="${provider}"]`)?.textContent || provider;

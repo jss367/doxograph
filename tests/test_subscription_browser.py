@@ -639,6 +639,8 @@ def test_library_agent_requires_explicit_provider_choice_when_settings_choose_an
             await page.locator('#btn-agent:enabled').click()
             assert await page.locator('#agent-agent option').evaluate_all('options => options.map(o => o.value)') \
                 == ['api', 'claude_code', 'codex']
+            assert await page.locator('#agent-agent option[value="claude_code"]').text_content() \
+                == f'Claude subscription · {config.MODEL}'
             assert await page.locator('#agent-agent').input_value() == 'api'
             assert await page.locator('#agent-send').is_disabled()
             await page.locator('#agent-agent').select_option('claude_code')
