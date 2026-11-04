@@ -50,6 +50,7 @@ function renderAgentChat(chat) {
   $('agent-question').disabled = chat.busy || chat.archiving || chat.archived;
   renderAskScope(chat);
   syncAgentChatControls();
+  syncAskContext();
 }
 
 function boundedNoteText(text, limit, label) {
@@ -220,7 +221,6 @@ function scopeProblem(chat) {
 function renderAskScope(chat) {
   const scope = chat.scope;
   const locked = chat.archived || chat.archiving;
-  $('library-agent-title').textContent = scope.mode === 'library' ? 'Ask the library' : 'Ask about sources';
   const papers = catalog().papers;
   const chips = scope.papers.map(key => {
     const paper = papers.find(p => p.key === key);
@@ -245,28 +245,92 @@ function renderAskScope(chat) {
     : scope.mode === 'selected' && scope.papers.length === 1 && !papers.find(p => p.key === scope.papers[0])?.has_pdf && !catalog().claims.some(c => c.paper === scope.papers[0])
       ? 'Uses available paper metadata, such as its title, abstract, and summary. Full text, extracted claims, and page images are unavailable.'
       : 'Retrieves paper metadata, claims, and text passages as needed. Figures and page images are unavailable; a search is not an exhaustive review.';
-  const starters = scope.focus?.some(f => f.claim) ? ['What supports this claim?', 'What qualifications does the paper give?', 'Find conflicting evidence']
+  const focusedPapers = new Set((scope.focus || []).filter(f => f.claim).map(f => f.paper));
+  const starters = focusedPapers.size > 1 ? ['What would reconcile these?', 'Which side has the stronger evidence?', 'What experiment would settle this?']
+    : scope.focus?.some(f => f.claim) ? ['What supports this claim?', 'What qualifications does the paper give?', 'Find conflicting evidence']
     : scope.mode === 'library' ? ['What does this library say about…?', 'What remains unresolved?']
     : scope.papers.length > 1 ? ['Compare methods', 'Where do their findings differ?'] : ['Explain the main result', 'What are the limitations?'];
   $('agent-starters').innerHTML = chat.messages.length ? '' : starters.map(text => `<button type="button" data-starter="${esc(text)}" ${chat.busy ? 'disabled' : ''}>${esc(text)}</button>`).join('');
 }
 let askOpener = null, askOpenerSelector = '';
-async function openAsk(scope, opener = document.activeElement) {
+// Whether the pane was open is remembered in this browser, like its width, so
+// a reload or a relaunch brings the conversation back beside the library.
+const ASK_OPEN_KEY = 'doxograph-ask-open';
+function rememberAskOpen(open) {
+  try { if (open) localStorage.setItem(ASK_OPEN_KEY, '1'); else localStorage.removeItem(ASK_OPEN_KEY); }
+  catch (error) { /* the pane keeps its state for this session */ }
+}
+function askWasOpen() {
+  try { return localStorage.getItem(ASK_OPEN_KEY) === '1'; } catch (error) { return false; }
+}
+// Called once the workspace and provider state are in, from `boot`: the pane
+// is put back where it was, without taking the keyboard from the page.
+function restoreAsk() {
+  if (askWasOpen() && $('library-agent').hidden) openAsk(null, document.body, {focus: false});
+}
+
+// What the reader is looking at, as sources for a question: the paper being
+// read, the findings page, or nothing in particular, which is the library.
+function askContext() {
+  if (V.view === 'claims' && V.paper) {
+    const paper = S.papers.find(p => p.key === V.paper);
+    if (paper) return {kind: 'paper', label: paper.title || paper.key, scope: {mode: 'paper', papers: [paper.key], focus: []}};
+  }
+  if (V.view === 'findings') return {kind: 'findings', label: 'Findings', scope: {mode: 'library', papers: [], focus: []}};
+  return {kind: 'library', label: 'Whole library', scope: {mode: 'library', papers: [], focus: []}};
+}
+function scopeMatches(scope, context) {
+  if (context.scope.mode === 'library') return scope.mode === 'library';
+  return scope.mode === 'paper' && scope.papers.length === 1 && scope.papers[0] === context.scope.papers[0];
+}
+// The chip under the title: where the reader is, and one click to ask about
+// it. Drawn on every redraw of the page, so it follows the reader around.
+function syncAskContext() {
+  const element = $('agent-context');
+  const chat = activeAgentChat();
+  if (!chat || $('library-agent').hidden || agentChats.workspace !== workspaceClient.workspaceId) { element.hidden = true; return; }
+  const context = askContext();
+  const on = scopeMatches(chat.scope, context);
+  const locked = chat.archived || chat.archiving;
+  element.hidden = false;
+  // Keep the control in place: a background redraw must not take its focus.
+  if (!element.querySelector('[data-ask-context]')) {
+    element.innerHTML = '<span></span><button type="button" class="chip" data-ask-context=""></button><span class="hint">· click to ask about it</span>';
+  }
+  const [label, chip, hint] = element.children;
+  label.textContent = on ? 'Asking about' : 'Looking at';
+  chip.textContent = context.label;
+  chip.title = context.label;
+  chip.dataset.askContext = context.kind;
+  chip.classList.toggle('on', on);
+  chip.disabled = on || locked;
+  hint.hidden = on;
+}
+$('agent-context').addEventListener('click', event => {
+  if (!event.target.closest('[data-ask-context]')) return;
+  changeAskScope(askContext().scope).then(() => $('agent-question').focus());
+});
+async function openAsk(scope, opener = document.activeElement, {focus = true} = {}) {
   if (!$('library-agent').contains(opener)) {
     askOpener = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+    const topic = askOpener?.closest('.ftopic')?.dataset.topic;
     askOpenerSelector = askOpener?.id ? `#${CSS.escape(askOpener.id)}`
       : askOpener?.dataset.askClaim ? `[data-ask-claim="${CSS.escape(askOpener.dataset.askClaim)}"][data-paper="${CSS.escape(askOpener.dataset.paper)}"]`
-      : askOpener?.dataset.paperChat ? `[data-paper-chat="${CSS.escape(askOpener.dataset.paperChat)}"]` : '';
+      : askOpener?.dataset.paperChat ? `[data-paper-chat="${CSS.escape(askOpener.dataset.paperChat)}"]`
+      : askOpener?.dataset.askFinding && topic
+        ? `.ftopic[data-topic="${CSS.escape(topic)}"] [data-ask-kind="${CSS.escape(askOpener.dataset.askKind)}"][data-ask-finding="${CSS.escape(askOpener.dataset.askFinding)}"]` : '';
   }
   rememberAskCatalog();
   const opening = agentChats.open(workspaceClient.workspaceId, null, scope ? {fresh: true, scope} : {});
   $('library-agent').hidden = false;
   document.body.classList.add('agent-open');
   $('btn-agent').setAttribute('aria-expanded', 'true');
+  rememberAskOpen(true);
   fitAskPane();
   syncAskWorkspace();
-  $('agent-question').focus();
+  if (focus) $('agent-question').focus();
   await opening;
+  syncAskContext();
 }
 function syncAskWorkspace() {
   const owner = agentChats.workspace;
@@ -277,6 +341,7 @@ function closeAsk() {
   const restoreFocus = $('library-agent').contains(document.activeElement);
   $('library-agent').hidden = true;
   document.body.classList.remove('agent-open');
+  rememberAskOpen(false);
   fitAskPane();
   $('btn-agent').setAttribute('aria-expanded', 'false');
   if (restoreFocus) {
@@ -336,6 +401,15 @@ $('agent-starters').addEventListener('click', async event => {
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-ask-claim]');
   if (button) openAsk({mode:'paper', papers:[button.dataset.paper], focus:[{paper:button.dataset.paper, claim:button.dataset.askClaim}]}, button);
+  // A tension or agreement: its claims in focus, its papers as the sources.
+  const finding = event.target.closest('[data-ask-finding]');
+  if (finding) {
+    const rows = finding.dataset.askKind === 'agreement' ? (S.agreements || []) : (S.tensions || []);
+    const row = rows.find(r => r.id === finding.dataset.askFinding);
+    if (!row) return;
+    const papers = [...new Set(row.claims.map(c => c.paper))];
+    openAsk({mode: papers.length === 1 ? 'paper' : 'selected', papers, focus: row.claims.map(c => ({paper: c.paper, claim: c.id}))}, finding);
+  }
 });
 $('ask-selection').addEventListener('click', event => {
   const selection = ResearchTools.selection();
@@ -457,3 +531,7 @@ function evidenceDetails(message) {
   }
   return details;
 }
+
+// boot can finish while this later script is still being fetched. The boot
+// hook handles the other ordering; restoreAsk is idempotent once open.
+if (typeof libraryInitialized !== 'undefined' && libraryInitialized) restoreAsk();

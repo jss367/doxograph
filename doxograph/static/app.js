@@ -762,6 +762,7 @@ function render() {
   ResearchTools.sync();
   WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
+  if (typeof syncAskContext === 'function') syncAskContext();
 }
 
 // Whether something is being typed into the content pane. A poll redrawing it
@@ -799,6 +800,7 @@ function renderAll() {
   ResearchTools.sync();
   WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
+  if (typeof syncAskContext === 'function') syncAskContext();
   syncHash();
 }
 
@@ -1684,6 +1686,7 @@ async function updateFromPoll() {
   ResearchTools.sync();
   WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
+  if (typeof syncAskContext === 'function') syncAskContext();
 }
 
 async function boot() {
@@ -1720,6 +1723,7 @@ async function boot() {
   // New conversations need both the final workspace and initial provider state.
   // AI-off setup help remains accessible once that state is loaded.
   $('btn-agent').disabled = false;
+  if (typeof restoreAsk === 'function') restoreAsk();
   $('kind').innerHTML = '<option value="">every kind</option>'
     + S.kinds.map((k) => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
   // A filter the URL named that the corpus does not have is already gone: the

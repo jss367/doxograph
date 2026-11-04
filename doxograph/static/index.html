@@ -26,7 +26,7 @@
     <button type="button" id="btn-findings" title="What the papers hold on each topic, where they agree, and where they disagree">Findings</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
-    <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask questions across every paper in this library">Ask the library</button>
+    <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask about the paper, the findings, or the whole library; the pane stays open while you read">Ask</button>
     <button type="button" id="btn-export">Export HTML</button>
     <details id="workspace-actions" class="action-disclosure">
       <summary aria-label="More workspace actions" title="More workspace actions">•••</summary>
@@ -472,10 +472,14 @@
       <div id="research-body"></div>
     </section>
   </section>
+  <div id="ask-resize" role="separator" aria-orientation="vertical" tabindex="0"
+       aria-label="Width of the Ask pane"
+       title="Drag to resize the Ask pane — double-click to put it back" hidden></div>
   <aside id="library-agent" class="paper-chat" hidden aria-labelledby="library-agent-title">
-    <div class="row"><h2 id="library-agent-title">Ask the library</h2>
-      <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close library agent">×</button></div>
+    <div class="row"><h2 id="library-agent-title">Ask</h2>
+      <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close Ask">×</button></div>
     <p class="hint" id="agent-workspace"></p>
+    <div id="agent-context" class="agent-context" hidden></div>
     <details class="agent-guidance"><summary>About this conversation</summary>
       <p class="hint">Ask about papers and claims in this workspace, or ask Claude or Codex to add, remove, or replace paper labels based on their content. Your Doxograph notes stay private.
         Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>

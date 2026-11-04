@@ -206,12 +206,21 @@ apply, including the original paper in paper chat.
 
 ## Ask the library
 
-**Ask the library** opens a pane on the right and resumes its current conversation.
-You can browse papers, read PDFs, and edit claims while the agent answers. Close
-the pane and reopen it to return to the same conversation and draft. On narrow
+**Ask**, in the header, opens a pane on the right and resumes its current
+conversation. You can browse papers, read PDFs, edit claims, and read the
+findings while the agent answers; the pane stays where it is across pages and
+comes back after a reload. Drag its left edge to resize it, or give the divider
+focus and use the arrow keys; Home or a double-click puts it back. On narrow
 windows, or when a wide sidebar leaves too little room to read and edit, the
 conversation docks along the bottom. The workspace named in the
 pane owns the conversation, even while you browse another workspace.
+
+Under the title, **Looking at** names what is on screen: the paper being read,
+the findings, or the whole library. Click it to make that the next question's
+sources; when the conversation already has answers from other sources, that
+starts a new conversation and carries the draft. On the findings page, **Ask
+about this** on an agreement or tension opens the pane with its claims in focus
+and its papers as the sources.
 Choose **Search the rest of the library** to expand an existing selection, or use
 **New conversation** to start another thread with the displayed scope. Library
 and multiple-paper retrieval require **Claude subscription (Claude Code)** or

@@ -33,6 +33,8 @@ function findingRow(row, kind) {
   if (row.stale || row.status !== 'confirmed') actions.push(`<button type="button" data-act="${act}" ${ref} data-status="confirmed">Confirm</button>`);
   if (row.stale || row.status !== 'dismissed') actions.push(`<button type="button" data-act="${act}" ${ref} data-status="dismissed">Dismiss</button>`);
   if (row.status !== 'open') actions.push(`<button type="button" data-act="${act}" ${ref} data-status="open">Reopen</button>`);
+  actions.push(`<button type="button" data-ask-finding="${esc(row.id)}" data-ask-kind="${esc(kind)}" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'}
+    title="Ask about these claims, with their papers as the sources">Ask about this</button>`);
   return `<details class="frow ${esc(kind)} ${esc(row.status)}${row.stale ? ' is-stale' : ''}" data-finding="${esc(row.id)}"${open ? ' open' : ''}>
     <summary>
       <span class="ftag ${esc(kind)}">${esc(kind === 'tension' ? (row.kind || 'tension') : 'agreement')}</span>
