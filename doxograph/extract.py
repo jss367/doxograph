@@ -718,8 +718,17 @@ def _merge_extraction(key: str, payload: dict[str, Any], response: ModelResponse
     # `working` is where the ids were allocated; carry the high-water mark back
     # so a later hand-written claim cannot reuse one of them.
     paper["claim_seq"] = working.get("claim_seq", paper.get("claim_seq", 0))
-    paper["summary"] = (payload.get("summary") or paper.get("summary") or "").strip()
-    paper["relevance"] = (payload.get("relevance") or paper.get("relevance") or "").strip()
+    # The model writes the summary and relevance first and the reader may
+    # rewrite them. Text that no longer matches what the model last wrote is
+    # the reader's, and a re-read keeps it. A paper read before the model's
+    # text was recorded has only the model's on file.
+    written = {}
+    for field in ("summary", "relevance"):
+        current = (paper.get(field) or "").strip()
+        model = (paper.get("extraction") or {}).get(field, current)
+        written[field] = (payload.get(field) or "").strip() or model
+        if not current or current == model:
+            paper[field] = (payload.get(field) or "").strip() or current
 
     used_tags = {t for claim in paper["claims"] for t in claim["tags"]}
     proposed = {}
@@ -746,6 +755,7 @@ def _merge_extraction(key: str, payload: dict[str, Any], response: ModelResponse
             "cache_creation_input_tokens": usage.cache_creation_input_tokens,
             "cache_read_input_tokens": usage.cache_read_input_tokens,
         } if usage is not None else None,
+        **written,
     }
     store.refresh_status(paper)
     store.save_paper(paper)

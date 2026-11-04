@@ -311,13 +311,53 @@ function paperOverview(paper) {
     <div class="paper-reading-progress"><span class="who">Reading progress</span>
       <p data-paper-progress="${esc(paper.key)}">${esc(paperReadingProgress(paper.key))}</p></div>
     ${(paper.labels || []).length ? `<div class="labels">${paper.labels.map(labelChip).join('')}</div>` : ''}
-    <div class="paper-summary"><h4>Summary</h4>
+    <div class="paper-summary"><h4>Summary ${paperTextEdit(paper, 'summary')}</h4>
       ${paper.summary ? `<p>${esc(paper.summary)}</p>` : '<p class="hint">No summary yet. You can read the paper and add your own notes.</p>'}</div>
-    ${paper.relevance ? `<div class="paper-relevance"><h4>Why it's here</h4><p>${esc(paper.relevance)}</p></div>` : ''}
+    <div class="paper-relevance"><h4>Why it matters ${paperTextEdit(paper, 'relevance')}</h4>
+      ${paper.relevance ? `<p>${esc(paper.relevance)}</p>` : '<p class="hint">Not written yet.</p>'}</div>
     ${paperNote(paper.key)}
     ${proposedPanel(paper.key)}
     ${paperCode(paper)}
   </section>`;
+}
+
+const PAPER_TEXT = {
+  summary: {heading: 'Summary', placeholder: 'What the paper does and finds.'},
+  relevance: {heading: 'Why it matters', placeholder: 'Why this paper matters to your research.'},
+};
+
+function paperTextEdit(paper, field) {
+  return `<button type="button" class="paper-text-edit" data-act="edit-paper-text" data-field="${field}"
+    data-paper="${esc(paper.key)}" aria-label="Edit ${PAPER_TEXT[field].heading.toLowerCase()}">edit</button>`;
+}
+
+// The model writes the summary and why it matters when it reads the paper;
+// the reader can rewrite either, and a later re-read keeps what they wrote.
+async function editPaperText(key, field) {
+  const paper = S.papers.find((x) => x.key === key);
+  if (!paper) return;
+  const workspace = workspaceClient.workspaceId;
+  const answer = await askDialog({
+    title: `${PAPER_TEXT[field].heading} for ${paper.title || key}`,
+    note: 'Re-reading the paper keeps your version. Clear it to let the next re-read write a new one. '
+      + 'Command-Enter or Ctrl-Enter saves.',
+    input: {multiline: true, placeholder: PAPER_TEXT[field].placeholder, value: paper[field] || ''},
+    ok: 'Save',
+    async onSubmit(text) {
+      if (text.trim() === (paper[field] || '').trim()) return null;
+      try {
+        await api(`/api/papers/${encodeURIComponent(key)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+          body: JSON.stringify({ [field]: text.trim() }),
+        });
+        return null;
+      } catch (error) { return `Could not save the text: ${error.message}`; }
+    },
+  });
+  if (answer === null) return;
+  // As for labels: the overview is part of the paper's header.
+  await refreshAll();
 }
 
 // Only web addresses become links. The server checks what it saves, but a

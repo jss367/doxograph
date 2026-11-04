@@ -140,6 +140,11 @@ notes, and its saved reading progress together in **Paper overview**. The
 overview stays available when the PDF is hidden. Papers without a summary
 or PDF can still be annotated and added to the reading queue.
 
+The model writes the summary and why it matters when it reads the paper.
+Click **edit** beside either to rewrite it. Re-reading the paper replaces
+the model's text and keeps yours; clear your version to let the next re-read
+write a new one.
+
 Use **Read** to open the PDF at your saved page, **Ask about this paper** to
 start a conversation, or **Add to reading queue** to save it for later.
 Once queued, **View reading queue** opens its reading status and bookmarks.
@@ -187,8 +192,8 @@ Failed requests keep the draft for an explicit retry. Removing a paper preserves
 its conversations and saved evidence; repair unavailable sources before another
 question. Saved notes remain independent of their conversations.
 
-Use **Attach files…**, drop files into the chat, or paste an image into the
-question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files
+Use the **+** button in the question field, drop files into the chat, or paste
+an image into the question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files
 (including Markdown, CSV, JSON, and source code) are supported. You can send files
 with or without a typed question, preview images, remove files before sending,
 and download them from saved messages. Up to five files per message, 4 MB per
