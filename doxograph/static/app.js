@@ -954,7 +954,9 @@ function syncPageNav() {
   }
 }
 function openPage(view) {
-  if (V.view !== view) showView(view);
+  // The active page already owns its DOM, including disabled in-flight forms.
+  if (V.view === view) return;
+  showView(view);
   syncHash(true);
   renderAll();
 }
@@ -995,9 +997,9 @@ function openPerson(name) {
 }
 
 // Following a source out of a page view, the way the paper list opens one.
-function followToPaper(paper, claim = null) {
+function followToPaper(paper, claim = null, tag = null) {
   captureOpenEditor(); parkNewClaimForNavigation(paper);
-  V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
+  V.paper = paper; V.view = 'claims'; V.tag = tag; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
   V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
   $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
   scheduleTextSearch(); syncHash(true); renderAll();

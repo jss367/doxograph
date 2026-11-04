@@ -102,10 +102,12 @@ function renderResearch() {
     <button type="button" data-reader-command="btn-retag" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'}>Retag all</button>
     <button type="button" data-reader-command="btn-settings">Settings</button>
     <button type="button" data-reader-command="btn-workspace-rename">Rename workspace</button>
-    <button type="button" class="danger" data-reader-command="btn-workspace-delete">Delete workspace</button>
+    <button type="button" class="danger" data-reader-command="btn-workspace-delete"
+      ${$('btn-workspace-delete').disabled ? 'disabled' : ''} title="${esc($('btn-workspace-delete').title)}">Delete workspace</button>
   </div>
   </div>`;
   $('content').innerHTML = html;
+  setResearchSaving($('research-form'), V.researchSaving);
   if (main) main.scrollTop = scrollTop;
 }
 
@@ -136,10 +138,8 @@ document.addEventListener('click', (event) => {
   const topic = event.target.closest('[data-open-topic]');
   if (!topic) return;
   captureResearchDraft();
-  followToPaper(null);
-  V.tag = topic.dataset.openTopic;
-  syncHash(true);
-  renderAll();
+  // Settle the complete destination before its one history entry is written.
+  followToPaper(null, null, topic.dataset.openTopic);
 });
 
 // Whether the research form on screen differs from what the server holds. The
@@ -160,7 +160,7 @@ function readResearchForm() {
 }
 
 function setResearchSaving(form, busy) {
-  if (!form.isConnected) return;   // a finished save has already left the view
+  if (!form?.isConnected) return;   // a finished save has already left the view
   form.classList.toggle('saving', busy);
   form.querySelectorAll('input, textarea, button').forEach((field) => { field.disabled = busy; });
 }
@@ -195,16 +195,18 @@ async function saveResearch() {
     // Show the error over the form as typed; redrawing from S would put the
     // saved values back and lose the edit that just failed.
     V.error = `Could not save: ${error.message}`;
-    let warn = form.previousElementSibling;
+    const currentForm = $('research-form') || form;
+    let warn = currentForm.previousElementSibling;
     if (!warn || !warn.classList.contains('warn')) {
-      form.insertAdjacentHTML('beforebegin', '<p class="warn"></p>');
-      warn = form.previousElementSibling;
+      currentForm.insertAdjacentHTML('beforebegin', '<p class="warn"></p>');
+      warn = currentForm.previousElementSibling;
     }
     warn.textContent = V.error;
     return;
   } finally {
     V.researchSaving = false;
     setResearchSaving(form, false);
+    if ($('research-form') !== form) setResearchSaving($('research-form'), false);
   }
   showView('claims');       // captures the form on the way out, so clear after
   V.researchDraft = null;
