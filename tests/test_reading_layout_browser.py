@@ -287,6 +287,9 @@ def test_reading_layout_and_library_return(engine, width):
                 await page.locator('#btn-back-library').click()
                 await expect(page.locator('body')).not_to_have_class('reading-paper')
                 await expect(page.locator('#q')).to_have_value('Oversight')
+                # Leaving starts the note's save without waiting for it. Let it
+                # land first, or the paper reopens on the draft still in flight.
+                await page.wait_for_function("!paperNotesSaving() && V.noteDrafts.paper === undefined")
                 await page.locator('#papers li[data-paper="paper"]').click()
                 # Leaving the paper saved the note; it comes back as written.
                 await expect(page.locator('#content .paper-overview .note')).to_contain_text('My unfinished thought.')
