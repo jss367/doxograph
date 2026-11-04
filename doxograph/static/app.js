@@ -1133,7 +1133,7 @@ $('panes').addEventListener('click', async (event) => {
     }
     if (act === 'cancel') { cancelEdit(); return; }
     if (act === 'toggle-claims') { setClaimsDrawer(!claimsDrawerOpen); return; }
-    if (act === 'review-claims') { window.FocusedReview.open(); return; }
+    if (act === 'review-claims') { window.FocusedReview.open('#claims-drawer-bar [data-act="review-claims"]'); return; }
     if (act === 'claims-findings') { openFindings(); return; }
     if (act === 'add-ledger') {
       const rows = $('ledger-rows');

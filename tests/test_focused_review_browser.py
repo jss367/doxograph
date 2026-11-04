@@ -307,3 +307,41 @@ def test_focused_review_drafts_failed_save_missing_pdf_and_workspace(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_focused_review_returns_focus_to_the_claims_drawer(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.', 'reviewed': False})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                dialog = page.locator('#focused-review')
+                review = page.locator('#claims-drawer-bar [data-act="review-claims"]')
+
+                # Opened from the drawer under the PDF, the review hands focus
+                # back to the drawer's button, drawn afresh while it was open,
+                # rather than to the sidebar's, which is hidden in the reader.
+                await expect(page.locator('#btn-focus-review')).to_be_hidden()
+                for leave in ('Escape', 'Exit review'):
+                    await review.click()
+                    await expect(dialog).to_be_visible()
+                    if leave == 'Escape':
+                        await page.keyboard.press('Escape')
+                    else:
+                        await dialog.get_by_role('button', name=leave, exact=True).click()
+                    await expect(dialog).not_to_be_visible()
+                    await expect(review).to_be_focused()
+                assert not errors
+
+    run_browser(scenario())
