@@ -277,6 +277,10 @@ def test_reading_layout_and_library_return(engine, width):
                 await expect(page.locator('#q')).to_be_focused()
                 await page.keyboard.insert_text('Oversight')
                 await ready(page)
+                # The search of the papers' text answers after a debounce, and
+                # its redraw rebuilds the paper header. Landing later, it can
+                # swallow a click on the reopened paper below.
+                await page.wait_for_function("V.textSearch?.q === 'Oversight' && V.textSearch.loading === false")
                 await page.locator('#btn-reader-filters').click()
                 await expect(page.locator('#btn-reader-filters')).to_have_text('Claim filters · active')
                 await page.keyboard.press('/')
@@ -290,7 +294,12 @@ def test_reading_layout_and_library_return(engine, width):
                 # Leaving starts the note's save without waiting for it. Let it
                 # land first, or the paper reopens on the draft still in flight.
                 await page.wait_for_function("!paperNotesSaving() && V.noteDrafts.paper === undefined")
+                # The saved note changes the corpus. Have the poll redraw for it
+                # now, rather than between the press and release of a click.
+                await _poll(page)
                 await page.locator('#papers li[data-paper="paper"]').click()
+                # Opening the PDF changes the reader's hint and shifts the note.
+                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
                 # Leaving the paper saved the note; it comes back as written.
                 await expect(page.locator('#content .paper-overview .note')).to_contain_text('My unfinished thought.')
                 assert store.load_paper('paper')['notes'] == 'My unfinished thought.'

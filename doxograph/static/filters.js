@@ -336,7 +336,12 @@ async function runTextSearch(query, quiet = false) {
   // requests are not guaranteed to come back in the order they went out, and
   // the corpus can have changed under the one still running.
   if (seq !== textSearchSeq || workspace !== workspaceClient.workspaceId) return;
+  // A re-run that found what is already on screen has nothing to draw. The
+  // redraw would rebuild the paper header and list under the pointer, and a
+  // click whose press and release land on different copies is never made.
+  const unchanged = quiet && JSON.stringify(next) === JSON.stringify(V.textSearch);
   V.textSearch = next;
+  if (unchanged) return;
   captureOpenEditor();
   drawSearchProgress();
 }

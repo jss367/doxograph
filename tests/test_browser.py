@@ -5640,6 +5640,38 @@ def test_a_note_keeps_the_cursor_when_an_answer_asked_for_earlier_lands():
 
 
 @pytest.mark.browser
+def test_a_search_asked_again_redraws_only_when_its_answer_changed():
+    """A corpus change asks the papers' text search again. The same answer
+    must leave the pane alone: a redraw between the press and release of a
+    click rebuilds the button under the pointer, and the click is lost."""
+    _paper("paper-a", "Paper A", "recovery")
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#view=claims")
+                await page.locator('#papers [data-paper="paper-a"]').click()
+                await page.fill("#q", "recovery")
+                await page.wait_for_function("V.textSearch?.q === 'recovery' && V.textSearch.loading === false")
+                await page.evaluate("window.header = document.querySelector('#paperhead .paper-actions')")
+
+                await page.evaluate("runTextSearch('recovery', true)")
+                assert await page.evaluate("header === document.querySelector('#paperhead .paper-actions')")
+
+                async def found(route, request):
+                    await route.fulfill(json={"papers": [{"key": "paper-a", "title": "Paper A", "passages": []}],
+                                              "terms": ["recovery"], "next_offset": None})
+
+                await page.route("**/api/search*", found)
+                await page.evaluate("runTextSearch('recovery', true)")
+                assert await page.evaluate("V.textSearch.papers.length") == 1
+                assert await page.evaluate("header !== document.querySelector('#paperhead .paper-actions')")
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_one_note_save_at_a_time_and_it_closes_only_its_own_editor():
     """A slow save must not close the note the reader moved on to write."""
     _paper("paper-a", "Paper A", "recovery")
