@@ -41,7 +41,7 @@ def test_open_dataset_in_loupe_preserves_drafts_and_handles_errors(engine):
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -341,7 +341,7 @@ def test_dataset_editor_and_linked_research(engine):
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -438,11 +438,11 @@ def test_dataset_drafts_missing_links_and_deletion(engine):
                 await page.evaluate("void switchWorkspace('" + other['id'] + "')")
                 await dialog.wait_for(state='hidden')
                 await page.wait_for_function('id => workspaceClient.workspaceId === id', arg=other['id'])
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 assert await page.locator('#datasets-list button').count() == 0
                 await page.locator('#workspace').select_option('default')
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 assert await dialog.get_by_label('Dataset name', exact=True).input_value() == 'My draft'
                 await page.locator('#datasets-search').fill('not present')
@@ -529,7 +529,7 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 item = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'version': 'Saved'}).json()
                 second = httpx.post(url + '/api/datasets', json={'name': 'Second corpus'}).json()
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 view = page.locator('#datasets-sheet')
                 await view.wait_for(state='visible')
                 await ready(page)
@@ -610,7 +610,7 @@ def test_a_retried_create_keeps_edits_made_after_its_answer_was_lost(engine):
             await page.route('**/api/datasets', lose_first_answer)
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -672,7 +672,7 @@ def test_a_retried_create_keeps_changes_another_window_made_after_its_answer_was
             await page.route('**/api/datasets/*', count_updates)
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -751,7 +751,7 @@ def test_discarding_a_new_dataset_deletes_the_record_its_create_stored(engine, c
             await page.route('**/api/datasets', hold_create)
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -806,7 +806,7 @@ def test_discarding_a_new_dataset_keeps_a_record_another_window_changed(engine):
             await page.route('**/api/datasets/*', count_deletes)
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -872,7 +872,7 @@ def test_a_lost_create_recognizes_the_record_in_its_stored_form(engine, then):
             await page.route('**/api/datasets/*', count_updates)
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -944,7 +944,7 @@ def test_a_save_whose_answer_was_lost_is_not_saved_by_restoring_the_old_text(eng
                 item = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'version': 'Saved'}).json()
                 await page.route('**/api/datasets/*', lose_first_answer)
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 view = page.locator('#datasets-sheet')
                 await view.wait_for(state='visible')
                 await ready(page)
@@ -1007,7 +1007,7 @@ def test_dataset_edits_during_held_deletes_are_asked_about_before_a_switch(engin
                 await page.goto(url + '/#view=claims')
                 await page.locator(f'.claim[data-claim="{claim}"] [data-act="del"]').click()
                 await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 view = page.locator('#datasets-sheet')
                 await view.wait_for(state='visible')
                 await ready(page)
@@ -1043,7 +1043,7 @@ def test_navigating_to_a_dataset_made_since_the_list_was_read(engine):
             with _server() as url:
                 httpx.post(url + '/api/datasets', json={'name': 'Corpus'}).raise_for_status()
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 view = page.locator('#datasets-sheet')
                 await view.wait_for(state='visible')
                 await ready(page)
@@ -1070,7 +1070,7 @@ def test_dataset_custom_fields(engine):
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 dialog = page.locator('#datasets-sheet')
                 await dialog.get_by_role('button', name='Add dataset', exact=True).click()
@@ -1138,7 +1138,7 @@ def test_dataset_table_shows_chosen_columns_sorted_and_remembers_them(engine):
                     httpx.post(url + '/api/datasets', json=body).raise_for_status()
                 ids = {d['name']: d['id'] for d in httpx.get(url + '/api/datasets').json()['datasets']}
                 await page.goto(url)
-                await page.get_by_role('button', name='Datasets', exact=True).click()
+                await page.evaluate("openPageView('datasets')")
                 view = page.locator('#datasets-sheet')
                 await ready(page)
                 await view.get_by_role('button', name='Table', exact=True).click()

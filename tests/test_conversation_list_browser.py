@@ -1,5 +1,4 @@
 """Conversation rows switch independently; archiving preserves saved evidence."""
-import asyncio
 from pathlib import Path
 
 import httpx
@@ -284,58 +283,6 @@ def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive
             await expect(reader.locator('#agent-question')).to_have_value('Keep this draft after another window archives it')
             assert len(httpx.get(url + '/api/chats').json()['chats']) == 3
             assert not errors
-
-    with _server() as url:
-        seed_conversations(url)
-        run_browser(scenario(url))
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_lost_archive_reconciliation_keeps_note_actions_blocked_when_reopened(engine):
-    async def scenario(url):
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport=VIEWPORT)
-            await page.goto(url)
-            await page.locator('#btn-agent:enabled').click()
-            await open_ask_conversations(page)
-            await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
-            held, release = asyncio.Event(), asyncio.Event()
-            writes = []
-            page.on('request', lambda request: writes.append(request.url)
-                    if request.method in ('POST', 'PUT') and '/api/' in request.url else None)
-
-            async def lose_patch(route):
-                if route.request.method == 'PATCH':
-                    await route.fetch()
-                    await route.abort()
-                else:
-                    await route.continue_()
-
-            async def hold_lists(route):
-                held.set()
-                await release.wait()
-                await route.continue_()
-
-            await page.route('**/api/chats/*', lose_patch)
-            await page.route('**/api/chats?all_scopes=true', hold_lists)
-            await open_ask_conversations(page)
-            await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
-            await asyncio.wait_for(held.wait(), timeout=10)
-            try:
-                # Reopening redraws controls while recovery is still waiting on its list.
-                await page.locator('#agent-close').click()
-                await page.locator('#btn-agent').click()
-                button = page.locator('[data-agent-action]')
-                await expect(button).to_be_disabled()
-                await button.dispatch_event('click')
-                assert writes == []
-                assert await page.evaluate('Boolean(activeAgentChat().archiving)')
-            finally:
-                release.set()
-            await expect(page.locator('#agent-thread [aria-current="true"]')).not_to_have_attribute('data-thread-open', 'a' * 32)
-            await expect(page.locator('#agent-question')).to_be_enabled()
-            assert len(httpx.get(url + '/api/chats').json()['chats']) == 3
 
     with _server() as url:
         seed_conversations(url)

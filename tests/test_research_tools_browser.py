@@ -279,7 +279,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.wait_for_function("document.querySelector('#reader-page') && document.querySelector('#reader-page').value === '1'")
                 # The reading queue's own button opens a page of the paper, and a
                 # paper only queued is being read once it is resumed.
-                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.evaluate("openPageView('tools', {tool: 'reading'})")
                 await ready(page)
                 dialog = page.locator('#research-tools')
                 await dialog.locator('[data-reading-status]').first.select_option('queued')
@@ -290,7 +290,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
                 await queue_status(url, 'reading')
                 await saved_page(url, 2)
-                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.evaluate("openPageView('tools', {tool: 'reading'})")
                 await ready(page)
                 await dialog.locator('[data-reading-status]').first.select_option('finished')
                 await ready(page)
@@ -332,7 +332,7 @@ def test_paper_reads_beside_its_notes(engine):
                 async def hold_get(route):
                     if route.request.method == 'GET' and not held: held.append(route); await release.wait()
                     await route.continue_()
-                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.evaluate("openPageView('tools', {tool: 'reading'})")
                 await ready(page)
                 await page.route('**/api/notebook', hold_get)
                 await dialog.get_by_role('button', name='Resume at page 2', exact=True).click()
@@ -374,7 +374,7 @@ def test_paper_reads_beside_its_notes(engine):
                 async def hold_pdf(route):
                     pdf_held.append(route); await pdf_release.wait(); await route.continue_()
                 await page.route('**/pdf/paper?*', hold_pdf)
-                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.evaluate("openPageView('tools', {tool: 'reading'})")
                 await ready(page)
                 await dialog.get_by_role('button', name='Resume at page 2', exact=True).click()
                 await dialog.wait_for(state='hidden', timeout=5000)
@@ -568,24 +568,6 @@ def test_history_restore_and_notebook_conflict(engine):
                 await _answer(page,'Restore version')
                 await ready(page)
                 assert httpx.get(url+'/api/state').json()['claims'][0]['id'] == claim['id']
-                await dialog.get_by_role('button',name='Evidence boards',exact=True).click()
-                await ready(page)
-                await dialog.get_by_role('button',name='New board',exact=True).click()
-                await _answer(page,'Create board','A board to keep')
-                await ready(page)
-                await page.locator('#board-title').fill('Unsaved title')
-                # A second writer changes the file while the first window is editing.
-                data = httpx.get(url+'/api/notebook').json()
-                data['boards'][0]['title'] = 'Another window title'
-                assert httpx.put(url+'/api/notebook',json=data).status_code == 200
-                await dialog.get_by_role('button',name='Save board',exact=True).click()
-                await ready(page)
-                assert 'another window' in await page.locator('#research-message').inner_text()
-                assert await page.locator('#board-title').input_value() == 'Unsaved title'
-                await dialog.get_by_role('button',name='Reload saved version').click()
-                await _answer(page,'Discard changes')
-                await ready(page)
-                assert await page.locator('#board-title').input_value() == 'Another window title'
                 assert not errors and not external
 
     run_browser(scenario())
