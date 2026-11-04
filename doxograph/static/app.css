@@ -743,7 +743,7 @@ body.resizing-graph { cursor: ns-resize; user-select: none; }
 #library-agent #agent-starters { margin: .5rem 0; }
 #library-agent #agent-form button { font-size: .8rem; }
 #library-agent #agent-form .chat-attach { font-size: 1.1rem; }
-#library-agent #agent-question { min-height: 5rem; }
+#library-agent #agent-question { min-height: 3rem; }
 #btn-agent[aria-expanded="true"] { background: var(--sel); border-color: var(--accent); }
 /* Notifications stay visible without covering the conversation composer. */
 body.agent-open:not(.agent-docked) .jobs { right: calc(var(--ask-width, min(36vw, 34rem)) + 1rem); }
@@ -882,9 +882,12 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4p
 .source-result input[type="checkbox"] { width:auto; margin:0 .5rem 0 0; }
 #agent-form > .row { flex-wrap:wrap; }
 /* Files travel with both paper and library conversations. */
-.chat-composer { position: relative; }
-.chat-composer textarea { display: block; padding-bottom: 2.2rem; }
-.chat-attach { position: absolute; left: .4rem; bottom: .4rem; width: 1.6rem; height: 1.6rem; padding: 0;
+/* The attach button sits below the textarea inside one bordered box, so text never scrolls under it. */
+.chat-composer { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; }
+.chat-composer:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+.chat-composer textarea { display: block; border: 0; background: transparent; }
+.chat-composer textarea:focus-visible { outline: none; }
+.chat-attach { display: block; margin: 0 0 .4rem .4rem; width: 1.6rem; height: 1.6rem; padding: 0;
   border-radius: 50%; font-size: 1.1rem; line-height: 1; }
 .chat-attachments { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
 .chat-attachments:empty { display: none; }
