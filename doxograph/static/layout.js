@@ -29,7 +29,10 @@ function layoutPanes(reading) {
   // Off the reader the claims are drawn in the content pane, so the drawer is
   // emptied: a second copy of a card, hidden, would answer its selectors.
   $('claims-drawer').hidden = !reading;
-  if (!reading) { $('claims-drawer-bar').innerHTML = ''; $('claims-drawer-list').innerHTML = ''; }
+  if (!reading) {
+    $('claims-drawer-bar').innerHTML = ''; $('claims-drawer-list').innerHTML = '';
+    delete $('claims-drawer-bar').dataset.paper;
+  }
   fitClaimsWidth();
   const filtersOpen = document.body.classList.contains('reading-filters-open');
   const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.facet || V.ledger || V.unreviewed || V.unverified);

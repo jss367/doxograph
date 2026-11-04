@@ -771,3 +771,32 @@ def test_resuming_a_paper_from_the_reading_queue_leaves_the_drawer_closed(engine
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_drawer_focus_is_not_carried_to_another_paper(engine):
+    config.set_ai_enabled(False)
+    for key, title in [('one', 'The first paper'), ('two', 'The second paper')]:
+        store.save_paper(store.new_paper(key, title=title))
+        store.pdf_path(key).write_bytes(minimal_pdf(['A passage about oversight.']))
+        store.add_claim(key, {'text': f'A claim from {title}.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="one"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await page.locator('#papers li[data-paper="two"]').click()
+                await expect(page.locator('#paperhead')).to_contain_text('The second paper')
+                toggle = page.locator('#claims-drawer-bar [data-act="toggle-claims"]')
+                await toggle.focus()
+                # Back to the first paper with focus on the second's toggle:
+                # the first paper's handle is a different control.
+                await page.go_back()
+                await expect(page.locator('#paperhead')).to_contain_text('The first paper')
+                await expect(toggle).not_to_be_focused()
+
+    run_browser(scenario())

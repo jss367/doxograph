@@ -905,10 +905,13 @@ function renderContent() {
 
 // Polling can refresh the header. Keep keyboard focus on the same reading
 // action or menu command, rather than dropping it back onto the document.
-// The handle of the claims drawer is drawn afresh too, so it is kept the same way.
+// The handle of the claims drawer is drawn afresh too, so it is kept the same
+// way, and only on the handle of the paper it was on.
 function paperActionCursor() {
   const field = document.activeElement;
-  if (field?.matches('#claims-drawer-bar [data-act]')) return {drawer: `[data-act="${CSS.escape(field.dataset.act)}"]`};
+  if (field?.matches('#claims-drawer-bar [data-act]')) {
+    return {drawer: `[data-act="${CSS.escape(field.dataset.act)}"]`, paper: $('claims-drawer-bar').dataset.paper};
+  }
   const actions = field?.closest('.reading-actions');
   if (!actions) return null;
   const attribute = ['data-act', 'data-tool', 'data-paper-chat', 'data-reader-command', 'href']
@@ -921,6 +924,7 @@ function restorePaperActionCursor(cursor) {
   if (cursor.drawer) {
     // Review is gone when a filter empties the drawer; its toggle never is.
     const bar = $('claims-drawer-bar');
+    if (bar.dataset.paper !== cursor.paper) return;
     (bar.querySelector(cursor.drawer) || bar.querySelector('[data-act="toggle-claims"]'))?.focus({preventScroll: true});
     return;
   }
@@ -1111,6 +1115,7 @@ function drawContent() {
     // which stays in view while the overview column beside the PDF is hidden.
     $('content').innerHTML = overview;
     $('claims-drawer-bar').innerHTML = lead + claimsDrawerBar(V.paper, rows);
+    $('claims-drawer-bar').dataset.paper = V.paper;
     $('claims-drawer-list').innerHTML = draft + html;
     syncClaimsDrawer();
   } else {
