@@ -725,7 +725,8 @@ def _merge_extraction(key: str, payload: dict[str, Any], response: ModelResponse
     written = {}
     for field in ("summary", "relevance"):
         current = (paper.get(field) or "").strip()
-        model = (paper.get("extraction") or {}).get(field, current)
+        previous = paper.get("extraction")
+        model = (previous or {}).get(field, current if previous is not None else "")
         written[field] = (payload.get(field) or "").strip() or model
         if not current or current == model:
             paper[field] = (payload.get(field) or "").strip() or current
