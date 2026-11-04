@@ -88,6 +88,10 @@ class Extraction(Document):
     at: str | None = None
     schema_version: int | None = None
     usage: Usage | None = None
+    # What the model last wrote for each. The paper's own text differing from
+    # it is the reader's rewrite, which no re-read replaces.
+    summary: str | None = None
+    relevance: str | None = None
 
 
 class Paper(Document):
