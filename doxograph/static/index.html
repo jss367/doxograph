@@ -28,7 +28,7 @@
   <div class="actions">
     <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide overview</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
-      aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
+      aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask about the paper, the findings, or the whole library; the pane stays open while you read">Ask</button>
     <button type="button" id="btn-export">Export HTML</button>
     <details id="workspace-actions" class="action-disclosure">
@@ -418,9 +418,9 @@
     <h2 id="command-palette-title">Jump to…</h2>
     <button type="button" class="icon-button" id="btn-close-command-palette" aria-label="Close command palette">×</button>
   </div>
-  <input id="command-query" role="combobox" aria-label="Search papers, topics, boards, and actions"
+  <input id="command-query" role="combobox" aria-label="Search papers, topics, and actions"
     aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" autocomplete="off"
-    placeholder="Search papers, topics, boards, or actions…">
+    placeholder="Search papers, topics, or actions…">
   <p id="command-status" class="hint" role="status"></p>
   <ul id="command-results" role="listbox" aria-label="Destinations and actions"></ul>
   <p class="hint command-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> to move · <kbd>Enter</kbd> to open</span><span><kbd>Esc</kbd> to close</span></p>
@@ -432,7 +432,7 @@
     <button type="button" class="icon-button" id="btn-close-help" aria-label="Close shortcuts">×</button>
   </div>
   <dl class="keys">
-    <dt><kbd>⌘K</kbd> / <kbd>Ctrl K</kbd></dt><dd>jump to a paper, topic, board, or action</dd>
+    <dt><kbd>⌘K</kbd> / <kbd>Ctrl K</kbd></dt><dd>jump to a paper, topic, or action</dd>
     <dt><kbd>⌘Z</kbd> / <kbd>Ctrl Z</kbd></dt><dd>undo the last edit; add Shift to redo</dd>
     <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>move down and up the claims</dd>
     <dt><kbd>r</kbd></dt><dd>mark the claim reviewed and move to the next one</dd>

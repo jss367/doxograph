@@ -37,7 +37,7 @@ def test_command_palette_destinations_and_actions(engine):
                 await page.goto(url)
                 await page.locator('#papers [data-paper="one"]').wait_for()
                 palette = page.locator("#command-palette")
-                query = page.get_by_role("combobox", name="Search papers, topics, boards, and actions")
+                query = page.get_by_role("combobox", name="Search papers, topics, and actions")
                 options = palette.get_by_role("option")
 
                 await page.keyboard.press("Meta+k")

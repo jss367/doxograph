@@ -187,9 +187,8 @@ scope. Removing sources starts a new conversation, carrying the draft but leavin
 prior answers and evidence behind. Each submitted question keeps its own scope,
 including when the selection changes while an answer is running.
 
-Every answer can be saved as a research note. **Evidence used** distinguishes
-retrieved claims and passages, supplied documents, and evidence carried forward
-from previous turns. Structured citations open preserved evidence and a link to
+**Evidence used** distinguishes retrieved claims and passages, supplied
+documents, and evidence carried forward from previous turns. Structured citations open preserved evidence and a link to
 the current claim or PDF page. Unknown references and invalid page references
 are marked as unverified. A valid citation establishes traceability, not that the
 paper supports the answer. Older conversations without evidence records are
@@ -199,7 +198,7 @@ Conversations keep their provider choice and can run side by side. A conflict
 with another window preserves the local answer as a separate conversation.
 Failed requests keep the draft for an explicit retry. Removing a paper preserves
 its conversations and saved evidence; repair unavailable sources before another
-question. Saved notes remain independent of their conversations.
+question.
 
 Use the **+** button in the question field, drop files into the chat, or paste
 an image into the question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files

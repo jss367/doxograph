@@ -189,7 +189,7 @@ const CommandPalette = (() => {
     list.innerHTML = results.map((e, i) => `<li id="command-result-${i}" role="option" data-command="${i}" aria-selected="false">
       <span class="command-kind">${esc(e.kind)}</span><span class="command-label"><strong>${esc(e.title)}</strong>
       ${e.detail ? `<small>${esc(e.detail)}</small>` : ''}</span></li>`).join('');
-    $('command-status').textContent = !results.length ? 'No matches. Try a different title, topic, board, or action.'
+    $('command-status').textContent = !results.length ? 'No matches. Try a different title, topic, or action.'
       : `${results.length < matched.length ? `${results.length} of ${matched.length}` : results.length} results in ${currentWorkspace()?.name || 'this workspace'}${results.length < matched.length ? ' · Type to narrow your search' : ''}`;
     select(force ? 0 : Math.max(0, results.findIndex(e => e.id === previous)), false);
   }
@@ -208,8 +208,8 @@ const CommandPalette = (() => {
     const entry = results[active];
     if (!entry) return;
     if (sourceWorkspace !== workspaceClient.workspaceId || workspaceController.pending) { dialog.close(); return; }
-    // Recheck the live catalog: a background refresh may have removed a paper,
-    // board, topic, or disabled an AI action since it was highlighted.
+    // Recheck the live catalog: a background refresh may have removed a paper or
+    // topic, or disabled an AI action, since it was highlighted.
     const live = catalog().find(e => e.id === entry.id);
     if (!live) { sync(true); return; }
     dialog.close();
