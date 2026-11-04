@@ -1547,6 +1547,10 @@ $('panes').addEventListener('click', async (event) => {
       await editCode(paper);
       return;
     }
+    if (act === 'edit-paper-text') {
+      await editPaperText(paper, button.dataset.field);
+      return;
+    }
     if (act === 'del-paper') {
       // The button goes with the header, which stands until the DELETE comes
       // back. A second removal would ask the question again and send a second
