@@ -214,7 +214,7 @@ function scopeProblem(chat) {
   if (scope.mode !== 'library' && !scope.papers.length) return 'Add a source before asking a question.';
   if (scope.mode !== 'library' && scope.papers.some(key => !catalog().papers.some(p => p.key === key))) return 'Source unavailable. Repair the selection before asking another question.';
   if ((scope.focus || []).some(f => f.claim && !catalog().claims.some(c => c.paper === f.paper && c.id === f.claim))) return 'A focused claim is unavailable. Repair the selection.';
-  if (scope.mode !== 'paper' && chat.agent === 'api') return 'Retrieval needs Claude or ChatGPT subscription. Choose a supported agent above; your draft is kept.';
+  if (scope.mode !== 'paper' && chat.agent === 'api') return 'Retrieval needs Claude or ChatGPT subscription. Choose a supported agent below; your draft is kept.';
   if (scope.mode === 'paper' && !catalog().papers.find(p => p.key === scope.papers[0])?.has_pdf) return 'No PDF is available. Use the retrieval option to ask from available paper metadata and claims.';
   return '';
 }
@@ -231,8 +231,8 @@ function renderAskScope(chat) {
     return `<details><summary>About: ${esc(f.text || claim?.text || 'Claim unavailable')}</summary><p>${esc(papers.find(p => p.key === f.paper)?.title || f.paper)}</p><p>${esc(claim?.quote || '')}</p><p class="hint">${esc(claim?.locator || '')} · ${claim?.reviewed ? 'Reviewed' : 'Unreviewed'}</p></details>`;
   }).join('');
   $('agent-scope').innerHTML = focus + (scope.mode === 'library'
-    ? `<p>Search: entire library · ${papers.length} papers</p>`
-    : `<p>${scope.focus?.some(f => f.claim) ? 'Evidence from originating papers' : 'Selected sources'}</p><div class="ask-chips">${chips.slice(0, 3).join('')}</div>${chips.length > 3 ? `<details><summary>Show all ${chips.length} sources</summary><div class="ask-chips">${chips.slice(3).join('')}</div></details>` : ''}`);
+    ? `<span class="agent-sources-label">Sources:</span> <span>Entire library · ${papers.length} papers</span>`
+    : `<span class="agent-sources-label">${scope.focus?.some(f => f.claim) ? 'Evidence from originating papers:' : 'Sources:'}</span><div class="ask-chips">${chips.slice(0, 3).join('')}</div>${chips.length > 3 ? `<details><summary>Show all ${chips.length} sources</summary><div class="ask-chips">${chips.slice(3).join('')}</div></details>` : ''}`);
   $('agent-expand').hidden = scope.mode === 'library';
   $('agent-expand').disabled = locked;
   $('agent-add').disabled = locked;
@@ -283,8 +283,9 @@ function scopeMatches(scope, context) {
   if (context.scope.mode === 'library') return scope.mode === 'library';
   return scope.mode === 'paper' && scope.papers.length === 1 && scope.papers[0] === context.scope.papers[0];
 }
-// The chip under the title: where the reader is, and one click to ask about
-// it. Drawn on every redraw of the page, so it follows the reader around.
+// Above the sources while the reader is somewhere else: where they are, and one
+// click to ask about it. Drawn on every redraw of the page, so it follows the
+// reader around; once the sources match, the sources line says it instead.
 function syncAskContext() {
   const element = $('agent-context');
   const chat = activeAgentChat();
@@ -292,7 +293,7 @@ function syncAskContext() {
   const context = askContext();
   const on = scopeMatches(chat.scope, context);
   const locked = chat.archived || chat.archiving;
-  element.hidden = false;
+  element.hidden = on;
   // Keep the control in place: a background redraw must not take its focus.
   if (!element.querySelector('[data-ask-context]')) {
     element.innerHTML = '<span></span><button type="button" class="chip" data-ask-context=""></button><span class="hint">· click to ask about it</span>';
@@ -332,13 +333,28 @@ async function openAsk(scope, opener = document.activeElement, {focus = true} = 
   await opening;
   syncAskContext();
 }
+// Named only once the library behind the pane is another one: a conversation
+// stays with the workspace it started in.
 function syncAskWorkspace() {
   const owner = agentChats.workspace;
   const workspace = workspaceClient.workspaces.find(workspace => workspace.id === owner);
   $('agent-workspace').textContent = owner ? `Conversation in ${workspace?.name || owner}` : '';
+  $('agent-workspace').hidden = !owner || owner === workspaceClient.workspaceId;
 }
+// The conversation list drops over the transcript, so it closes once a
+// conversation is picked and on Escape; settings.js closes it on a click elsewhere.
+function closeAskHistory({focus = false} = {}) {
+  if (!$('agent-history').open) return false;
+  $('agent-history').open = false;
+  if (focus) $('agent-history').querySelector('summary').focus();
+  return true;
+}
+$('agent-history').addEventListener('click', event => {
+  if (event.target.closest('[data-thread-open]')) closeAskHistory();
+});
 function closeAsk() {
   const restoreFocus = $('library-agent').contains(document.activeElement);
+  closeAskHistory();
   $('library-agent').hidden = true;
   document.body.classList.remove('agent-open');
   rememberAskOpen(false);
@@ -357,7 +373,7 @@ function closeAsk() {
 $('library-agent').addEventListener('keydown', event => {
   if (event.key === 'Escape' && !document.querySelector('dialog[open]')) {
     event.preventDefault();
-    closeAsk();
+    if (!closeAskHistory({focus: $('agent-history').contains(document.activeElement)})) closeAsk();
     event.stopPropagation();
     return;
   }

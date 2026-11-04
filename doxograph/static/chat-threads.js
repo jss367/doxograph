@@ -85,6 +85,7 @@ const ChatThreads = (() => {
       $(`${prefix}-archive`).hidden = !archived.length;
       if (thread.archived) $(`${prefix}-archive`).open = true;
       $(`${prefix}-archive-label`).textContent = `Archived conversations (${archived.length})`;
+      $(`${prefix}-current`).textContent = `${title(thread)}${thread.busy ? ' (answering…)' : ''}`;
       $(`${prefix}-agent`).innerHTML = agents().map(a => `<option value="${a}">${esc(agentLabel(a))}</option>`).join('');
       $(`${prefix}-agent`).value = thread.agent;
       $(`${prefix}-agent`).disabled = thread.busy || thread.saving || thread.archiving || thread.archived;

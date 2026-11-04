@@ -60,3 +60,15 @@ async def browser_session(engine="chromium"):
         # used for multiple tabs. Cookies, storage, routes, and pages never
         # carry over to the next test.
         await asyncio.gather(*(context.close() for context in browser.contexts))
+
+
+async def open_ask_conversations(page):
+    """Drop down the Ask conversation list, which stays closed over the transcript until asked for."""
+    if not await page.locator('#agent-history').evaluate('details => details.open'):
+        await page.locator('#agent-history > summary').click()
+
+
+async def close_ask_conversations(page):
+    """Put the Ask conversation list away, as a click elsewhere would, so it no longer covers the transcript."""
+    if await page.locator('#agent-history').evaluate('details => details.open'):
+        await page.locator('#agent-history > summary').click()

@@ -13,7 +13,7 @@ import httpx
 import pytest
 from playwright.async_api import expect
 
-from browser_support import browser_session, run_browser
+from browser_support import browser_session, open_ask_conversations, run_browser
 from doxograph import agent, ask_context, config, mcp_server, server, store
 from pdfs import minimal_pdf
 
@@ -416,6 +416,7 @@ def test_attachment_only_draft_survives_contextual_open_and_refresh(engine):
                 await page.locator('[data-paper-chat="a"]').first.click()
                 await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(2)
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(0)
+                await open_ask_conversations(page)
                 await page.locator('#agent-thread [data-thread-open]').nth(1).click()
                 await expect(page.locator('#agent-attachments')).to_contain_text('draft.txt')
                 await page.locator('#agent-close').click()
@@ -546,6 +547,7 @@ def test_scope_fork_isolates_attachments_from_inflight_messages(engine):
                 await page.wait_for_function("!document.querySelector('#agent-thread').textContent.includes('answering')")
                 saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats'][0]
                 assert [a['name'] for a in saved['messages'][0]['attachments']] == ['original.txt']
+                await open_ask_conversations(page)
                 await page.locator(f"[data-thread-open='{saved['id']}']").click()
                 await page.locator('#agent-files').set_input_files({'name':'old-draft.txt', 'mimeType':'text/plain', 'buffer':b'Old draft'})
                 await expect(page.locator('#agent-attachments')).to_contain_text('old-draft.txt')
@@ -555,6 +557,7 @@ def test_scope_fork_isolates_attachments_from_inflight_messages(engine):
                 await page.locator('#agent-files').set_input_files({'name':'fork.txt', 'mimeType':'text/plain', 'buffer':b'Fork'})
                 await expect(page.locator('#agent-attachments')).to_contain_text('fork.txt')
                 await page.evaluate('window.forkDraft = activeAgentChat()')
+                await open_ask_conversations(page)
                 await page.locator(f"[data-thread-open='{saved['id']}']").click()
                 await expect(page.locator('#agent-attachments')).to_contain_text('old-draft.txt')
                 await page.locator('#agent-attachments button').click()
@@ -736,10 +739,13 @@ def test_ask_owner_name_tracks_registry_updates_without_changing_conversation(en
                 await page.locator('#btn-workspace-rename').click()
                 await page.locator('#ask-input').fill('Renamed library')
                 await page.locator('#ask-ok').click()
+                # The pane names the conversation's library only once another one is open.
+                await expect(page.locator('#agent-workspace')).to_be_hidden()
                 await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Renamed library')
                 await page.wait_for_function('workspaceClient.pendingMutations === 0')
                 await page.locator('#workspace').select_option(other)
                 await expect(page.locator('#workspace')).to_have_value(other)
+                await expect(page.locator('#agent-workspace')).to_be_visible()
                 await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Renamed library')
                 # Refreshing metadata for the originating workspace while viewing another
                 # workspace must still label the original conversation, not the selection.

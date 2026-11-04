@@ -148,5 +148,6 @@ def test_library_starts_while_the_chat_script_is_delayed(engine):
                 await page.wait_for_load_state('load')
                 await page.locator('#btn-agent:enabled').click()
                 await expect(page.locator('#agent-workspace')).to_have_text('Conversation in Default workspace')
+                await expect(page.locator('#agent-workspace')).to_be_hidden()
                 assert not errors
     run_browser(scenario())
