@@ -715,7 +715,7 @@ body.resizing-graph { cursor: ns-resize; user-select: none; }
   box-shadow: 0 10px 40px rgba(0, 0, 0, .3); }
 .sheet::backdrop { background: rgba(0, 0, 0, .35); }
 /* Ask stays beside the library so the workspace remains interactive. */
-#library-agent { flex: 0 0 min(36vw, 34rem); min-width: 0; height: 100%;
+#library-agent { flex: 0 0 var(--ask-width, min(36vw, 34rem)); min-width: 0; height: 100%;
   display: flex; flex-direction: column; padding: 1rem; border-left: 1px solid var(--line);
   background: var(--bg); overflow: hidden; }
 #library-agent[hidden] { display: none; }
@@ -746,7 +746,19 @@ body.resizing-graph { cursor: ns-resize; user-select: none; }
 #library-agent #agent-question { min-height: 3rem; }
 #btn-agent[aria-expanded="true"] { background: var(--sel); border-color: var(--accent); }
 /* Notifications stay visible without covering the conversation composer. */
-body.agent-open:not(.agent-docked) .jobs { right: calc(min(36vw, 34rem) + 1rem); }
+body.agent-open:not(.agent-docked) .jobs { right: calc(var(--ask-width, min(36vw, 34rem)) + 1rem); }
+#ask-resize { flex: 0 0 8px; margin: 0 -4px; z-index: 5; height: 100%; cursor: col-resize; touch-action: none; }
+#ask-resize[hidden] { display: none; }
+#ask-resize::before { content: ''; display: block; width: 2px; height: 100%; margin: 0 auto; background: transparent; }
+#ask-resize:hover::before, #ask-resize:focus-visible::before { background: var(--accent); }
+#ask-resize:focus-visible { outline: none; }
+/* What the reader is looking at, offered as the next question's sources. */
+.agent-context { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: .8rem;
+  color: var(--muted); margin: 0 0 .5rem; }
+.agent-context[hidden] { display: none; }
+.agent-context .chip { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-context .chip.on { background: var(--sel); border-color: var(--accent); color: var(--accent); cursor: default; }
 body.agent-docked :is(.jobs, .toasts) { bottom: calc(50dvh + 1rem);
   width: min(22rem, calc(50vw - 1.5rem)); max-height: calc(50dvh - 2rem); overflow-y: auto; }
 body.agent-docked #layout { margin-bottom: 50dvh; }

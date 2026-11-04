@@ -61,12 +61,118 @@ function setReadingFilters(open) {
 // cannot fit side by side. Keep the user's requested sidebar width intact.
 function fitAskPane() {
   const open = document.body.classList.contains('agent-open');
-  const chatWidth = Math.min(window.innerWidth * .36,
-    34 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16));
+  fitAskWidth();
+  // Docking is decided on the pane's default width, whatever width is wanted:
+  // the sidebar and the window decide it, not a drag of this divider.
+  const chatWidth = askWidthDefault();
   const sidebarWidth = $('side').getBoundingClientRect().width;
   const docked = open && (window.innerWidth <= 800
     || $('layout').clientWidth - sidebarWidth - chatWidth < 560);
   document.body.classList.toggle('agent-docked', docked);
+  $('ask-resize').hidden = !open || docked;
+}
+
+// --- the width of the Ask pane --------------------------------------------
+//
+// The same arrangement as the side pane below: a divider to drag or nudge
+// with the arrow keys, a double-click or Home to put it back, and the width
+// remembered in this browser. The pane sits on the right, so dragging the
+// divider left makes it wider.
+
+const ASK_WIDTH_KEY = 'doxograph-ask-width';
+const ASK_WIDTH_MIN = 280;
+// What the pane has always been: 36% of the window, capped at 34rem.
+const askWidthDefault = () => Math.round(Math.min(window.innerWidth * .36,
+  34 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16)));
+const askWidthMax = () => Math.round(window.innerWidth / 2);
+// The most the pane can show beside the workspace without squeezing it under
+// the 560px `fitAskPane` docks at. A wider width is remembered, as the side
+// pane remembers one, and shown when the window allows; it does not send the
+// pane to the bottom of the window mid-drag.
+const askWidthFit = () => Math.max(askWidthMin(),
+  Math.round($('layout').clientWidth - $('side').getBoundingClientRect().width - 560));
+const askWidthMin = () => Math.min(ASK_WIDTH_MIN, askWidthMax());
+const clampAskWidth = (px) => Math.min(askWidthMax(), Math.max(askWidthMin(), Math.round(px)));
+
+function readAskWidth() {
+  try {
+    const saved = Number(localStorage.getItem(ASK_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? saved : askWidthDefault();
+  } catch (error) {
+    return askWidthDefault();
+  }
+}
+
+let askWidthWanted = readAskWidth();
+
+function wantAskWidth(px, persist = false) {
+  askWidthWanted = Math.round(px);
+  if (persist) storeAskWidth();
+  return fitAskWidth();
+}
+
+function fitAskWidth() {
+  const width = Math.min(clampAskWidth(askWidthWanted), askWidthFit());
+  $('layout').style.setProperty('--ask-width', `${width}px`);
+  const handle = $('ask-resize');
+  handle.setAttribute('aria-valuenow', String(width));
+  handle.setAttribute('aria-valuemin', String(askWidthMin()));
+  handle.setAttribute('aria-valuemax', String(askWidthMax()));
+  return width;
+}
+
+function storeAskWidth() {
+  try { localStorage.setItem(ASK_WIDTH_KEY, String(askWidthWanted)); }
+  catch (error) { /* the pane keeps the width for this session */ }
+}
+
+{
+  const handle = $('ask-resize');
+  let drag = null;
+  let movedThisPress = false;
+  let movedLastPress = false;
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.focus();
+    movedLastPress = movedThisPress;
+    movedThisPress = false;
+    drag = { pointer: event.pointerId, from: event.clientX, width: $('library-agent').getBoundingClientRect().width, wanted: askWidthWanted };
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-side');
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    if (Math.abs(event.clientX - drag.from) > 2) movedThisPress = true;
+    wantAskWidth(clampAskWidth(drag.width - (event.clientX - drag.from)));
+    fitAskPane();
+  });
+  const release = (event) => {
+    if (!drag || event.pointerId !== drag.pointer) return;
+    if (clampAskWidth(askWidthWanted) === clampAskWidth(drag.wanted)) askWidthWanted = drag.wanted;
+    drag = null;
+    document.body.classList.remove('resizing-side');
+    storeAskWidth();
+  };
+  handle.addEventListener('pointerup', release);
+  handle.addEventListener('pointercancel', release);
+  handle.addEventListener('lostpointercapture', release);
+  handle.addEventListener('dblclick', () => {
+    if (!movedThisPress && !movedLastPress) { wantAskWidth(askWidthDefault(), true); fitAskPane(); }
+  });
+  const nudge = (px) => {
+    if (clampAskWidth(px) !== clampAskWidth(askWidthWanted)) { wantAskWidth(clampAskWidth(px), true); fitAskPane(); }
+  };
+  handle.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 48 : 12;
+    const at = clampAskWidth(askWidthWanted);
+    // The divider is on the pane's left edge: left is wider, right is narrower.
+    if (event.key === 'ArrowLeft') nudge(at + step);
+    else if (event.key === 'ArrowRight') nudge(at - step);
+    else if (event.key === 'Home') { wantAskWidth(askWidthDefault(), true); fitAskPane(); }
+    else return;
+    event.preventDefault();
+  });
 }
 
 // --- the width of the side pane -------------------------------------------

@@ -50,6 +50,7 @@ function renderAgentChat(chat) {
   $('agent-question').disabled = chat.busy || chat.archiving || chat.archived;
   renderAskScope(chat);
   syncAgentChatControls();
+  syncAskContext();
 }
 
 function boundedNoteText(text, limit, label) {
@@ -220,7 +221,6 @@ function scopeProblem(chat) {
 function renderAskScope(chat) {
   const scope = chat.scope;
   const locked = chat.archived || chat.archiving;
-  $('library-agent-title').textContent = scope.mode === 'library' ? 'Ask the library' : 'Ask about sources';
   const papers = catalog().papers;
   const chips = scope.papers.map(key => {
     const paper = papers.find(p => p.key === key);
@@ -245,13 +245,63 @@ function renderAskScope(chat) {
     : scope.mode === 'selected' && scope.papers.length === 1 && !papers.find(p => p.key === scope.papers[0])?.has_pdf && !catalog().claims.some(c => c.paper === scope.papers[0])
       ? 'Uses available paper metadata, such as its title, abstract, and summary. Full text, extracted claims, and page images are unavailable.'
       : 'Retrieves paper metadata, claims, and text passages as needed. Figures and page images are unavailable; a search is not an exhaustive review.';
-  const starters = scope.focus?.some(f => f.claim) ? ['What supports this claim?', 'What qualifications does the paper give?', 'Find conflicting evidence']
+  const focusedPapers = new Set((scope.focus || []).filter(f => f.claim).map(f => f.paper));
+  const starters = focusedPapers.size > 1 ? ['What would reconcile these?', 'Which side has the stronger evidence?', 'What experiment would settle this?']
+    : scope.focus?.some(f => f.claim) ? ['What supports this claim?', 'What qualifications does the paper give?', 'Find conflicting evidence']
     : scope.mode === 'library' ? ['What does this library say about…?', 'What remains unresolved?']
     : scope.papers.length > 1 ? ['Compare methods', 'Where do their findings differ?'] : ['Explain the main result', 'What are the limitations?'];
   $('agent-starters').innerHTML = chat.messages.length ? '' : starters.map(text => `<button type="button" data-starter="${esc(text)}" ${chat.busy ? 'disabled' : ''}>${esc(text)}</button>`).join('');
 }
 let askOpener = null, askOpenerSelector = '';
-async function openAsk(scope, opener = document.activeElement) {
+// Whether the pane was open is remembered in this browser, like its width, so
+// a reload or a relaunch brings the conversation back beside the library.
+const ASK_OPEN_KEY = 'doxograph-ask-open';
+function rememberAskOpen(open) {
+  try { if (open) localStorage.setItem(ASK_OPEN_KEY, '1'); else localStorage.removeItem(ASK_OPEN_KEY); }
+  catch (error) { /* the pane keeps its state for this session */ }
+}
+function askWasOpen() {
+  try { return localStorage.getItem(ASK_OPEN_KEY) === '1'; } catch (error) { return false; }
+}
+// Called once the workspace and provider state are in, from `boot`: the pane
+// is put back where it was, without taking the keyboard from the page.
+function restoreAsk() {
+  if (askWasOpen() && $('library-agent').hidden) openAsk(null, document.body, {focus: false});
+}
+
+// What the reader is looking at, as sources for a question: the paper being
+// read, the findings page, or nothing in particular, which is the library.
+function askContext() {
+  if (V.view === 'claims' && V.paper) {
+    const paper = S.papers.find(p => p.key === V.paper);
+    if (paper) return {kind: 'paper', label: paper.title || paper.key, scope: {mode: 'paper', papers: [paper.key], focus: []}};
+  }
+  if (V.view === 'findings') return {kind: 'findings', label: 'Findings', scope: {mode: 'library', papers: [], focus: []}};
+  return {kind: 'library', label: 'Whole library', scope: {mode: 'library', papers: [], focus: []}};
+}
+function scopeMatches(scope, context) {
+  if (context.scope.mode === 'library') return scope.mode === 'library';
+  return scope.mode === 'paper' && scope.papers.length === 1 && scope.papers[0] === context.scope.papers[0];
+}
+// The chip under the title: where the reader is, and one click to ask about
+// it. Drawn on every redraw of the page, so it follows the reader around.
+function syncAskContext() {
+  const element = $('agent-context');
+  const chat = activeAgentChat();
+  if (!chat || $('library-agent').hidden || agentChats.workspace !== workspaceClient.workspaceId) { element.hidden = true; return; }
+  const context = askContext();
+  const on = scopeMatches(chat.scope, context);
+  const locked = chat.archived || chat.archiving;
+  element.hidden = false;
+  element.innerHTML = `<span>${on ? 'Asking about' : 'Looking at'}</span>
+    <button type="button" class="chip${on ? ' on' : ''}" data-ask-context="${esc(context.kind)}" title="${esc(context.label)}" ${on || locked ? 'disabled' : ''}>${esc(context.label)}</button>
+    ${on ? '' : '<span class="hint">· click to ask about it</span>'}`;
+}
+$('agent-context').addEventListener('click', event => {
+  if (!event.target.closest('[data-ask-context]')) return;
+  changeAskScope(askContext().scope).then(() => $('agent-question').focus());
+});
+async function openAsk(scope, opener = document.activeElement, {focus = true} = {}) {
   if (!$('library-agent').contains(opener)) {
     askOpener = opener instanceof HTMLElement && opener !== document.body ? opener : null;
     askOpenerSelector = askOpener?.id ? `#${CSS.escape(askOpener.id)}`
@@ -263,10 +313,12 @@ async function openAsk(scope, opener = document.activeElement) {
   $('library-agent').hidden = false;
   document.body.classList.add('agent-open');
   $('btn-agent').setAttribute('aria-expanded', 'true');
+  rememberAskOpen(true);
   fitAskPane();
   syncAskWorkspace();
-  $('agent-question').focus();
+  if (focus) $('agent-question').focus();
   await opening;
+  syncAskContext();
 }
 function syncAskWorkspace() {
   const owner = agentChats.workspace;
@@ -277,6 +329,7 @@ function closeAsk() {
   const restoreFocus = $('library-agent').contains(document.activeElement);
   $('library-agent').hidden = true;
   document.body.classList.remove('agent-open');
+  rememberAskOpen(false);
   fitAskPane();
   $('btn-agent').setAttribute('aria-expanded', 'false');
   if (restoreFocus) {
@@ -336,6 +389,15 @@ $('agent-starters').addEventListener('click', async event => {
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-ask-claim]');
   if (button) openAsk({mode:'paper', papers:[button.dataset.paper], focus:[{paper:button.dataset.paper, claim:button.dataset.askClaim}]}, button);
+  // A tension or agreement: its claims in focus, its papers as the sources.
+  const finding = event.target.closest('[data-ask-finding]');
+  if (finding) {
+    const rows = finding.dataset.askKind === 'agreement' ? (S.agreements || []) : (S.tensions || []);
+    const row = rows.find(r => r.id === finding.dataset.askFinding);
+    if (!row) return;
+    const papers = [...new Set(row.claims.map(c => c.paper))];
+    openAsk({mode: papers.length === 1 ? 'paper' : 'selected', papers, focus: row.claims.map(c => ({paper: c.paper, claim: c.id}))}, finding);
+  }
 });
 $('ask-selection').addEventListener('click', event => {
   const selection = ResearchTools.selection();

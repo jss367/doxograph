@@ -151,6 +151,7 @@ const CommandPalette = (() => {
     });
     add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', focusPaperImport, 'import');
     add('search', 'Action', 'Search claims and PDF text', '', focusClaimSearch);
+    click('btn-agent', 'Open Ask', 'chat question conversation library');
     click('btn-workspace-add', 'Create workspace');
     click('btn-export', 'Export HTML');
     click('btn-bib', 'Export BibTeX');
