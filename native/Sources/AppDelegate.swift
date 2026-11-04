@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var pendingDrops: [URL] = []
     /// An update is in progress; a second one must wait for it.
     private var updating = false
+    /// A relaunch prompt's Later found the server failed while a newer update
+    /// was running, and left the retry to that update.
+    private var startAfterUpdate = false
     /// The bundle was replaced by an update, and the quit under way should be
     /// followed by a launch of the new one.
     private var relaunchAfterQuit = false
@@ -147,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard let command = command ?? commandForUpdate() else {
             updating = false
             if ready { window.hideStatus() }
+            startDeferredServer()
             return
         }
         guard let repository = Updater.repository(near: command)
@@ -154,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             ?? chooseRepository() else {
             updating = false
             if ready { window.hideStatus() }
+            startDeferredServer()
             return
         }
         Updater.remember(repository)
@@ -167,10 +172,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// A deferred response must preserve any newer update's progress.
     private func finishUpdate(_ result: Result<Updater.Outcome, Updater.Failure>, ownsServer: Bool) {
         updating = false
+        // Every success below retries a failed start, or offers a Later that does.
+        if case .success = result { startAfterUpdate = false }
         switch result {
         case .failure(.step(let name, let output)):
             if ready { window.hideStatus() }
             warn("Update failed at \(name)", output.isEmpty ? "It printed nothing." : output)
+            startDeferredServer()
 
         case .success(let outcome) where outcome.changes.isEmpty:
             if ready { window.hideStatus() }
@@ -195,8 +203,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 guard response == .alertFirstButtonReturn else {
                     if self.ready && !self.updating { self.window.hideStatus() }
                     // The old bundle keeps running, but the Python is new, and a
-                    // server that failed to start may start now.
-                    if self.serverFailed { self.startServer() }
+                    // server that failed to start may start now. Not while a newer
+                    // update is changing the checkout, though: that update captured
+                    // `ownsServer` before this start and would mistake the server
+                    // for an adopted one, so the retry waits for it to finish.
+                    if self.serverFailed {
+                        if self.updating { self.startAfterUpdate = true } else { self.startServer() }
+                    }
                     return
                 }
                 self.relaunchAfterQuit = true
@@ -246,6 +259,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     onFailure: { [weak self] failure in self?.report(failure) })
             }
         }
+    }
+
+    /// Retry the start a stale Later deferred, for the ways an update ends
+    /// without retrying it itself.
+    private func startDeferredServer() {
+        guard startAfterUpdate else { return }
+        startAfterUpdate = false
+        if serverFailed { startServer() }
     }
 
     /// Ask where the checkout is, when the command was not installed from one

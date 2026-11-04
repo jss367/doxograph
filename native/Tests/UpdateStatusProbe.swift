@@ -1,7 +1,7 @@
 import AppKit
 
 private var pendingPrompts: [(NSApplication.ModalResponse) -> Void] = []
-private var updateStarts = 0, terminationRequests = 0
+private var updateStarts = 0, terminationRequests = 0, serverStarts = 0
 /// Record the actual presentation calls without opening a dialog.
 final class UpdateStatusProbeAlert: NSAlert {
     var sheetParent: NSWindow?
@@ -20,6 +20,8 @@ final class UpdateStatusProbeAlert: NSAlert {
 }
 func updateStatusProbeStarted() { updateStarts += 1 }
 func updateStatusProbeTerminate() { terminationRequests += 1 }
+/// Counts the start instead of spawning a server.
+func updateStatusProbeServerStarted() { serverStarts += 1 }
 func updateStatusProbeForbiddenUpdater(command: String, repository: URL,
     progress: @escaping (String) -> Void,
     completion: @escaping (Result<Updater.Outcome, Updater.Failure>) -> Void) {
@@ -91,6 +93,24 @@ private enum UpdateStatusProbe {
         precondition(!delegate.validateMenuItem(updateMenu))
         print("PASS: old Later callback preserves newer update progress and menu guard")
 
+        delegate.updating = false
+        precondition(serverStarts == 0, "No server was failed, so nothing should have started one")
+        delegate.serverFailed = true
+        finish(ready: false)
+        delegate.updateDoxograph(nil)
+        precondition(delegate.updating && updateStarts == 2)
+        later()
+        precondition(serverStarts == 0, "Old Later callback started the server during a newer update")
+        delegate.finishUpdate(.failure(.step("pip install", "")), ownsServer: false)
+        precondition(serverStarts == 1, "A failed newer update must make the deferred start")
+        pendingPrompts.removeAll() // The failure's warning sheet.
+        delegate.updating = true
+        delegate.finishUpdate(.failure(.step("pip install", "")), ownsServer: false)
+        precondition(serverStarts == 1, "A deferred start must be made only once")
+        pendingPrompts.removeAll()
+        print("PASS: old Later callback defers a failed server's restart to the newer update")
+
+        delegate.serverFailed = false
         delegate.updating = false
         finish(ready: true)
         pendingPrompts.removeFirst()(.alertFirstButtonReturn)

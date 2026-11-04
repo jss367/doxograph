@@ -15,7 +15,7 @@ for source in (here/'Sources').glob('*.swift'):
         continue
     text=source.read_text()
     if source.name=='AppDelegate.swift':
-        for field in ('window','ready','updating','relaunchAfterQuit'):
+        for field in ('window','ready','serverFailed','updating','relaunchAfterQuit'):
             text=text.replace('private let '+field+' =','let '+field+' =').replace('private var '+field+' =','var '+field+' =')
         text=text.replace('private func finishUpdate(', 'func finishUpdate(')
         dispatch='''        DispatchQueue.global().async { [weak self] in
@@ -28,7 +28,7 @@ for source in (here/'Sources').glob('*.swift'):
         text=text.replace('Updater.run(', 'updateStatusProbeForbiddenUpdater(')
         text=text.replace('NSApp.terminate(nil)','updateStatusProbeTerminate()')
         text,count=re.subn(r'    private func startServer\(\) \{.*?\n    \}',
-            '    private func startServer() { fatalError("Inert probe attempted server startup") }',text,count=1,flags=re.S)
+            '    private func startServer() { updateStatusProbeServerStarted() }',text,count=1,flags=re.S)
         assert count==1
     if source.name=='WebWindow.swift':
         text=text.replace('private let status:', 'let status:').replace('private let statusBackground:', 'let statusBackground:')
