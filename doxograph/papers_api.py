@@ -260,6 +260,13 @@ def patch_paper(key: str, patch: PaperPatch) -> dict[str, Any]:
         # Correcting a year must not leave an older full date on the timeline.
         if "year" in fields and "publication_date" not in fields and fields["year"] != paper.get("year"):
             fields["publication_date"] = None
+        # Older reads have no recorded model text. Capture the prior text
+        # before its first manual edit so a later re-read can recognise it.
+        for field in ("summary", "relevance"):
+            written = paper.get("extraction")
+            if written is not None and field in fields and fields[field] != paper.get(field):
+                if written.get(field) is None:
+                    written[field] = paper.get(field) or ""
         paper.update(fields)
         store.save_paper(paper)
     return paper
