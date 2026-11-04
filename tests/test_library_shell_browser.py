@@ -37,8 +37,6 @@ def test_library_menus_selection_and_keyboard(engine, width):
                 await page.keyboard.press("Escape")
 
                 # Dismissing filters leaves a separate writing draft intact.
-                await page.locator("#workspace-notes").fill("A question about oversight.")
-                await expect(page.locator("#workspace-notes-status")).to_have_text("Saved")
                 filters = page.locator("#claim-filter-options > summary")
                 await filters.click()
                 await page.locator("#only-unreviewed").check()
@@ -49,7 +47,6 @@ def test_library_menus_selection_and_keyboard(engine, width):
                 await expect(filters).to_be_focused()
                 await expect(page.locator("#claim-filter-options")).not_to_have_attribute("open", "")
                 await expect(page.locator("#active-filters")).to_contain_text("Unreviewed")
-                await expect(page.locator("#workspace-notes")).to_have_value("A question about oversight.")
                 await page.get_by_role("button", name="Clear all", exact=True).click()
 
                 # Selecting through either list reveals the bulk workflow.
@@ -88,7 +85,6 @@ def test_empty_library_hides_selection_until_papers_arrive():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
-                await expect(page.locator("#workspace-notes-panel")).to_be_visible()
                 await expect(page.locator("#selection-tools")).to_be_hidden()
                 _paper("first", "The first paper")
                 await _poll(page)
@@ -159,8 +155,6 @@ def test_sidebar_groups_preserve_drafts_and_import_remains_discoverable(engine):
                 review = page.locator('[data-sidebar-group="review"]')
                 write = page.locator('[data-sidebar-group="write"]')
                 await expect(page.locator("#paper-import")).not_to_have_attribute("open", "")
-                await page.locator("#workspace-notes").fill("Keep this research question.")
-                await expect(page.locator("#workspace-notes-status")).to_have_text("Saved")
                 await write.locator(":scope > summary").click()
                 await review.locator(":scope > summary").click()
                 await _poll(page)
@@ -169,7 +163,6 @@ def test_sidebar_groups_preserve_drafts_and_import_remains_discoverable(engine):
                 await page.reload()
                 await expect(write).not_to_have_attribute("open", "")
                 await expect(review).not_to_have_attribute("open", "")
-                await expect(page.locator("#workspace-notes")).to_have_value("Keep this research question.")
                 await library.locator(":scope > summary").click()
                 await page.locator("#btn-command-palette").click()
                 await page.locator("#command-query").fill("Add papers")
@@ -183,7 +176,6 @@ def test_sidebar_groups_preserve_drafts_and_import_remains_discoverable(engine):
                 await expect(write).to_have_attribute("open", "")
                 await expect(library).not_to_have_attribute("open", "")
                 await expect(page.locator('[data-sidebar-focus="write"]')).to_have_attribute("aria-pressed", "true")
-                await expect(page.locator("#workspace-notes")).to_have_value("Keep this research question.")
                 await page.locator('[data-sidebar-focus="library"]').click()
                 await expect(page.locator("#refs")).to_have_value("A reference I am still typing")
 

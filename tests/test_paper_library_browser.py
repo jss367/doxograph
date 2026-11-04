@@ -219,7 +219,6 @@ def test_paper_library_metadata_navigation_and_selection(engine, width):
                 assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
                 if engine == "chromium" and width == 1440:
-                    await page.locator("#workspace-notes-toggle").click()
                     await page.locator("#paper-sort").select_option("year-desc")
                     Path(".context").mkdir(exist_ok=True)
                     await page.screenshot(path=".context/paper-library.png")
@@ -355,7 +354,6 @@ def test_library_search_highlights_and_prioritizes_authors_and_titles(engine):
                 await page.goto(url)
                 cards = page.locator(".library-paper")
                 await expect(cards).to_have_count(5)
-                await page.locator("#workspace-notes-toggle").click()
                 await page.locator("#paper-sort").select_option("title")
                 await page.locator("#q").fill("storf")
                 await expect(cards).to_have_count(4)

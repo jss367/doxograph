@@ -137,7 +137,6 @@ const CommandPalette = (() => {
     view('research', 'Edit research context and personal claims', 'research');
     view('datasets', 'Open datasets', 'datasets');
     view('people', 'Open people', 'people');
-    view('notes', 'Open research notes', 'notes');
     ['questions', 'boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
       const titles = {questions: 'Open research questions', boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
         connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
@@ -295,7 +294,7 @@ document.addEventListener('keydown', async (event) => {
   }
   // These independent editors own their keyboard. Escape here must not reach
   // the claim-editor fallback and discard a draft elsewhere in the view.
-  if (event.target.closest?.('#workspace-notes-panel, #datasets-sheet, #people-sheet, #research-notes, #research-tools')) return;
+  if (event.target.closest?.('#datasets-sheet, #people-sheet, #research-tools')) return;
   if (event.key === 'Escape') {
     const menu = document.querySelector('.paper-actions[open]');
     if (menu) {

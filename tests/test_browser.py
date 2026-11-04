@@ -254,12 +254,6 @@ def test_workspace_delete_confirmation_and_return_to_default(engine):
                 assert config.get_workspace(workspace["id"]) == workspace
                 assert await draft.input_value() == "My unsaved draft"
 
-                # A failed autosave leaves a native unload guard. The explicit
-                # deletion confirmation also covers discarding these notes.
-                await page.route("**/api/notebook/notes", lambda route: route.fulfill(
-                    status=503, content_type="application/json", json={"detail": "Autosave unavailable"}))
-                await page.locator("#workspace-notes").fill("Unsaved workspace notes")
-                await page.evaluate("WorkspaceNotes.flush()")
                 await page.locator("#workspace-actions > summary").click()
                 await page.locator("#btn-workspace-delete").click()
                 await _answer(page, "Delete workspace")

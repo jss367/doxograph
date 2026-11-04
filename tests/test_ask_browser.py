@@ -158,10 +158,6 @@ def test_selection_citations_notes_and_narrowing(engine, monkeypatch):
                 await expect(page.locator('#citation-body')).to_contain_text('Memory and recovery reports improvement.')
                 await expect(page.locator('#citation-body a')).to_have_attribute('href', re.compile(r'.*sel='))
                 await page.locator('#citation-close').click()
-                await page.get_by_role('button', name='Save as research note', exact=True).click()
-                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
-                notes = httpx.get(url + '/api/research-notes').json()['notes']
-                assert len(notes) == 1 and 'Memory and recovery reports improvement.' in notes[0]['body']
                 # Add a third paper through the keyboard-accessible picker.
                 await page.locator('#agent-add').click()
                 await page.locator('#source-search').fill('separate')
@@ -253,10 +249,6 @@ def test_full_paper_answers_save_notes_on_a_narrow_window(engine, monkeypatch):
                 await expect(page.locator('#citation-body')).to_contain_text('The sample was small.')
                 await expect(page.locator('#citation-body a')).to_have_attribute('href', re.compile(r'/pdf/a\?workspace=default#page=2'))
                 await page.locator('#citation-close').click()
-                await page.get_by_role('button', name='Save as research note', exact=True).click()
-                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
-                notes = httpx.get(url + '/api/research-notes').json()['notes']
-                assert len(notes) == 1 and 'The sample was small.' in notes[0]['body']
                 assert await page.locator('#library-agent').evaluate('el => el.scrollWidth <= el.clientWidth')
                 if engine == 'chromium':
                     await page.screenshot(path='.context/ask-paper-narrow.png')
@@ -351,50 +343,6 @@ def test_followup_flushes_failed_save_before_calling_model(engine, monkeypatch):
                 assert len(saved) == 1 and len(saved[0]['messages']) == 4
                 assert saved[0]['messages'][0]['content'] == 'First question'
                 assert saved[0]['messages'][2]['content'] == 'Follow-up question'
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_note_keeps_originating_workspace_while_conversation_save_waits(engine, monkeypatch):
-    seed()
-    model_stub(monkeypatch)
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
-            started, release = asyncio.Event(), asyncio.Event()
-            async def delay_save(route):
-                if route.request.method == 'PUT':
-                    started.set()
-                    await release.wait()
-                await route.continue_()
-            with _server() as url:
-                other = httpx.post(url + '/api/workspaces', json={'name': 'Other workspace'}).json()['workspace']['id']
-                await page.goto(url)
-                await page.locator('[data-select-paper="a"]').first.check()
-                await page.locator('[data-select-paper="b"]').first.check()
-                await page.locator('#ask-selection').click()
-                await page.locator('#agent-question').fill('Explain the evidence')
-                await page.locator('#agent-send').click()
-                await expect(page.locator('#agent-question')).to_be_empty()
-                await page.route('**/api/chats/*', delay_save)
-                await page.get_by_role('button', name='Save as research note', exact=True).click()
-                await asyncio.wait_for(started.wait(), 5)
-                await page.locator('#agent-close').click()
-                await page.evaluate('workspace => switchWorkspace(workspace)', other)
-                await page.locator('#btn-agent:enabled').click()
-                release.set()
-                for _ in range(100):
-                    notes = httpx.get(url + '/api/research-notes', headers={'X-Doxograph-Workspace':'default'}).json()['notes']
-                    if notes:
-                        break
-                    await asyncio.sleep(.05)
-                assert len(notes) == 1
-                body = notes[0]['body']
-                assert 'ws=default' in body and f'ws={other}' not in body
-                assert 'Sources: Memory and recovery' in body
-                assert httpx.get(url + '/api/research-notes', headers={'X-Doxograph-Workspace':other}).json()['notes'] == []
     run_browser(scenario())
 
 
@@ -561,35 +509,6 @@ def test_scope_fork_isolates_attachments_from_inflight_messages(engine):
                 await page.locator('#agent-files').set_input_files({'name':'other.txt', 'mimeType':'text/plain', 'buffer':b'Other'})
                 assert await page.evaluate('forkDraft.draftAttachments.map(a => a.name)') == ['fork.txt']
                 await expect(page.locator('#agent-attachments')).to_contain_text('other.txt')
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_large_source_roster_saves_a_bounded_note(engine):
-    seed()
-    keys = [f'{i:05d}-' + 'x' * 194 for i in range(10000)]
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={'width':1440, 'height':1100})
-            async def answer(route):
-                await route.fulfill(json={'answer':'A short answer.', 'scope':{'mode':'library', 'papers':keys, 'focus':[]}, 'evidence':[]})
-            await page.route('**/api/ask', answer)
-            with _server() as url:
-                await page.goto(url)
-                await page.locator('#btn-agent:enabled').click()
-                await page.locator('#agent-question').fill('Summarize')
-                await page.locator('#agent-send').click()
-                await expect(page.locator('#agent-question')).to_be_empty()
-                await page.get_by_role('button', name='Save as research note', exact=True).click()
-                await page.get_by_role('button', name='Open saved note', exact=True).wait_for()
-                note = httpx.get(url + '/api/research-notes').json()['notes'][0]
-                assert 'A short answer.' in note['body']
-                assert '9800 additional papers omitted' in note['body']
-                assert len(note['body']) < 2_000_000
-                saved = httpx.get(url + '/api/chats?all_scopes=true').json()['chats'][0]
-                assert saved['messages'][0]['scope']['papers'] == keys
-                assert await page.evaluate("boundedNoteText('x'.repeat(2100000), 1900000, 'Note').length") < 2_000_000
     run_browser(scenario())
 
 

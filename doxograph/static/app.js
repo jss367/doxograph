@@ -144,7 +144,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'datasets', 'people', 'notes', 'tools'];
+const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'datasets', 'people', 'tools'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -167,7 +167,6 @@ function currentHash() {
   if (V.view === 'datasets' && V.dataset) params.set('dataset', V.dataset);
   if (V.view === 'people' && V.person) params.set('person', V.person);
   else if (V.view === 'people' && V.author) params.set('author', V.author);
-  if (V.view === 'notes' && V.note) params.set('note', V.note);
   if (V.view === 'tools') {
     params.set('tool', V.tool || 'compare');
     if (V.board) params.set('board', V.board);
@@ -631,14 +630,14 @@ function canLeaveWorkspace() {
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
     && !V.synthSaving && !paperNotesSaving() && !V.researchSaving && !trash.size
-    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !Datasets.hasUnsavedChanges() && !People.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
+    && !Datasets.hasUnsavedChanges() && !People.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
 }
 
 // The native app calls this before quitting. Writing saves itself a moment
 // after typing stops, and the words typed in that moment are saved here.
 window.doxographSaveDrafts = async () => {
   workspaceWritingSnapshot();
-  const saved = (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), People.flush(), flushPaperNotes(),
+  const saved = (await Promise.all([Datasets.flush(), People.flush(), flushPaperNotes(),
     typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
   // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
   // writing after the waits too, and warn rather than silently saving a judgment.
@@ -649,7 +648,7 @@ window.doxographSaveDrafts = async () => {
 // Consent to lose writing belongs to its content and identity, not a quit
 // attempt alone. Native compares this only while input remains frozen.
 window.doxographQuitWritingSnapshot = () => JSON.stringify([
-  workspaceWritingSnapshot(), ResearchNotes.writingSnapshot(), Datasets.writingSnapshot(), People.writingSnapshot(),
+  workspaceWritingSnapshot(), Datasets.writingSnapshot(), People.writingSnapshot(),
   ResearchTools.writingSnapshot(), [...document.querySelectorAll('input:not([type="password"]):not([type="file"]),textarea,select,[contenteditable="true"]')]
     .map(field => [field.id, field.name, field.value ?? field.textContent, field.checked]),
 ]);
@@ -658,8 +657,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
     // A paper note that cannot save is a draft, which confirmLeave asks about.
     await flushPaperNotes();
-    return await WorkspaceNotes.beforeWorkspaceSwitch()
-      && await ResearchNotes.beforeWorkspaceSwitch() && await Datasets.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+    return await Datasets.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave: canLeaveWorkspace,
@@ -673,8 +671,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   },
   beforeLeave: flushTrash,
   async beforeSelect() {
-    if (!await WorkspaceNotes.beforeWorkspaceSwitch()) return false;
-    if (!await ResearchNotes.beforeWorkspaceSelect() || !await Datasets.beforeWorkspaceSelect() || !await People.beforeWorkspaceSelect()
+    if (!await Datasets.beforeWorkspaceSelect() || !await People.beforeWorkspaceSelect()
         || !await ResearchTools.beforeWorkspaceSelect()) return false;
     // All earlier waits leave core editors interactive. Consent applies only
     // to the snapshot shown when asking, not later writing or pending saves.
@@ -693,7 +690,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     // This synchronous last check runs after beforeSelect's Promise and
     // immediately before selection, so a late save/draft cannot slip through.
     if (!canLeaveWorkspace()) return false;
-    if (!ResearchNotes.canWorkspaceSelect() || !Datasets.canWorkspaceSelect() || !People.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
+    if (!Datasets.canWorkspaceSelect() || !People.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
     if (hasWorkspaceDrafts() && workspaceWritingSnapshot() !== discardedWorkspaceWriting) {
       toast('Your writing changed. Switch workspaces again to review it.', { tone: 'warn' });
       return false;
@@ -702,9 +699,6 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   },
   async enter() {
     resetWorkspaceView();
-    // Selection cleared the client snapshot. Retire the previous workspace's
-    // editor before the destination read can pause or fail.
-    WorkspaceNotes.sync({view:V.view, paper:V.paper});
     renderWorkspacePicker();
     syncHash(true);
     await refresh();
@@ -739,7 +733,6 @@ function render() {
   syncAnalysisControls();
   People.sync();
   ResearchTools.sync();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   if (typeof syncAskContext === 'function') syncAskContext();
 }
@@ -775,7 +768,6 @@ function renderAll() {
   syncAnalysisControls();
   People.sync();
   ResearchTools.sync();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   if (typeof syncAskContext === 'function') syncAskContext();
   syncHash();
@@ -826,7 +818,7 @@ function renderStorageWarnings() {
 
 function showView(view) {
   const destination = {library: 'papers', claims: 'papers', research: 'research-nav',
-    findings: 'findings-nav', tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people', notes: 'btn-research-notes'}[view];
+    findings: 'findings-nav', tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people'}[view];
   if (destination) revealSidebar($(destination));
   if (view === 'tools') revealSidebar(toolButton());
   if (view === V.view) return;
@@ -870,7 +862,6 @@ function renderContent() {
   restoreNoteCursor(cursor);
   restorePaperActionCursor(actionFocus);
   renderContinuation();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   syncHash();
 }
 
@@ -911,7 +902,6 @@ function restoreNoteCursor(cursor) {
 function pageViews() {
   return {datasets: [Datasets, [V.dataset], $('btn-datasets')],
     people: [People, [V.person, V.author], $('btn-people')],
-    notes: [ResearchNotes, [V.note], $('btn-research-notes')],
     tools: [ResearchTools, [V.tool, V.board], toolButton()]};
 }
 
@@ -1629,36 +1619,29 @@ async function updateFromPoll() {
   syncAnalysisControls();
   People.sync();
   ResearchTools.sync();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   if (typeof syncAskContext === 'function') syncAskContext();
 }
 
 async function boot() {
-  WorkspaceNotes.connect(workspaceClient);
-  ResearchNotes.connect(workspaceClient, {open: (id) => openPageView('notes', {note: id || undefined}), follow: followToPaper,
-    selected: (id) => { V.note = id; syncHash(); }});
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
   $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
   People.connect(workspaceClient, followToPaper, (id, author) => { V.person = id; V.author = author; syncHash(); });
   $('btn-people').addEventListener('click', () => openPageView('people'));
-  $('btn-research-notes').addEventListener('click', () => openPageView('notes'));
   ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
     selected: followTools});
   window.FocusedReview.connect(workspaceClient);
   AppStartup.phase('connection');
   await loadWorkspaces();
   applyHash();
-  // Older links name a note or a dataset in the query string, from when each
-  // opened in a sheet. Links between notes are still written that way.
+  // Older links name a dataset in the query string, from when it opened in a sheet.
   const query = new URLSearchParams(location.search);
-  const noteId = query.get('note'), datasetId = query.get('dataset');
-  if (noteId || datasetId) {
+  const datasetId = query.get('dataset');
+  if (datasetId) {
     const url = new URL(location.href);
-    url.searchParams.delete('note'); url.searchParams.delete('dataset');
+    url.searchParams.delete('dataset');
     history.replaceState(null, '', url);
-    if (noteId) Object.assign(V, {view: 'notes', paper: null, note: noteId});
-    else Object.assign(V, {view: 'datasets', paper: null, dataset: datasetId});
+    Object.assign(V, {view: 'datasets', paper: null, dataset: datasetId});
   }
   const changed = await pull();
   AppStartup.phase('interface');

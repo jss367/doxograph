@@ -11,7 +11,7 @@ from test_tools_action_history_browser import inert_tools as inert_tools
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('kind', ['dataset', 'research-note', 'claim', 'references'])
+@pytest.mark.parametrize('kind', ['dataset', 'claim', 'references'])
 def test_quit_snapshot_is_stable_for_same_writing_and_changes_for_new_state(engine, kind):
     _, claims, _ = seed()
 
@@ -19,7 +19,7 @@ def test_quit_snapshot_is_stable_for_same_writing_and_changes_for_new_state(engi
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             with _server() as url:
-                if kind in ('dataset', 'research-note'):
+                if kind in ('dataset'):
                     path = '/api/datasets' if kind == 'dataset' else '/api/research-notes'
                     item = httpx.post(url+path, json={'name':'Synthetic'} if kind == 'dataset' else {'title':'Synthetic'}).json()
                     view, query, selector = ('datasets', 'dataset', '#dataset-description') if kind == 'dataset' else ('notes', 'note', '#note-body')

@@ -201,7 +201,7 @@ const ResearchTools = (() => {
     // its tab.
     if (!still(move)) return;
     loaded = target;
-    const flushed = await WorkspaceNotes.flush();
+    const flushed = true;
     if (!still(move)) return;
     if (!flushed) {
       notebook = null;
@@ -1572,7 +1572,6 @@ const ResearchTools = (() => {
   // is still()'s check without its `shown`.
   async function mayEnter(name) {
     const move = navigationVersion();
-    if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return false; }
     const leaving = connectionDraft && loaded?.tab !== name;
     if (leaving && !await confirmDialog('Discard the connection you are writing?', {ok:'Discard changes'})) return false;
     if (navigationVersion() !== move) return false;
@@ -1637,7 +1636,6 @@ const ResearchTools = (() => {
       else visibleClaims().forEach(c => claims.add(refKey(c)));
       remember(); sync(); return;
     }
-    if (name === 'notes') { WorkspaceNotes.open(); return; }
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       // A tab, or a tool used from the library, opens the research tools first.

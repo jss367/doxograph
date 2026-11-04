@@ -183,7 +183,7 @@ header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-le
   font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .library-heading h2 { margin: 0; font-size: 1.7rem; font-weight: 600; letter-spacing: -.035em; }
 .library-heading .stats { margin: .4rem 0 0; font-size: .8rem; color: var(--muted); }
-#main > :is(.library-heading, #workspace-notes-home, #continue-reading, #panes),
+#main > :is(.library-heading, #continue-reading, #panes),
 #reading-claim-tools > :is(.filters, .selection-tools) { max-width: 80rem; margin-inline: auto; }
 
 .continue-reading { background: var(--panel); border: 1px solid var(--line);
@@ -582,8 +582,7 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 /* The findings page: a section per topic, the synthesis as one line until
    opened, and each agreement or tension as a row whose claims are a click
    away. The claims inside reuse the tension card's drawing. */
-.findings-view #main > :is(.library-heading, #workspace-notes-home, #continue-reading, #reading-navigation, #reading-claim-tools),
-.findings-view #workspace-notes-reading { display: none; }
+.findings-view #main > :is(.library-heading, #continue-reading, #reading-navigation, #reading-claim-tools) { display: none; }
 .findings-head .row { align-items: flex-start; gap: .6rem; margin-top: .6rem; }
 .findings-head .row > .primary { white-space: nowrap; }
 .ftoc { display: flex; flex-wrap: wrap; gap: .35rem; }
@@ -629,7 +628,7 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .frow .cact { margin-top: .5rem; display: flex; gap: .4rem; }
 @media (max-width: 800px) { .frow .tpair { grid-template-columns: 1fr; } .frow .fwho { display: none; } }
 
-/* A page view (datasets, research notes, research tools) takes the main pane to itself. */
+/* A page view (datasets, people, research tools) takes the main pane to itself. */
 .page-view #main > :not(.main-page, .storage-warning) { display: none; }
 
 /* The research form: context and the ledger of my own claims. */

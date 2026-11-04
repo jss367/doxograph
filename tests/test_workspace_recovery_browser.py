@@ -39,7 +39,6 @@ def test_restore_previous_version_and_download_archive(engine):
                     Path('.context').mkdir(exist_ok=True)
                     await page.screenshot(path='.context/previous-document-versions.png')
                 await page.get_by_role('button', name='Close previous versions').click()
-                await expect(page.locator('#workspace-notes')).to_have_value('Original conclusion')
                 await page.locator('#workspace-actions > summary').click()
                 async with page.expect_download() as download:
                     await page.locator('#btn-workspace-archive').click()
