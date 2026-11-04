@@ -48,6 +48,10 @@ class BrowserRuntime:
 runtime = BrowserRuntime()
 run_browser = runtime.run
 
+# An init script for a page whose test works on a PDF's claims: they sit in a
+# drawer under the PDF, closed until opened, and the browser remembers which.
+CLAIMS_OPEN = "localStorage.setItem('doxograph-claims-drawer', 'open')"
+
 
 @asynccontextmanager
 async def browser_session(engine="chromium"):

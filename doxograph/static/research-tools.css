@@ -73,6 +73,7 @@
 /* The paper and notes share a reading layout; each owns its scroll position. */
 #paperhead:empty { display: none; }
 #reader[hidden], #panes.reading #reader[hidden] { display: none; }
+#claims-drawer[hidden], #claims-drawer-list[hidden] { display: none; }
 #claim-column { min-width: 0; }
 #panes.reading #paperhead { grid-column: 1 / -1; }
 #panes.reading #reader { min-width: 0; display: flex; flex-direction: column; }
@@ -218,9 +219,9 @@ body.reading-paper { height: 100dvh; overflow: hidden; display: flex; flex-direc
   box-shadow: none; }
 .reading-paper #panes.reading { flex: 1; min-height: 0; display: grid;
   grid-template-columns: minmax(0, 1fr) 0 min(var(--claims-width, 30%), max(0px, calc(100% - 280px)));
-  grid-template-rows: auto minmax(0, 1fr); gap: 0; }
+  grid-template-rows: auto minmax(0, 1fr) auto; gap: 0; }
 #claims-resize { display: none; }
-.reading-paper #claims-resize { display: block; grid-column: 2; grid-row: 2;
+.reading-paper #claims-resize { display: block; grid-column: 2; grid-row: 2 / 4;
   width: 8px; margin: 0 -4px; z-index: 5; cursor: col-resize; touch-action: none; }
 .reading-paper #claims-resize::before { content: ''; display: block; width: 2px; height: 100%; margin: 0 auto;
   background: var(--line); }
@@ -275,7 +276,18 @@ body.resizing-claims { cursor: col-resize; user-select: none; }
 .reading-paper .pdf-scroll { background: color-mix(in srgb, var(--line) 55%, var(--panel)); border-radius: 5px 5px 0 0; padding: 1rem; }
 .reading-paper #reader-hint { font-size: .7rem; background: var(--panel); }
 .reading-paper #panes.reading #claim-column { height: 100%; overflow-y: auto;
-  grid-column: 3; grid-row: 2; border-left: 1px solid var(--line); overflow-wrap: anywhere; }
+  grid-column: 3; grid-row: 2 / 4; border-left: 1px solid var(--line); overflow-wrap: anywhere; }
+/* The claims, in a drawer under the PDF: a one-line handle until opened. */
+.reading-paper #claims-drawer { grid-column: 1; grid-row: 3; min-width: 0; padding: 0 1rem;
+  background: var(--panel); border-top: 1px solid var(--line); }
+#claims-drawer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .75rem; padding: .55rem 0; font-size: .8rem; }
+#claims-drawer-bar .hint { font-size: .8rem; }
+#claims-drawer-bar > .warn { flex: 1 0 100%; margin: 0; }
+#claims-drawer-bar button.link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--accent); }
+#claims-drawer-bar button.link:hover { text-decoration: underline; }
+#claims-drawer-bar .drawer-actions { display: flex; gap: .4rem; margin-left: auto; }
+#claims-drawer-list { height: min(40dvh, 28rem); overflow-y: auto; overflow-wrap: anywhere; padding: .25rem 0 1rem;
+  border-top: 1px solid var(--line); }
 .reading-paper #panes.reading #content { padding: 1.25rem; }
 .reading-paper #workspace-notes-reading { padding: 1.25rem 1.25rem 0; }
 .reading-paper #workspace-notes-reading:empty { display: none; }
@@ -305,6 +317,8 @@ body.resizing-claims { cursor: col-resize; user-select: none; }
   .reading-paper #paperhead { width: 100%; }
   .reading-paper #panes.reading #reader { width: 100%; height: 70dvh; min-height: 24rem; }
   .reading-paper #panes.reading #claim-column { width: 100%; height: auto; overflow: visible; border-left: 0; border-top: 1px solid var(--line); }
+  .reading-paper #claims-drawer { width: 100%; }
+  .reading-paper #claims-drawer-list { height: auto; overflow: visible; }
   .reading-paper .reading-head { padding: .75rem; }
   #reading-navigation { padding: .5rem; gap: .4rem; }
   #reading-navigation > span { display: none; }

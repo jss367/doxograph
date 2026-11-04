@@ -1,10 +1,10 @@
 'use strict';
 
-// The reading layout and the dividers between the library, the claims, and
-// the paper. Shares the library state declared in app.js.
+// The reading layout and the dividers between the library, the paper, and
+// its overview. Shares the library state declared in app.js.
 
-// The paper whose PDF is shown beside the claims: the one selected, when it
-// has a PDF and the reader has not put it away.
+// The paper whose PDF is shown, with its claims in a drawer under it: the one
+// selected, when it has a PDF and the reader has not put it away.
 function readingPaper() {
   if (V.view !== 'claims' || !V.paper || V.pdfHidden) return null;
   const paper = S.papers.find((p) => p.key === V.paper);
@@ -13,7 +13,7 @@ function readingPaper() {
 
 // Reading has its own layout. Library filters remain available on demand and
 // keep their state when the user returns to the library.
-let readingClaimsCollapsed = false;
+let readingOverviewCollapsed = false;
 function layoutPanes(reading) {
   const wasReading = document.body.classList.contains('reading-paper');
   document.body.classList.toggle('reading-paper', Boolean(reading));
@@ -25,7 +25,14 @@ function layoutPanes(reading) {
     const narrow = reading && window.matchMedia('(max-width: 800px)').matches;
     setReadingLibrary(Boolean(narrow));
   }
-  document.body.classList.toggle('claims-collapsed', Boolean(reading) && readingClaimsCollapsed);
+  document.body.classList.toggle('claims-collapsed', Boolean(reading) && readingOverviewCollapsed);
+  // Off the reader the claims are drawn in the content pane, so the drawer is
+  // emptied: a second copy of a card, hidden, would answer its selectors.
+  $('claims-drawer').hidden = !reading;
+  if (!reading) {
+    $('claims-drawer-bar').innerHTML = ''; $('claims-drawer-list').innerHTML = '';
+    delete $('claims-drawer-bar').dataset.paper;
+  }
   fitClaimsWidth();
   const filtersOpen = document.body.classList.contains('reading-filters-open');
   const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.facet || V.ledger || V.unreviewed || V.unverified);
@@ -43,13 +50,47 @@ function setReadingLibrary(collapsed) {
   fitClaimsWidth();
 }
 
-function setReadingClaims(collapsed) {
+function setReadingOverview(collapsed) {
   if (collapsed && $('claim-column').contains(document.activeElement)) $('btn-reader-claims').focus();
-  readingClaimsCollapsed = collapsed;
+  readingOverviewCollapsed = collapsed;
   document.body.classList.toggle('claims-collapsed', document.body.classList.contains('reading-paper') && collapsed);
-  $('btn-reader-claims').textContent = collapsed ? 'Show claims' : 'Hide claims';
+  $('btn-reader-claims').textContent = collapsed ? 'Show overview' : 'Hide overview';
   $('btn-reader-claims').setAttribute('aria-expanded', String(!collapsed));
   fitClaimsWidth();
+}
+
+// Under the PDF the claims sit in a drawer, closed until asked for, and kept
+// open or closed in this browser. Whatever shows the reader one claim opens
+// it: a link to the claim, the keys that move between claims, an editor.
+const CLAIMS_DRAWER_KEY = 'doxograph-claims-drawer';
+let claimsDrawerOpen = false;
+// Counts every opening and closing, so work that finishes later can tell the
+// reader has chosen since it started.
+let claimsDrawerMoves = 0;
+try { claimsDrawerOpen = localStorage.getItem(CLAIMS_DRAWER_KEY) === 'open'; } catch (_) { /* closed */ }
+
+function syncClaimsDrawer() {
+  $('claims-drawer-list').hidden = !claimsDrawerOpen;
+  const toggle = $('claims-drawer-bar').querySelector('[data-act="toggle-claims"]');
+  if (toggle) {
+    toggle.textContent = claimsDrawerOpen ? 'Hide claims' : 'Show claims';
+    toggle.setAttribute('aria-expanded', String(claimsDrawerOpen));
+  }
+}
+
+function setClaimsDrawer(open) {
+  if (!open && $('claims-drawer-list').contains(document.activeElement)) {
+    $('claims-drawer-bar').querySelector('[data-act="toggle-claims"]')?.focus();
+  }
+  claimsDrawerOpen = open;
+  claimsDrawerMoves += 1;
+  try { localStorage.setItem(CLAIMS_DRAWER_KEY, open ? 'open' : 'closed'); } catch (_) { /* for this page only */ }
+  syncClaimsDrawer();
+}
+
+// Without a PDF the claims are in the content pane already, on show.
+function revealClaims() {
+  if (document.body.classList.contains('reading-paper') && !claimsDrawerOpen) setClaimsDrawer(true);
 }
 
 function setReadingFilters(open) {
@@ -320,7 +361,7 @@ window.addEventListener('resize', fitSideWidth);
   });
 }
 
-// The claims column keeps its own width. ResizeObserver also refits it when
+// The overview column keeps its own width. ResizeObserver also refits it when
 // the library opens or changes width, without replacing the mounted reader.
 const CLAIMS_WIDTH_KEY = 'doxograph-claims-width';
 let claimsWidthWanted = null;
@@ -370,7 +411,7 @@ window.addEventListener('resize', fitClaimsWidth);
   handle.addEventListener('pointermove', event => {
     if (!drag || event.pointerId !== drag.pointer) return;
     if (Math.abs(event.clientX - drag.from) > 2) movedThisPress = true;
-    // Moving the right divider left makes the claims column wider.
+    // Moving the right divider left makes the overview column wider.
     claimsWidthWanted = clampClaimsWidth(drag.width + drag.from - event.clientX);
     fitClaimsWidth();
   });
@@ -406,7 +447,7 @@ $('btn-reader-library').addEventListener('click', () => {
   setReadingLibrary(!document.body.classList.contains('library-collapsed'));
 });
 $('btn-reader-claims').addEventListener('click', () => {
-  setReadingClaims(!readingClaimsCollapsed);
+  setReadingOverview(!readingOverviewCollapsed);
 });
 window.matchMedia('(max-width: 800px)').addEventListener('change', event => {
   if (readingPaper()) setReadingLibrary(event.matches);

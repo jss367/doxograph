@@ -310,6 +310,7 @@ async function runTextSearch(query, quiet = false) {
   const seq = ++textSearchSeq;
   const workspace = workspaceClient.workspaceId;
   const library = V.view === 'library';
+  const move = navigationVersion(), drawer = claimsDrawerMoves;
   if (!quiet) {
     captureOpenEditor();   // the redraw rebuilds any open form from state
     V.textSearch = { q: query, loading: true, papers: [], terms: [], error: null };
@@ -344,6 +345,13 @@ async function runTextSearch(query, quiet = false) {
   if (unchanged) return;
   captureOpenEditor();
   drawSearchProgress();
+  // Reading a PDF, the passages are drawn in the claims drawer under it, and a
+  // closed drawer would hide what the reader just searched for. Only their own
+  // search opens it, and only when it found something or could not search: a
+  // re-run after a corpus change is not a question they asked. Nor does an
+  // answer that lands after the reader moved, even back to the same paper, or
+  // after they opened or closed the drawer themselves while it was out.
+  if (!quiet && navigationVersion() === move && claimsDrawerMoves === drawer && $('claims-drawer-list').querySelector('.pdfhit, .pdfhits-failed')) revealClaims();
 }
 
 // The results live under the claims, so the research form never shows them —
@@ -594,7 +602,7 @@ function textSearchBlock() {
   const head = '<h3>In the PDFs</h3>';
   if (found.loading) return `<div class="pdfhits">${head}<p class="hint">Reading the papers…</p></div>`;
   if (found.error) {
-    return `<div class="pdfhits">${head}<p class="hint">Could not search the papers: ${esc(found.error)}</p></div>`;
+    return `<div class="pdfhits">${head}<p class="hint pdfhits-failed">Could not search the papers: ${esc(found.error)}</p></div>`;
   }
   if (!found.papers.length) {
     return `<div class="pdfhits">${head}<p class="hint">No paper's text holds every word of that.</p></div>`;

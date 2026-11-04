@@ -105,17 +105,17 @@ def paper(key: str) -> Response:
 @router.get("/claim/{claim_id:path}", include_in_schema=False)
 def claim(claim_id: str, paper: str | None = None) -> Response:
     if paper is not None:
-        return _open(paper=paper, sel=claim_id) if _holds(paper, claim_id) else _missing(f"Claim {claim_id}")
+        return _open(paper=paper, sel=claim_id, show="claim") if _holds(paper, claim_id) else _missing(f"Claim {claim_id}")
     # A claim id is normally its paper's key and a sequence number, so the
     # paper is read alone. Other ids are found by a scan.
     owner = re.fullmatch(r"(.+)-c\d+", claim_id)
     if owner and _holds(owner.group(1), claim_id):
-        return _open(paper=owner.group(1), sel=claim_id)
+        return _open(paper=owner.group(1), sel=claim_id, show="claim")
     holders = [p["key"] for p in store.all_papers()
                if any(c["id"] == claim_id for c in p.get("claims", []))]
     if len(holders) != 1:
         return _missing(f"Claim {claim_id}", holders=holders, claim_id=claim_id)
-    return _open(paper=holders[0], sel=claim_id)
+    return _open(paper=holders[0], sel=claim_id, show="claim")
 
 
 @router.get("/ledger/{ledger_id:path}", include_in_schema=False)

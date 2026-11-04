@@ -311,13 +311,13 @@ function paperOverview(paper) {
     <div class="paper-reading-progress"><span class="who">Reading progress</span>
       <p data-paper-progress="${esc(paper.key)}">${esc(paperReadingProgress(paper.key))}</p></div>
     ${(paper.labels || []).length ? `<div class="labels">${paper.labels.map(labelChip).join('')}</div>` : ''}
-    ${paperCode(paper)}
     <div class="paper-summary"><h4>Summary ${paperTextEdit(paper, 'summary')}</h4>
       ${paper.summary ? `<p>${esc(paper.summary)}</p>` : '<p class="hint">No summary yet. You can read the paper and add your own notes.</p>'}</div>
     <div class="paper-relevance"><h4>Why it matters ${paperTextEdit(paper, 'relevance')}</h4>
       ${paper.relevance ? `<p>${esc(paper.relevance)}</p>` : '<p class="hint">Not written yet.</p>'}</div>
     ${paperNote(paper.key)}
     ${proposedPanel(paper.key)}
+    ${paperCode(paper)}
   </section>`;
 }
 
