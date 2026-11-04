@@ -179,5 +179,7 @@ jobs:
             -framework AppKit -framework WebKit native/Sources/*.swift
       - name: Test the update summary
         run: bash native/test-updater.sh
+      - name: Test update alert presentation and responses
+        run: bash native/test-update-status.sh
       - name: Test quitting and relaunching
         run: bash native/test-quit.sh

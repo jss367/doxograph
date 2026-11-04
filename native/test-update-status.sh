@@ -24,13 +24,7 @@ for source in (here/'Sources').glob('*.swift'):
         }'''
         assert text.count(dispatch)==1
         text=text.replace(dispatch,'        updateStatusProbeStarted()')
-        presentation='''            if window.window.isVisible {
-                alert.beginSheetModal(for: window.window, completionHandler: handle)
-            } else {
-                handle(alert.runModal())
-            }'''
-        assert text.count(presentation)==1
-        text=text.replace(presentation,'            updateStatusProbePresent(handle)')
+        text=text.replace('let alert = NSAlert()', 'let alert = UpdateStatusProbeAlert()')
         text=text.replace('Updater.run(', 'updateStatusProbeForbiddenUpdater(')
         text=text.replace('NSApp.terminate(nil)','updateStatusProbeTerminate()')
         text,count=re.subn(r'    private func startServer\(\) \{.*?\n    \}',

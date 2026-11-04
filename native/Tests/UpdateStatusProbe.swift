@@ -2,8 +2,21 @@ import AppKit
 
 private var pendingPrompts: [(NSApplication.ModalResponse) -> Void] = []
 private var updateStarts = 0, terminationRequests = 0
-func updateStatusProbePresent(_ callback: @escaping (NSApplication.ModalResponse) -> Void) {
-    pendingPrompts.append(callback)
+/// Record the actual presentation calls without opening a dialog.
+final class UpdateStatusProbeAlert: NSAlert {
+    var sheetParent: NSWindow?
+    var modalCalls = 0
+
+    override func beginSheetModal(for sheetWindow: NSWindow,
+        completionHandler handler: ((NSApplication.ModalResponse) -> Void)? = nil) {
+        sheetParent = sheetWindow
+        if let handler { pendingPrompts.append(handler) }
+    }
+
+    override func runModal() -> NSApplication.ModalResponse {
+        modalCalls += 1
+        return .alertSecondButtonReturn
+    }
 }
 func updateStatusProbeStarted() { updateStarts += 1 }
 func updateStatusProbeTerminate() { terminationRequests += 1 }
@@ -21,6 +34,26 @@ private enum UpdateStatusProbe {
         app.finishLaunching()
         // No delegate registration, application launch, updater, server or real sheet.
         let delegate = AppDelegate(), window = delegate.window
+        let hiddenAlert = UpdateStatusProbeAlert()
+        var hiddenResponses: [NSApplication.ModalResponse] = []
+        precondition(!window.window.isVisible)
+        window.present(hiddenAlert) { hiddenResponses.append($0) }
+        precondition(hiddenAlert.modalCalls == 1 && hiddenAlert.sheetParent == nil)
+        precondition(hiddenResponses == [.alertSecondButtonReturn] && pendingPrompts.isEmpty)
+        print("PASS: hidden window uses runModal and delivers its response")
+
+        window.window.orderFront(nil)
+        defer { window.window.orderOut(nil) }
+        precondition(window.window.isVisible)
+        let visibleAlert = UpdateStatusProbeAlert()
+        var visibleResponses: [NSApplication.ModalResponse] = []
+        window.present(visibleAlert) { visibleResponses.append($0) }
+        precondition(visibleAlert.sheetParent === window.window && visibleAlert.modalCalls == 0)
+        precondition(visibleResponses.isEmpty && pendingPrompts.count == 1)
+        pendingPrompts.removeFirst()(.alertFirstButtonReturn)
+        precondition(visibleResponses == [.alertFirstButtonReturn])
+        print("PASS: visible window uses beginSheetModal and defers its response")
+
         let updateMenu = NSMenuItem(title: "Update Doxograph", action: #selector(AppDelegate.updateDoxograph(_:)), keyEquivalent: "")
         func finish(ready: Bool) {
             delegate.ready = ready

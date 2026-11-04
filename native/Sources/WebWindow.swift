@@ -488,7 +488,8 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
         present(alert) { completionHandler($0 == .alertFirstButtonReturn ? field.stringValue : nil) }
     }
 
-    private func present(_ alert: NSAlert, then handle: @escaping (NSApplication.ModalResponse) -> Void) {
+    /// Present a sheet on a visible window, or a modal alert when it is hidden.
+    func present(_ alert: NSAlert, then handle: @escaping (NSApplication.ModalResponse) -> Void) {
         if window.isVisible {
             alert.beginSheetModal(for: window, completionHandler: handle)
         } else {

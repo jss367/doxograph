@@ -163,6 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     completion: { [weak self] result in self?.finishUpdate(result, ownsServer: ownsServer) })
     }
 
+    /// Report the update result and offer a relaunch after replacing the bundle.
+    /// A deferred response must preserve any newer update's progress.
     private func finishUpdate(_ result: Result<Updater.Outcome, Updater.Failure>, ownsServer: Bool) {
         updating = false
         switch result {
@@ -203,11 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // Run modally from the updater's main-queue callback, this alert
             // was seen to go blank until a screenshot redrew it. A sheet on the
             // window avoids that path, as `inform` and `warn` already do.
-            if window.window.isVisible {
-                alert.beginSheetModal(for: window.window, completionHandler: handle)
-            } else {
-                handle(alert.runModal())
-            }
+            window.present(alert, then: handle)
 
         case .success(let outcome):
             if serverFailed {
