@@ -2,6 +2,7 @@ import AppKit
 
 private var pendingPrompts: [(NSApplication.ModalResponse) -> Void] = []
 private var updateStarts = 0, terminationRequests = 0, serverStarts = 0
+private var terminationReplies: [Bool] = []
 /// Record the actual presentation calls without opening a dialog.
 final class UpdateStatusProbeAlert: NSAlert {
     var sheetParent: NSWindow?
@@ -20,6 +21,8 @@ final class UpdateStatusProbeAlert: NSAlert {
 }
 func updateStatusProbeStarted() { updateStarts += 1 }
 func updateStatusProbeTerminate() { terminationRequests += 1 }
+/// The answer to a terminateLater, recorded instead of ending a quit nobody began.
+func updateStatusProbeReply(_ allowed: Bool) { terminationReplies.append(allowed) }
 /// Counts the start instead of spawning a server.
 func updateStatusProbeServerStarted() { serverStarts += 1 }
 func updateStatusProbeForbiddenUpdater(command: String, repository: URL,
@@ -30,6 +33,14 @@ func updateStatusProbeForbiddenUpdater(command: String, repository: URL,
 
 @main
 private enum UpdateStatusProbe {
+    static func pump(_ until: () -> Bool) {
+        let deadline = Date().addingTimeInterval(8)
+        while !until() && Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        precondition(until(), "Inert update-status probe timed out")
+    }
+
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
@@ -107,13 +118,39 @@ private enum UpdateStatusProbe {
         delegate.serverFailed = false
         print("PASS: Later retries a failed server start immediately")
 
+        // A page whose writing will not save, so the quit's first save asks,
+        // and the probe's alert answers Don't Quit: a real decline, no server.
+        let web = window.webView
+        web.loadHTMLString("""
+          <!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'">
+          <script>window.doxographSaveDrafts = () => false;</script>
+          """, baseURL: nil)
+        pump { !web.isLoading }
+
         finish(ready: true)
         expectUpdateBlocked()
         answer(.alertFirstButtonReturn)
         precondition(!delegate.relaunchOffered && !delegate.updating)
         precondition(delegate.relaunchAfterQuit && terminationRequests == 1)
-        precondition(delegate.validateMenuItem(updateMenu), "A Relaunch whose quit is declined should allow another update")
-        print("PASS: Relaunch requests termination with no update running, then admits updates again")
-        print("PASS: no real updater, download, installation, server or relaunch invoked")
+        // What NSApp.terminate would do next: the delegate's own answer.
+        let reply = delegate.applicationShouldTerminate(app)
+        guard case .terminateLater = reply else { fatalError("Expected the quit to wait on its save") }
+        let starts = updateStarts
+        precondition(!delegate.validateMenuItem(updateMenu), "Update must be disabled while the Relaunch quit is pending")
+        delegate.updateDoxograph(nil)
+        precondition(updateStarts == starts && !delegate.updating, "An update started under a pending Relaunch quit")
+        precondition(window.status.stringValue == "Previous update finished")
+        print("PASS: Update is blocked, by menu and by direct call, while the Relaunch quit is pending")
+
+        pump { !terminationReplies.isEmpty }
+        precondition(terminationReplies == [false], "The unsaved-writing question should have declined the quit")
+        precondition(!delegate.relaunchAfterQuit, "A declined quit must call the relaunch off")
+        pump { !window.editingFrozen }
+        precondition(delegate.validateMenuItem(updateMenu), "A declined Relaunch quit should allow another update")
+        delegate.updateDoxograph(nil)
+        precondition(delegate.updating && updateStarts == starts + 1)
+        delegate.updating = false
+        print("PASS: a declined Relaunch quit admits updates again")
+        print("PASS: no real updater, download, installation, server, quit or relaunch invoked")
     }
 }

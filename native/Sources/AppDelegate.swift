@@ -20,7 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// about as one.
     private var relaunchOffered = false
     /// The bundle was replaced by an update, and the quit under way should be
-    /// followed by a launch of the new one.
+    /// followed by a launch of the new one. Update stays shut while this is
+    /// set, too: the quit asks about a running update only before its saves
+    /// and probe, which answer later, so an update begun in between would be
+    /// killed by a quit that never asked about it, and the relaunch would come
+    /// from a bundle it was halfway through rebuilding. Every way of staying
+    /// clears this, which opens Update again.
     private var relaunchAfterQuit = false
 
     /// Appended to an update's report when the server is not this app's to
@@ -134,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// restart: the update still happens, and the alert says the terminal has to
     /// do the rest.
     @objc func updateDoxograph(_ sender: Any?) {
-        guard !updating, !relaunchOffered else { return }
+        guard !updating, !relaunchOffered, !relaunchAfterQuit else { return }
         updating = true
         window.showStatus("Checking for updates…")
         // Finding the command can fall back to a login shell, which is slow.
@@ -501,9 +506,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard ready else {
             let uploading = Uploader.uploadsInFlight
             guard uploading > 0 else { return .terminateNow }
-            relaunchAfterQuit = false
-            return confirmInterruption(.quit, uploading: uploading, reading: 0)
-                ? .terminateNow : .terminateCancel
+            // Only staying calls the relaunch off; a quit let through here
+            // still owes the new bundle its launch.
+            guard confirmInterruption(.quit, uploading: uploading, reading: 0) else {
+                relaunchAfterQuit = false
+                return .terminateCancel
+            }
+            return .terminateNow
         }
         // Autosaved writing may still be waiting after the last keystroke.
         // Save it first; manual editors report their unsaved writing so the
@@ -815,8 +824,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Not while the server is still coming up, since the restart after
         // the update needs to know whether it is owned. A start that failed is
         // settled, and updating is then the way out. Not under an unanswered
-        // relaunch prompt either, whose Relaunch must not land mid-update.
-        case #selector(updateDoxograph(_:)): return (ready || serverFailed) && !updating && !relaunchOffered
+        // relaunch prompt either, whose Relaunch must not land mid-update, nor
+        // while the quit that Relaunch began is still saving and asking.
+        case #selector(updateDoxograph(_:)):
+            return (ready || serverFailed) && !updating && !relaunchOffered && !relaunchAfterQuit
         default: return true
         }
     }

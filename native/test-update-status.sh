@@ -27,6 +27,7 @@ for source in (here/'Sources').glob('*.swift'):
         text=text.replace('let alert = NSAlert()', 'let alert = UpdateStatusProbeAlert()')
         text=text.replace('Updater.run(', 'updateStatusProbeForbiddenUpdater(')
         text=text.replace('NSApp.terminate(nil)','updateStatusProbeTerminate()')
+        text=text.replace('NSApp.reply(toApplicationShouldTerminate:','updateStatusProbeReply(')
         text,count=re.subn(r'    private func startServer\(\) \{.*?\n    \}',
             '    private func startServer() { updateStatusProbeServerStarted() }',text,count=1,flags=re.S)
         assert count==1
