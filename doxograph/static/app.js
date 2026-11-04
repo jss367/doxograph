@@ -339,6 +339,10 @@ let popSeq = 0;
 window.addEventListener('popstate', async () => {
   navigationSeq++;
   const seq = ++popSeq;
+  // A link to a claim opens its drawer here as it does at boot. It is read now:
+  // the redraw below writes the address back without it.
+  const claimLinked = hashParams().get('show') === 'claim';
+  let applied = false;
   // A question still on screen belongs to the move this one supersedes —
   // Forward pressed while Back was asking about unsaved edits. Answering it
   // afterwards would switch the corpus for a move that is no longer where the
@@ -377,6 +381,7 @@ window.addEventListener('popstate', async () => {
     }
     applyHash();
     dropMissingFilters();
+    applied = true;
   } finally {
     // Every exit redraws, including the refused one, and the redraw writes the
     // URL back to what is on screen: an entry the page did not take must not
@@ -385,6 +390,7 @@ window.addEventListener('popstate', async () => {
     if (seq === popSeq) {
       restoringHistory = false;
       renderAll();
+      if (applied && claimLinked && V.view === 'claims' && V.selectedId) scrollToSelected();
     }
   }
 });

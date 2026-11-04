@@ -587,3 +587,41 @@ def test_claims_drawer_buttons_keep_focus_across_a_redraw(engine):
                     await expect(bar.locator(f'[data-act="{act}"]')).to_be_focused()
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_moving_to_a_claim_link_in_the_page_opens_the_drawer(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    first = store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+    second = store.add_claim('paper', {'text': 'Weak judges miss subtle errors.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+
+                # A move within the page, as Back, Forward and an edited address
+                # make, opens the drawer on the claim the address names.
+                go = "([sel, show]) => { location.hash = `view=claims&paper=paper&sel=${encodeURIComponent(sel)}${show}`; }"
+                await page.evaluate(go, [second['id'], '&show=claim'])
+                card = page.locator(f'#claims-drawer-list .claim.sel[data-claim="{second["id"]}"]')
+                await expect(card).to_be_visible()
+                await page.wait_for_function("!location.hash.includes('show=')")
+
+                # One that does not ask for it leaves the drawer as it was left.
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
+                await page.evaluate(go, [first['id'], ''])
+                await page.wait_for_function("id => V.selectedId === id", arg=first['id'])
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+                assert not errors
+
+    run_browser(scenario())
