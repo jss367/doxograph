@@ -379,3 +379,41 @@ def test_focused_review_falls_back_to_the_drawer_toggle(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_focused_review_does_not_focus_another_papers_review_button(engine):
+    config.set_ai_enabled(False)
+    for key, title in [('one', 'The first paper'), ('two', 'The second paper')]:
+        store.save_paper(store.new_paper(key, title=title))
+        store.pdf_path(key).write_bytes(minimal_pdf(['A passage about oversight.']))
+        store.add_claim(key, {'text': f'A claim from {title}.', 'reviewed': False})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="one"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await page.locator('#papers li[data-paper="two"]').click()
+                await expect(page.locator('#paperhead')).to_contain_text('The second paper')
+                dialog = page.locator('#focused-review')
+                bar = page.locator('#claims-drawer-bar')
+
+                # Opened on the second paper, closed once Back has moved the
+                # page to the first: that paper's Review button did not open it.
+                await bar.locator('[data-act="review-claims"]').click()
+                await expect(dialog).to_be_visible()
+                await page.go_back()
+                await expect(page.locator('#paperhead')).to_contain_text('The first paper')
+                await page.keyboard.press('Escape')
+                await expect(dialog).not_to_be_visible()
+                await expect(bar.locator('[data-act="review-claims"]')).not_to_be_focused()
+                await expect(bar.locator('[data-act="toggle-claims"]')).to_be_focused()
+                assert not errors
+
+    run_browser(scenario())
