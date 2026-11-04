@@ -71,7 +71,7 @@ def test_command_palette_destinations_and_actions(engine):
                 assert await page.evaluate("V.paper === null && V.tag === 'recovery'")
                 await expect(page.locator('.claim[data-paper="one"]')).to_be_visible()
                 await page.reload()
-                await expect(page.locator('#tags [data-tag="recovery"]')).to_have_class("active")
+                await page.wait_for_function("V.tag === 'recovery'")
                 await page.go_back()
                 await page.wait_for_function("V.paper === 'two' && V.tag === null")
 

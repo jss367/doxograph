@@ -118,34 +118,21 @@ const CommandPalette = (() => {
     const topics = new Map(S.tags.map(t => [t.name, t.description || '']));
     Object.keys(S.tag_counts).forEach(name => { if (!topics.has(name)) topics.set(name, ''); });
     topics.forEach((description, name) => add(`topic:${name}`, 'Topic', name, description, () => library(null, name)));
-    (S.notebook?.boards || []).forEach(b => add(`board:${b.id}`, 'Board', b.title,
-      `${b.entries.length} entries · Evidence board`, () => ResearchTools.openBoard(b.id)));
     add('all', 'Action', 'Show all papers', 'Browse every claim in this workspace', () => library(), 'library home');
     const click = (id, title, keywords = '') => {
-      if (!$(id).disabled) add(id, 'Action', title, '', () => {
-        revealSidebar($(id));
-        $(id).click();
-      }, keywords);
+      if (!$(id).disabled) add(id, 'Action', title, '', () => $(id).click(), keywords);
     };
     const view = (id, title, next) => add(id, 'Action', title, '', () => {
       if (V.view === next) return;
       showView(next); syncHash(true); renderAll();
     });
     view('findings', 'Browse findings', 'findings');
+    add('update-findings', 'Action', 'Update findings', 'Find tensions, then agreements, then write each topic\'s synthesis', () => { openFindings(); updateFindings(); });
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
     view('datasets', 'Open datasets', 'datasets');
     view('people', 'Open people', 'people');
-    ['questions', 'boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
-      const titles = {questions: 'Open research questions', boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
-        connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
-      add(`tool:${tool}`, 'Action', titles[tool], '', () => {
-        const target = document.querySelector(`[data-tool="${tool}"]`);
-        revealSidebar(target);
-        target.click();
-      });
-    });
     add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', focusPaperImport, 'import');
     add('search', 'Action', 'Search claims and PDF text', '', focusClaimSearch);
     click('btn-agent', 'Open Ask', 'chat question conversation library');
@@ -157,10 +144,6 @@ const CommandPalette = (() => {
     click('btn-settings', 'Open settings', 'appearance theme color AI');
     click('btn-help', 'Show keyboard shortcuts', 'help');
     click('btn-retag', 'Retag all papers');
-    click('btn-update-findings', 'Update findings');
-    click('btn-tensions', 'Find tensions');
-    click('btn-agreements', 'Find agreements');
-    click('btn-synth', 'Synthesize topics');
     return entries;
   }
 

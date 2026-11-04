@@ -55,6 +55,9 @@ header nav.pages button[aria-current="page"] { background: var(--sel); color: va
 .workspace-page .topic-list li:hover { border-color: var(--accent); color: var(--accent); }
 .workspace-page .topic-list .n { color: var(--muted); margin-left: .3rem; }
 .workspace-page .actions-row { display: flex; flex-wrap: wrap; gap: .4rem; }
+.workspace-page .topic-add { margin-top: .6rem; }
+.workspace-page .topic-add input { flex: 0 1 16rem; }
+.sidebar-nav { margin-top: 1rem; }
 header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-left: auto;
   justify-content: flex-end; gap: .5rem; font-size: .82rem; }
 #btn-command-palette { display: flex; align-items: center; gap: 1.5rem; color: var(--muted);
@@ -173,20 +176,6 @@ header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-le
   flex-wrap: wrap; padding: .8rem 0; border-bottom: 1px solid var(--line); }
 .backup-version p { margin: .3rem 0 0; }
 .backup-version .row { flex-wrap: wrap; }
-.sidebar-focus { display: flex; gap: .25rem; position: sticky; top: -1.2rem; z-index: 2;
-  background: var(--panel); margin: -1.2rem -1rem .9rem; padding: .75rem 1rem;
-  border-bottom: 1px solid var(--line); }
-.sidebar-focus button { flex: 1; min-width: 0; padding: .4rem .25rem; font-size: .8rem;
-  background: transparent; border-color: transparent; color: var(--muted); }
-.sidebar-focus button:hover, .sidebar-focus button[aria-pressed=true] {
-  background: var(--sel); color: var(--accent); }
-.sidebar-group { padding-bottom: 1rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
-.sidebar-group > summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
-.sidebar-description { display: block; margin: .2rem 0 .8rem; font-size: .72rem;
-  font-weight: 400; color: var(--muted); }
-.sidebar-group > .sec { margin-top: 1rem; }
-.sidebar-group #paper-import { margin-top: .75rem; padding-bottom: .75rem; }
-.sidebar-group .research-tools-nav { margin-top: .5rem; }
 .paper-library .plist { max-height: 30dvh; overflow-y: auto; overscroll-behavior: contain; }
 .library-heading { margin-bottom: 1.75rem; }
 .eyebrow { margin: 0 0 .35rem; color: var(--accent); font-size: .7rem;

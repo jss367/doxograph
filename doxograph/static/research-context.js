@@ -2,17 +2,6 @@
 
 // The research context and the reader's own claims, edited in one form.
 
-function renderResearchNav() {
-  const n = (S.ledger || []).length;
-  const bits = [];
-  bits.push(S.context ? 'context written' : 'no context yet');
-  bits.push(n ? `${n} claims of my own` : 'no claims of my own');
-  if (V.view !== 'research' && researchFormDirty()) bits.push('unsaved edits');
-  $('research-nav').innerHTML = `<li class="${V.view === 'research' ? 'active' : ''}" data-view="research">
-    <span class="pt">What I am studying</span>
-    <span class="pm">${esc(bits.join(' · '))}</span></li>`;
-}
-
 // --- research: the context and the ledger, edited in place -----------------
 //
 // context.md and ledger.yaml are the two inputs that most shape what
@@ -118,11 +107,13 @@ function workspaceTopics() {
   const counts = S.tag_counts || {};
   const declared = (S.tags || []).map((t) => t.name);
   const names = [...declared, ...Object.keys(counts).filter((name) => !declared.includes(name)).sort()];
-  if (!names.length) return '<h2>Topics</h2><p class="hint">No topics yet. The vocabulary is written as papers are read.</p>';
+  const add = `<div class="row topic-add"><input id="new-tag" placeholder="new topic" aria-label="New topic">
+    <button type="button" id="btn-tag">Add topic</button></div>`;
+  if (!names.length) return `<h2>Topics</h2><p class="hint">No topics yet. The vocabulary is written as papers are read.</p>${add}`;
   return `<h2>Topics</h2><ul class="topic-list">${names.map((name) => {
     const description = (S.tags.find((t) => t.name === name) || {}).description || '';
     return `<li data-open-topic="${esc(name)}" title="${esc(description)}">${esc(name)}${declared.includes(name) ? '' : ' *'}<span class="n">${counts[name] || 0}</span></li>`;
-  }).join('')}</ul>`;
+  }).join('')}</ul>${add}`;
 }
 
 function workspaceLabels() {
@@ -221,12 +212,3 @@ $('panes').addEventListener('submit', async (event) => {
   await saveResearch();
 });
 
-$('research-nav').addEventListener('click', (event) => {
-  if (!event.target.closest('[data-view]')) return;
-  // Clicking the item already shown is not navigation. Redrawing here would
-  // rebuild the form from `S` and throw away whatever has been typed into it.
-  if (V.view === 'research') return;
-  showView('research');
-  syncHash(true);
-  renderAll();
-});

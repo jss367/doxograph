@@ -78,7 +78,7 @@ def test_clear_active_filters(engine):
                 await chips.get_by_role("button", name=f"Remove filter: Paper: {title}", exact=True).click()
                 await expect(draft).to_have_value("Unsaved changes survive clearing filters.")
                 await expect(chips.locator(".filter-chip")).to_have_count(1)
-                await expect(page.locator("#tags .active")).to_have_count(1)
+                assert await page.evaluate("V.tag !== null")
                 await chips.get_by_role("button", name="Clear all", exact=True).click()
                 await expect(draft).to_have_value("Unsaved changes survive clearing filters.")
 

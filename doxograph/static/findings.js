@@ -10,17 +10,6 @@
 // the reader's eyes would lose their place.
 const findingsOpen = new Set();
 
-function renderFindingsNav() {
-  const sections = FindingsModel.topics(S);
-  const stale = sections.filter((s) => s.stale).length;
-  const parts = [];
-  if (sections.length) parts.push(`${sections.length} topic${sections.length === 1 ? '' : 's'}`);
-  if (stale) parts.push(`${stale} stale`);
-  $('findings-nav').innerHTML = `<li class="${V.view === 'findings' ? 'active' : ''}" data-view="findings">
-    <span class="pt">What the papers hold</span>
-    <span class="pm">${sections.length ? esc(parts.join(' · ')) : 'nothing written yet'}</span></li>`;
-}
-
 function findingRow(row, kind) {
   const open = findingsOpen.has(row.id);
   const sentence = FindingsModel.firstSentence(row.note) || `${kind} between ${FindingsModel.papersOf(row).join(' and ')}`;
@@ -138,17 +127,7 @@ function openFindings() {
   renderAll();
 }
 
-$('findings-nav').addEventListener('click', (event) => {
-  if (!event.target.closest('[data-view]')) return;
-  openFindings();
-});
-
 $('btn-findings').addEventListener('click', openFindings);
-
-$('btn-update-findings').addEventListener('click', async () => {
-  openFindings();
-  await updateFindings();
-});
 
 // A row's open state is the reader's, kept across the redraws listed above.
 $('content').addEventListener('toggle', (event) => {

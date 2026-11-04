@@ -82,7 +82,10 @@ $('btn-workspace-add').addEventListener('click', async () => {
   }
 });
 
-$('btn-tag').addEventListener('click', async () => {
+// The box is on the Workspace page, drawn with it, so the click is caught
+// on the document.
+document.addEventListener('click', async (event) => {
+  if (!event.target.closest('#btn-tag')) return;
   const name = $('new-tag').value.trim();
   if (!name) return;
   try {

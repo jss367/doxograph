@@ -814,7 +814,7 @@ def test_a_stale_confirmed_tension_can_be_confirmed_again_without_reopening():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 card = page.locator(f'.tcard[data-tension="{tid}"]')
                 stale = card.locator(".stale")
                 await stale.wait_for(state="visible")
@@ -1062,7 +1062,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                nav = page.locator('#research-nav [data-view="research"]')
+                nav = page.locator('#btn-workspace')
                 await nav.get_by_text("1 claims of my own", exact=False).wait_for()
                 await nav.click()
                 form = page.locator("#research-form")
@@ -1147,7 +1147,7 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                nav = page.locator('#research-nav [data-view="research"]')
+                nav = page.locator('#btn-workspace')
                 await nav.get_by_text("2 claims of my own", exact=False).wait_for()
                 await nav.click()
                 form = page.locator("#research-form")
@@ -1202,7 +1202,6 @@ def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
                 assert await card.locator(".tnote").text_content() == "All three report it."
                 await card.get_by_role("button", name="Confirm").click()
                 await page.locator('.tcard.confirmed[data-agreement="a1"]').wait_for(state="visible")
-                await page.locator('#agreements-nav', has_text="1 confirmed").wait_for()
 
     run_browser(scenario())
     assert store.agreement_rows()[0]["status"] == "confirmed"
@@ -1219,7 +1218,7 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                nav = page.locator('#research-nav [data-view="research"]')
+                nav = page.locator('#btn-workspace')
                 await nav.wait_for(state="visible")
                 await nav.click()
                 form = page.locator("#research-form")
@@ -1306,8 +1305,7 @@ def test_analysis_setting_survives_reload_and_disables_actions():
                 await expect(toggle).to_be_checked()
                 await toggle.uncheck()
                 await expect(page.locator('#ai-settings-status')).to_have_text("AI analysis disabled.")
-                for selector in ['#btn-retag', '#btn-tensions', '#btn-agreements', '#btn-synth',
-                                 '#auto-extract', '[data-act="reextract"]', '[data-act="retag-one"]']:
+                for selector in ['#btn-retag', '#auto-extract', '[data-act="reextract"]', '[data-act="retag-one"]']:
                     await expect(page.locator(selector)).to_be_disabled()
                 await expect(page.locator('#auto-extract')).not_to_be_checked()
                 await expect(page.locator('[data-act="add-claim"]')).to_be_enabled()
@@ -1363,8 +1361,7 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
                     # Leave the first tab untouched: only its normal state poll
                     # can update the open menu and the rendered action buttons.
                     await expect(toggle).to_be_checked(checked=enabled, timeout=10000)
-                    for selector in ['#btn-retag', '#btn-tensions', '#btn-agreements',
-                                     '#btn-synth', '#auto-extract', f'[data-act="find-{view}"]']:
+                    for selector in ['#btn-retag', '#auto-extract', f'[data-act="find-{view}"]']:
                         await expect(page.locator(selector)).to_be_enabled(enabled=enabled)
                     await expect(page.locator('#auto-extract')).to_be_checked(checked=enabled)
 
@@ -1395,7 +1392,7 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
                 else:
                     await page.locator('.synth[data-topic="recovery"] [data-act="edit-synth"]').click()
                     field = page.locator('textarea[data-synth="recovery"]')
-                    action = page.locator('#btn-synth')
+                    action = page.locator('.synth[data-topic="recovery"] [data-act="synthesize"]')
                 await field.fill("Unsaved draft that polling must preserve.")
                 await field.evaluate("el => el.setSelectionRange(8, 13)")
                 original_field = await field.element_handle()
@@ -1684,12 +1681,12 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
                 await page.locator(".paperhead h2", has_text="A study").wait_for()
                 assert "paper=doe2026study" in page.url
 
-                await page.locator('#tags [data-tag="locomotion"]').click()
+                await page.evaluate("V.tag = V.tag === 'locomotion' ? null : 'locomotion'; syncHash(true); renderAll()")
                 assert "tag=locomotion" in page.url
 
                 # A reload lands where the URL says, filters and all.
                 await page.reload()
-                await page.locator('#tags [data-tag="locomotion"].active').wait_for()
+                await page.wait_for_function("V.tag === 'locomotion'")
                 assert await page.locator('#papers [data-paper="doe2026study"].active').count() == 1
 
                 # Typing replaces the entry rather than adding one per letter,
@@ -1699,7 +1696,7 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
                 await page.go_back()
                 await page.wait_for_function("() => !location.hash.includes('q=gait')")
                 assert await page.input_value("#q") == ""
-                assert await page.locator('#tags [data-tag="locomotion"].active').count() == 0
+                assert await page.evaluate("V.tag !== 'locomotion'")
                 assert "paper=doe2026study" in page.url
 
                 await page.go_back()
@@ -2549,7 +2546,7 @@ def test_the_status_filter_is_part_of_the_view_the_url_carries():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 await page.locator("#tension-status").select_option("dismissed")
                 await page.locator(".tcard.dismissed").wait_for()
                 assert "tstatus=dismissed" in page.url
@@ -2762,7 +2759,7 @@ def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('.claim[data-claim="paper-a-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
-                await page.locator("#btn-tensions").click()
+                await page.evaluate("findTensions()")
                 for _ in range(100):
                     if sent_to:
                         break
@@ -2860,9 +2857,9 @@ def test_back_from_the_analysis_views_returns_to_the_claims():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                for button, view in [("#btn-tensions", "tensions"), ("#btn-agreements", "agreements")]:
-                    await page.locator(button).click()
-                    await page.locator(f'#{view}-nav [data-view="{view}"].active').wait_for()
+                for view in ["tensions", "agreements"]:
+                    await page.evaluate(f"openPage('{view}')")
+                    await page.wait_for_function(f"V.view === '{view}'")
                     assert f"view={view}" in page.url
                     await page.go_back()
                     await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
@@ -2945,7 +2942,7 @@ def test_back_returns_to_the_research_form_after_leaving_it():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 for leave in ["Cancel", "Save"]:
-                    await page.locator('#research-nav [data-view="research"]').click()
+                    await page.locator('#btn-workspace').click()
                     await page.locator("#research-form").wait_for()
                     assert "view=research" in page.url
                     await page.locator("#research-form").get_by_role(
@@ -2957,7 +2954,7 @@ def test_back_returns_to_the_research_form_after_leaving_it():
                     # nothing, which is what replacing its entry looked like.
                     await page.go_back()
                     await page.locator("#research-form").wait_for()
-                    await page.locator('#research-nav [data-view="research"].active').wait_for()
+                    await page.locator('#btn-workspace[aria-current="page"]').wait_for()
                     await page.go_forward()
                     await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
 
@@ -2979,12 +2976,12 @@ def test_a_url_naming_a_topic_that_is_gone_falls_back_to_the_corpus():
                 assert "tag=gait" not in page.url
 
                 # And a topic that goes while an entry naming it is in history.
-                await page.locator('#tags [data-tag="recovery"]').click()
-                await page.locator('#tags [data-tag="recovery"].active').wait_for()
+                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
+                await page.wait_for_function("V.tag === 'recovery'")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 store.rename_tag("recovery", "recovery-rate")
                 # A poll picks the rename up.
-                await page.locator('#tags [data-tag="recovery-rate"]').wait_for()
+                await page.wait_for_function("'recovery-rate' in S.tag_counts")
                 await page.go_back()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
                 assert "tag=recovery&" not in page.url and not page.url.endswith("tag=recovery")
@@ -3788,7 +3785,7 @@ def test_a_url_naming_the_research_view_draws_it_at_boot():
             with _server() as url:
                 await page.goto(f"{url}/#view=research")
                 await page.locator("#research-form").wait_for(timeout=5000)
-                await page.locator('#research-nav [data-view="research"].active').wait_for()
+                await page.locator('#btn-workspace[aria-current="page"]').wait_for()
 
                 # A reload of the same address redraws it too.
                 await page.reload()
@@ -3827,12 +3824,12 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
                 await notice.wait_for()
 
                 # The tension needs both its claims, so it is not shown at all.
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 await page.locator(".paperhead h2", has_text="Where papers disagree").wait_for()
                 assert await page.locator(f'.tcard[data-tension="{tid}"]').count() == 0
 
                 # The agreement keeps the members that are left, and says so.
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 group = page.locator('.tcard[data-agreement="a1"]')
                 await group.wait_for()
                 assert await group.locator(".kind.agreement").text_content() == "2 papers"
@@ -3843,7 +3840,7 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
                 await notice.get_by_role("button", name="Undo").click()
                 await group.locator('[data-tclaim="paper-a-c1"]').wait_for()
                 assert await group.locator(".kind.agreement").text_content() == "3 papers"
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 await page.locator(f'.tcard[data-tension="{tid}"]').wait_for()
 
     run_browser(scenario())
@@ -3864,8 +3861,8 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="solo"]').wait_for()
-                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
+                await page.wait_for_function("'solo' in S.tag_counts")
+                assert await page.evaluate("String(S.tag_counts['shared'] || 0)") == "2"
 
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 card = page.locator('.claim[data-claim="paper-a-c1"]')
@@ -3877,13 +3874,12 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
                 # The topic that claim held on its own is gone, not left at one.
                 # Well inside the undo window, so this is the sidebar keeping up
                 # with the hold rather than the delete having gone out.
-                await page.locator('#tags [data-tag="solo"]').wait_for(
-                    state="detached", timeout=3000)
-                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "1"
+                await page.wait_for_function("!('solo' in S.tag_counts)", timeout=3000)
+                assert await page.evaluate("String(S.tag_counts['shared'] || 0)") == "1"
 
                 await notice.get_by_role("button", name="Undo").click()
-                await page.locator('#tags [data-tag="solo"]').wait_for()
-                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
+                await page.wait_for_function("'solo' in S.tag_counts")
+                assert await page.evaluate("String(S.tag_counts['shared'] || 0)") == "2"
 
     run_browser(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
@@ -3905,8 +3901,8 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="solo"]').click()
-                await page.locator('#tags [data-tag="solo"].active').wait_for()
+                await page.evaluate("V.tag = V.tag === 'solo' ? null : 'solo'; syncHash(true); renderAll()")
+                await page.wait_for_function("V.tag === 'solo'")
                 assert "tag=solo" in page.url
 
                 card = page.locator('.claim[data-claim="paper-a-c1"]')
@@ -3917,15 +3913,15 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
                 await card.wait_for(state="detached")
 
                 # Still on the topic, and still able to leave it by hand.
-                await page.locator('#tags [data-tag="solo"].active').wait_for(timeout=3000)
-                assert await page.locator('#tags [data-tag="solo"] .n').text_content() == "0"
+                await page.wait_for_function("V.tag === 'solo'", timeout=3000)
+                assert await page.evaluate("String(S.tag_counts['solo'] || 0)") == "0"
                 assert "tag=solo" in page.url
                 assert await page.locator('.claim[data-claim="paper-b-c1"]').count() == 0
 
                 # Undo puts the reader back where they were, not on the corpus.
                 await notice.get_by_role("button", name="Undo").click()
                 await card.wait_for()
-                assert await page.locator('#tags [data-tag="solo"] .n').text_content() == "1"
+                assert await page.evaluate("String(S.tag_counts['solo'] || 0)") == "1"
                 assert "tag=solo" in page.url
                 assert await page.locator('.claim[data-claim="paper-b-c1"]').count() == 0
 
@@ -3934,7 +3930,7 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
                 await card.get_by_role("button", name="delete").click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
                 await page.evaluate("flushTrash()")
-                await page.locator('#tags [data-tag="solo"]').wait_for(state="detached")
+                await page.wait_for_function("!('solo' in S.tag_counts)")
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
                 assert "tag=solo" not in page.url
 
@@ -4101,7 +4097,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
                 # The topic whose only claim is held: the server would stop
                 # showing that synthesis, so the card goes rather than standing
                 # over a topic with nothing left under it.
-                await page.locator('#tags [data-tag="solo"]').click()
+                await page.evaluate("V.tag = V.tag === 'solo' ? null : 'solo'; syncHash(true); renderAll()")
                 solo = page.locator('.synth[data-topic="solo"]')
                 await solo.wait_for()
                 await page.locator('.claim[data-claim="paper-d-c1"]').get_by_role(
@@ -4114,7 +4110,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
 
                 # A topic with claims left recounts, and reads stale: the text on
                 # file was written about a set of claims that is not this one.
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.wait_for()
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
@@ -4229,7 +4225,7 @@ def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.locator(".stale").wait_for()
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
@@ -4288,7 +4284,7 @@ def test_a_held_claim_leaves_the_agreements_in_the_order_the_server_would_send()
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
                 await notice.wait_for()
 
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 await page.locator(".paperhead h2", has_text="Where papers agree").wait_for()
                 await page.wait_for_function(order % "a1,a2", timeout=5000)
 
@@ -4336,9 +4332,9 @@ def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
                 await notice.wait_for()
 
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 await page.locator(".paperhead h2", has_text="Where papers agree").wait_for()
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
                 # A and B both carry the topic, so the pair the wait leaves
                 # behind is in #recovery until the delete settles.
                 await page.wait_for_function(shows % "a1", timeout=5000)
@@ -4371,7 +4367,7 @@ def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="edit").click()
@@ -4427,7 +4423,7 @@ def test_deciding_an_agreement_settles_a_held_claim_delete_first():
                 await claim.get_by_role("button", name="delete").click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
 
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 card = page.locator('.tcard[data-agreement="a1"]')
                 await card.wait_for()
                 # A and B are left, so the card is still here — and stale, since
@@ -4570,6 +4566,7 @@ def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
                 assert await page.evaluate("window.doxographWorkspaceId") == "default"
 
                 # And a write made in that window lands where the picker says.
+                await page.locator("#btn-workspace").click()
                 await page.locator("#new-tag").fill("midswitch")
                 await page.locator("#btn-tag").click()
                 for _ in range(100):
@@ -5134,7 +5131,7 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
                 await form.get_by_role("button", name="Save").click()
                 await asyncio.wait_for(in_flight.wait(), 10)
 
-                await page.locator('#research-nav [data-view="research"]').click()
+                await page.locator('#btn-workspace').click()
                 context = page.locator("#research-context")
                 await context.fill("What I am studying, typed while the claim saved.")
                 await context.focus()
@@ -5489,7 +5486,7 @@ def test_a_topic_that_could_not_be_added_says_so_and_keeps_its_name():
 
             await page.route("**/api/tags", refuse)
             with _server() as url:
-                await page.goto(f"{url}/#view=claims")
+                await page.goto(f"{url}/#view=research")
                 await page.locator("#new-tag").fill("interpretability")
                 await page.locator("#btn-tag").click()
                 await page.locator("#toasts .toast.warn",
@@ -5532,12 +5529,13 @@ def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back(
             with _server() as url:
                 await page.route("**/api/state", hold_one)
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="recovery"]').wait_for()
+                await page.wait_for_function("'recovery' in S.tag_counts")
                 armed = True
                 httpx.post(f"{url}/api/tags", json={"name": "alignment", "description": ""})
                 await asyncio.wait_for(held.wait(), timeout=10)
 
                 polls = await page.evaluate("poller.completed")
+                await page.locator("#btn-workspace").click()
                 await page.locator("#new-tag").fill("interpretability")
                 await page.locator("#btn-tag").click()
                 await page.wait_for_function("S.tags.some((t) => t.name === 'interpretability')")
@@ -5680,10 +5678,10 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                 await page.goto(f"{url}/#view=claims")
                 field = None
                 if action == "tension":
-                    await page.locator('#tensions-nav [data-view="tensions"]').click()
+                    await page.evaluate("openPage('tensions')")
                     await page.locator(".tcard").get_by_role("button", name="Confirm").click()
                 elif action == "agreement":
-                    await page.locator('#agreements-nav [data-view="agreements"]').click()
+                    await page.evaluate("openPage('agreements')")
                     await page.locator('.tcard[data-agreement="a1"]').get_by_role(
                         "button", name="Confirm").click()
                 elif action == "verify":
@@ -5691,9 +5689,9 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     await page.locator('.paper-actions > summary').click()
                     await page.locator('[data-act="verify"]').click()
                 elif action == "find-tensions":
-                    await page.locator("#btn-tensions").click()
+                    await page.evaluate("findTensions()")
                 elif action == "find-agreements":
-                    await page.locator("#btn-agreements").click()
+                    await page.evaluate("findAgreements()")
                 elif action == "synthesize":
                     await page.locator('.synth[data-topic="recovery"] [data-act="synthesize"]').click()
                 elif action == "save-synth":
@@ -5768,9 +5766,9 @@ def test_escape_outside_the_claim_form_leaves_its_draft_alone():
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
                 await claim_field.fill("Draft that Escape elsewhere must keep.")
 
-                # Escape in the sidebar's new-topic box and in the add-papers
-                # textarea leaves those fields; the editor and its draft stay.
-                for selector in ("#new-tag", "#refs"):
+                # Escape in the add-papers textarea leaves the field; the editor
+                # and its draft stay.
+                for selector in ("#refs",):
                     if selector == "#refs":
                         await page.locator("#btn-command-palette").click()
                         await page.locator("#command-query").fill("Add papers")

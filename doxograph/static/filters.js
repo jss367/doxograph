@@ -491,19 +491,6 @@ function renderLabels() {
     </li>`).join('');
 }
 
-
-function renderTags() {
-  const entries = Object.entries(S.tag_counts);
-  const declared = new Set(S.tags.map((t) => t.name));
-  $('tags').innerHTML = (entries.length ? '' : '<li class="hint">No topics yet.</li>')
-    + entries.map(([name, count]) => `
-      <li class="${V.tag === name ? 'active' : ''}" data-tag="${esc(name)}"
-          title="${esc((S.tags.find((t) => t.name === name) || {}).description || '')}">
-        <span>${esc(name)}${declared.has(name) ? '' : ' *'}</span>
-        <span class="n">${count}</span>
-      </li>`).join('');
-}
-
 // What the query found in the papers themselves, under the claims it found.
 // A paper can hold a word no claim of it mentions, and a paper nothing has
 // been extracted from yet holds all of them.
@@ -579,14 +566,6 @@ $('labels').addEventListener('click', (event) => {
   const li = event.target.closest('[data-label]');
   if (!li) return;
   chooseLabel(li.dataset.label);
-});
-
-$('tags').addEventListener('click', (event) => {
-  const li = event.target.closest('[data-tag]');
-  if (!li) return;
-  V.tag = V.tag === li.dataset.tag ? null : li.dataset.tag;
-  syncHash(true);
-  renderAll();
 });
 
 function applyQuery(value) {

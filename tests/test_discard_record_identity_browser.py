@@ -9,7 +9,7 @@ from doxograph import config, store
 from pdfs import minimal_pdf
 from test_ask_browser import _server
 from test_browser import _answer
-from test_tools_action_history_browser import inert_tools as inert_tools
+from browser_support import inert_tools as inert_tools
 
 
 @pytest.mark.browser

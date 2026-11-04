@@ -45,7 +45,7 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
                     if not request.url.startswith(('http://127.0.0.1:', 'blob:')) else None)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
                 await page.locator("#claim-filter-options > summary").click()
                 await page.locator('#only-unreviewed').check()
                 await page.locator('#btn-close-filters').click()

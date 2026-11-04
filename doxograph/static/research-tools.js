@@ -5,7 +5,7 @@ const ResearchTools = (() => {
   // The tab and board the URL names, the ones on screen, and the library view
   // a saved search is taken from.
   let shown = false, wanted = null, loaded = null, origin = 'library';
-  const TABS = ['compare', 'boards', 'questions', 'connections', 'reading', 'marks', 'searches'];
+  const TABS = ['reading'];
   const tabKey = target => target && `${target.tab}\u0000${target.board || ''}`;
   // Whether the tools are up and no move has come since some work took the
   // navigation number it began at (app.js's navigationVersion). A move is a
@@ -20,7 +20,7 @@ const ResearchTools = (() => {
     return false;
   };
   let workspace = null, claims = new Set(), papers = new Set();
-  let notebook = null, tab = 'compare', boardId = null, dirty = false, busy = false, connectionDraft = false;
+  let notebook = null, tab = 'reading', boardId = null, dirty = false, busy = false, connectionDraft = false;
   let modalWorkspace = null, historyData = null, historyPaper = null, historyClaim = null, marksFilter = 'all';
   // Edits to boards and to connection explanations not yet saved. They are
   // held apart from the notebook, so a save made for anything else, such as a
@@ -111,9 +111,6 @@ const ResearchTools = (() => {
     el('selection-tools').hidden = !selected && !(library ? client.state.papers.length : client.state.claims.length);
     el('selection-tools').querySelectorAll('[data-needs-selection]').forEach(button => { button.hidden = !selected; });
     const visible = library ? visiblePapers().length : visibleClaims().length;
-    const select = el('selection-tools').querySelector('[data-tool="select-visible"]');
-    select.hidden = !visible;
-    select.textContent = library ? 'Select visible papers' : 'Select visible claims';
     el('btn-focus-review').hidden = library || !visible;
     el('selection-count').textContent = selected
       ? `${claims.size} claims · ${papers.size} papers selected`
@@ -212,7 +209,7 @@ const ResearchTools = (() => {
     sync();
     const keep = dirty && notebook && modalWorkspace === workspace;
     modalWorkspace = workspace;
-    tab = target.tab === 'history' && !historyData ? 'compare' : target.tab;
+    tab = target.tab === 'history' && !historyData ? 'reading' : target.tab;
     if (!keep) {
       el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
       message('');
@@ -225,14 +222,10 @@ const ResearchTools = (() => {
       notebook = fresh;
       dirty = false;
     }
-    if (target.board) {
-      boardId = target.board;
-      if (!currentBoard()) { boardId = null; message('That board no longer exists.', true); }
-    }
     render();
   }
   function show(next, requestedBoard = null) {
-    const target = {tab: TABS.includes(next) || next === 'history' ? next : 'compare', board: requestedBoard || null};
+    const target = {tab: TABS.includes(next) || next === 'history' ? next : 'reading', board: requestedBoard || null};
     if (shown && tabKey(target) === tabKey(wanted)) return;
     wanted = target;
     shown = true;
@@ -243,13 +236,6 @@ const ResearchTools = (() => {
   function hide() {
     shown = false;
     el('research-tools').hidden = true;
-  }
-  // A board chosen here is a destination of its own, as a tab is: the URL
-  // names it and Back returns to the board before.
-  function chooseBoard(id) {
-    boardId = id || null;
-    navigate(tab, boardId);
-    render();
   }
   // A tab opens at no particular board; the boards tab then shows the one
   // last open, or the first. Choosing the tab already open keeps its board:
@@ -295,107 +281,14 @@ const ResearchTools = (() => {
   }
   function render() {
     if (!notebook) return;
-    const labels = {compare:'Compare & organize', boards:'Evidence boards', questions:'Research questions', connections:'Claim connections', reading:'Reading queue', marks:'Marks', searches:'Saved searches'};
-    el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : tab === 'questions' ? 'Research questions' : 'Your research tools';
-    el('research-tabs').innerHTML = Object.entries(labels).map(([key, label]) => button('tab', label, `data-tab="${key}" ${tab === key ? 'aria-current="page"' : ''}`)).join('')
+    el('research-tools-title').textContent = tab === 'history' ? 'Edit history' : 'Reading queue';
+    el('research-tabs').innerHTML = button('tab', 'Reading queue', `data-tab="reading" ${tab === 'reading' ? 'aria-current="page"' : ''}`)
       + button('reload', 'Reload saved version');
-    if (tab === 'compare') renderCompare();
-    if (tab === 'boards' || tab === 'questions') renderBoards();
-    if (tab === 'connections') renderConnections();
     if (tab === 'reading') renderReading();
-    if (tab === 'marks') renderMarks();
-    if (tab === 'searches') renderSearches();
     if (tab === 'history') renderHistory();
     syncLocation();
   }
-  function renderCompare() {
-    el('research-body').innerHTML = `<p class="hint">Selections stay pinned while you browse other papers or topics. Select claims or papers using their checkboxes.</p>
-      <div class="tool-actions">${button('add-board', 'Add claims to board')} ${button('queue-selection', 'Queue selected papers')}
-      ${button('export-selection', 'Export Markdown', 'data-format="markdown"')} ${button('export-selection', 'Export CSV', 'data-format="csv"')}</div>
-      <fieldset><legend>Bulk organization</legend><div class="tool-actions">
-        <label>Change<select id="bulk-field"><option value="tags">Topics on selected claims</option><option value="labels">Labels on selected papers</option></select></label>
-        <label>Action<select id="bulk-mode"><option value="add">Add</option><option value="remove">Remove</option><option value="replace">Replace all</option></select></label>
-        ${input('Values, separated by commas', 'bulk-values')}${button('bulk', 'Apply to selection')}
-      </div><p class="hint">Topics must already exist in the vocabulary. Paper labels also apply to the papers of selected claims.</p></fieldset>
-      <div class="comparison">${refs().map(r => `<article class="comparison-card">${claimSummary(r)}${button('unpin', 'Unpin claim', `data-ref="${html(refKey(r))}"`)}</article>`).join('')}
-      ${[...papers].map(key => {
-        const p = client.state.papers.find(p => p.key === key);
-        return `<article class="comparison-card"><h3>${html(p.title)}</h3><p class="hint">${html((p.authors || []).join(', '))} · ${html(p.year)}</p>
-          <p>${html(p.summary || 'No summary recorded.')}</p><p>${html(p.notes)}</p>
-          ${button('source', p.has_pdf ? 'Read paper' : 'Open paper', `data-paper="${html(key)}"`)}${button('unpin-paper', 'Unpin paper', `data-paper="${html(key)}"`)}</article>`;
-      }).join('')}</div>${!claims.size && !papers.size ? '<p class="empty">Select claims or papers in the library to compare them here.</p>' : ''}`;
-  }
-  const STANCES = {supporting:'Supporting evidence', opposing:'Conflicting evidence', qualifying:'Conditions and limitations', background:'Background / not assessed'};
-  const isQuestion = board => board.kind === 'question' || ['question', 'conclusion', 'open_questions'].some(field => board[field])
-    || board.entries.some(entry => entry.kind === 'claim' && entry.stance && entry.stance !== 'background');
 
-  function questionOverview(board) {
-    const rows = board.entries.filter(e => e.kind === 'claim').map(e => resolve(e.reference)).filter(Boolean);
-    const origins = new Set(rows.map(c => (c.evidence_origin || '').trim().toLowerCase()).filter(Boolean));
-    const unassessed = new Set(rows.filter(c => !c.evidence_relationship || c.evidence_relationship === 'unassessed').map(c => c.paper));
-    return `<p class="hint">${origins.size} named evidence origins · ${unassessed.size} papers with independence unassessed. Origin names are your labels; paper counts do not establish independent replication.</p><section class="question-overview" aria-label="Evidence for this question">${Object.entries(STANCES).map(([stance,label]) => {
-      const entries = board.entries.filter(e => e.kind === 'claim' && (e.stance || 'background') === stance);
-      const sourcePapers = new Set(entries.filter(e => resolve(e.reference)).map(e => e.reference.paper));
-      return `<div><h3>${label}</h3><p class="hint">${entries.length} ${entries.length === 1 ? 'claim' : 'claims'} · ${sourcePapers.size} ${sourcePapers.size === 1 ? 'paper' : 'papers'}</p>${entries.length ? entries.map(e => {
-        const row = resolve(e.reference);
-        return row ? `<p>${html(row.text)} ${button('source','Check source',`data-paper="${html(row.paper)}" data-claim="${html(row.id)}"`)}</p>` : '<p class="warn">Source claim no longer exists.</p>';
-      }).join('') : '<p class="hint">No evidence assigned yet.</p>'}</div>`;
-    }).join('')}</section>`;
-  }
-  // The boards as they stand on screen: saved ones with their held edits, and
-  // an edited board removed elsewhere meanwhile, kept so its text can be copied.
-  function boards() {
-    const listed = notebook.boards.map(b => edits.boards[b.id] || b);
-    return listed.concat(Object.values(edits.boards).filter(b => !notebook.boards.some(n => n.id === b.id)));
-  }
-  function currentBoard() { return boards().find(b => b.id === boardId); }
-  // The board on screen, to be changed: a copy held until Save board.
-  function editBoard() {
-    if (!edits.boards[boardId]) {
-      edits.boardBases[boardId] = JSON.stringify(notebook.boards.find(b => b.id === boardId) ?? null);
-      edits.boards[boardId] = structuredClone(currentBoard());
-    }
-    return edits.boards[boardId];
-  }
-  function renderBoards() {
-    const questioning = tab === 'questions';
-    const available = boards().filter(b => !questioning || isQuestion(b));
-    if (!available.some(b => b.id === boardId)) boardId = available[0]?.id || null;
-    const board = currentBoard();
-    el('research-body').innerHTML = `<div class="tool-actions"><label>${questioning ? 'Question' : 'Board'}<select id="board-picker"><option value="">${questioning ? 'Choose a question' : 'Choose a board'}</option>${available.map(b => `<option value="${html(b.id)}" ${b.id === boardId ? 'selected' : ''}>${html(b.title)}</option>`).join('')}</select></label>
-      ${button(questioning ? 'new-question' : 'new-board', questioning ? 'New research question' : 'New board')}${board ? button('delete-board', questioning ? 'Delete question' : 'Delete board') : ''}</div>
-      ${board ? `${input(questioning ? 'Question title' : 'Board title', 'board-title', board.title)}
-        ${(questioning || isQuestion(board)) ? `${area('Research question', 'board-question', board.question || '')}${area('Working conclusion', 'board-conclusion', board.conclusion || '')}${area('Open questions and next steps', 'board-open_questions', board.open_questions || '')}${questionOverview(board)}` : ''}
-        <div class="tool-actions">${button('board-add-selection','Add selected claims')}${button('board-heading','Add heading')}${button('board-note','Add commentary')}
-        ${!isQuestion(board) ? button('question-board','Turn into research question') : ''}${button('save-board',questioning ? 'Save question' : 'Save board')}${button('export-board','Export Markdown','data-format="markdown"')}${button('export-board','Export CSV','data-format="csv"')}</div>
-        <div class="board-entries">${board.entries.map((entry,i) => `<article class="board-entry" data-entry="${html(entry.id)}">
-          <div class="entry-actions"><span class="hint">${i+1} · ${html(entry.kind === 'note' ? 'commentary' : entry.kind)}</span>
-          ${button('entry-up','↑', `aria-label="Move entry ${i+1} up" ${i === 0 ? 'disabled' : ''}`)}${button('entry-down','↓', `aria-label="Move entry ${i+1} down" ${i === board.entries.length-1 ? 'disabled' : ''}`)}${button('entry-remove','Remove')}</div>
-          ${entry.kind === 'claim' ? `${claimSummary(entry.reference)}${isQuestion(board) ? `<label>Bearing on question<select data-entry-stance="${html(entry.id)}">${Object.entries(STANCES).map(([key, label]) => `<option value="${key}" ${entry.stance === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>` : ''}` : ''}
-          <label>${entry.kind === 'heading' ? 'Heading' : 'Your commentary'}<textarea data-entry-text="${html(entry.id)}">${html(entry.text)}</textarea></label>
-        </article>`).join('')}</div>${!board.entries.length ? '<p class="empty">Add selected claims, then arrange headings and commentary around the evidence.</p>' : ''}`
-        : questioning ? '<p class="empty">Create a research question. Select claims in the library, then add them here as evidence.</p>' : '<p class="empty">Create a board for a question, argument, or section you are writing.</p>'}`;
-  }
-  // The connections as they stand on screen, as boards() has them: an edited
-  // connection removed elsewhere meanwhile is kept so its explanation can be copied.
-  function connections() {
-    const removed = Object.keys(edits.notes).filter(id => !notebook.connections.some(c => c.id === id));
-    return notebook.connections.concat(removed.map(id => ({...edits.noteConnections[id], removed:true})));
-  }
-  function renderConnections() {
-    const options = refs().map(r => `<option value="${html(refKey(r))}">${html(resolve(r)?.text || r.claim)}</option>`).join('');
-    el('research-body').innerHTML = `<p class="hint">Select at least two claims in the library to connect them. “Qualifies” runs from the first claim to the second.</p>
-      <fieldset><legend>Connect selected claims</legend>
-      <label>First claim<select id="connection-source">${options}</select></label>
-      <label>Relationship<select id="connection-relation"><option value="agrees">Agrees with</option><option value="contradicts">Contradicts</option><option value="qualifies">Qualifies</option></select></label>
-      <label>Second claim<select id="connection-target">${options}</select></label>
-      ${area('Your explanation', 'connection-note')}${button('create-connection','Create connection', claims.size < 2 ? 'disabled' : '')}</fieldset>
-      ${connections().map(c => `<article class="board-entry" data-connection="${html(c.id)}">${c.removed ? '<p class="warn" role="status">This connection was removed in another window. Your unsaved explanation is kept here.</p>' : ''}<strong>${html(c.relation)}</strong>
-        <div class="connection-pair"><div>${claimSummary(c.source)}</div><div>${claimSummary(c.target)}</div></div>
-        <label>Your explanation<textarea data-connection-note="${html(c.id)}">${html(edits.notes[c.id] ?? c.note)}</textarea></label>
-        ${button('save-connection','Save explanation')}${button('delete-connection','Remove connection')}</article>`).join('')}`;
-    if (el('connection-target')?.options.length > 1) el('connection-target').selectedIndex = 1;
-  }
   function renderReading() {
     el('research-body').innerHTML = `<div class="tool-actions">${button('queue-selection','Add selected papers')}</div>
       <p class="hint">Queue order is independent of claim review. Page position and bookmarks are saved as you read.</p>
@@ -407,31 +300,6 @@ const ResearchTools = (() => {
           ${button('reading-up','↑',`aria-label="Move paper up" ${i === 0 ? 'disabled' : ''}`)}${button('reading-down','↓',`aria-label="Move paper down" ${i === notebook.reading.length-1 ? 'disabled' : ''}`)}${button('reading-remove','Remove from queue')}</div>
           <div class="tool-actions">${r.bookmarks.map(page => button('reader',`Bookmark: page ${page}`,`data-paper="${html(r.paper)}" data-page="${page}"`)).join('')}</div></article>`;
       }).join('')}${notebook.reading.length ? '' : '<p class="empty">Add a paper from its header, or queue a selection of papers.</p>'}`;
-  }
-  function markQuote(h) {
-    return `<blockquote class="highlight-${html(h.color)}">${h.kind === 'figure' ? '<em>Figure or region</em>' : html(h.text)}</blockquote>`;
-  }
-  function renderMarks() {
-    const marks = notebook.highlights.filter(h => marksFilter === 'all' || h.question);
-    const papers = [...new Set(marks.map(h => h.paper))].map(key => ({key, paper:client.state.papers.find(p => p.key === key)}))
-      .sort((a, b) => (a.paper?.title || a.key).localeCompare(b.paper?.title || b.key));
-    el('research-body').innerHTML = `<p class="hint">Passages and figures you marked while reading, with your notes and questions. Open a mark to return to its page.</p>
-      <div class="tool-actions"><label>Show<select id="marks-filter">${[['all','All marks'],['questions','Open questions']].map(([value, label]) => `<option value="${value}" ${marksFilter === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>
-      ${papers.map(({key, paper}) => `<section class="marks-paper"><h3>${html(paper?.title || 'Removed paper: '+key)}</h3>
-        ${paper?.has_pdf ? `<div class="tool-actions">${button('export-annotated','Export annotated PDF',`data-paper="${html(key)}"`)}</div>` : ''}
-        ${marks.filter(h => h.paper === key).sort((a, b) => a.page - b.page || a.rects[0].y - b.rects[0].y).map(h => `<article class="highlight-entry" data-highlight="${html(h.id)}">
-          <p class="hint">Page ${h.page} · ${h.kind === 'figure' ? 'figure' : 'passage'}${h.question ? ' · <strong>open question</strong>' : ''}</p>
-          ${markQuote(h)}${h.note ? `<p>${html(h.note)}</p>` : ''}
-          <div class="tool-actions">${paper?.has_pdf ? button('reader',`Open page ${h.page}`,`data-paper="${html(key)}" data-page="${h.page}" data-mark="${html(h.id)}"`) : '<span class="hint">No PDF available</span>'}
-          ${h.question ? button('answer-question','Mark answered') : ''}</div></article>`).join('')}</section>`).join('')}
-      ${marks.length ? '' : `<p class="empty">${marksFilter === 'all' ? 'Highlight a passage or mark a figure while reading a paper.' : 'No open questions. Tick “Open question” on a mark to list it here.'}</p>`}`;
-  }
-  function renderSearches() {
-    el('research-body').innerHTML = `<p class="hint">Saved searches remember your view and filters. New matching papers or claims appear automatically.</p>
-      ${button('save-search','Save current library filters')}
-      ${notebook.searches.map(s => `<article class="reading-entry" data-search="${html(s.id)}"><h3>${html(s.name)}</h3>
-        <p class="hint">${html([s.q && `Search: ${s.q}`, s.tag && `Topic: ${s.tag}`, s.label && `Label: ${s.label}`, s.kind, s.unreviewed && 'Unreviewed only', s.unverified && 'Quote not found', s.paper && `Paper: ${client.state.papers.find(p => p.key === s.paper)?.title || s.paper}`].filter(Boolean).join(' · ') || (s.view === 'library' ? 'All papers' : 'All claims'))}</p>
-        ${button('apply-search','Open search')}${button('rename-search','Rename')}${button('delete-search','Delete')}</article>`).join('')}`;
   }
   async function queue(keys) {
     if (!keys.length) throw new Error('Select at least one paper or claim first.');
@@ -1421,7 +1289,7 @@ const ResearchTools = (() => {
       if (!await discardDrafts()) return;
       // The history on screen was read with the version being dropped, so the
       // tools return to Compare in its place: not a move the reader chose.
-      const nextTab = tab === 'history' ? 'compare' : tab;
+      const nextTab = tab === 'history' ? 'reading' : tab;
       if (nextTab === 'reading') {
         el('research-body').innerHTML = '<p class="hint">Loading your research…</p>';
         await flushReadingProgress();
@@ -1430,89 +1298,11 @@ const ResearchTools = (() => {
       if (!still(move)) return;
       tab = nextTab; render(); return;
     }
-    if (name === 'unpin') { claims.delete(data.ref); remember(); sync(); renderCompare(); return; }
-    if (name === 'unpin-paper') { papers.delete(data.paper); remember(); sync(); renderCompare(); return; }
     if (name === 'source') { goToPaper(data.paper, data.claim || null); return; }
-    if (name === 'bulk') {
-      const values = el('bulk-values').value.split(',').map(s=>s.trim()).filter(Boolean);
-      const mode = el('bulk-mode').value;
-      if (!values.length && mode !== 'replace') throw new Error('Enter at least one value.');
-      if (mode === 'replace' && !await confirmDialog('Replace all existing values on this selection?',{ok:'Replace values'})) return;
-      const result = await request('/bulk','POST',{papers:el('bulk-field').value === 'labels' ? selectedPapers() : [...papers],claims:refs(),field:el('bulk-field').value,mode,values});
-      await refreshAll(); renderCompare(); message(`Updated ${result.changed} items.`); return;
-    }
-    if (name === 'export-selection') { await download(data.format); return; }
-    if (name === 'export-board') { await download(data.format, boardId); return; }
     if (name === 'queue-selection' || name === 'queue-paper') {
       await queue(name === 'queue-paper' ? [data.paper] : selectedPapers());
       if (still(move)) await arrive('reading', opened);
       return;
-    }
-    if (name === 'new-board' || name === 'new-question') {
-      if (!await discardDrafts()) return;
-      const asking = name === 'new-question';
-      const title = await promptDialog(asking ? 'What are you investigating?' : 'Name this evidence board', '', {ok:asking ? 'Create question' : 'Create board'});
-      if (!title?.trim() || !still(move)) return;
-      const board = {id:uid(),kind:asking ? 'question' : 'board',title:title.trim(),entries:[],question:asking ? title.trim() : '',conclusion:'',open_questions:''};
-      // With no board open, the tab's entry names none, and going back to it
-      // would open this board anyway: the new board takes that entry in place.
-      const before = boardId;
-      notebook.boards.push(board); boardId = board.id; await save();
-      // A move made during the save is newer, even one back to this tab and
-      // board: the board is saved, not opened.
-      if (!still(move)) { boardId = before; return; }
-      if (before) chooseBoard(board.id); else render();
-      return;
-    }
-    if (name === 'add-board') {
-      await arrive('boards', opened);
-      if (!overtaken) message('Choose or create a board, then add the selected claims.');
-      return;
-    }
-    if (name === 'board-add-selection') {
-      if (!claims.size) throw new Error('Select claims in the library first.');
-      const board = editBoard();
-      for (const reference of refs()) if (!board.entries.some(e => e.reference && refKey(e.reference) === refKey(reference))) board.entries.push({id:uid(),kind:'claim',reference,text:''});
-      await save({board:boardId}); renderBoards(); return;
-    }
-    if (name === 'board-heading' || name === 'board-note') {
-      editBoard().entries.push({id:uid(),kind:name === 'board-heading' ? 'heading' : 'note',text:'',reference:null}); renderBoards(); return;
-    }
-    if (name === 'question-board') {
-      const board = editBoard();
-      board.kind = 'question'; board.question ||= board.title;
-      await save({board:boardId}); renderBoards(); return;
-    }
-    if (name === 'save-board') { await save({board:boardId}); return; }
-    if (name === 'save-connection') { await save({notes:true}); return; }
-    if (name === 'delete-board') {
-      if (!await confirmDialog('Delete this evidence board? Source claims will remain in the library.',{ok:'Delete board'})) return;
-      const id = boardId;
-      notebook.boards = notebook.boards.filter(b=>b.id !== id); await save(); delete edits.boards[id]; delete edits.boardBases[id];
-      // The URL stops naming the board deleted.
-      if (still(move)) render();
-      return;
-    }
-    if (name.startsWith('entry-')) {
-      const entries = editBoard().entries, id = target.closest('[data-entry]').dataset.entry;
-      const i = entries.findIndex(e=>e.id === id);
-      if (name === 'entry-remove') entries.splice(i,1);
-      else { const j = i + (name === 'entry-up' ? -1 : 1); if (j >= 0 && j < entries.length) [entries[i],entries[j]] = [entries[j],entries[i]]; }
-      renderBoards(); return;
-    }
-    if (name === 'create-connection') {
-      const from = JSON.parse(el('connection-source').value), to = JSON.parse(el('connection-target').value);
-      if (JSON.stringify(from) === JSON.stringify(to)) throw new Error('Choose two different claims.');
-      const relation = el('connection-relation').value;
-      const existing = notebook.connections.find(c => refKey(c.source) === JSON.stringify(from) && refKey(c.target) === JSON.stringify(to) && c.relation === relation);
-      if (existing) { existing.note = el('connection-note').value; dropNote(existing.id); }
-      else notebook.connections.push({id:uid(),source:{paper:from[0],claim:from[1]},target:{paper:to[0],claim:to[1]},relation,note:el('connection-note').value});
-      await save(); connectionDraft = false; renderConnections(); return;
-    }
-    if (name === 'delete-connection') {
-      const id = target.closest('[data-connection]').dataset.connection;
-      if (!await confirmDialog('Remove this manual connection?',{ok:'Remove connection'})) return;
-      notebook.connections = notebook.connections.filter(c=>c.id !== id); await save(); dropNote(id); renderConnections(); return;
     }
     if (name.startsWith('reading-')) {
       const key = target.closest('[data-reading]').dataset.reading, items = notebook.reading;
@@ -1520,37 +1310,6 @@ const ResearchTools = (() => {
       if (name === 'reading-remove') items.splice(i,1);
       else { const j = i + (name === 'reading-up' ? -1 : 1); if (j >= 0 && j < items.length) [items[i],items[j]] = [items[j],items[i]]; }
       await save(); renderReading(); return;
-    }
-    if (name === 'save-search') {
-      const title = await promptDialog('Name this saved search', '', {ok:'Save search'});
-      if (!title?.trim()) return;
-      const search = {id:uid(),name:title.trim(),view:origin};
-      for (const field of ['q','paper','tag','label','kind','unreviewed','unverified','group']) search[field] = V[field];
-      notebook.searches.push(search); await save();
-      if (still(move)) await arrive('searches', opened);
-      return;
-    }
-    if (['apply-search','rename-search','delete-search'].includes(name)) {
-      const id = target.closest('[data-search]').dataset.search, search = notebook.searches.find(s=>s.id === id);
-      if (name === 'apply-search') {
-        captureOpenEditor();
-        const params = new URLSearchParams();
-        params.set('view', search.view || 'claims');
-        if (workspace !== 'default') params.set('ws',workspace);
-        for (const field of ['q','paper','tag','label','kind']) if (search[field]) params.set(field, search[field]);
-        if (search.unreviewed) params.set('unreviewed','1'); if (search.unverified) params.set('unverified','1');
-        if (!search.group) params.set('group','0');
-        history.pushState(null,'',`#${params}`); applyHash(); dropMissingFilters(); renderAll(); return;
-      }
-      if (name === 'rename-search') {
-        const title = await promptDialog('Rename saved search', search.name, {ok:'Rename'});
-        if (!title?.trim()) return; search.name = title.trim();
-      } else notebook.searches = notebook.searches.filter(s=>s.id !== id);
-      await save(); renderSearches(); return;
-    }
-    if (name === 'answer-question') {
-      notebook.highlights.find(h => h.id === target.closest('[data-highlight]').dataset.highlight).question = false;
-      await save(); renderMarks(); message('Question marked answered. The mark and its note remain.'); return;
     }
     if (name === 'history') { if (!await discardDrafts()) return; await showHistory(data.paper, data.claim || null, move, opened); return; }
     if (name === 'restore') {
@@ -1631,11 +1390,6 @@ const ResearchTools = (() => {
     event.preventDefault(); event.stopPropagation();
     const name = target.dataset.tool;
     if (name === 'clear-selection') { claims.clear(); papers.clear(); remember(); sync(); return; }
-    if (name === 'select-visible') {
-      if (V.view === 'library') visiblePapers().forEach(p => papers.add(p.key));
-      else visibleClaims().forEach(c => claims.add(refKey(c)));
-      remember(); sync(); return;
-    }
     if (READER_TOOLS.has(name)) { run(() => readerAction(name, target)); return; }
     run(async () => {
       // A tab, or a tool used from the library, opens the research tools first.
@@ -1643,7 +1397,7 @@ const ResearchTools = (() => {
       if (TABS.includes(name) || !shown) {
         // An action used from outside runs on Compare; the tab it ends on
         // takes over this entry (see arrive), so history gains one step.
-        const opening = TABS.includes(name) ? name : 'compare';
+        const opening = TABS.includes(name) ? name : 'reading';
         if (!shown) {
           if (!await mayEnter(opening)) return;
           opened = true;
@@ -1663,25 +1417,11 @@ const ResearchTools = (() => {
     if (target.matches('[data-select-paper]')) {
       target.checked ? papers.add(target.dataset.selectPaper) : papers.delete(target.dataset.selectPaper); remember(); sync(); return;
     }
-    if (target.id === 'board-picker') run(async () => {
-      const next = target.value, move = navigationVersion();
-      // "Choose a board" names none, and the redraw would open the first one:
-      // it is not a move, so the open board stays and history gets no entry.
-      if (!next) { target.value = boardId || ''; return; }
-      if (!await discardDrafts()) { target.value = boardId || ''; return; }
-      if (still(move)) chooseBoard(next);
-    });
-    if (target.matches('[data-entry-stance]')) {
-      editBoard().entries.find(e => e.id === target.dataset.entryStance).stance = target.value;
-      const overview = el('research-body').querySelector('.question-overview');
-      if (overview) { const summary = overview.previousElementSibling; summary.insertAdjacentHTML('beforebegin', questionOverview(currentBoard())); summary.remove(); overview.remove(); }
-    }
     if (target.matches('[data-reading-status]')) run(async () => {
       notebook.reading.find(r=>r.paper === target.dataset.readingStatus).status = target.value;
       await save();
     });
     if (target.id === 'reader-zoom') run(() => setZoom(target.value));
-    if (target.id === 'marks-filter') { marksFilter = target.value; renderMarks(); }
     if (target.matches('[data-highlight-question]')) run(async () => {
       const id = target.dataset.highlightQuestion, question = target.checked;
       if (shown && notebook) {
@@ -1701,18 +1441,6 @@ const ResearchTools = (() => {
       return;
     }
     if (!el('research-tools')?.contains(target)) return;
-    if (target.id.startsWith('connection-')) connectionDraft = true;
-    if (target.id.startsWith('board-') && ['title','question','conclusion','open_questions'].includes(target.id.slice(6))) editBoard()[target.id.slice(6)] = target.value;
-    if (target.dataset.entryText) editBoard().entries.find(e=>e.id === target.dataset.entryText).text = target.value;
-    if (target.dataset.connectionNote) {
-      const id = target.dataset.connectionNote;
-      if (!Object.hasOwn(edits.notes, id)) {
-        const connection = notebook.connections.find(c => c.id === id);
-        edits.noteBases[id] = JSON.stringify(connection.note ?? null);
-        edits.noteConnections[id] = structuredClone(connection);
-      }
-      edits.notes[id] = target.value;
-    }
   });
   window.addEventListener('beforeunload', event => { if (unsaved()) { event.preventDefault(); event.returnValue = ''; } });
   // Everything a workspace switch would discard, to tell whether it changed
@@ -1771,15 +1499,5 @@ const ResearchTools = (() => {
     sync,syncSelectionControls,claimCheckbox,paperCheckbox,beforeWorkspaceSwitch,beforeWorkspaceSelect,
     writingSnapshot: writing,
     canWorkspaceSelect: () => !busy && writing() === discarding, mountReader,highlightsHtml,recoveryHtml,holds,markDraftOn,dropMarkDraft,
-    hasUnsavedChanges: () => Boolean(unsaved() || busy),
-    // A board from the command palette. From outside the tools it opens as a
-    // sidebar tool does, once mayEnter agrees.
-    openBoard(id) {
-      if (shown) { navigate('boards', id); return; }
-      void run(async () => {
-        if (!await mayEnter('boards')) return;
-        navigate('boards', id);
-        await load();
-      });
-    }};
+    hasUnsavedChanges: () => Boolean(unsaved() || busy)};
 })();

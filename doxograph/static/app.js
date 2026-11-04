@@ -105,36 +105,6 @@ function refuseWhileRemoving(paper, what) {
 
 const $ = (id) => document.getElementById(id);
 
-function revealSidebar(target) {
-  const group = target?.closest('[data-sidebar-group]');
-  if (group) group.open = true;
-}
-
-function syncSidebarFocus() {
-  const open = [...document.querySelectorAll('[data-sidebar-group]')].filter(group => group.open);
-  document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
-    button.setAttribute('aria-pressed', String(open.length === 1 && open[0].dataset.sidebarGroup === button.dataset.sidebarFocus));
-  });
-}
-
-document.querySelectorAll('[data-sidebar-group]').forEach(group => {
-  const key = `doxograph-sidebar:${group.dataset.sidebarGroup}`;
-  try { group.open = localStorage.getItem(key) !== 'closed'; } catch (_) { /* optional */ }
-  group.addEventListener('toggle', () => {
-    try { localStorage.setItem(key, group.open ? 'open' : 'closed'); } catch (_) { /* optional */ }
-    syncSidebarFocus();
-  });
-});
-document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
-  button.addEventListener('click', () => {
-    document.querySelectorAll('[data-sidebar-group]').forEach(group => {
-      group.open = group.dataset.sidebarGroup === button.dataset.sidebarFocus;
-    });
-    syncSidebarFocus();
-    $('side').scrollTop = 0;
-  });
-});
-syncSidebarFocus();
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -723,11 +693,6 @@ async function loadWorkspaces() {
 function render() {
   renderStats();
   renderPapers();
-  renderFindingsNav();
-  renderTensionsNav();
-  renderAgreementsNav();
-  renderResearchNav();
-  renderTags();
   renderLabels();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
@@ -759,11 +724,6 @@ function renderAll() {
   else captureOpenEditor();
   renderStats();
   renderPapers();
-  renderFindingsNav();
-  renderTensionsNav();
-  renderAgreementsNav();
-  renderResearchNav();
-  renderTags();
   renderLabels();
   renderContent();
   renderJobs();
@@ -819,10 +779,6 @@ function renderStorageWarnings() {
 }
 
 function showView(view) {
-  const destination = {library: 'papers', claims: 'papers', research: 'research-nav',
-    findings: 'findings-nav', tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people'}[view];
-  if (destination) revealSidebar($(destination));
-  if (view === 'tools') revealSidebar(toolButton());
   if (view === V.view) return;
   if (V.view === 'research') captureResearchDraft();
   // Neither the tensions view nor the map has an editor. Park any open one
@@ -902,7 +858,7 @@ function restoreNoteCursor(cursor) {
 // their own page in the main pane, and their drafts while the reader is away.
 // Showing one that is already up is a no-op, so every redraw can come through here.
 function pageViews() {
-  return {datasets: [Datasets, [V.dataset], $('btn-datasets')],
+  return {datasets: [Datasets, [V.dataset], null],
     people: [People, [V.person, V.author], $('btn-people')],
     tools: [ResearchTools, [V.tool, V.board], toolButton()]};
 }
@@ -1639,7 +1595,7 @@ async function updateFromPoll() {
   if (!changed) return;
   corpusChanged();
   renderStats();
-  renderPapers(); renderFindingsNav(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderTags(); renderLabels();
+  renderPapers(); renderLabels();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   syncHash();
@@ -1652,7 +1608,6 @@ async function updateFromPoll() {
 
 async function boot() {
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
-  $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
   People.connect(workspaceClient, followToPaper, (id, author) => { V.person = id; V.author = author; syncHash(); });
   $('btn-people').addEventListener('click', () => openPageView('people'));
   ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),

@@ -104,7 +104,7 @@ def test_restore_refuses_unsaved_editor_without_losing_the_draft(engine, editor)
                     await page.locator('[data-act="edit"]').first.click()
                     field = page.locator('form[data-form] [name="text"]')
                 else:
-                    await page.locator('#research-nav [data-view="research"]').click()
+                    await page.locator('#btn-workspace').click()
                     field = page.locator('#research-context')
                 await field.fill('An unsaved synthetic draft')
                 await page.locator('#workspace-actions > summary').click()

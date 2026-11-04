@@ -155,10 +155,10 @@ def test_continue_review_clears_filters_and_handles_missing_sources(engine):
                 await expect(page.locator('#q')).to_have_value('')
                 await expect(page.locator('#only-unverified')).not_to_be_checked()
                 # Leaving the research form through the shortcut keeps its draft.
-                await page.locator('#research-nav [data-view="research"]').click()
+                await page.locator('#btn-workspace').click()
                 await page.locator('#research-form [name="context"]').fill('A question to keep.')
                 await card.get_by_role('button', name='Next unreviewed claim').click()
-                await page.locator('#research-nav [data-view="research"]').click()
+                await page.locator('#btn-workspace').click()
                 await expect(page.locator('#research-form [name="context"]')).to_have_value('A question to keep.')
                 await page.locator('#content [data-act="cancel-research"]').click()
                 # Restore the first cursor so the reload can check the next one.

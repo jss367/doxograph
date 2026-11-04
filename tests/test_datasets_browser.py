@@ -306,7 +306,7 @@ def test_dataset_draft_survives_a_later_workspace_guard_refusal(engine, new_data
                 await _answer(page, 'Discard changes')
                 assert await page.locator('#workspace').input_value() == 'default'
                 assert await page.evaluate('Datasets.hasUnsavedChanges()')
-                await page.locator('#btn-datasets').click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 assert await view.get_by_label('Dataset name', exact=True).input_value() == ('New corpus' if new_dataset else 'Corpus')
                 assert await view.get_by_label('Version', exact=True).input_value() == 'My unsaved version'
@@ -317,7 +317,7 @@ def test_dataset_draft_survives_a_later_workspace_guard_refusal(engine, new_data
                 await page.wait_for_function('id => workspaceClient.workspaceId === id && !workspaceController.pending', arg=other['id'])
                 assert not await view.is_visible()
                 assert not await page.evaluate('Datasets.hasUnsavedChanges()')
-                await page.locator('#btn-datasets').click()
+                await page.evaluate("openPageView('datasets')")
                 await ready(page)
                 assert await page.locator('#datasets-list button').count() == 0
 
@@ -534,7 +534,7 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 await view.wait_for(state='visible')
                 await ready(page)
                 assert 'view=datasets' in page.url and f'dataset={item["id"]}' in page.url
-                assert await page.locator('#btn-datasets').get_attribute('aria-current') == 'page'
+                assert await page.evaluate("V.view === 'datasets'")
                 assert not await page.locator('#panes').is_visible()
                 # The rest of the app stays live beside the catalog.
                 assert await page.locator('#side').is_visible()
@@ -543,7 +543,7 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 await page.locator('#papers').get_by_text('Evaluation study').click()
                 await view.wait_for(state='hidden')
                 assert 'paper=study' in page.url
-                assert await page.locator('#btn-datasets').get_attribute('aria-current') is None
+                assert await page.evaluate("V.view !== 'datasets'")
                 await page.go_back()
                 await view.wait_for(state='visible')
                 await ready(page)
