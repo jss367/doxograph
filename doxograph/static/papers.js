@@ -385,7 +385,7 @@ function webLinks(links) {
 // The records are read once per workspace, and the panel redraws when they arrive.
 const DATASET_ROLES = {training: 'training', evaluation: 'evaluation', reference: 'reference', 'project-output': 'project output'};
 function paperArtifacts(paper) {
-  if (!Datasets.loaded()) Datasets.ensureLoaded(() => { if (V.view === 'claims' && V.paper && !editorHolds()) renderContent(); });
+  Datasets.ensureLoaded(() => { if (V.view === 'claims' && V.paper && !editorHolds()) renderContent(); });
   const datasets = Datasets.forPaper(paper.key);
   const links = webLinks(paper.code);
   if (!datasets.length && !links.length) return '';

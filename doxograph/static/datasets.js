@@ -3,8 +3,8 @@
    and leaving the view saves at once; a draft that cannot save stays put. */
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
-  // A paper panel's read of the list: the workspace it is for, and the redraw to run when it lands.
-  let reading = null, afterRead = null;
+  // A paper panel's current read and its observer of confirmed cache changes.
+  let reading = null, afterChange = null;
   let inspectedRevision;
   // Each record's linked research, gathered for the table being drawn.
   let researched = new WeakMap();
@@ -102,6 +102,7 @@ const Datasets = (() => {
       items = [...items.filter(row => row.id !== item.id), item];
       if (first) { select(item.id); renderActions(); }
       renderList();
+      if (workspace === client.workspaceId) afterChange?.();
     },
     changed: () => progress()});
   function customProblem() {
@@ -392,6 +393,7 @@ const Datasets = (() => {
   function reset() {
     void autosave.settle();
     workspace = client.workspaceId; items = []; draft = saved = null; loaded = false; inspectedRevision = undefined;
+    reading = afterChange = null;
     el('datasets-search').value = '';
   }
   // The record a URL names, or else the one last open, or else the first.
@@ -605,25 +607,21 @@ const Datasets = (() => {
         .sort((a, b) => a.name.localeCompare(b.name));
     },
     loaded: () => loaded && workspace === client?.workspaceId,
-    // Reads the list for a paper's panel when nothing has yet. A read already
-    // under way for this workspace takes the latest redraw instead of starting
-    // another; one for a workspace since left neither fills the list nor holds
-    // up the read for the new one.
-    ensureLoaded(onLoaded) {
+    // Observe confirmed cache changes for the current paper panel, reading the
+    // list if needed. Only this visit's request may publish or clear its task;
+    // leaving and returning to the same workspace is a new visit too.
+    ensureLoaded(onChange) {
       if (!client) return;
       if (workspace !== client.workspaceId) reset();
-      if (loaded) return;
-      afterRead = onLoaded;
-      if (reading === workspace) return;
-      const ws = reading = workspace;
+      afterChange = onChange;
+      if (loaded || reading?.workspace === workspace) return;
+      const task = reading = {workspace};
       request().then(({datasets}) => {
-        if (ws !== workspace || ws !== client.workspaceId) return;
+        if (reading !== task || task.workspace !== workspace || workspace !== client.workspaceId) return;
         if (!loaded) { items = datasets; loaded = true; }
-        const redraw = afterRead;
-        afterRead = null;
-        redraw?.();
+        afterChange?.();
       }, () => { /* the panel lists no datasets until the next look */ })
-        .finally(() => { if (reading === ws) reading = null; });
+        .finally(() => { if (reading === task) reading = null; });
     },
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
