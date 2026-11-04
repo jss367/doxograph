@@ -22,7 +22,7 @@
     <button type="button" id="btn-workspace-add" aria-label="Create workspace" title="Create workspace"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14 M5 12h14"/></svg></button>
   </span>
   <div class="actions">
-    <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide claims</button>
+    <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide overview</button>
     <button type="button" id="btn-findings" title="What the papers hold on each topic, where they agree, and where they disagree">Findings</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
@@ -402,9 +402,13 @@
     <div id="panes">
       <div id="paperhead"></div>
       <div id="reader" hidden></div>
+      <section id="claims-drawer" aria-label="Claims" hidden>
+        <div id="claims-drawer-bar"></div>
+        <div id="claims-drawer-list" hidden></div>
+      </section>
       <div id="claims-resize" role="separator" aria-orientation="vertical" tabindex="0"
-        aria-controls="claim-column" aria-label="Width of the claims pane"
-        title="Drag to resize the claims pane — double-click to put it back"></div>
+        aria-controls="claim-column" aria-label="Width of the overview pane"
+        title="Drag to resize the overview pane — double-click to put it back"></div>
       <div id="claim-column">
         <div id="workspace-notes-reading"></div>
         <div id="content"></div>

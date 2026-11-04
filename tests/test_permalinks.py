@@ -43,7 +43,7 @@ def test_each_kind_redirects_to_the_view_that_shows_it(client):
     assert fragment(client.get("/paper/doe2026recovery", follow_redirects=False)) == \
         {"ws": "default", "view": "claims", "paper": "doe2026recovery"}
     assert fragment(client.get(f"/claim/{claim_id}", follow_redirects=False)) == \
-        {"ws": "default", "view": "claims", "paper": "doe2026recovery", "sel": claim_id}
+        {"ws": "default", "view": "claims", "paper": "doe2026recovery", "sel": claim_id, "show": "claim"}
     assert fragment(client.get("/ledger/L1", follow_redirects=False)) == \
         {"ws": "default", "view": "claims", "ledger": "L1"}
     assert fragment(client.get("/ledger/my%20claim", follow_redirects=False))["ledger"] == "my claim"
@@ -85,7 +85,7 @@ def test_an_id_two_papers_hold_is_cited_with_its_paper(client):
                     "http://127.0.0.1:8765/claim/legacy-7?paper=roe2025steering"]
     for key in ("doe2026recovery", "roe2025steering"):
         assert fragment(client.get(f"/claim/legacy-7?paper={key}", follow_redirects=False)) == \
-            {"ws": "default", "view": "claims", "paper": key, "sel": "legacy-7"}
+            {"ws": "default", "view": "claims", "paper": key, "sel": "legacy-7", "show": "claim"}
     assert client.get("/claim/legacy-7?paper=nobody", follow_redirects=False).status_code == 404
     # A link written without the paper cannot choose, so it offers both.
     ambiguous = client.get("/claim/legacy-7", follow_redirects=False)

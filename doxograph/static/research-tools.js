@@ -1088,7 +1088,7 @@ const ResearchTools = (() => {
   function focusRailEntry(id) {
     document.querySelectorAll('.highlight-entry.focused').forEach(entry => entry.classList.remove('focused'));
     const entry = id && document.querySelector(`.highlight-entry[data-highlight="${CSS.escape(id)}"]`);
-    if (entry) { setReadingClaims(false); entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'}); }
+    if (entry) { setReadingOverview(false); entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'}); }
   }
   async function setZoom(zoom) {
     if (!reader?.pages.length || !ZOOMS.includes(zoom)) return;
@@ -1213,7 +1213,7 @@ const ResearchTools = (() => {
       && Boolean(document.querySelector('[data-highlight-note]'));
   }
   function openMarkNote(highlight) {
-    setReadingClaims(false);
+    setReadingOverview(false);
     markEditor = {id:highlight.id, paper:highlight.paper, workspace:client.workspaceId, saved:highlight.note, text:highlight.note, removed:false};
     redrawContent();
     document.querySelector('[data-highlight-note]')?.focus();

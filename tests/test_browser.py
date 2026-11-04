@@ -13,7 +13,7 @@ from contextlib import contextmanager
 import httpx
 import pytest
 
-from browser_support import browser_session, run_browser
+from browser_support import CLAIMS_OPEN, browser_session, run_browser
 from doxograph import store
 
 
@@ -5252,6 +5252,7 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
 
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            await page.add_init_script(CLAIMS_OPEN)
 
             async def hold_claim_delete(route, request):
                 if request.method == "DELETE":
@@ -6006,6 +6007,7 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
     async def scenario():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            await page.add_init_script(CLAIMS_OPEN)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{key}-c1"]')

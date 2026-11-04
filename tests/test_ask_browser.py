@@ -13,7 +13,7 @@ import httpx
 import pytest
 from playwright.async_api import expect
 
-from browser_support import browser_session, run_browser
+from browser_support import CLAIMS_OPEN, browser_session, run_browser
 from doxograph import agent, ask_context, config, mcp_server, server, store
 from pdfs import minimal_pdf
 
@@ -201,6 +201,7 @@ def test_claim_focus_expansion_provider_choice_and_empty_selection(engine, monke
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1000, 'height':1000})
+            await page.add_init_script(CLAIMS_OPEN)
             with _server() as url:
                 await page.goto(url + '/#paper=a')
                 await page.locator(f'[data-ask-claim="{claim["id"]}"]').first.click()
@@ -601,6 +602,7 @@ def test_library_pane_keeps_workspace_interactive_while_answering(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            await page.add_init_script(CLAIMS_OPEN)
             held, release = asyncio.Event(), asyncio.Event()
             requests, errors = [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -634,7 +636,7 @@ def test_library_pane_keeps_workspace_interactive_while_answering(engine):
                     await expect(page.locator('#paperhead')).to_contain_text('Recovery under intervention')
                     await expect(page.locator('#library-agent')).to_be_visible()
                     await expect(page.locator('#agent-status')).to_contain_text('Looking through')
-                    await page.locator('#content [data-act="edit"]').first.click()
+                    await page.locator('#claims-drawer-list [data-act="edit"]').first.click()
                     draft = page.locator('form[data-form] textarea[name="note"]')
                     await draft.fill('A note made while the agent answers.')
                     await expect(draft).to_have_value('A note made while the agent answers.')
@@ -683,6 +685,7 @@ def test_ask_docks_before_a_wide_sidebar_squeezes_the_workspace(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 900, 'height': 1000})
+            await page.add_init_script(CLAIMS_OPEN)
             await page.add_init_script("localStorage.setItem('doxograph-side-width', '450')")
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -696,7 +699,7 @@ def test_ask_docks_before_a_wide_sidebar_squeezes_the_workspace(engine):
                 assert pane['y'] >= main['y'] + main['height'] - 1
                 await page.locator('#papers li[data-paper="a"]').click()
                 await expect(page.locator('#reader')).to_be_visible()
-                await page.locator('#content [data-act="edit"]').first.click()
+                await page.locator('#claims-drawer-list [data-act="edit"]').first.click()
                 draft = page.locator('form[data-form] textarea[name="note"]')
                 await draft.fill('Editing beside a docked conversation.')
                 # A wider window restores the right pane and keeps both drafts.
@@ -856,6 +859,7 @@ def test_closing_contextual_ask_restores_the_opener_or_falls_back(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            await page.add_init_script(CLAIMS_OPEN)
             with _server() as url:
                 await page.goto(url + '/#paper=a')
                 for selector in ['[data-paper-chat="a"]', f'[data-ask-claim="{claim["id"]}"]']:
@@ -866,7 +870,7 @@ def test_closing_contextual_ask_restores_the_opener_or_falls_back(engine):
                     await expect(opener).to_be_focused()
                     # A saved edit replaces the button's DOM node but keeps its action.
                     await opener.click()
-                    await page.locator('#content [data-act="edit"]').first.click()
+                    await page.locator('#claims-drawer-list [data-act="edit"]').first.click()
                     form = page.locator('form[data-form]')
                     await form.locator('textarea[name="note"]').fill('Saved while asking from ' + selector)
                     await form.locator('button[type="submit"]').click()

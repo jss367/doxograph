@@ -7,7 +7,7 @@ import httpx
 import pytest
 from fpdf import FPDF
 
-from browser_support import browser_session, run_browser
+from browser_support import CLAIMS_OPEN, browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
 from test_browser import _poll, _server
@@ -27,6 +27,7 @@ def test_explicit_zoom_survives_a_pending_fit_width_resize(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            await page.add_init_script(CLAIMS_OPEN)
             await page.add_init_script("""(() => {
               const schedule = window.setTimeout.bind(window);
               window.setTimeout = (task, delay, ...args) => {
@@ -82,6 +83,7 @@ def test_existing_claim_annotations_follow_the_pdf_and_saved_changes(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            await page.add_init_script(CLAIMS_OPEN)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
@@ -100,7 +102,7 @@ def test_existing_claim_annotations_follow_the_pdf_and_saved_changes(engine):
                 assert b['y'] >= a['y'] + a['height']
                 assert await other.inner_text() == 'Note'
                 await other.click()
-                assert await page.locator(f'#content .claim.sel[data-claim="{multiline["id"]}"]').count() == 1
+                assert await page.locator(f'#claims-drawer-list .claim.sel[data-claim="{multiline["id"]}"]').count() == 1
 
                 # Existing captures survive a reload and stay aligned after zoom.
                 await page.reload()
@@ -177,6 +179,7 @@ def test_claim_annotations_use_the_verifiers_accent_and_case_folding(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page()
+            await page.add_init_script(CLAIMS_OPEN)
             with _server() as url:
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
@@ -206,6 +209,7 @@ def test_claim_annotations_check_document_ambiguity_and_span_page_breaks(engine)
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            await page.add_init_script(CLAIMS_OPEN)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
@@ -225,7 +229,7 @@ def test_claim_annotations_check_document_ambiguity_and_span_page_breaks(engine)
                 second_mark = second.locator(f'.claim-passage[data-claim="{crossing["id"]}"]')
                 await second_mark.wait_for()
                 await second.get_by_role('button', name='Show claim: Evidence spans two pages', exact=True).click()
-                assert await page.locator(f'#content .claim.sel[data-claim="{crossing["id"]}"]').count() == 1
+                assert await page.locator(f'#claims-drawer-list .claim.sel[data-claim="{crossing["id"]}"]').count() == 1
                 assert await page.locator(f'.claim-passage[data-claim="{repeated["id"]}"]').count() == 0
                 assert await page.get_by_role('button', name='Show claim: Repeated evidence', exact=True).count() == 0
                 await page.locator('#reader-zoom').select_option('2')
@@ -264,6 +268,7 @@ def test_claim_annotations_use_the_verifiers_span_for_wording_differences(engine
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            await page.add_init_script(CLAIMS_OPEN)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             with _server() as url:
@@ -279,7 +284,7 @@ def test_claim_annotations_use_the_verifiers_span_for_wording_differences(engine
                 assert mark_box['x'] > text_box['x']  # Exclude "We find", outside the verifier's span.
                 assert await page.get_by_role('button', name='Show claim: Repeated evidence with a wording difference', exact=True).count() == 0
                 await badge.click()
-                assert await page.locator(f'#content .claim.sel[data-claim="{claim["id"]}"]').count() == 1
+                assert await page.locator(f'#claims-drawer-list .claim.sel[data-claim="{claim["id"]}"]').count() == 1
                 assert not errors
 
     run_browser(scenario())
@@ -300,6 +305,7 @@ def test_claim_annotations_retry_a_transient_verifier_lookup_failure(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page()
+            await page.add_init_script(CLAIMS_OPEN)
             requests = []
             recovery = {'ready':False}
 
@@ -320,7 +326,7 @@ def test_claim_annotations_retry_a_transient_verifier_lookup_failure(engine):
                 assert requests
                 recovery['ready'] = True
                 # A normal selection redraw retries without remounting the PDF.
-                await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
+                await page.locator(f'#claims-drawer-list .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
                 await badge.wait_for()
                 assert len(requests) >= 2
                 assert await page.locator('.claim-passage').count() == 1
@@ -339,6 +345,7 @@ def test_claim_annotations_retry_a_transient_document_index_failure(engine):
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page(viewport={'width':1440, 'height':1000})
+            await page.add_init_script(CLAIMS_OPEN)
 
             async def fail_offscreen_page(route):
                 await route.fulfill(content_type='text/javascript', body='''
@@ -365,7 +372,7 @@ def test_claim_annotations_retry_a_transient_document_index_failure(engine):
                 badge = page.get_by_role('button', name='Show claim: Evidence after indexing retry', exact=True)
                 assert await badge.count() == 0
                 await page.evaluate('window.allowQuoteIndex = true')
-                await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
+                await page.locator(f'#claims-drawer-list .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
                 await badge.wait_for()
                 assert await page.locator('.pdf-page[data-page="20"] canvas').count() == 0
 
@@ -386,6 +393,7 @@ def test_claim_annotations_discard_stale_responses_before_restoring_a_quote(engi
     async def scenario():
         async with browser_session(engine) as browser:
             page = await browser.new_page()
+            await page.add_init_script(CLAIMS_OPEN)
             held, release, requests, stale = asyncio.Event(), asyncio.Event(), [], {}
 
             async def hold_first(route):

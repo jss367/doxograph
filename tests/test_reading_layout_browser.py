@@ -119,7 +119,12 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
-                await page.locator(f'#content [data-claim="{claim["id"]}"] [data-act="edit"]').click()
+                # The claims wait in a closed drawer under the PDF.
+                await expect(page.locator('#claims-drawer-bar')).to_contain_text('1 claim')
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
+                await expect(page.locator('#claims-drawer-bar [data-act="toggle-claims"]')).to_have_attribute('aria-expanded', 'true')
+                await page.locator(f'#claims-drawer-list [data-claim="{claim["id"]}"] [data-act="edit"]').click()
                 draft = page.locator(f'form[data-form="{claim["id"]}"] textarea[name="note"]')
                 await draft.fill('An unfinished thought beside the source.')
                 await page.evaluate('''() => {
@@ -132,8 +137,11 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
                 await expect(page.locator('#side')).to_be_hidden()
                 await expect(page.locator('#claim-column')).to_be_hidden()
                 await expect(page.locator('#claims-resize')).to_be_hidden()
-                await expect(page.locator('#btn-reader-claims')).to_have_text('Show claims')
+                await expect(page.locator('#btn-reader-claims')).to_have_text('Show overview')
                 await expect(page.locator('#btn-reader-claims')).to_have_attribute('aria-expanded', 'false')
+                # The claims are under the PDF, so putting the overview away
+                # leaves the draft on screen.
+                await expect(draft).to_be_visible()
                 if width > 800:
                     reader = await page.locator('#reader').bounding_box()
                     main = await page.locator('#main').bounding_box()
@@ -155,9 +163,12 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
                 await expect(page.locator('#btn-reader-claims')).to_have_attribute('aria-expanded', 'true')
 
                 await page.locator('#btn-reader-claims').click()
+                # Adding a claim opens the drawer it is written in.
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
                 await page.locator(".paper-actions > summary").click()
                 await page.locator('[data-act="add-claim"]').click()
-                await expect(page.locator('form[data-form="__new__"]')).to_be_visible()
+                await expect(page.locator('#claims-drawer-list form[data-form="__new__"]')).to_be_visible()
 
                 # Collapsing the reading column must not hide the library's claims.
                 await page.locator('#btn-reader-claims').click()
@@ -171,7 +182,7 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('width', [1440, 1024, 390])
-def test_claim_editor_fits_reading_sidebar(engine, width):
+def test_claim_editor_fits_claims_drawer(engine, width):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('paper', title='Editing claims beside a paper'))
     store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
@@ -188,10 +199,11 @@ def test_claim_editor_fits_reading_sidebar(engine, width):
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
-                await page.locator(f'#content [data-claim="{claim["id"]}"] [data-act="edit"]').click()
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
+                await page.locator(f'#claims-drawer-list [data-claim="{claim["id"]}"] [data-act="edit"]').click()
                 form = page.locator(f'form[data-form="{claim["id"]}"]')
                 await expect(form).to_be_visible()
-                assert await page.locator('#claim-column').evaluate(
+                assert await page.locator('#claims-drawer-list').evaluate(
                     '(pane) => pane.scrollWidth <= pane.clientWidth')
                 # Check the controls themselves, so clipping overflow cannot pass.
                 assert await form.evaluate('''(form) => {
@@ -246,8 +258,13 @@ def test_reading_layout_and_library_return(engine, width):
                 if width < 800:
                     assert abs(pane['height'] - page.viewport_size['height'] * .7) <= 2
                 else:
+                    # The reader runs down to the claims drawer's handle, and
+                    # the handle to the bottom of the window.
                     main = await page.locator('#main').bounding_box()
-                    assert abs(pane['y'] + pane['height'] - main['y'] - main['height']) <= 2
+                    drawer = await page.locator('#claims-drawer').bounding_box()
+                    assert abs(pane['y'] + pane['height'] - drawer['y']) <= 2
+                    assert abs(drawer['y'] + drawer['height'] - main['y'] - main['height']) <= 2
+                    assert drawer['height'] < 60
                 assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
 
                 # Background refreshes keep an open menu and its keyboard focus.
@@ -436,4 +453,63 @@ def test_sidebar_paper_click_survives_search_refresh(engine):
                 await page.mouse.up()
                 await expect(page.locator('#paperhead')).to_contain_text('Paper to open')
                 await expect(page.locator('#papers li[data-paper="paper"]')).to_have_class('active')
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_claims_drawer_is_remembered_and_opened_by_a_claim_link(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    first = store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+    second = store.add_claim('paper', {'text': 'Weak judges miss subtle errors.', 'reviewed': False})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                bar = page.locator('#claims-drawer-bar')
+                await expect(bar).to_contain_text('2 claims')
+                await expect(bar).to_contain_text('1 unreviewed')
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+                # The overview column holds no claims.
+                await expect(page.locator('#claim-column .claim')).to_have_count(0)
+
+                # A reload comes back to the drawer as it was left.
+                await page.reload()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+                await bar.locator('[data-act="toggle-claims"]').click()
+                await expect(page.locator(f'#claims-drawer-list .claim[data-claim="{first["id"]}"]')).to_be_visible()
+                await page.reload()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await expect(page.locator('#claims-drawer-list')).to_be_visible()
+                await bar.locator('[data-act="toggle-claims"]').click()
+                await expect(bar.locator('[data-act="toggle-claims"]')).to_have_text('Show claims')
+
+                # The keys that move between claims open the drawer.
+                await page.locator('body').press('j')
+                await expect(page.locator('#claims-drawer-list')).to_be_visible()
+                await bar.locator('[data-act="toggle-claims"]').click()
+
+                # A link to one claim opens the drawer on it, and leaves the
+                # address as the page writes it.
+                await page.goto(f'{url}/claim/{second["id"]}')
+                card = page.locator(f'#claims-drawer-list .claim.sel[data-claim="{second["id"]}"]')
+                await expect(card).to_be_visible()
+                await page.wait_for_function("!location.hash.includes('show=')")
+
+                # Off the reader, the claims are in the content pane again and
+                # the drawer holds no second copy of them.
+                await page.locator('#btn-back-library').click()
+                await expect(page.locator('#claims-drawer')).to_be_hidden()
+                await expect(page.locator('#claims-drawer-list .claim')).to_have_count(0)
+                assert not errors
+
     run_browser(scenario())
