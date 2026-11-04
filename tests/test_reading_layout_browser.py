@@ -513,3 +513,47 @@ def test_claims_drawer_is_remembered_and_opened_by_a_claim_link(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_search_of_the_pdf_text_opens_the_claims_drawer(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['The judges discuss sandbagging at length.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                drawer = page.locator('#claims-drawer-list')
+                toggle = page.locator('#claims-drawer-bar [data-act="toggle-claims"]')
+                await expect(drawer).to_be_hidden()
+
+                # A search that finds nothing in the PDFs leaves the drawer shut.
+                await page.locator('#btn-reader-filters').click()
+                await page.locator('#q').fill('nowhere')
+                await page.wait_for_function("V.textSearch?.q === 'nowhere' && V.textSearch.loading === false")
+                await expect(drawer).to_be_hidden()
+
+                # One that finds a passage opens it on what it found.
+                await page.locator('#q').fill('sandbagging')
+                await expect(drawer.locator('.pdfhit .pp mark')).to_have_text('sandbagging')
+                await expect(toggle).to_have_text('Hide claims')
+
+                # Closed again, the standing query does not reopen it: neither a
+                # redraw nor the quiet re-run a corpus change asks for.
+                await toggle.click()
+                await page.evaluate("renderContent()")
+                await page.evaluate("runTextSearch('sandbagging', true)")
+                await _poll(page)
+                await expect(drawer).to_be_hidden()
+                assert not errors
+
+    run_browser(scenario())

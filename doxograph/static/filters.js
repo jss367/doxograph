@@ -344,6 +344,11 @@ async function runTextSearch(query, quiet = false) {
   if (unchanged) return;
   captureOpenEditor();
   drawSearchProgress();
+  // Reading a PDF, the passages are drawn in the claims drawer under it, and a
+  // closed drawer would hide what the reader just searched for. Only their own
+  // search opens it, and only when it found something: a re-run after a corpus
+  // change is not a question they asked.
+  if (!quiet && $('claims-drawer-list').querySelector('.pdfhit')) revealClaims();
 }
 
 // The results live under the claims, so the research form never shows them —
