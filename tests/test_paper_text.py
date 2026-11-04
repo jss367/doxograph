@@ -143,6 +143,7 @@ def test_stale_overview_dialog_keeps_draft_and_newer_saved_text(engine, field):
                     await page.goto(f'{url}#paper={KEY}')
                     await page.locator(f'.paper-{field} [data-act="edit-paper-text"]').click()
                     await expect(page.locator('#ask-lines')).to_have_value('Original text')
+                await second.evaluate("async () => { poller.stop(); if (poller.running) await poller.once().catch(() => {}); }")
                 await first.locator('#ask-lines').fill('First window correction')
                 await first.locator('#ask-lines').press('Control+Enter')
                 await expect(first.locator('#ask')).to_be_hidden()
@@ -159,5 +160,55 @@ def test_stale_overview_dialog_keeps_draft_and_newer_saved_text(engine, field):
                 await second.locator('#ask-lines').press('Control+Enter')
                 await expect(second.locator('#ask')).to_be_hidden()
                 assert store.load_paper(KEY)[field] == 'Reconciled correction'
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('failed', [False, True])
+def test_superseded_text_snapshot_does_not_replace_draft(engine, failed):
+    """A delayed snapshot or load error cannot disturb the newer editor."""
+    import asyncio
+    from playwright.async_api import expect
+    from test_browser import _server
+
+    store.save_paper(store.new_paper(KEY, title='Study', summary='Summary', relevance='Relevance'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            pending, release = asyncio.Event(), asyncio.Event()
+            requests = 0
+
+            async def snapshot(route):
+                nonlocal requests
+                requests += 1
+                if requests != 1:
+                    await route.continue_()
+                    return
+                response = await route.fetch()
+                pending.set()
+                await release.wait()
+                if failed:
+                    await route.fulfill(status=500, json={'detail': 'Superseded load failed'})
+                else:
+                    await route.fulfill(response=response)
+
+            with _server() as url:
+                await page.goto(f'{url}#paper={KEY}')
+                await page.locator('.paper-summary').wait_for()
+                await page.route('**/api/papers/*?with_revision=true', snapshot)
+                await page.evaluate("() => { window.olderEditDone = false; void editPaperText('" + KEY + "', 'summary').then(() => { window.olderEditDone = true; }); }")
+                await asyncio.wait_for(pending.wait(), timeout=5)
+                await page.locator('.paper-relevance [data-act="edit-paper-text"]').click()
+                await expect(page.locator('#ask-lines')).to_have_value('Relevance')
+                await page.locator('#ask-lines').fill('Keep this draft')
+                release.set()
+                await page.wait_for_function('window.olderEditDone')
+                await expect(page.locator('#ask-title')).to_have_text('Why it matters for Study')
+                await expect(page.locator('#ask-lines')).to_have_value('Keep this draft')
+                await expect(page.get_by_text('Could not load the text: Superseded load failed', exact=True)).to_have_count(0)
+                await page.locator('#ask-cancel').click()
 
     run_browser(scenario())

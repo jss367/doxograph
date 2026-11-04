@@ -333,7 +333,9 @@ function paperTextEdit(paper, field) {
 
 // The model writes the summary and why it matters when it reads the paper;
 // the reader can rewrite either, and a later re-read keeps what they wrote.
+let paperTextRequest = 0;
 async function editPaperText(key, field) {
+  const request = ++paperTextRequest;
   const workspace = workspaceClient.workspaceId;
   let snapshot;
   try {
@@ -341,10 +343,10 @@ async function editPaperText(key, field) {
       headers: {'X-Doxograph-Workspace': workspace},
     });
   } catch (error) {
-    if (workspace === workspaceClient.workspaceId) toast(`Could not load the text: ${error.message}`, {tone: 'warn'});
+    if (request === paperTextRequest && workspace === workspaceClient.workspaceId) toast(`Could not load the text: ${error.message}`, {tone: 'warn'});
     return;
   }
-  if (workspace !== workspaceClient.workspaceId) return;
+  if (request !== paperTextRequest || workspace !== workspaceClient.workspaceId) return;
   const paper = snapshot.paper;
   const answer = await askDialog({
     title: `${PAPER_TEXT[field].heading} for ${paper.title || key}`,
