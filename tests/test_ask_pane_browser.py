@@ -86,7 +86,7 @@ def test_the_context_chip_follows_the_reader_and_switches_the_sources():
         async with browser_session("chromium") as browser:
             page = await browser.new_page(viewport={"width": 1600, "height": 1000})
             with _server() as url:
-                await page.goto(url)
+                await page.goto(f"{url}/#view=library")
                 await page.locator("#btn-agent:enabled").click()
                 chip = page.locator("#agent-context .chip")
                 await expect(chip).to_have_text("Whole library")

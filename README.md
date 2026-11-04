@@ -162,11 +162,14 @@ Extraction, quote checks, and **Add claim by hand** are under **Paper actions**.
 open the same Ask panel with the relevant sources already selected. A claim
 stays in focus while its originating paper supplies evidence. Use the existing
 paper and claim checkboxes to prepare a comparison of up to 200 papers; filters alone do not select
-sources. Contextual actions start a fresh conversation, and **Conversations**
-lists conversations in this workspace so you can switch between them. Each row
+sources. Contextual actions start a fresh conversation. The current
+conversation's title, beside **Ask**, drops down the conversations in this
+workspace so you can switch between them; **New** starts another one. Each row
 has an **Archive** button to put a finished conversation aside. Expand **Archived
 conversations** to read it again or **Restore** it to the active list. Archiving
 keeps its history, evidence, and attachments, including in workspace exports.
+The same list holds **Delete this conversation** and **About Ask**, which
+describes what each provider receives.
 
 Single-paper chat sends the PDF or extracted page-numbered text to the selected
 API, local, Claude subscription, or ChatGPT subscription provider. Native Claude
@@ -175,11 +178,11 @@ scans. If a paper has no readable PDF, **Use extracted claims only** offers
 retrieval through a subscription. For papers without extracted claims, **Use paper
 metadata only** retrieves available titles, abstracts, and summaries instead.
 Personal Doxograph notes are excluded from both paths. The ChatGPT option includes global Codex instructions,
-as disclosed in the panel.
+as disclosed under **About Ask**. The provider menu sits beside **Send**.
 
-Source chips above the question show the evidence available to the next answer.
+**Sources** chips above the question show the evidence available to the next answer.
 **Add sources** searches titles, authors, claim text, and assigned topics. Adding
-papers or choosing **Search the rest of the library** expands the next question's
+papers or choosing **Search whole library** expands the next question's
 scope. Removing sources starts a new conversation, carrying the draft but leaving
 prior answers and evidence behind. Each submitted question keeps its own scope,
 including when the selection changes while an answer is running.
@@ -223,17 +226,17 @@ findings while the agent answers; the pane stays where it is across pages and
 comes back after a reload. Drag its left edge to resize it, or give the divider
 focus and use the arrow keys; Home or a double-click puts it back. On narrow
 windows, or when a wide sidebar leaves too little room to read and edit, the
-conversation docks along the bottom. The workspace named in the
-pane owns the conversation, even while you browse another workspace.
+conversation docks along the bottom. A conversation belongs to the workspace it
+started in; while you browse another workspace, the pane names its owner.
 
-Under the title, **Looking at** names what is on screen: the paper being read,
-the findings, or the whole library. Click it to make that the next question's
+When the sources differ from what is on screen, **Looking at** above them names
+it: the paper being read, the findings, or the whole library. Click it to make that the next question's
 sources; when the conversation already has answers from other sources, that
 starts a new conversation and carries the draft. On the findings page, **Ask
 about this** on an agreement or tension opens the pane with its claims in focus
 and its papers as the sources.
-Choose **Search the rest of the library** to expand an existing selection, or use
-**New conversation** to start another thread with the displayed scope. Library
+Choose **Search whole library** to expand an existing selection, or use
+**New** to start another conversation with the displayed scope. Library
 and multiple-paper retrieval require **Claude subscription (Claude Code)** or
 **ChatGPT subscription (Codex)**. An unsupported provider remains selected until
 you explicitly choose a supported one; Doxograph never switches billing modes
@@ -1202,6 +1205,16 @@ are shown — two claims can contradict each other in words that have nothing in
 common, "recovers in 46% of rollouts" against "almost never returns to the
 task", and filtering the prompt by word overlap would quietly throw those
 away.
+
+## Pages
+
+The header has three pages. **Papers** is the library and the paper being
+read. **Findings** is what the papers hold on each topic, where they agree,
+and where they disagree. **Workspace** is what you are studying and your own
+claims, the topic vocabulary with its use, the labels in use, and the
+workspace's actions: export, archive, previous versions, retagging, settings,
+renaming and deletion. Opening Doxograph without a page in the address lands
+on Findings once the workspace has any, and on Papers before that.
 
 ## Findings
 

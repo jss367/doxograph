@@ -4,6 +4,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from playwright.async_api import expect
 
 from browser_support import browser_session, run_browser
 from doxograph import config
@@ -102,7 +103,7 @@ def test_library_answer_markdown_save_reopen_and_export(engine):
                 assert send_box['y'] + send_box['height'] <= 720
                 assert await page.locator('#library-agent').evaluate('el => el.scrollWidth <= el.clientWidth')
                 assert await page.locator('#library-agent').evaluate('el => getComputedStyle(el).overflowY') == 'auto'
-                assert (await page.locator('.chat-conversations').bounding_box())['height'] > 40
+                await expect(page.locator('#agent-history > summary')).to_be_visible()
                 if engine == 'chromium':
                     await page.screenshot(path='.context/library-answer-small.png')
                 await page.set_viewport_size({'width': 1440, 'height': 1100})

@@ -7,7 +7,7 @@ import httpx
 import pytest
 from playwright.async_api import async_playwright
 
-from browser_support import browser_session, run_browser
+from browser_support import browser_session, open_ask_conversations, run_browser
 from doxograph import config, store
 from test_browser import _answer, _server
 
@@ -192,9 +192,11 @@ def test_paper_conversations_run_side_by_side_on_their_own_agents_and_survive_re
             # The most recently answered conversation reopens; the held first answer may have landed last.
             await page.locator('#agent-thread [data-thread-open]').nth(1).wait_for(state='attached')
             assert sorted(await page.locator('#agent-thread [data-thread-open]').all_text_contents()) == ['First question', 'Second question']
+            await open_ask_conversations(page)
             await page.locator('#agent-thread').get_by_role('button', name='Second question', exact=True).click()
             await page.get_by_text('ChatGPT answer 2.', exact=True).wait_for()
             assert await page.locator('#agent-agent').input_value() == 'codex'
+            await open_ask_conversations(page)
             await page.locator('#agent-thread').get_by_role('button', name='First question', exact=True).click()
             assert await page.locator('#agent-agent').input_value() == 'claude_code'
             await page.get_by_text('Claude answer 2.', exact=True).wait_for()
@@ -203,7 +205,9 @@ def test_paper_conversations_run_side_by_side_on_their_own_agents_and_survive_re
             await page.get_by_text('Claude answer 3.', exact=True).wait_for()
             assert requests[-1] == ('claude_code', ['First question', 'Claude answer 2.', 'Follow up'])
 
+            await open_ask_conversations(page)
             await page.locator('#agent-thread').get_by_role('button', name='Second question', exact=True).click()
+            await open_ask_conversations(page)
             await page.locator('#agent-delete').click()
             await _answer(page, 'Delete conversation')
             await page.locator('#agent-thread [data-thread-open]', has_text='Second question').wait_for(state='detached')
@@ -301,6 +305,7 @@ def test_unsaved_answer_survives_another_window_saving_the_same_conversation(eng
             await page.locator('#agent-thread [data-thread-open]').nth(1).wait_for(state='attached')
             assert await _saved_contents(2) == [
                 ['First', 'Answer 1.', 'Mine', 'Answer 2.'], ['First', 'Answer 1.', 'Theirs', 'Their answer.']]
+            await open_ask_conversations(page)
             await page.locator('#agent-thread [data-thread-open]').nth(1).click()
             await page.get_by_text('Their answer.', exact=True).wait_for()
             assert not errors
@@ -519,6 +524,7 @@ def test_conversation_deleted_while_an_older_list_loads_stays_deleted(engine):
             await page.route('**/api/chats?all_scopes=true', held_list)
             await open_chat()
             await asyncio.wait_for(taken.wait(), timeout=10)
+            await open_ask_conversations(page)
             await page.locator('#agent-delete').click()
             await _answer(page, 'Delete conversation')
             await page.locator('#agent-thread [data-thread-open]', has_text='First').wait_for(state='detached')
@@ -605,6 +611,7 @@ def test_library_agent_dialog_sends_the_conversation_and_shows_lookups(provider,
             await page.get_by_text('Two papers agree.', exact=True).wait_for()
             assert await page.locator('#agent-messages .activity li').text_content() == 'Searched claims steering'
             assert await page.locator('#agent-messages .who').all_text_contents() == ['You', assistant]
+            await open_ask_conversations(page)
             await page.locator('.agent-guidance summary').click()
             assert await page.locator('#agent-codex-guidance').is_visible() == (provider == 'codex')
             await page.locator('#agent-question').fill('And disagrees?')
@@ -681,6 +688,7 @@ def test_library_agent_switches_agent_without_losing_drafts_or_answer_labels(eng
             assert await page.locator('#agent-send').is_enabled()
             await page.locator('#agent-agent').select_option('codex')
             assert await page.locator('#agent-question').input_value() == 'Follow up'
+            await open_ask_conversations(page)
             await page.locator('.agent-guidance summary').click()
             assert await page.locator('#agent-codex-guidance').is_visible()
             await page.locator('#agent-send').click()

@@ -290,6 +290,8 @@ function applyHash() {
   const legacyClaims = ['paper', 'sel', 'tag', 'q', 'label', 'kind', 'unreviewed', 'unverified', 'group'].some(key => params.has(key));
   const view = params.get('view') || (legacyClaims ? 'claims' : 'library');
   V.view = HASH_VIEWS.includes(view) ? view : 'library';
+  // An address naming no page lands on the findings once there are any.
+  V.landing = !params.has('view') && !legacyClaims;
   V.paper = V.view === 'library' ? null : params.get('paper') || null;
   V.tag = params.get('tag') || null;
   V.label = params.get('label') || null;
@@ -905,10 +907,13 @@ function renderContent() {
 
 // Polling can refresh the header. Keep keyboard focus on the same reading
 // action or menu command, rather than dropping it back onto the document.
-// The handle of the claims drawer is drawn afresh too, so it is kept the same way.
+// The handle of the claims drawer is drawn afresh too, so it is kept the same
+// way, and only on the handle of the paper it was on.
 function paperActionCursor() {
   const field = document.activeElement;
-  if (field?.matches('#claims-drawer-bar [data-act]')) return {drawer: `[data-act="${CSS.escape(field.dataset.act)}"]`};
+  if (field?.matches('#claims-drawer-bar [data-act]')) {
+    return {drawer: `[data-act="${CSS.escape(field.dataset.act)}"]`, paper: $('claims-drawer-bar').dataset.paper};
+  }
   const actions = field?.closest('.reading-actions');
   if (!actions) return null;
   const attribute = ['data-act', 'data-tool', 'data-paper-chat', 'data-reader-command', 'href']
@@ -921,6 +926,7 @@ function restorePaperActionCursor(cursor) {
   if (cursor.drawer) {
     // Review is gone when a filter empties the drawer; its toggle never is.
     const bar = $('claims-drawer-bar');
+    if (bar.dataset.paper !== cursor.paper) return;
     (bar.querySelector(cursor.drawer) || bar.querySelector('[data-act="toggle-claims"]'))?.focus({preventScroll: true});
     return;
   }
@@ -951,6 +957,29 @@ function pageViews() {
     notes: [ResearchNotes, [V.note], $('btn-research-notes')],
     tools: [ResearchTools, [V.tool, V.board], toolButton()]};
 }
+
+// The three pages in the header. Papers is the library and the reader;
+// Workspace is the research context, the ledger, the topics and the
+// workspace's own actions, under the view id they have always had.
+function hasFindings() {
+  return Boolean((S.syntheses || []).length || (S.tensions || []).length || (S.agreements || []).length);
+}
+function syncPageNav() {
+  const current = {library: 'btn-papers', claims: 'btn-papers', findings: 'btn-findings', research: 'btn-workspace'}[V.view];
+  for (const id of ['btn-papers', 'btn-findings', 'btn-workspace']) {
+    if (id === current) $(id).setAttribute('aria-current', 'page');
+    else $(id).removeAttribute('aria-current');
+  }
+}
+function openPage(view) {
+  // The active page already owns its DOM, including disabled in-flight forms.
+  if (V.view === view) return;
+  showView(view);
+  syncHash(true);
+  renderAll();
+}
+$('btn-papers').addEventListener('click', () => openPage('library'));
+$('btn-workspace').addEventListener('click', () => openPage('research'));
 
 function toolButton() {
   return document.querySelector(`.research-tools-nav [data-tool="${CSS.escape(V.tool || 'compare')}"]`);
@@ -986,9 +1015,9 @@ function openPerson(name) {
 }
 
 // Following a source out of a page view, the way the paper list opens one.
-function followToPaper(paper, claim = null) {
+function followToPaper(paper, claim = null, tag = null) {
   captureOpenEditor(); parkNewClaimForNavigation(paper);
-  V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
+  V.paper = paper; V.view = 'claims'; V.tag = tag; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
   V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
   $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
   scheduleTextSearch(); syncHash(true); renderAll();
@@ -1002,6 +1031,8 @@ function drawContent() {
   const library = V.view === 'library';
   document.body.classList.toggle('paper-library-view', library);
   document.body.classList.toggle('findings-view', V.view === 'findings');
+  document.body.classList.toggle('workspace-view', V.view === 'research');
+  syncPageNav();
   $('library-view-switch').hidden = Boolean(V.paper) || !['library', 'claims'].includes(V.view);
   $('btn-library-view').setAttribute('aria-pressed', String(library));
   $('btn-claims-view').setAttribute('aria-pressed', String(V.view === 'claims'));
@@ -1111,6 +1142,7 @@ function drawContent() {
     // which stays in view while the overview column beside the PDF is hidden.
     $('content').innerHTML = overview;
     $('claims-drawer-bar').innerHTML = lead + claimsDrawerBar(V.paper, rows);
+    $('claims-drawer-bar').dataset.paper = V.paper;
     $('claims-drawer-list').innerHTML = draft + html;
     syncClaimsDrawer();
   } else {
@@ -1756,6 +1788,8 @@ async function boot() {
   const changed = await pull();
   AppStartup.phase('interface');
   if (changed) corpusChanged();
+  if (V.landing && V.view === 'library' && hasFindings()) V.view = 'findings';
+  V.landing = false;
   render();
   // New conversations need both the final workspace and initial provider state.
   // AI-off setup help remains accessible once that state is loaded.
