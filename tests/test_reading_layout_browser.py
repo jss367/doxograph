@@ -557,3 +557,33 @@ def test_a_search_of_the_pdf_text_opens_the_claims_drawer(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_claims_drawer_buttons_keep_focus_across_a_redraw(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                bar = page.locator('#claims-drawer-bar')
+                await expect(bar).to_contain_text('1 claim')
+
+                # A claim written elsewhere redraws the bar under the reader's
+                # keyboard focus, and the focus stays on the same button.
+                for n, act in enumerate(['toggle-claims', 'review-claims'], start=2):
+                    await bar.locator(f'[data-act="{act}"]').focus()
+                    store.add_claim('paper', {'text': f'Claim number {n}.'})
+                    await _poll(page)
+                    await expect(bar).to_contain_text(f'{n} claims')
+                    await expect(bar.locator(f'[data-act="{act}"]')).to_be_focused()
+
+    run_browser(scenario())

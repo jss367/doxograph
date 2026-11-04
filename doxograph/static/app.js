@@ -899,8 +899,10 @@ function renderContent() {
 
 // Polling can refresh the header. Keep keyboard focus on the same reading
 // action or menu command, rather than dropping it back onto the document.
+// The handle of the claims drawer is drawn afresh too, so it is kept the same way.
 function paperActionCursor() {
   const field = document.activeElement;
+  if (field?.matches('#claims-drawer-bar [data-act]')) return {drawer: `[data-act="${CSS.escape(field.dataset.act)}"]`};
   const actions = field?.closest('.reading-actions');
   if (!actions) return null;
   const attribute = ['data-act', 'data-tool', 'data-paper-chat', 'data-reader-command', 'href']
@@ -910,6 +912,12 @@ function paperActionCursor() {
 }
 function restorePaperActionCursor(cursor) {
   if (!cursor) return;
+  if (cursor.drawer) {
+    // Review is gone when a filter empties the drawer; its toggle never is.
+    const bar = $('claims-drawer-bar');
+    (bar.querySelector(cursor.drawer) || bar.querySelector('[data-act="toggle-claims"]'))?.focus({preventScroll: true});
+    return;
+  }
   const actions = document.querySelector(`.reading-actions[data-paper="${CSS.escape(cursor.paper)}"]`);
   (actions?.querySelector(cursor.selector) || actions?.querySelector('summary'))?.focus({preventScroll: true});
 }
