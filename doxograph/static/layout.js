@@ -113,7 +113,8 @@ function wantAskWidth(px, persist = false) {
 
 function fitAskWidth() {
   const width = Math.min(clampAskWidth(askWidthWanted), askWidthFit());
-  $('layout').style.setProperty('--ask-width', `${width}px`);
+  // Notifications are a sibling of the layout and need the same fitted width.
+  document.documentElement.style.setProperty('--ask-width', `${width}px`);
   const handle = $('ask-resize');
   handle.setAttribute('aria-valuenow', String(width));
   handle.setAttribute('aria-valuemin', String(askWidthMin()));
@@ -161,11 +162,13 @@ function storeAskWidth() {
     if (!movedThisPress && !movedLastPress) { wantAskWidth(askWidthDefault(), true); fitAskPane(); }
   });
   const nudge = (px) => {
-    if (clampAskWidth(px) !== clampAskWidth(askWidthWanted)) { wantAskWidth(clampAskWidth(px), true); fitAskPane(); }
+    const next = Math.min(clampAskWidth(px), askWidthFit());
+    // Keep a larger remembered width when the key cannot move the divider.
+    if (next !== fitAskWidth()) { wantAskWidth(next, true); fitAskPane(); }
   };
   handle.addEventListener('keydown', (event) => {
     const step = event.shiftKey ? 48 : 12;
-    const at = clampAskWidth(askWidthWanted);
+    const at = fitAskWidth();
     // The divider is on the pane's left edge: left is wider, right is narrower.
     if (event.key === 'ArrowLeft') nudge(at + step);
     else if (event.key === 'ArrowRight') nudge(at - step);

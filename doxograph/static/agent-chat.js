@@ -293,9 +293,18 @@ function syncAskContext() {
   const on = scopeMatches(chat.scope, context);
   const locked = chat.archived || chat.archiving;
   element.hidden = false;
-  element.innerHTML = `<span>${on ? 'Asking about' : 'Looking at'}</span>
-    <button type="button" class="chip${on ? ' on' : ''}" data-ask-context="${esc(context.kind)}" title="${esc(context.label)}" ${on || locked ? 'disabled' : ''}>${esc(context.label)}</button>
-    ${on ? '' : '<span class="hint">· click to ask about it</span>'}`;
+  // Keep the control in place: a background redraw must not take its focus.
+  if (!element.querySelector('[data-ask-context]')) {
+    element.innerHTML = '<span></span><button type="button" class="chip" data-ask-context=""></button><span class="hint">· click to ask about it</span>';
+  }
+  const [label, chip, hint] = element.children;
+  label.textContent = on ? 'Asking about' : 'Looking at';
+  chip.textContent = context.label;
+  chip.title = context.label;
+  chip.dataset.askContext = context.kind;
+  chip.classList.toggle('on', on);
+  chip.disabled = on || locked;
+  hint.hidden = on;
 }
 $('agent-context').addEventListener('click', event => {
   if (!event.target.closest('[data-ask-context]')) return;
@@ -304,9 +313,12 @@ $('agent-context').addEventListener('click', event => {
 async function openAsk(scope, opener = document.activeElement, {focus = true} = {}) {
   if (!$('library-agent').contains(opener)) {
     askOpener = opener instanceof HTMLElement && opener !== document.body ? opener : null;
+    const topic = askOpener?.closest('.ftopic')?.dataset.topic;
     askOpenerSelector = askOpener?.id ? `#${CSS.escape(askOpener.id)}`
       : askOpener?.dataset.askClaim ? `[data-ask-claim="${CSS.escape(askOpener.dataset.askClaim)}"][data-paper="${CSS.escape(askOpener.dataset.paper)}"]`
-      : askOpener?.dataset.paperChat ? `[data-paper-chat="${CSS.escape(askOpener.dataset.paperChat)}"]` : '';
+      : askOpener?.dataset.paperChat ? `[data-paper-chat="${CSS.escape(askOpener.dataset.paperChat)}"]`
+      : askOpener?.dataset.askFinding && topic
+        ? `.ftopic[data-topic="${CSS.escape(topic)}"] [data-ask-kind="${CSS.escape(askOpener.dataset.askKind)}"][data-ask-finding="${CSS.escape(askOpener.dataset.askFinding)}"]` : '';
   }
   rememberAskCatalog();
   const opening = agentChats.open(workspaceClient.workspaceId, null, scope ? {fresh: true, scope} : {});
@@ -519,3 +531,7 @@ function evidenceDetails(message) {
   }
   return details;
 }
+
+// boot can finish while this later script is still being fetched. The boot
+// hook handles the other ordering; restoreAsk is idempotent once open.
+if (typeof libraryInitialized !== 'undefined' && libraryInitialized) restoreAsk();
