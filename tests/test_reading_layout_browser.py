@@ -844,3 +844,87 @@ def test_a_late_search_answer_does_not_open_another_papers_drawer(engine):
                 await expect(page.locator('#claims-drawer-list')).to_be_hidden()
 
     run_browser(scenario())
+
+
+def _two_searchable_papers():
+    for key, title in [('one', 'Sandbagging in the first paper'), ('two', 'Sandbagging in the second paper')]:
+        store.save_paper(store.new_paper(key, title=title))
+        store.pdf_path(key).write_bytes(minimal_pdf(['The judges discuss sandbagging at length.']))
+        store.add_claim(key, {'text': f'A claim from {title}.'})
+
+
+async def _hold_searches(page):
+    """Hold the next text search until the returned event is set."""
+    held, release = asyncio.Event(), asyncio.Event()
+
+    async def hold(route):
+        held.set()
+        await release.wait()
+        await route.continue_()
+    await page.route('**/api/search*', hold)
+    return held, release
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_late_search_answer_after_leaving_and_returning_leaves_the_drawer(engine):
+    config.set_ai_enabled(False)
+    _two_searchable_papers()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="one"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                held, release = await _hold_searches(page)
+                await page.locator('#btn-reader-filters').click()
+                await page.locator('#q').fill('sandbagging')
+                await asyncio.wait_for(held.wait(), timeout=10)
+
+                # Away and back while the answer is out: the paper is the same
+                # one, but the reader has moved since asking.
+                await page.locator('#papers li[data-paper="two"]').click()
+                await expect(page.locator('#paperhead')).to_contain_text('the second paper')
+                await page.locator('#papers li[data-paper="one"]').click()
+                await expect(page.locator('#paperhead')).to_contain_text('the first paper')
+                release.set()
+                await page.wait_for_function("V.textSearch?.q === 'sandbagging' && V.textSearch.loading === false")
+                await page.locator('#claims-drawer-list .pdfhit').first.wait_for(state='attached')
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_drawer_closed_while_a_search_is_out_stays_closed(engine):
+    config.set_ai_enabled(False)
+    _two_searchable_papers()
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            await page.add_init_script(CLAIMS_OPEN)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="one"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                drawer = page.locator('#claims-drawer-list')
+                await expect(drawer).to_be_visible()
+                held, release = await _hold_searches(page)
+                await page.locator('#btn-reader-filters').click()
+                await page.locator('#q').fill('sandbagging')
+                await asyncio.wait_for(held.wait(), timeout=10)
+
+                # Closed by the reader while the answer is out: their choice
+                # stands when it lands.
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
+                await expect(drawer).to_be_hidden()
+                release.set()
+                await page.wait_for_function("V.textSearch?.q === 'sandbagging' && V.textSearch.loading === false")
+                await drawer.locator('.pdfhit').first.wait_for(state='attached')
+                await expect(drawer).to_be_hidden()
+
+    run_browser(scenario())
