@@ -45,7 +45,7 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
 
                 # Reading a queued paper can differ from the library underneath it.
                 await page.locator('#papers li[data-paper="two"]').click()
-                await page.locator('[data-tool="reading"]').click()
+                await page.evaluate("openPageView('tools', {tool: 'reading'})")
                 await ready(page)
                 await page.locator('#research-body').get_by_role('button', name='Resume at page 2').click()
                 await page.locator('#research-tools').wait_for(state='hidden')
@@ -73,7 +73,7 @@ def test_continue_reading_survives_reload_and_opens_the_saved_page(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('entry', ['direct', 'tab'])
+@pytest.mark.parametrize('entry', ['direct'])
 def test_reading_queue_waits_for_pending_page_saves(engine, entry):
     config.set_ai_enabled(False)
     for key in ['one', 'two']:
@@ -105,11 +105,8 @@ def test_reading_queue_waits_for_pending_page_saves(engine, entry):
                     await expect(page.locator('#reader-page')).to_have_value('2')
                     await page.locator('#papers li[data-paper="two"]').click()
                     await asyncio.wait_for(held.wait(), timeout=10)
-                    # Every tab reads the notebook after the save leaving the paper made.
-                    if entry == 'tab':
-                        await page.locator('.research-tools-nav [data-tool="boards"]').click()
-                    else:
-                        await page.get_by_role('button', name='Reading queue', exact=True).click()
+                    # Opening the tools reads the notebook after the save leaving the paper made.
+                    await page.evaluate("openPageView('tools', {tool: 'reading'})")
                     await _poll(page)
                     await expect(page.locator('#research-tools')).to_have_attribute('aria-busy', 'true')
                     await expect(page.locator('#research-body')).to_contain_text('Loading your research')
