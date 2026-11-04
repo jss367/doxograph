@@ -992,6 +992,8 @@ function followToPaper(paper, claim = null) {
   V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
   $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
   scheduleTextSearch(); syncHash(true); renderAll();
+  // A link to one claim opens the drawer it sits in, as the other links do.
+  if (claim) scrollToSelected();
 }
 
 function drawContent() {

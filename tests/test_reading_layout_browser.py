@@ -1,5 +1,6 @@
 """The reading layout gives space to the source without losing library state."""
 
+import httpx
 import pytest
 from playwright.async_api import expect
 
@@ -622,6 +623,37 @@ def test_moving_to_a_claim_link_in_the_page_opens_the_drawer(engine):
                 await page.evaluate(go, [first['id'], ''])
                 await page.wait_for_function("id => V.selectedId === id", arg=first['id'])
                 await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+                assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_claim_link_from_a_dataset_opens_the_drawer(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+    linked = store.add_claim('paper', {'text': 'Weak judges miss subtle errors.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                item = httpx.post(url + '/api/datasets', json={'name': 'Corpus', 'papers': ['paper'],
+                    'claims': [{'paper': 'paper', 'claim': linked['id']}]}).json()
+                await page.goto(f'{url}/#view=datasets&dataset={item["id"]}')
+                await page.wait_for_function(
+                    "document.querySelector('#datasets-sheet').getAttribute('aria-busy') !== 'true'")
+                # The drawer was left closed, and a link to one claim opens it.
+                assert await page.evaluate('claimsDrawerOpen') is False
+                await page.locator('#dataset-research').get_by_role('button', name=linked['text'], exact=True).click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                card = page.locator(f'#claims-drawer-list .claim.sel[data-claim="{linked["id"]}"]')
+                await expect(card).to_be_visible()
                 assert not errors
 
     run_browser(scenario())
