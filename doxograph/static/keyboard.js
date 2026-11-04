@@ -99,7 +99,7 @@ const CommandPalette = (() => {
     parkSynthEditor();
     parkNoteEditor();
     showView(paper || tag ? 'claims' : 'library');
-    Object.assign(V, {paper, tag, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false,
+    Object.assign(V, {paper, tag, label: null, ledger: null, q: '', kind: '', unreviewed: false,
       unverified: false, editing: null, selectedId: null});
     $('q').value = ''; $('kind').value = '';
     $('only-unreviewed').checked = false; $('only-unverified').checked = false;

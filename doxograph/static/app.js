@@ -60,7 +60,7 @@ const NEW_CLAIM_ID = '__new__';
 // judgment but the reader's, so unlike a synthesis it is saved without
 // flushing the held deletes: no claim is read to write one.
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
-const V = { paper: null, tag: null, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+const V = { paper: null, tag: null, label: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
@@ -157,7 +157,6 @@ function currentHash() {
   if (V.paper) params.set('paper', V.paper);
   if (V.tag) params.set('tag', V.tag);
   if (V.label) params.set('label', V.label);
-  if (V.facet) params.set('facet', V.facet);
   if (V.ledger) params.set('ledger', V.ledger);
   if (V.q.trim()) params.set('q', V.q);
   if (V.kind) params.set('kind', V.kind);
@@ -194,7 +193,7 @@ let restoringHistory = false;
 let navigationSeq = 0, navigationRoute = null;
 function navigationRouteNow() {
   const record = {notes: V.note, datasets: V.dataset, people: [V.person, V.author], tools: [V.tool, V.board]}[V.view] ?? null;
-  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet, V.ledger,
+  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.ledger,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, record]);
 }
 function navigationVersion() {
@@ -254,14 +253,6 @@ function dropMissingFilters() {
   // leave a filter on with nothing on screen to turn it off.
   // The filter follows the label to the spelling the sidebar shows now.
   if (V.label) V.label = findLabel(Object.keys(S.label_counts || {}), V.label) || null;
-  // A facet value the corpus no longer holds is dropped the same way, and
-  // follows a value to the spelling the sidebar shows.
-  if (V.facet) {
-    const filter = facetFilter();
-    const values = filter ? Object.keys(facetEntry(S.facet_counts, filter.name) || {}) : [];
-    const value = filter && values.find((v) => facetValueKey(v) === facetValueKey(filter.value));
-    V.facet = value ? `${filter.name}:${value}` : null;
-  }
   // One of the reader's own claims, named by a link from outside the app, can
   // be removed or renumbered from the research form.
   if (V.ledger && !(S.ledger || []).some((own) => own.id === V.ledger)) V.ledger = null;
@@ -275,7 +266,6 @@ function dropMissingFilters() {
   // and from a hand-written address naming both. The paper wins, as it does on
   // every other path that opens one.
   keepLabelFor(V.paper);
-  keepFacetFor(V.paper);
   keepLedgerFor(V.paper);
 }
 
@@ -291,7 +281,6 @@ function applyHash() {
   V.paper = V.view === 'library' ? null : params.get('paper') || null;
   V.tag = params.get('tag') || null;
   V.label = params.get('label') || null;
-  V.facet = params.get('facet') || null;
   V.ledger = params.get('ledger') || null;
   V.q = params.get('q') || '';
   V.kind = params.get('kind') || '';
@@ -522,7 +511,7 @@ function resetWorkspaceView() {
   document.querySelectorAll('.research-tools-nav button[aria-current]').forEach(button => button.removeAttribute('aria-current'));
   document.body.classList.remove('page-view');
   Object.assign(V, {
-    paper: null, tag: null, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+    paper: null, tag: null, label: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
@@ -744,7 +733,6 @@ function render() {
   renderResearchNav();
   renderTags();
   renderLabels();
-  renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   renderJobs();
@@ -782,7 +770,6 @@ function renderAll() {
   renderResearchNav();
   renderTags();
   renderLabels();
-  renderFacets();
   renderContent();
   renderJobs();
   syncAnalysisControls();
@@ -964,7 +951,7 @@ function openPerson(name) {
 // Following a source out of a page view, the way the paper list opens one.
 function followToPaper(paper, claim = null) {
   captureOpenEditor(); parkNewClaimForNavigation(paper);
-  V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
+  V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.ledger = null; V.q = ''; V.kind = '';
   V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
   $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
   scheduleTextSearch(); syncHash(true); renderAll();
@@ -1413,7 +1400,6 @@ $('panes').addEventListener('click', async (event) => {
       if (row && !visibleClaims().some((c) => c.id === claim)) {
         if (V.paper && row.paper !== V.paper) V.paper = null;
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
-        if (!hasFacetFilter(row)) V.facet = null;
         if (!hasLedgerFilter(row)) V.ledger = null;
         keepLabelFor(row.paper);
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
@@ -1586,11 +1572,6 @@ $('panes').addEventListener('click', async (event) => {
     chooseLabel(labelEl.dataset.label);
     return;
   }
-  const facetEl = event.target.closest('.facet-value[data-facet]');
-  if (facetEl) {
-    chooseFacet(facetEl.dataset.facet, facetEl.dataset.facetValue);
-    return;
-  }
   const card = event.target.closest('.claim[data-claim]');
   if (card && card.dataset.claim !== V.selectedId) {
     // Selecting another claim redraws the list, which would rebuild an open
@@ -1641,7 +1622,7 @@ async function updateFromPoll() {
   if (!changed) return;
   corpusChanged();
   renderStats();
-  renderPapers(); renderFindingsNav(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderTags(); renderLabels(); renderFacets();
+  renderPapers(); renderFindingsNav(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderTags(); renderLabels();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   syncHash();
