@@ -643,7 +643,11 @@ def test_library_pane_keeps_workspace_interactive_while_answering(engine):
                     release.set()
                 await expect(page.locator('#agent-messages')).to_contain_text('The studies report improved recovery.')
                 await page.wait_for_function('workspaceClient.pendingMutations === 0')
+                # The picker moves before the switch commits, and Ask opens the
+                # workspace that still owns requests, so wait for the commit itself.
+                switched = 'id => workspaceClient.workspaceId === id && !workspaceController.pending'
                 await page.locator('#workspace').select_option(other)
+                await page.wait_for_function(switched, arg=other)
                 await expect(page.locator('#workspace')).to_have_value(other)
                 await expect(page.locator('#agent-workspace')).not_to_contain_text('Other workspace')
                 await page.locator('#agent-question').fill('Keep this follow-up')
@@ -656,6 +660,7 @@ def test_library_pane_keeps_workspace_interactive_while_answering(engine):
                 await expect(page.locator('#btn-agent')).to_be_focused()
                 await expect(page.locator('#btn-agent')).to_have_attribute('aria-expanded', 'false')
                 await page.locator('#workspace').select_option('default')
+                await page.wait_for_function(switched, arg='default')
                 await page.locator('#btn-agent').click()
                 await expect(page.locator('#agent-question')).to_have_value('Keep this follow-up')
                 await expect(page.locator('#agent-messages')).to_contain_text('improved recovery')
