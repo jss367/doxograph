@@ -269,7 +269,7 @@ def update_findings(body: FindingsBody) -> dict[str, Any]:
     topics = [t for t in possible if t in set(body.topics)] if body.topics else possible
     if not topics:
         return {"queued": 0}
-    job = job_queue._new_job(f"findings in {len(topics)} topics")
+    job = job_queue._new_job(f"findings in {len(topics)} topics", kind="findings")
     job_queue._submit_job(job_queue._run_findings, job, topics, body.force)
     return {"queued": len(topics)}
 

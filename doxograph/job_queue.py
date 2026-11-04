@@ -258,6 +258,71 @@ def _workspace_job[**P](
 
 # --- background work ------------------------------------------------------
 
+# --- findings after reading ----------------------------------------------
+#
+# A paper read, re-read or retagged changes what its topics hold, and the
+# findings page says so with a stale mark until the passes are run. Rather
+# than leave that to the reader, the passes are queued on their own a little
+# after the last reading finishes: one job per workspace, started once no
+# paper is still being read, so a batch of imports is answered once rather
+# than once per paper. The passes skip topics nothing changed in, so the job
+# costs only what changed.
+
+AUTO_FINDINGS_DELAY = 20.0
+_auto_findings_timers: dict[str, threading.Timer] = {}
+_auto_findings_lock = threading.Lock()
+
+
+def _workspace_jobs_active(workspace: str, kind: str | None = None) -> bool:
+    with _jobs_lock:
+        return any(job.get("workspace") == workspace and job["state"] not in ("done", "error")
+                   and (job.get("kind") == kind if kind else job.get("kind") != "findings")
+                   for job in _jobs.values())
+
+
+def schedule_findings(workspace: str | None = None) -> None:
+    """Queue the findings pass for a workspace a little after now.
+
+    Another call before the delay is up starts the wait again, so a run of
+    imports queues one pass at the end of it. Nothing is queued while the
+    analysis switch or the findings switch is off.
+    """
+    workspace = workspace or config.workspace_id()
+    if not (config.ai_enabled() and config.auto_findings()):
+        return
+    with _auto_findings_lock:
+        pending = _auto_findings_timers.pop(workspace, None)
+        if pending is not None:
+            pending.cancel()
+        timer = threading.Timer(AUTO_FINDINGS_DELAY, _auto_findings_due, args=(workspace,))
+        timer.daemon = True
+        _auto_findings_timers[workspace] = timer
+        timer.start()
+
+
+def _auto_findings_due(workspace: str) -> None:
+    with _auto_findings_lock:
+        _auto_findings_timers.pop(workspace, None)
+    if not (config.ai_enabled() and config.auto_findings()):
+        return
+    # A paper still being read would change the answer; a findings job
+    # already running would race it. Look again after another wait.
+    if _workspace_jobs_active(workspace) or _workspace_jobs_active(workspace, "findings"):
+        schedule_findings(workspace)
+        return
+    try:
+        with config.use_workspace(workspace), activity._using_workspace(workspace):
+            topics = store.tension_topics()
+            if not topics:
+                return
+            job = _new_job(f"findings in {len(topics)} topics", kind="findings", automatic=True)
+            _submit_job(_run_findings, job, topics, False)
+    except HTTPException:
+        pass   # the workspace is being removed; there is nothing to update
+    except Exception:
+        traceback.print_exc()
+
+
 @_workspace_job
 def _run_ingest(job: dict[str, Any], ref: ingest.Ref, do_extract: bool) -> None:
     try:
@@ -271,6 +336,7 @@ def _run_ingest(job: dict[str, Any], ref: ingest.Ref, do_extract: bool) -> None:
         if do_extract and config.ai_enabled() and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
+            schedule_findings(job.get("workspace"))
         _finish(job, key)
     except Exception as exc:
         _import_failed(job, exc)
@@ -294,6 +360,7 @@ def _run_upload(job: dict[str, Any], staged: Path, filename: str, do_extract: bo
         if do_extract and config.ai_enabled() and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
+            schedule_findings(job.get("workspace"))
         _finish(job, key)
     except Exception as exc:
         _import_failed(job, exc)
@@ -310,6 +377,7 @@ def _run_extract(job: dict[str, Any], key: str, keep_reviewed: bool) -> None:
         _set(job, state="reading", key=key)
         extract.extract_paper(key, keep_reviewed=keep_reviewed)
         _set(job, state="done")
+        schedule_findings(job.get("workspace"))
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -484,6 +552,7 @@ def _run_retag(job: dict[str, Any], keys: list[str]) -> None:
                  detail=f"{failed} of {len(keys)} papers failed; {last_failure}")
         else:
             _set(job, state="done", detail=f"{len(keys)} papers")
+        schedule_findings(job.get("workspace"))
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()

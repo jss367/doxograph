@@ -39,4 +39,6 @@ Three pages in the header and one pane:
    cuts: facets, map, saved searches, evidence boards, research questions,
    marks and questions, claim connections, compare and organize, research
    notes, the workspace notes editor on the library page, the datasets sheet.
-5. Run analysis automatically after extraction through the job queue.
+5. Run analysis automatically after extraction through the job queue. *Done:*
+   *the findings pass queues itself a little after the last paper of a batch*
+   *is read or retagged, with a switch in Settings.*

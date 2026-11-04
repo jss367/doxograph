@@ -1230,7 +1230,10 @@ marked stale when a claim under it changed after its findings were written.
 
 **Update findings** runs the three passes below in sequence as one job:
 tensions, then agreements, then a synthesis per topic, since the synthesis
-reads the tensions on file. `doxograph tensions`, `doxograph agreements` and
+reads the tensions on file. The same job runs on its own a little after the
+last paper of a batch is read or retagged, so the page stays current without
+being asked; **Update findings after reading papers** in Settings turns that
+off, and the passes skip topics nothing changed in either way. `doxograph tensions`, `doxograph agreements` and
 `doxograph synthesize` do the same from the command line, one at a time.
 
 ## Where papers disagree

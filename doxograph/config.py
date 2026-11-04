@@ -227,6 +227,17 @@ def set_ai_enabled(enabled: bool) -> None:
     _update_settings(ai_enabled=enabled)
 
 
+def auto_findings() -> bool:
+    """Whether the cross-paper passes run on their own a little after papers
+    are read or retagged. On unless switched off; shared by all workspaces,
+    like the analysis switch, which gates it."""
+    return _settings().get("auto_findings", True) is not False
+
+
+def set_auto_findings(enabled: bool) -> None:
+    _update_settings(auto_findings=enabled)
+
+
 def _update_settings(**changes: Any) -> None:
     with _settings_lock:
         path = base_data_dir() / "settings.json"

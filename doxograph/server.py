@@ -174,6 +174,7 @@ app.add_middleware(origins.RejectCrossSiteRequests)
 class SettingsBody(BaseModel):
     model_config = {"extra": "forbid"}
     ai_enabled: bool | None = None
+    auto_findings: bool | None = None
     provider: str | None = None
     model: str | None = None
     base_url: str | None = None
@@ -404,6 +405,7 @@ def _build_state() -> dict[str, Any]:
         "codex_model": config.codex_model(),
         "claude_code_model": config.MODEL,
         "ai_enabled": config.ai_enabled(),
+        "auto_findings": config.auto_findings(),
     }
 
 
@@ -429,7 +431,8 @@ def state(request: Request) -> Response:
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
     settings_signature = hashlib.sha256(json.dumps(
-        {**config.analysis_settings(), "codex_model": config.codex_model()}, sort_keys=True).encode()).hexdigest()
+        {**config.analysis_settings(), "codex_model": config.codex_model(), "auto_findings": config.auto_findings()},
+        sort_keys=True).encode()).hexdigest()
     workspace_record = config.get_workspace()
     # SelectWorkspace has already refused a request for an unknown workspace.
     assert workspace_record is not None
@@ -481,11 +484,13 @@ def update_settings(body: SettingsBody) -> dict[str, Any]:
             raise HTTPException(422, str(exc)) from exc
     if body.ai_enabled is not None:
         config.set_ai_enabled(body.ai_enabled)
+    if body.auto_findings is not None:
+        config.set_auto_findings(body.auto_findings)
     if changing_provider:
         return {"ai_enabled": config.ai_enabled(), **config.analysis_settings()}
     if body.codex_model is not None:
         return {"ai_enabled": config.ai_enabled(), "codex_model": config.codex_model(), "model": config.model()}
-    return {"ai_enabled": config.ai_enabled()}
+    return {"ai_enabled": config.ai_enabled(), "auto_findings": config.auto_findings()}
 
 
 @app.get("/api/settings/codex/models")

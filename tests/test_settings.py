@@ -21,7 +21,7 @@ def test_setting_persists_across_processes_and_workspaces_and_invalidates_state(
     with client() as c:
         initial = c.get("/api/state")
         assert initial.json()["ai_enabled"] is True
-        assert c.put("/api/settings", json={"ai_enabled": False}).json() == {"ai_enabled": False}
+        assert c.put("/api/settings", json={"ai_enabled": False}).json() == {"ai_enabled": False, "auto_findings": True}
         changed = c.get("/api/state", headers={"If-None-Match": initial.headers["etag"]})
         assert changed.status_code == 200
         assert changed.json()["ai_enabled"] is False
@@ -29,7 +29,7 @@ def test_setting_persists_across_processes_and_workspaces_and_invalidates_state(
         result = subprocess.check_output(
             [sys.executable, "-c", "from doxograph.config import ai_enabled; print(ai_enabled())"], text=True)
         assert result.strip() == "False"
-        assert c.put("/api/settings", json={"ai_enabled": True}).json() == {"ai_enabled": True}
+        assert c.put("/api/settings", json={"ai_enabled": True}).json() == {"ai_enabled": True, "auto_findings": True}
         assert c.get("/api/state").json()["ai_enabled"] is True
 
 
