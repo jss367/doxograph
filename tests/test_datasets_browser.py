@@ -552,10 +552,10 @@ def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(
                 # Leaving the catalog saved the draft without waiting for a pause.
                 saved = {d['id']: d for d in httpx.get(url + '/api/datasets').json()['datasets']}
                 assert saved[item['id']]['version'] == 'My unsaved version'
-                # Opening the map also leaves the catalog and keeps its draft.
-                await page.locator('#graph-nav [data-view="graph"]').click()
+                # Opening the findings also leaves the catalog and keeps its draft.
+                await page.locator('#btn-findings').click()
                 await view.wait_for(state='hidden')
-                assert 'view=graph' in page.url
+                assert 'view=findings' in page.url
                 await page.go_back()
                 await view.wait_for(state='visible')
                 await ready(page)

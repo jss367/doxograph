@@ -241,7 +241,7 @@ def test_paper_library_metadata_navigation_and_selection(engine, width):
                 await card.get_by_role("link", name=title, exact=True).click()
                 if width < 800:
                     await page.locator('#btn-reader-library').click()
-                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator('#btn-findings').click()
                 await page.keyboard.press("/")
                 await expect(cards).to_have_count(4)
                 await expect(page.locator("#library-view-switch")).to_be_visible()

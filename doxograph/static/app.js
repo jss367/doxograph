@@ -33,11 +33,9 @@ const NEW_CLAIM_ID = '__new__';
 // list. Without it a re-render redraws from the unchanged server row and
 // silently discards the edit. A map rather than one slot, so opening a second
 // claim's editor does not throw away the first one's draft.
-// view is 'library', 'claims', 'tensions', 'agreements', 'research', or 'graph'. Only
+// view is 'library', 'claims', 'tensions', 'agreements', or 'research'. Only
 // claims has a claim editor, so switching away closes any open one (keeping
-// its draft) and lets the background poll run. graph holds the map's display
-// choices, reset with the rest when the workspace changes; the layout itself
-// is in GRAPH below.
+// its draft) and lets the background poll run.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
 // similar is the one claim whose lookalikes from other papers are open, in the
@@ -68,7 +66,7 @@ const V = { paper: null, tag: null, label: null, facet: null, ledger: null, q: '
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
             noteEditing: null, noteDrafts: {},
-            graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false }, paperSort: null,
+            paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
 // Whether the paper's PDF is kept out of the claims view. A preference of this
@@ -146,7 +144,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'people', 'notes', 'tools'];
+const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'datasets', 'people', 'notes', 'tools'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -436,9 +434,6 @@ function corpusChanged() {
   window.FocusedReview?.sync();
   rerunTextSearch();     // a paper imported since holds the query's words too
   closeSimilar();        // and the claims it was compared against have moved
-  // A PDF that arrived while the map is open cites what it cites; the papers
-  // are redrawn from state but the arrows are fetched on their own.
-  if (V.view === 'graph') loadCitations();
 }
 
 async function refresh() {
@@ -533,13 +528,10 @@ function resetWorkspaceView() {
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
     noteEditing: null, noteDrafts: {},
-    graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false },
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
   dropTextSearch();
-  CITATIONS = [];
-  graphReset();
   $('q').value = '';
   $('kind').value = '';
   $('only-unreviewed').checked = false;
@@ -750,7 +742,6 @@ function render() {
   renderTensionsNav();
   renderAgreementsNav();
   renderResearchNav();
-  renderGraphNav();
   renderTags();
   renderLabels();
   renderFacets();
@@ -789,7 +780,6 @@ function renderAll() {
   renderTensionsNav();
   renderAgreementsNav();
   renderResearchNav();
-  renderGraphNav();
   renderTags();
   renderLabels();
   renderFacets();
@@ -848,7 +838,7 @@ function renderStorageWarnings() {
 }
 
 function showView(view) {
-  const destination = {library: 'papers', claims: 'papers', graph: 'graph-nav', research: 'research-nav',
+  const destination = {library: 'papers', claims: 'papers', research: 'research-nav',
     findings: 'findings-nav', tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people', notes: 'btn-research-notes'}[view];
   if (destination) revealSidebar($(destination));
   if (view === 'tools') revealSidebar(toolButton());
@@ -992,8 +982,6 @@ function drawContent() {
   $('q').placeholder = library ? 'Search papers…' : 'Search claims, quotes, and papers…';
   if (V.view !== 'claims') $('paperhead').innerHTML = '';
   const page = drawPageViews();
-  if (V.view === 'graph') { renderGraph(); return; }
-  graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (page) { $('content').innerHTML = ''; return; }
   if (library) { renderLibrary(); return; }
   if (V.view === 'findings') { renderFindings(); return; }
@@ -1627,31 +1615,9 @@ $('panes').addEventListener('input', (e) => {
 
 // Each filter keeps whatever is typed in an open editor before redrawing.
 $('panes').addEventListener('change', (e) => {
-  if (e.target.matches('[data-graph-opt]')) { graphOption(e.target); return; }
   if (e.target.id === 'tension-status') { V.tensionStatus = e.target.value; renderContent(); }
   if (e.target.id === 'agreement-status') { V.agreementStatus = e.target.value; renderContent(); }
 });
-$('panes').addEventListener('input', (e) => {
-  if (e.target.matches('[data-graph-opt="minShared"]')) graphOption(e.target);
-});
-
-function graphOption(field) {
-  const name = field.dataset.graphOpt;
-  if (name === 'xAxis') {
-    V.graph.xAxis = field.value;
-    GRAPH.autofit = true;
-  } else if (name === 'color') {
-    V.graph.color = field.value;
-  } else if (name === 'minShared') {
-    V.graph.minShared = Math.max(1, parseInt(field.value, 10) || 1);
-    const label = $('content').querySelector('[data-graph-min]');
-    if (label) label.textContent = String(V.graph.minShared);
-  } else {
-    V.graph[name] = field.checked;
-  }
-  if (V.view === 'graph') renderGraph();
-  if (V.view === 'graph' && name === 'xAxis') graphFit();
-}
 
 // --- boot -----------------------------------------------------------------
 
@@ -1672,16 +1638,10 @@ async function updateFromPoll() {
   // People records live outside the corpus, so a corpus that has not moved
   // says nothing about them. The page reads them itself, throttled.
   void People.refresh();
-  if (!changed) {
-    if (citationsFailed && V.view === 'graph') loadCitations();
-    return;
-  }
+  if (!changed) return;
   corpusChanged();
-  // An asking that failed is asked again while the map is open, whether or
-  // not anything in the corpus has moved.
-  if (citationsFailed && V.view === 'graph') loadCitations();
   renderStats();
-  renderPapers(); renderFindingsNav(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels(); renderFacets();
+  renderPapers(); renderFindingsNav(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderTags(); renderLabels(); renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   syncHash();
@@ -1705,7 +1665,6 @@ async function boot() {
   ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
     selected: followTools});
   window.FocusedReview.connect(workspaceClient);
-  connectPaperMap(workspaceClient);
   AppStartup.phase('connection');
   await loadWorkspaces();
   applyHash();

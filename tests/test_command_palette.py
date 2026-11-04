@@ -121,42 +121,6 @@ def test_command_palette_destinations_and_actions(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_command_palette_map_loads_citation_arrows(engine):
-    _paper("one", "A paper that cites another")
-    _paper("two", "The cited paper")
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page()
-            citation_requests = []
-
-            async def citations(route):
-                citation_requests.append(route.request.url)
-                await route.fulfill(json={"edges": [{"from": "one", "to": "two"}]})
-
-            await page.route("**/api/citations", citations)
-            with _server() as url:
-                await page.goto(url)
-                await page.locator('#papers [data-paper="one"]').wait_for()
-                await page.keyboard.press("Meta+k")
-                await page.locator("#command-query").fill("open paper map")
-                async with page.expect_request("**/api/citations"):
-                    await page.keyboard.press("Enter")
-                await page.wait_for_function("""() => window.doxographGraph().edges.some(
-                    edge => edge.type === 'cite' && edge.a === 'p:one' && edge.b === 'p:two'
-                )""")
-                await expect(page.locator("#command-palette")).not_to_be_visible()
-                await _poll(page)
-                assert len(citation_requests) == 1
-                assert await page.evaluate("""window.doxographGraph().edges.some(
-                    edge => edge.type === 'cite' && edge.a === 'p:one' && edge.b === 'p:two'
-                )""")
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_command_palette_preserves_drafts_and_updates_with_workspace(engine):
     _paper("one", "Original paper", "original-topic")
     animal = config.create_workspace("Animal locomotion")
