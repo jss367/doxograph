@@ -698,3 +698,44 @@ def test_a_failed_claim_save_shows_with_the_overview_hidden(engine):
                 await expect(form.locator('[name="text"]')).to_have_value('Oversight depends on the task.')
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_failed_search_of_the_pdf_text_opens_the_claims_drawer(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['The judges discuss sandbagging at length.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+
+    async def refuse(route):
+        await route.fulfill(status=500, json={'detail': 'Search is unavailable.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                drawer = page.locator('#claims-drawer-list')
+                await expect(drawer).to_be_hidden()
+
+                # The reader's search could not run: the drawer opens on why.
+                await page.route('**/api/search*', refuse)
+                await page.locator('#btn-reader-filters').click()
+                await page.locator('#q').fill('sandbagging')
+                await expect(drawer.locator('.pdfhits')).to_contain_text('Could not search the papers')
+                await expect(drawer).to_be_visible()
+
+                # A quiet re-run that fails again leaves a closed drawer closed.
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
+                await page.locator('#q').fill('sandbag')
+                await page.wait_for_function("V.textSearch?.q === 'sandbag' && V.textSearch.loading === false")
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
+                await expect(drawer).to_be_hidden()
+                await page.evaluate("runTextSearch('sandbag', true)")
+                await _poll(page)
+                await expect(drawer).to_be_hidden()
+
+    run_browser(scenario())

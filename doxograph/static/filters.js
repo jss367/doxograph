@@ -346,9 +346,9 @@ async function runTextSearch(query, quiet = false) {
   drawSearchProgress();
   // Reading a PDF, the passages are drawn in the claims drawer under it, and a
   // closed drawer would hide what the reader just searched for. Only their own
-  // search opens it, and only when it found something: a re-run after a corpus
-  // change is not a question they asked.
-  if (!quiet && $('claims-drawer-list').querySelector('.pdfhit')) revealClaims();
+  // search opens it, and only when it found something or could not search: a
+  // re-run after a corpus change is not a question they asked.
+  if (!quiet && $('claims-drawer-list').querySelector('.pdfhit, .pdfhits-failed')) revealClaims();
 }
 
 // The results live under the claims, so the research form never shows them —
@@ -599,7 +599,7 @@ function textSearchBlock() {
   const head = '<h3>In the PDFs</h3>';
   if (found.loading) return `<div class="pdfhits">${head}<p class="hint">Reading the papers…</p></div>`;
   if (found.error) {
-    return `<div class="pdfhits">${head}<p class="hint">Could not search the papers: ${esc(found.error)}</p></div>`;
+    return `<div class="pdfhits">${head}<p class="hint pdfhits-failed">Could not search the papers: ${esc(found.error)}</p></div>`;
   }
   if (!found.papers.length) {
     return `<div class="pdfhits">${head}<p class="hint">No paper's text holds every word of that.</p></div>`;
