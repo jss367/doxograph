@@ -2,10 +2,9 @@
 //
 //   swift native/tools/make-icon.swift <output.icns> [icon.png]
 //
-// The artwork is a scroll of claims fed by a stack of source lines, drawn as a
-// square with its own background. macOS icons sit on a transparent canvas,
-// inset from the edges and clipped to the system's rounded square, so this
-// places the artwork on that grid rather than filling the whole tile.
+// The artwork is an interlocking-strand D on an ink-blue square.
+// macOS icons sit on a transparent canvas, inset from the edges and clipped to
+// the system's rounded square, so this places the artwork on that grid.
 
 import AppKit
 import Foundation
