@@ -736,27 +736,57 @@ body.resizing-graph { cursor: ns-resize; user-select: none; }
   background: var(--bg); overflow: hidden; }
 #library-agent[hidden] { display: none; }
 #library-agent h2 { font-size: 1rem; margin: 0; }
-#library-agent > .row, #library-agent > .hint, .agent-guidance { flex-shrink: 0; }
+#library-agent > .row, #library-agent > .hint { flex-shrink: 0; }
 #library-agent > .row:first-child { margin-top: 0; }
-#agent-workspace { margin: 0 0 .5rem; overflow-wrap: anywhere; }
-.agent-guidance { font-size: .78rem; max-height: 25%; overflow-y: auto; }
+#library-agent .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* One header row: the open conversation, a new one, and close. */
+.agent-head { position: relative; }
+.agent-head > :is(h2, button) { flex-shrink: 0; }
+#agent-workspace { margin: 0 0 .25rem; overflow-wrap: anywhere; }
+/* The open conversation's title; the list, archive, and notes drop over the transcript. */
+.agent-history { flex: 1; min-width: 0; }
+/* Anchor the list to the whole header, not the title. */
+.agent-history.action-disclosure { position: static; }
+.agent-history > summary { display: flex; align-items: center; gap: .3rem; padding: .3rem .5rem;
+  border-color: transparent; background: transparent; font-size: .85rem; color: var(--muted); }
+.agent-history > summary::after { content: '▾'; flex-shrink: 0; }
+.agent-history > summary:hover, .agent-history[open] > summary { border-color: var(--line); background: var(--panel); color: var(--ink); }
+#agent-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-history-panel { position: absolute; z-index: 3; left: 0; right: 0; top: calc(100% + .25rem);
+  max-height: min(60dvh, 28rem); overflow-y: auto; padding: .5rem .75rem; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
+.agent-history-panel .chat-thread-open { border-color: transparent; background: transparent; font-size: .85rem; }
+.agent-history-panel .chat-thread-open[aria-current="true"] { border-color: transparent; background: var(--sel); }
+.agent-history-panel .chat-thread-action { padding: .15rem .5rem; font-size: .75rem; }
+.agent-guidance { margin-top: .4rem; font-size: .78rem; }
 .agent-guidance summary { cursor: pointer; color: var(--muted); }
-#library-agent > .chat-conversations { flex: 0 1 auto; min-height: 0;
-  max-height: min(18dvh, 10rem); overflow-y: auto; }
-/* Keep one conversation and part of the next in view, so the list never
-   shrinks to its heading while the transcript and composer take the room. */
-#library-agent > .chat-conversations:has(li + li, #agent-archive:not([hidden])) { min-height: 5.75rem; }
-#library-agent .chat-threads { gap: .4rem; font-size: .8rem; }
-#library-agent .chat-threads label { width: 100%; }
-#library-agent .chat-threads select { flex: 1; min-width: 0; max-width: 100%; width: 0; }
+#library-agent .chat-threads { margin-top: .4rem; }
+#library-agent #agent-delete { padding: .15rem .5rem; font-size: .75rem; }
 #agent-messages { flex: 1 1 auto; min-height: 6rem; overflow-y: auto;
-  overscroll-behavior: contain; margin: .75rem 0 0; padding-right: .25rem; }
+  overscroll-behavior: contain; margin: .5rem 0 0; padding-right: .25rem; }
+#library-agent .agent-message { padding: .7rem .9rem; margin-bottom: .6rem; }
+#library-agent .agent-message-head { margin-bottom: .4rem; }
 #library-agent #agent-form { flex: 0 0 auto; min-height: 0; max-height: 60%; overflow-y: auto;
-  margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--line); }
+  margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--line); }
 #library-agent #agent-form > .row { flex-wrap: wrap; }
-#library-agent #agent-scope { margin: .25rem 0; font-size: .8rem; }
-#library-agent #agent-scope p { margin: .25rem 0; }
+/* The next question's sources on one wrapping line, with the ways to change them. */
+.agent-sources { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; font-size: .8rem; }
+#library-agent #agent-scope { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .4rem; min-width: 0; margin: 0; }
+#library-agent #agent-scope p { margin: 0; }
+#library-agent #agent-scope details { flex-basis: 100%; }
+.agent-sources-label { color: var(--muted); }
+#library-agent .ask-chip { padding: .05rem .15rem .05rem .55rem; border-radius: 999px; font-size: .8rem; }
+#library-agent .ask-chip button { padding: 0 .35rem; border-color: transparent; background: transparent; }
+#library-agent #agent-form .agent-sources > button { padding: .1rem .3rem; border-color: transparent;
+  background: transparent; color: var(--accent); font-size: .78rem; }
+#library-agent #agent-form .agent-sources > button:hover:not(:disabled) { text-decoration: underline; }
 #library-agent #agent-starters { margin: .5rem 0; }
+#library-agent #agent-status { margin: .3rem 0 0; }
+#library-agent #agent-status:empty { display: none; }
+.agent-foot { margin-bottom: 0; }
+.agent-foot #agent-agent { flex: 0 1 auto; min-width: 0; max-width: 65%; padding: .2rem .4rem;
+  font-size: .78rem; color: var(--muted); }
+.agent-foot #agent-send { margin-left: auto; }
 #library-agent #agent-form button { font-size: .8rem; }
 #library-agent #agent-form .chat-attach { font-size: 1.1rem; }
 #library-agent #agent-question { min-height: 3rem; }
@@ -770,7 +800,7 @@ body.agent-open:not(.agent-docked) .jobs { right: calc(var(--ask-width, min(36vw
 #ask-resize:focus-visible { outline: none; }
 /* What the reader is looking at, offered as the next question's sources. */
 .agent-context { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: .8rem;
-  color: var(--muted); margin: 0 0 .5rem; }
+  color: var(--muted); margin: 0 0 .35rem; }
 .agent-context[hidden] { display: none; }
 .agent-context .chip { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -785,7 +815,6 @@ body.agent-docked #library-agent > .row:first-child { position: sticky; top: -1r
   background: var(--bg); padding-block: .5rem; }
 body.agent-docked #library-agent #agent-messages { overflow: visible; }
 body.agent-docked #library-agent #agent-form { max-height: none; overflow: visible; }
-body.agent-docked #library-agent .agent-guidance { max-height: none; }
 /* Short panes scroll as a whole so every control remains reachable. */
 @media (max-height: 840px) {
   #library-agent { display: block; overflow-y: auto; }
@@ -793,7 +822,6 @@ body.agent-docked #library-agent .agent-guidance { max-height: none; }
     background: var(--bg); padding-block: .5rem; }
   #library-agent #agent-messages { overflow: visible; }
   #library-agent #agent-form { max-height: none; overflow: visible; }
-  #library-agent .agent-guidance { max-height: none; }
 }
 .agent-message { padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 9px; margin-bottom: .8rem; }
 .agent-question { background: var(--panel); }
@@ -814,10 +842,7 @@ body.agent-docked #library-agent .agent-guidance { max-height: none; }
 #agent-messages .activity summary { cursor: pointer; }
 #agent-messages .activity ul { padding-left: 1.25rem; }
 .chat-threads { flex-wrap: wrap; gap: .5rem 1rem; margin-top: .75rem; }
-.chat-threads label { display: flex; align-items: center; gap: .4rem; min-width: 0; }
-.chat-threads select { max-width: 22rem; }
-.chat-conversations { flex: 0 0 auto; min-height: 0; margin-top: .75rem; }
-.chat-conversations h3 { font-size: .8rem; color: var(--muted); margin: 0 0 .4rem; }
+.chat-conversations { min-height: 0; }
 .chat-thread-list { list-style: none; padding: 0; margin: 0; }
 .chat-thread-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .25rem 0; }
 .chat-thread-open { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
