@@ -80,7 +80,13 @@ def test_delete_menu_lifecycle(engine, archived, outcome):
 
                 await page.route("**/api/chats/*", intercept)
                 delete = page.locator("#agent-delete")
+                # Ask opens before its saved conversation list has loaded.
+                # A hidden static button cannot take focus; Enter would toggle
+                # the history summary instead of activating Delete.
+                await expect(delete).to_be_visible()
+                await expect(delete).to_be_enabled()
                 await delete.focus()
+                await expect(delete).to_be_focused()
                 await delete.press("Enter")
                 await expect(page.locator("#ask")).to_be_visible()
                 await page.locator(
@@ -160,6 +166,10 @@ def test_new_conversation_dismisses_history_and_focuses_composer(engine, archive
                     ).raise_for_status()
                 await page.goto(url)
                 await page.locator("#btn-agent:enabled").click()
+                if not archived:
+                    await expect(page.locator("#agent-messages")).to_contain_text(
+                        "Synthetic answer"
+                    )
                 await page.locator("#agent-history > summary").click()
                 if archived:
                     await page.locator("#agent-archive > summary").click()

@@ -37,6 +37,9 @@ def test_history_keyboard_and_dismissal(engine, width, case):
                     ).raise_for_status()
                 await page.goto(url)
                 await page.locator("#btn-agent:enabled").click()
+                await expect(
+                    page.locator("#agent-thread [data-thread-open]")
+                ).to_have_count(2 if case == "archived-selection-focus" else 3)
                 history = page.locator("#agent-history")
                 summary = history.locator(":scope > summary")
                 await summary.focus()
@@ -49,7 +52,9 @@ def test_history_keyboard_and_dismissal(engine, width, case):
                     if case == "archived-selection-focus"
                     else "#agent-thread [data-thread-open]"
                 ).first
+                await expect(row).to_be_visible()
                 await row.focus()
+                await expect(row).to_be_focused()
                 if case == "escape":
                     await row.press("Escape")
                     await expect(history).not_to_have_attribute("open", "")
