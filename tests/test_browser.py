@@ -119,6 +119,17 @@ async def _poll(page) -> None:
     await asyncio.wait_for(page.evaluate("pollOnce()"), timeout=30)
 
 
+async def _toggle_topic(page, tag: str) -> None:
+    """Filter to a topic, or off it again, as a click on the old sidebar link did.
+
+    That click waited for the link to be drawn, which is after the first read of
+    the corpus. A bare evaluate right after `goto` can land before it and be
+    undone by the boot that follows.
+    """
+    await page.wait_for_function("libraryInitialized")
+    await page.evaluate(f"V.tag = V.tag === '{tag}' ? null : '{tag}'; syncHash(true); renderAll()")
+
+
 def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
     paper = store.new_paper(key, title=title, year=year)
     paper["claims"] = [
@@ -1683,7 +1694,7 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
                 await page.locator(".paperhead h2", has_text="A study").wait_for()
                 assert "paper=doe2026study" in page.url
 
-                await page.evaluate("V.tag = V.tag === 'locomotion' ? null : 'locomotion'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "locomotion")
                 assert "tag=locomotion" in page.url
 
                 # A reload lands where the URL says, filters and all.
@@ -2978,7 +2989,7 @@ def test_a_url_naming_a_topic_that_is_gone_falls_back_to_the_corpus():
                 assert "tag=gait" not in page.url
 
                 # And a topic that goes while an entry naming it is in history.
-                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "recovery")
                 await page.wait_for_function("V.tag === 'recovery'")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 store.rename_tag("recovery", "recovery-rate")
@@ -3903,7 +3914,7 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.evaluate("V.tag = V.tag === 'solo' ? null : 'solo'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "solo")
                 await page.wait_for_function("V.tag === 'solo'")
                 assert "tag=solo" in page.url
 
@@ -4099,7 +4110,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
                 # The topic whose only claim is held: the server would stop
                 # showing that synthesis, so the card goes rather than standing
                 # over a topic with nothing left under it.
-                await page.evaluate("V.tag = V.tag === 'solo' ? null : 'solo'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "solo")
                 solo = page.locator('.synth[data-topic="solo"]')
                 await solo.wait_for()
                 await page.locator('.claim[data-claim="paper-d-c1"]').get_by_role(
@@ -4112,7 +4123,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
 
                 # A topic with claims left recounts, and reads stale: the text on
                 # file was written about a set of claims that is not this one.
-                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "recovery")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.wait_for()
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
@@ -4227,7 +4238,7 @@ def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "recovery")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.locator(".stale").wait_for()
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
@@ -4336,7 +4347,7 @@ def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
 
                 await page.evaluate("openPage('agreements')")
                 await page.locator(".paperhead h2", has_text="Where papers agree").wait_for()
-                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "recovery")
                 # A and B both carry the topic, so the pair the wait leaves
                 # behind is in #recovery until the delete settles.
                 await page.wait_for_function(shows % "a1", timeout=5000)
@@ -4369,7 +4380,7 @@ def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "recovery")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="edit").click()

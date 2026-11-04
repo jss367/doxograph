@@ -714,7 +714,10 @@ def test_resuming_a_paper_from_the_reading_queue_leaves_the_drawer_closed(engine
                 notebook['reading'] = [{'paper': 'paper', 'status': 'queued', 'page': 1, 'bookmarks': []}]
                 assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
                 await page.goto(url)
-                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.wait_for_function('libraryInitialized')
+                await page.locator('#btn-command-palette').click()
+                await page.locator('#command-query').fill('Open reading queue')
+                await page.locator('#command-results').get_by_text('Open reading queue', exact=True).click()
                 await ready(page)
                 # The queue asks for the paper, not one of its claims: the
                 # first claim is selected, but the drawer stays as it was left.

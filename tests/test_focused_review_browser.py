@@ -9,7 +9,7 @@ from playwright.async_api import expect
 from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
-from test_browser import _answer, _server
+from test_browser import _answer, _server, _toggle_topic
 
 
 @pytest.mark.browser
@@ -45,7 +45,7 @@ def test_focused_review_pdf_edit_and_filtered_progress(engine):
                     if not request.url.startswith(('http://127.0.0.1:', 'blob:')) else None)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.evaluate("V.tag = V.tag === 'recovery' ? null : 'recovery'; syncHash(true); renderAll()")
+                await _toggle_topic(page, "recovery")
                 await page.locator("#claim-filter-options > summary").click()
                 await page.locator('#only-unreviewed').check()
                 await page.locator('#btn-close-filters').click()
