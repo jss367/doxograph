@@ -64,6 +64,9 @@ function setReadingOverview(collapsed) {
 // it: a link to the claim, the keys that move between claims, an editor.
 const CLAIMS_DRAWER_KEY = 'doxograph-claims-drawer';
 let claimsDrawerOpen = false;
+// Counts every opening and closing, so work that finishes later can tell the
+// reader has chosen since it started.
+let claimsDrawerMoves = 0;
 try { claimsDrawerOpen = localStorage.getItem(CLAIMS_DRAWER_KEY) === 'open'; } catch (_) { /* closed */ }
 
 function syncClaimsDrawer() {
@@ -80,6 +83,7 @@ function setClaimsDrawer(open) {
     $('claims-drawer-bar').querySelector('[data-act="toggle-claims"]')?.focus();
   }
   claimsDrawerOpen = open;
+  claimsDrawerMoves += 1;
   try { localStorage.setItem(CLAIMS_DRAWER_KEY, open ? 'open' : 'closed'); } catch (_) { /* for this page only */ }
   syncClaimsDrawer();
 }
