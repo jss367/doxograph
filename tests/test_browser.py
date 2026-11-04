@@ -585,7 +585,9 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 papers = page.locator("#papers")
-                assert "A consciousness paper" in await papers.inner_text()
+                # The list is drawn once the first read of the workspace lands,
+                # which can be after the page's load event on a busy machine.
+                await papers.get_by_text("A consciousness paper", exact=True).wait_for()
                 assert "An animal locomotion paper" not in await papers.inner_text()
 
                 await page.locator("#workspace").select_option(label="Animal locomotion")
