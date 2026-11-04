@@ -739,3 +739,35 @@ def test_a_failed_search_of_the_pdf_text_opens_the_claims_drawer(engine):
                 await expect(drawer).to_be_hidden()
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_resuming_a_paper_from_the_reading_queue_leaves_the_drawer_closed(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['reading'] = [{'paper': 'paper', 'status': 'queued', 'page': 1, 'bookmarks': []}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                await page.goto(url)
+                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await ready(page)
+                # The queue asks for the paper, not one of its claims: the
+                # first claim is selected, but the drawer stays as it was left.
+                await page.locator('#research-tools').get_by_role('button', name='Resume at page 1', exact=True).click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await expect(page.locator('#claims-drawer-list .claim.sel')).to_have_count(1)
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
+                assert await page.evaluate('claimsDrawerOpen') is False
+                assert not errors
+
+    run_browser(scenario())
