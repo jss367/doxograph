@@ -95,3 +95,27 @@ def test_corrupt_paper_data_is_a_server_error_without_exposing_its_path(caplog):
     assert str(path) not in response.text
     assert str(path) in caplog.text
     assert 'saved paper or model configuration' in response.json()['detail']
+
+
+def provider_failure(status, code=None, headers=None):
+    request = httpx.Request('POST', 'https://provider.example/v1/chat/completions')
+    body = {'error': {'code': code}} if code else {}
+    response = httpx.Response(status, request=request, headers=headers, json=body)
+    return httpx.HTTPStatusError('SECRET_DIAGNOSTIC', request=request, response=response)
+
+
+@pytest.mark.parametrize('status,code,retryable', [
+    (503, None, True), (529, None, True), (429, 'rate_limit_exceeded', True),
+    (429, 'insufficient_quota', False), (429, None, False), (400, None, False), (500, None, False)])
+def test_only_temporary_provider_failures_are_marked_retryable(monkeypatch, status, code, retryable):
+    monkeypatch.setattr(chat, 'answer', Mock(side_effect=provider_failure(status, code, {'Retry-After': '7'})))
+    result = ask()
+    assert result.status_code == 502
+    assert (result.headers.get('X-Doxograph-Retryable') == 'true') is retryable
+    assert result.headers.get('Retry-After') == ('7' if retryable else None)
+    assert 'SECRET_DIAGNOSTIC' not in result.text
+
+
+def test_cli_failures_are_never_marked_retryable(monkeypatch):
+    monkeypatch.setattr(chat, 'answer', Mock(side_effect=RuntimeError('Codex returned no complete answer.')))
+    assert 'X-Doxograph-Retryable' not in ask().headers
