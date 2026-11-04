@@ -140,6 +140,12 @@ notes, and its saved reading progress together in **Paper overview**. The
 overview stays available when the PDF is hidden. Papers without a summary
 or PDF can still be annotated and added to the reading queue.
 
+**In findings** lists the agreements and tensions the paper's claims feed,
+leaving out dismissed ones; each opens the findings page at its row.
+**Artifacts** lists the dataset records whose linked research includes the
+paper, through its own links, a linked claim, or a matching dataset facet,
+and the paper's code links. A dataset opens its record.
+
 The model writes the summary and why it matters when it reads the paper.
 Click **edit** beside either to rewrite it. Re-reading the paper replaces
 the model's text and keeps yours; clear your version to let the next re-read

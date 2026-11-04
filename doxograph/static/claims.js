@@ -102,7 +102,7 @@ function claimsDrawerBar(paper, rows) {
   const noun = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const count = rows.length === claims.length ? noun(claims.length, 'claim', 'claims') : `${rows.length} of ${noun(claims.length, 'claim', 'claims')}`;
   const unreviewed = claims.filter((row) => !row.reviewed).length;
-  const feeding = (findings) => (findings || []).filter((finding) => finding.status !== 'dismissed'
+  const feeding = (findings) => (findings || []).filter((finding) => finding.status !== 'dismissed' && (finding.topics || []).length > 0
     && (finding.claims || []).some((claim) => claim.paper === paper)).length;
   const agreements = feeding(S.agreements);
   const tensions = feeding(S.tensions);

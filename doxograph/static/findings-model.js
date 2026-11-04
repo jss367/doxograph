@@ -103,5 +103,13 @@ const FindingsModel = (() => {
       .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
   }
 
-  return {stripCitations, firstSentence, lead, unreviewedCount, papersOf, topics};
+  // The agreements and tensions a paper's claims feed, leaving out dismissed
+  // ones, as the claims drawer's handle counts them.
+  function forPaper(state, key) {
+    const feeding = (row) => row.status !== 'dismissed' && (row.topics || []).length > 0 && (row.claims || []).some((claim) => claim.paper === key);
+    return [...(state.agreements || []).filter(feeding).map((row) => ({row, kind: 'agreement'})),
+            ...(state.tensions || []).filter(feeding).map((row) => ({row, kind: 'tension'}))];
+  }
+
+  return {stripCitations, firstSentence, lead, unreviewedCount, papersOf, topics, forPaper};
 })();

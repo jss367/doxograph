@@ -3,6 +3,27 @@
    and leaving the view saves at once; a draft that cannot save stays put. */
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
+  // A paper panel's current read and its observer of confirmed cache changes.
+  let reading = null, afterChange = null, cacheVisit = {}, notifiedItems = items, cacheOrder = 0, appliedRead = 0;
+  function notifyCache(visit) {
+    if (visit !== cacheVisit || workspace !== client.workspaceId || notifiedItems === items) return;
+    notifiedItems = items;
+    afterChange?.();
+  }
+  // Reads may overlap across the editor and paper panel. Failed reads do not
+  // retire older successful ones; acknowledged mutations retire every prior read.
+  async function readItems(current = () => true) {
+    const visit = cacheVisit, order = ++cacheOrder;
+    const latest = (await request()).datasets;
+    if (visit !== cacheVisit || workspace !== client.workspaceId || !current()) return false;
+    if (order >= appliedRead) { items = latest; loaded = true; appliedRead = order; }
+    return true;
+  }
+  function mutateItems(change, visit) {
+    if (visit !== cacheVisit || workspace !== client.workspaceId) return false;
+    items = change(items); appliedRead = ++cacheOrder;
+    return true;
+  }
   let inspectedRevision;
   // Each record's linked research, gathered for the table being drawn.
   let researched = new WeakMap();
@@ -66,6 +87,7 @@ const Datasets = (() => {
   const autosave = createAutosave({current: () => draft, dirty,
     blocked: () => conflicted === draft ? conflict : !draft.name.trim() ? 'Give your dataset a name.' : customProblem(),
     async write(target) {
+      const visit = cacheVisit;
       const sent = body(target), first = !saved;
       let item;
       if (first) {
@@ -81,8 +103,9 @@ const Datasets = (() => {
             // Another window changed it since. Keep the draft, as any other
             // conflict does, and hold saves until the writer reloads.
             saved = structuredClone(item); conflicted = target;
-            items = [...items.filter(row => row.id !== item.id), item];
+            if (!mutateItems(rows => [...rows.filter(row => row.id !== item.id), item], visit)) return;
             select(item.id); renderActions(); renderList();
+            notifyCache(visit);
             throw new Error(conflict);
           }
           item = await request('/' + item.id,'PUT',{...sent,revision:item.revision});
@@ -97,9 +120,10 @@ const Datasets = (() => {
         const labels = el('dataset-labels');
         if (labels && document.activeElement !== labels) labels.value = target.labels.join(', ');
       }
-      items = [...items.filter(row => row.id !== item.id), item];
+      if (!mutateItems(rows => [...rows.filter(row => row.id !== item.id), item], visit)) return;
       if (first) { select(item.id); renderActions(); }
       renderList();
+      notifyCache(visit);
     },
     changed: () => progress()});
   function customProblem() {
@@ -125,6 +149,7 @@ const Datasets = (() => {
   }
   async function run(task) {
     if (busy) return;
+    const visit = cacheVisit;
     setBusy(true);
     // Actions read the saved revision, so a save under way lands first. A
     // pending one is held while the editor is frozen and resumes after.
@@ -133,6 +158,9 @@ const Datasets = (() => {
     finally {
       setBusy(false);
       autosave.resume();
+      // Actions can confirm a delete, discard, reload or replacement even when
+      // the reader has moved to a paper. Publish only this visit's cache facts.
+      notifyCache(visit);
       if (focusName) { el('dataset-name')?.focus(); focusName = false; }
       // Hash navigation can arrive during a load, save, or discard prompt.
       // Drain the latest target once that work releases the editor.
@@ -329,10 +357,13 @@ const Datasets = (() => {
   }
   // A record's research as the editor lists it: its own links, the papers of
   // linked claims, claims whose dataset facets match it, and removed sources.
-  function research(item) {
+  function facetMatch(item) {
     const names = new Set([item.name, ...item.facet_values].map(key).filter(Boolean));
-    const matches = claim => Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
+    return claim => Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
       && values.some(value => names.has(key(value))));
+  }
+  function research(item) {
+    const matches = facetMatch(item);
     const manual = new Set(item.claims.map(ref => ref.paper + ':' + ref.claim));
     const claims = client.state.claims.filter(claim => manual.has(claim.paper + ':' + claim.id) || matches(claim));
     const missing = item.claims.filter(ref => !claims.some(c => c.paper === ref.paper && c.id === ref.claim));
@@ -376,7 +407,8 @@ const Datasets = (() => {
   async function created(target) {
     if (saved) return {item:saved, ours:conflicted !== target};
     if (posted?.target !== target) return {};
-    const item = (await request()).datasets.find(row => row.id === target.id);
+    if (!await readItems()) return {};
+    const item = items.find(row => row.id === target.id);
     return {item, ours:!!item && posted.bodies.some(sent => stored(sent) === stored(item))};
   }
   function choose(item) {
@@ -387,6 +419,8 @@ const Datasets = (() => {
   function reset() {
     void autosave.settle();
     workspace = client.workspaceId; items = []; draft = saved = null; loaded = false; inspectedRevision = undefined;
+    reading = afterChange = null;
+    cacheVisit = {}; notifiedItems = items; appliedRead = ++cacheOrder;
     el('datasets-search').value = '';
   }
   // The record a URL names, or else the one last open, or else the first.
@@ -399,9 +433,7 @@ const Datasets = (() => {
     if (!current()) return;
     // A record made since the list was read, in another window.
     if (id && !items.some(item => item.id === id)) {
-      const ws = workspace, latest = (await request()).datasets;
-      if (!current() || ws !== client.workspaceId) return;
-      items = latest;
+      if (!await readItems(current)) return;
     }
     const item = items.find(item => item.id === (id || draft?.id)) || (!id && [...items].sort((a,b) => a.name.localeCompare(b.name))[0]);
     if (item) choose(item);
@@ -434,8 +466,7 @@ const Datasets = (() => {
     renderList(); renderDocument();
     if (dirty()) progress(); else status('Loading datasets…');
     await run(async () => {
-      items = (await request()).datasets; loaded = true;
-      await revealRequested();
+      if (await readItems()) await revealRequested();
     });
   }
   function hide() {
@@ -445,6 +476,7 @@ const Datasets = (() => {
     if (wasShown) void autosave.flush();
   }
   async function action(name, target) {
+    const visit = cacheVisit;
     // Opening or adding a record shows it in the editor.
     if (name === 'new' || name === 'open') setView('list');
     if (name === 'new') {
@@ -464,29 +496,29 @@ const Datasets = (() => {
       // lost. Discarding the draft also deletes the record it made.
       await autosave.settle();
       const {item, ours} = await created(draft);
+      if (visit !== cacheVisit) return;
       if (item && !ours) {
         // Another window changed the record, so it is theirs to keep.
-        items = [...items.filter(row => row.id !== item.id), item];
         choose(item);
         status('Another window changed this dataset, so it was kept. This is its saved version.');
         return;
       }
       if (item) {
         await request('/' + item.id + '?' + new URLSearchParams({revision:item.revision}),'DELETE');
-        items = items.filter(row => row.id !== item.id);
+        if (!mutateItems(rows => rows.filter(row => row.id !== item.id), visit)) return;
       }
       draft = saved = null; select(null); renderDocument(); renderList(); status('');
     } else if (name === 'reload') {
       await autosave.flush();
-      const latest = (await request()).datasets;
-      const version = latest.find(item => item.id === saved.id);
+      if (!await readItems()) return;
+      const version = items.find(item => item.id === saved.id);
       // Always leave the draft intact while the reader inspects the disk version.
       showSavedComparison(version);
-      items = latest; renderList(); status('Your draft is still in the editor. Inspect the saved version below before replacing it.');
+      renderList(); status('Your draft is still in the editor. Inspect the saved version below before replacing it.');
     } else if (name === 'replace') {
-      const latest = (await request()).datasets;
-      const version = latest.find(item => item.id === saved.id);
-      items = latest; renderList();
+      if (!await readItems()) return;
+      const version = items.find(item => item.id === saved.id);
+      renderList();
       if (inspectedRevision === undefined || (version?.revision ?? null) !== inspectedRevision) {
         showSavedComparison(version);
         status('The saved version changed again. Your draft is still here. Inspect the updated comparison before replacing it.');
@@ -498,8 +530,10 @@ const Datasets = (() => {
       else { draft = saved = null; select(null); renderList(); renderDocument(); status('This dataset record has been deleted.'); }
     } else if (name === 'delete') {
       if (!await confirmDialog(`Delete the dataset record “${saved.name}”? Its source files and research stay in place.`,{ok:'Delete record'})) return;
-      await request('/' + saved.id + '?' + new URLSearchParams({revision:saved.revision}),'DELETE');
-      items = items.filter(item => item.id !== saved.id); draft = saved = null;
+      const id = saved.id;
+      await request('/' + id + '?' + new URLSearchParams({revision:saved.revision}),'DELETE');
+      if (!mutateItems(rows => rows.filter(item => item.id !== id), visit)) return;
+      draft = saved = null;
       select(null); renderList(); renderDocument(); status('Dataset record deleted.');
     } else if (name === 'follow') {
       const {paper,claim} = target.dataset;
@@ -591,6 +625,29 @@ const Datasets = (() => {
       // that names one opens it in the editor.
       select = id => selected(table.view === 'table' ? null : id);
     }, show, hide, flush: () => autosave.flush(),
+    // The records a paper's panel lists: those whose Linked research names the
+    // paper, through their own links, linked claims, or matching dataset facets.
+    forPaper(key) {
+      if (!loaded || workspace !== client?.workspaceId) return [];
+      const claims = client.state.claims.filter(claim => claim.paper === key);
+      return items.filter(item => item.papers.includes(key) || item.claims.some(ref => ref.paper === key) || claims.some(facetMatch(item)))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+    loaded: () => loaded && workspace === client?.workspaceId,
+    // Observe confirmed cache changes for the current paper panel, reading the
+    // list if needed. Only this visit's request may publish or clear its task;
+    // leaving and returning to the same workspace is a new visit too.
+    ensureLoaded(onChange) {
+      if (!client) return;
+      if (workspace !== client.workspaceId) reset();
+      afterChange = onChange;
+      if (loaded || reading?.workspace === workspace) return;
+      const visit = cacheVisit, task = reading = {workspace};
+      readItems(() => reading === task).then(current => {
+        if (current) notifyCache(visit);
+      }, () => { /* the panel lists no datasets until the next look */ })
+        .finally(() => { if (reading === task) reading = null; });
+    },
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
     hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,
