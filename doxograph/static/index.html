@@ -20,9 +20,13 @@
     <select id="workspace" aria-label="Workspace"></select>
     <button type="button" id="btn-workspace-add" aria-label="Create workspace" title="Create workspace"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14 M5 12h14"/></svg></button>
   </span>
+  <nav class="pages" aria-label="Pages">
+    <button type="button" id="btn-papers" title="The papers in this workspace, and the one being read">Papers</button>
+    <button type="button" id="btn-findings" title="What the papers hold on each topic, where they agree, and where they disagree">Findings</button>
+    <button type="button" id="btn-workspace" title="What you are studying, your own claims, the topics, and the workspace's settings">Workspace</button>
+  </nav>
   <div class="actions">
     <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide claims</button>
-    <button type="button" id="btn-findings" title="What the papers hold on each topic, where they agree, and where they disagree">Findings</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask about the paper, the findings, or the whole library; the pane stays open while you read">Ask</button>
@@ -410,46 +414,50 @@
        aria-label="Width of the Ask pane"
        title="Drag to resize the Ask pane — double-click to put it back" hidden></div>
   <aside id="library-agent" class="paper-chat" hidden aria-labelledby="library-agent-title">
-    <div class="row"><h2 id="library-agent-title">Ask</h2>
-      <button type="button" id="agent-close" style="margin-left:auto" aria-label="Close Ask">×</button></div>
-    <p class="hint" id="agent-workspace"></p>
-    <div id="agent-context" class="agent-context" hidden></div>
-    <details class="agent-guidance"><summary>About this conversation</summary>
-      <p class="hint">Ask about papers and claims in this workspace, or ask Claude or Codex to add, remove, or replace paper labels based on their content. Your Doxograph notes stay private.
-        Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>
-      <p class="hint" id="agent-input-format"></p>
-      <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
-    </details>
-    <nav class="chat-conversations" aria-label="Conversations">
-      <h3>Conversations</h3>
-      <ul id="agent-thread" class="chat-thread-list"></ul>
-      <details id="agent-archive" hidden>
-        <summary id="agent-archive-label">Archived conversations</summary>
-        <ul id="agent-archived" class="chat-thread-list" aria-label="Archived conversations"></ul>
+    <div class="row agent-head"><h2 id="library-agent-title">Ask</h2>
+      <details id="agent-history" class="agent-history action-disclosure">
+        <summary title="Conversations"><span class="sr-only">Conversations: </span><span id="agent-current"></span></summary>
+        <div class="agent-history-panel">
+          <nav class="chat-conversations" aria-label="Conversations">
+            <ul id="agent-thread" class="chat-thread-list"></ul>
+            <details id="agent-archive" hidden>
+              <summary id="agent-archive-label">Archived conversations</summary>
+              <ul id="agent-archived" class="chat-thread-list" aria-label="Archived conversations"></ul>
+            </details>
+          </nav>
+          <div class="row chat-threads"><button type="button" id="agent-delete" hidden>Delete this conversation</button></div>
+          <details class="agent-guidance"><summary>About Ask</summary>
+            <p class="hint">Ask about papers and claims in this workspace, or ask Claude or Codex to add, remove, or replace paper labels based on their content. Your Doxograph notes stay private.
+              Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>
+            <p class="hint" id="agent-input-format"></p>
+            <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
+          </details>
+        </div>
       </details>
-    </nav>
-    <div class="row chat-threads">
-      <label>Agent <select id="agent-agent"></select></label>
-      <button type="button" id="agent-delete" hidden>Delete</button>
-    </div>
+      <button type="button" id="agent-clear" aria-label="New conversation" title="New conversation">New</button>
+      <button type="button" id="agent-close" aria-label="Close Ask">×</button></div>
+    <p class="hint" id="agent-workspace" hidden></p>
     <div id="agent-messages" role="log" aria-live="polite"></div>
     <form id="agent-form">
-      <div id="agent-scope" aria-label="Conversation sources"></div>
-      <div class="row"><button type="button" id="agent-add">Add sources</button>
-        <button type="button" id="agent-expand">Search the rest of the library</button>
-        <button type="button" id="agent-claims-only">Use extracted claims only</button></div>
+      <div id="agent-context" class="agent-context" hidden></div>
+      <div class="agent-sources">
+        <div id="agent-scope" aria-label="Conversation sources"></div>
+        <button type="button" id="agent-add">Add sources</button>
+        <button type="button" id="agent-expand" title="Search the rest of the library">Search whole library</button>
+        <button type="button" id="agent-claims-only">Use extracted claims only</button>
+      </div>
       <div id="agent-starters" class="row"></div>
-      <label for="agent-question">Question</label>
+      <label for="agent-question" class="sr-only">Question</label>
       <div class="chat-composer">
-        <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
+        <textarea id="agent-question" rows="3" maxlength="8000" required placeholder="Ask a question"></textarea>
         <button type="button" id="agent-attach" class="chat-attach" aria-label="Attach files"
           title="Attach files. You can also drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.">+</button>
         <input type="file" id="agent-files" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.tsv,.json,.jsonl,.log,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.toml,.tex,.rst">
       </div>
       <div id="agent-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
       <p class="hint" id="agent-status" role="status"></p>
-      <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
-        <button type="button" id="agent-clear">New conversation</button>
+      <div class="row agent-foot"><select id="agent-agent" aria-label="Agent" title="Agent that answers this conversation"></select>
+        <button type="button" id="agent-settings" hidden>Open Settings</button>
         <button type="submit" class="primary" id="agent-send">Send</button></div>
     </form>
   </aside>
