@@ -6346,7 +6346,9 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     await page.locator('#papers [data-paper="paper-a"]').click()
                     field = page.locator('textarea[data-note="paper-a"]')
                     await field.fill("Worth reading for the method.")
-                await page.locator("#content .warn", has_text=message).wait_for(timeout=10000)
+                # Reading a PDF, the warning is on the claims drawer's handle.
+                warn = "#claims-drawer-bar .warn" if action == "verify" else "#content .warn"
+                await page.locator(warn, has_text=message).wait_for(timeout=10000)
                 if field is not None:
                     # Handed back, with what was typed, for the save to be retried.
                     assert await field.is_enabled()
