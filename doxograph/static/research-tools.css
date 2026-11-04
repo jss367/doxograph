@@ -282,6 +282,7 @@ body.resizing-claims { cursor: col-resize; user-select: none; }
   background: var(--panel); border-top: 1px solid var(--line); }
 #claims-drawer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .75rem; padding: .55rem 0; font-size: .8rem; }
 #claims-drawer-bar .hint { font-size: .8rem; }
+#claims-drawer-bar > .warn { flex: 1 0 100%; margin: 0; }
 #claims-drawer-bar button.link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--accent); }
 #claims-drawer-bar button.link:hover { text-decoration: underline; }
 #claims-drawer-bar .drawer-actions { display: flex; gap: .4rem; margin-left: auto; }

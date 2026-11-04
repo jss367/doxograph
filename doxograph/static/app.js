@@ -1107,8 +1107,10 @@ function drawContent() {
   }
   html += textSearchBlock();
   if (reading) {
-    $('content').innerHTML = lead + overview;
-    $('claims-drawer-bar').innerHTML = claimsDrawerBar(V.paper, rows);
+    // A failed save or other claim action is reported on the drawer's handle,
+    // which stays in view while the overview column beside the PDF is hidden.
+    $('content').innerHTML = overview;
+    $('claims-drawer-bar').innerHTML = lead + claimsDrawerBar(V.paper, rows);
     $('claims-drawer-list').innerHTML = draft + html;
     syncClaimsDrawer();
   } else {

@@ -4,7 +4,7 @@ import httpx
 import pytest
 from playwright.async_api import expect
 
-from browser_support import browser_session, run_browser
+from browser_support import CLAIMS_OPEN, browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
 from test_browser import _poll, _server
@@ -655,5 +655,46 @@ def test_a_claim_link_from_a_dataset_opens_the_drawer(engine):
                 card = page.locator(f'#claims-drawer-list .claim.sel[data-claim="{linked["id"]}"]')
                 await expect(card).to_be_visible()
                 assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_failed_claim_save_shows_with_the_overview_hidden(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    claim = store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+
+    async def refuse(route):
+        if route.request.method == 'GET':
+            await route.continue_()
+        else:
+            await route.fulfill(status=500, json={'detail': 'Saving is unavailable.'})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            await page.add_init_script(CLAIMS_OPEN)
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await page.locator('#btn-reader-claims').click()
+                await expect(page.locator('#btn-reader-claims')).to_have_text('Show overview')
+
+                await page.route('**/api/papers/paper/claims/**', refuse)
+                await page.locator(f'#claims-drawer-list [data-act="edit"][data-claim="{claim["id"]}"]').click()
+                form = page.locator(f'#claims-drawer-list form[data-form="{claim["id"]}"]')
+                await form.locator('[name="text"]').fill('Oversight depends on the task.')
+                await form.get_by_role('button', name='Save', exact=True).click()
+                # Reported on the drawer's handle, which the hidden overview
+                # does not take with it, and not a second time beside the PDF.
+                warning = page.locator('#claims-drawer-bar .warn')
+                await expect(warning).to_contain_text('Could not save the claim')
+                await expect(warning).to_be_visible()
+                await expect(page.locator('#content .warn')).to_have_count(0)
+                await expect(form.locator('[name="text"]')).to_have_value('Oversight depends on the task.')
 
     run_browser(scenario())
