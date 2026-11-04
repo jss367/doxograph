@@ -142,7 +142,9 @@ function openFindings() {
 function openFindingRow(id) {
   findingsOpen.add(id);
   openFindings();
-  document.querySelector(`.frow[data-finding="${CSS.escape(id)}"]`)?.scrollIntoView({block: 'center'});
+  const row = document.querySelector(`.frow[data-finding="${CSS.escape(id)}"]`);
+  row?.scrollIntoView({block: 'center'});
+  row?.querySelector('summary')?.focus({preventScroll: true});
 }
 
 $('findings-nav').addEventListener('click', (event) => {

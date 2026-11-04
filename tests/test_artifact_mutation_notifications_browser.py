@@ -374,7 +374,12 @@ def test_discard_recovery_publishes_only_confirmed_cache_facts(engine, foreign):
                 await page.locator("#ask-ok").click()
                 await started.wait()
                 await page.locator('#papers li[data-paper="a"]').click()
-                await expect(page.locator(".paper-artifacts")).to_have_count(0)
+                if foreign:
+                    await expect(page.locator(".paper-artifacts")).to_have_count(0)
+                else:
+                    await expect(page.locator("#paperhead")).to_contain_text(
+                        "Synthetic a"
+                    )
                 release.set()
                 await page.wait_for_function(
                     "document.querySelector('#datasets-sheet').getAttribute('aria-busy')==='false'"
