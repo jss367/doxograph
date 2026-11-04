@@ -140,6 +140,13 @@ def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
     store.save_paper(paper)
 
 
+async def open_claims(page):
+    """Open the claims drawer beside a paper when the PDF has closed it."""
+    summary = page.locator("#claims-drawer:not([open]) > summary")
+    if await summary.count():
+        await summary.click()
+
+
 def _paper_with_proposal(key: str, title: str, proposal: str, updated: str) -> None:
     paper = store.new_paper(key, title=title)
     paper["proposed_tags"] = [{"name": proposal, "description": f"About {proposal}."}]
@@ -5271,6 +5278,7 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('#papers [data-paper="shared"]').click()
+                await open_claims(page)
                 await page.locator('.claim[data-claim="shared-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
 
@@ -6013,6 +6021,7 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
 
                 # Under a paper.
                 await page.locator(f'#papers [data-paper="{key}"]').click()
+                await open_claims(page)
                 await card.get_by_role("button", name="in the paper").click()
                 await card.locator(".qctx .qpassage").wait_for()
                 await card.get_by_role("button", name="alike", exact=True).click()

@@ -10,7 +10,7 @@ from fpdf import FPDF
 from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
-from test_browser import _poll, _server
+from test_browser import open_claims, _poll, _server
 from test_research_tools_browser import ready, select_first_line
 
 
@@ -320,6 +320,7 @@ def test_claim_annotations_retry_a_transient_verifier_lookup_failure(engine):
                 assert requests
                 recovery['ready'] = True
                 # A normal selection redraw retries without remounting the PDF.
+                await open_claims(page)
                 await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
                 await badge.wait_for()
                 assert len(requests) >= 2
@@ -365,6 +366,7 @@ def test_claim_annotations_retry_a_transient_document_index_failure(engine):
                 badge = page.get_by_role('button', name='Show claim: Evidence after indexing retry', exact=True)
                 assert await badge.count() == 0
                 await page.evaluate('window.allowQuoteIndex = true')
+                await open_claims(page)
                 await page.locator(f'#content .claim[data-claim="{claim["id"]}"] [data-select-claim]').check()
                 await badge.wait_for()
                 assert await page.locator('.pdf-page[data-page="20"] canvas').count() == 0

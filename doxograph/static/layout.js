@@ -47,7 +47,7 @@ function setReadingClaims(collapsed) {
   if (collapsed && $('claim-column').contains(document.activeElement)) $('btn-reader-claims').focus();
   readingClaimsCollapsed = collapsed;
   document.body.classList.toggle('claims-collapsed', document.body.classList.contains('reading-paper') && collapsed);
-  $('btn-reader-claims').textContent = collapsed ? 'Show claims' : 'Hide claims';
+  $('btn-reader-claims').textContent = collapsed ? 'Show panel' : 'Hide panel';
   $('btn-reader-claims').setAttribute('aria-expanded', String(!collapsed));
   fitClaimsWidth();
 }

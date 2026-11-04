@@ -138,6 +138,13 @@ function openFindings() {
   renderAll();
 }
 
+// The findings page with one row open and on screen: from a paper's panel.
+function openFindingRow(id) {
+  findingsOpen.add(id);
+  openFindings();
+  document.querySelector(`.frow[data-finding="${CSS.escape(id)}"]`)?.scrollIntoView({block: 'center'});
+}
+
 $('findings-nav').addEventListener('click', (event) => {
   if (!event.target.closest('[data-view]')) return;
   openFindings();

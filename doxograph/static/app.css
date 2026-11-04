@@ -645,6 +645,25 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .frow .cact { margin-top: .5rem; display: flex; gap: .4rem; }
 @media (max-width: 800px) { .frow .tpair { grid-template-columns: 1fr; } .frow .fwho { display: none; } }
 
+/* The side panel beside a paper, and the drawer its claims sit in. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.paper-overview h4 { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: .9rem 0 .25rem; }
+.paper-overview > div:first-of-type h4 { margin-top: 0; }
+.paper-overview .paper-summary p, .paper-overview .paper-relevance p { margin: 0; font-size: .92rem; }
+.paper-overview ul { list-style: none; margin: 0; padding: 0; }
+.paper-overview li { margin: .25rem 0; font-size: .9rem; }
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; font: inherit; font-size: .9rem; }
+.linkish:hover { text-decoration: underline; background: none; }
+.paper-findings .ftag { margin-right: .25rem; }
+.claims-drawer { border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0 0; }
+.claims-drawer > summary { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; padding: .55rem .8rem; cursor: pointer; list-style: none; }
+.claims-drawer > summary b, .claims-drawer > summary .drawer-toggle { white-space: nowrap; }
+.claims-drawer > summary::-webkit-details-marker { display: none; }
+.claims-drawer > summary .drawer-toggle { margin-left: auto; color: var(--accent); }
+.claims-drawer[open] > summary { border-bottom: 1px solid var(--line); }
+.claims-drawer .drawer-body { padding: .5rem .8rem .8rem; }
+.claims-drawer .drawer-body > .claim:first-child { margin-top: .25rem; }
+
 /* The map: papers as nodes on a canvas. The wrapper is sized from JS to fill
    what is left of #main below the header, so the whole graph is on screen. */
 #main:has(.graph-wrap) { padding: 1.25rem; }

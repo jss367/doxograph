@@ -301,6 +301,7 @@ function applyHash() {
   V.unverified = params.get('unverified') === '1';
   V.group = params.get('group') !== '0';
   V.selectedId = params.get('sel') || null;
+  if (V.selectedId && V.paper) openClaimsDrawer(V.paper);
   V.dataset = params.get('dataset') || null;
   V.person = params.get('person') || null;
   V.author = V.person ? null : params.get('author') || null;
@@ -862,7 +863,7 @@ function showView(view) {
   parkSynthEditor();
   parkNoteEditor();
   V.error = null;
-  if (view === 'library') {
+  if (view === 'library' || view === 'findings') {
     parkNewClaimForNavigation(null);
     V.paper = null;
     V.selectedId = null;
@@ -976,6 +977,7 @@ function followToPaper(paper, claim = null) {
   captureOpenEditor(); parkNewClaimForNavigation(paper);
   V.paper = paper; V.view = 'claims'; V.tag = null; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
   V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
+  if (claim) openClaimsDrawer(paper);
   $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
   scheduleTextSearch(); syncHash(true); renderAll();
 }
@@ -1028,42 +1030,41 @@ function drawContent() {
   if (V.tag && !V.paper && !(V.group && rows.length)) {
     html += `<div class="group"><h3>${esc(V.tag)} ${synthesizeButton(V.tag)}</h3>${synthesisBlock(V.tag)}</div>`;
   }
+  let newClaimHtml = '';
   if (V.newClaim && V.editing === NEW_CLAIM_ID) {
     shown.add(NEW_CLAIM_ID);
-    html += editForm(V.newClaim);
+    newClaimHtml += editForm(V.newClaim);
   } else if (newClaimHasEdits(V.newClaim)) {
     // Held but not open — opening another claim's editor moved `V.editing`.
     // Without this the draft is unreachable: Add claim would overwrite it and
     // cancelling the other editor would drop it, losing the text silently.
-    html += `<div class="proposed">
+    newClaimHtml += `<div class="proposed">
       <span>Unsaved new claim: <em>${esc(V.newClaim.text.slice(0, 80) || 'Details entered; claim text is still empty.')}${V.newClaim.text.length > 80 ? '…' : ''}</em></span>
       <span style="margin-left:auto"></span>
       <button type="button" data-act="resume-new">Resume</button>
       <button type="button" data-act="discard-new">Discard</button>
     </div>`;
   }
-  // Keep the overview and personal notes together in either paper layout.
-  // Highlights stay listed with the PDF put away; clicking one reopens it.
+  // With a paper open the side panel comes first — the summary, the reader's
+  // note, what the paper connects to — and the claims sit under it in a
+  // drawer, closed until something asks for them. Highlights stay listed
+  // with the PDF put away; clicking one reopens it.
+  let panel = '';
   if (V.paper) {
     const paper = S.papers.find((p) => p.key === V.paper);
-    if (paper) html += paperOverview(paper);
+    if (paper) panel += paperOverview(paper);
     const marked = (S.notebook?.highlights || []).some((h) => h.paper === V.paper);
-    if (paper && (paper.has_pdf || marked)) html += ResearchTools.highlightsHtml(V.paper);
+    if (paper && (paper.has_pdf || marked)) panel += ResearchTools.highlightsHtml(V.paper);
   }
 
+  let claims = '';
   if (!rows.length) {
     if (!V.newClaim) {
-      html += S.papers.length
+      claims += S.papers.length
         ? `<p class="empty">${reading && !S.claims.some(c => c.paper === V.paper) ? 'Capture a passage from the paper to start collecting claims.' : 'No claims match these filters.'}</p>`
         : '<p class="empty">Nothing here yet. Paste an arXiv ID or drop a PDF to start.</p>';
     }
-    $('content').innerHTML = html + textSearchBlock();
-  applySavingState();
-    if (main) main.scrollTop = scrollTop;
-    return;
-  }
-
-  if (V.group && !V.paper) {
+  } else if (V.group && !V.paper) {
     const byTag = new Map();
     const untagged = [];
     rows.forEach((row) => {
@@ -1076,24 +1077,85 @@ function drawContent() {
     const ordered = [...byTag.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
     for (const [tag, group] of ordered) {
       const description = (S.tags.find((t) => t.name === tag) || {}).description || '';
-      html += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span>${synthesizeButton(tag)}</h3>`
+      claims += `<div class="group"><h3>${esc(tag)} <span class="n hint">${group.length}</span>${synthesizeButton(tag)}</h3>`
         + (description ? `<p class="gd">${esc(description)}</p>` : '')
         + synthesisBlock(tag)
         + group.map((row) => card(row, tag)).join('') + '</div>';
     }
     if (untagged.length) {
-      html += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
+      claims += `<div class="group"><h3>untagged <span class="n hint">${untagged.length}</span></h3>`
         + untagged.map((row) => card(row, 'untagged')).join('') + '</div>';
     }
   } else {
     // Not `rows.map(card)`: the index `map` passes would land in `group`, and
     // the buttons that carry it back as a string would never match it again.
-    html += rows.map((row) => card(row)).join('');
+    claims += rows.map((row) => card(row)).join('');
   }
+  // The new-claim form and a held draft go with the claims: inside the
+  // drawer, which opens for them, or at the head of the library's list.
+  html += panel;
+  html += V.paper ? claimsDrawer(V.paper, newClaimHtml + claims) : newClaimHtml + claims;
   $('content').innerHTML = html + textSearchBlock();
   applySavingState();
   if (main) main.scrollTop = scrollTop;
 }
+
+// --- the claims drawer --------------------------------------------------
+//
+// Under a paper's panel, its claims are a drawer: a line with the counts,
+// closed beside the PDF until the reader opens it or something sends them to
+// a claim — a citation, a link naming one, the keyboard, a new claim, a
+// filter. Whether it is open is remembered for each paper for the session.
+const claimsDrawers = new Map();
+const drawerKey = (paper) => `${workspaceClient.workspaceId}\n${paper}`;
+function openClaimsDrawer(paper = V.paper) {
+  if (paper) claimsDrawers.set(drawerKey(paper), true);
+}
+// Closed by default only while the PDF is on screen, where the panel and
+// the page are competing for the width; with the PDF put away, or none to
+// show, the claims are the thing to read and the drawer starts open.
+function claimsDrawerOpen(paper) {
+  const chosen = claimsDrawers.get(drawerKey(paper));
+  if (chosen !== undefined) return chosen;
+  // An editor opens the drawer for good: a claim just saved should not fold
+  // away under the reader who was writing it.
+  if (V.editing || (V.newClaim && V.newClaim.paper === paper)) { openClaimsDrawer(paper); return true; }
+  if (V.q || V.kind || V.tag || V.unreviewed || V.unverified || V.facet || V.ledger) return true;
+  return !readingPaper();
+}
+function claimsDrawer(paper, inner) {
+  const all = S.claims.filter((c) => c.paper === paper);
+  const unreviewed = all.filter((c) => !c.reviewed).length;
+  const findings = FindingsModel.forPaper(S, paper).length;
+  const open = claimsDrawerOpen(paper);
+  const parts = [];
+  if (all.length && unreviewed) parts.push(`${unreviewed} unreviewed`);
+  if (findings) parts.push(`in ${findings} finding${findings === 1 ? '' : 's'}`);
+  return `<details id="claims-drawer" class="claims-drawer"${open ? ' open' : ''}>
+    <summary><b>${all.length} claim${all.length === 1 ? '' : 's'}</b>
+      ${parts.length ? `<span class="hint">${esc(parts.join(' · '))}</span>` : ''}
+      <span class="drawer-toggle hint">${open ? 'Hide' : 'Show'}</span></summary>
+    <div class="drawer-body">${inner}</div>
+  </details>`;
+}
+// The choice is taken off the click, not the toggle event: the toggle is
+// queued, and a click inside the content pane can redraw it first, leaving
+// the event to fire on a drawer that is no longer in the page.
+$('content').addEventListener('click', (event) => {
+  const summary = event.target.closest('#claims-drawer > summary');
+  if (!summary || !V.paper) return;
+  const opening = !summary.parentElement.open;
+  claimsDrawers.set(drawerKey(V.paper), opening);
+  const toggle = summary.querySelector('.drawer-toggle');
+  if (toggle) toggle.textContent = opening ? 'Hide' : 'Show';
+}, true);
+// A dataset named in a paper's panel opens its record; a finding opens its row.
+document.addEventListener('click', (event) => {
+  const dataset = event.target.closest('[data-open-dataset]');
+  if (dataset) { openPageView('datasets', {dataset: dataset.dataset.openDataset}); return; }
+  const finding = event.target.closest('[data-open-finding]');
+  if (finding && typeof openFindingRow === 'function') openFindingRow(finding.dataset.openFinding);
+});
 
 $('panes').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-act]');
@@ -1434,6 +1496,7 @@ $('panes').addEventListener('click', async (event) => {
         if (V.q.trim() && !queryMatcher()(haystack(row))) { V.q = ''; $('q').value = ''; }
       }
       selectClaim(claim);
+      openClaimsDrawer(row?.paper);
       syncHash(true);
       renderAll();   // a cleared topic or paper filter changes the sidebar too
       scrollToSelected();
@@ -1510,6 +1573,7 @@ $('panes').addEventListener('click', async (event) => {
       // behind it is about to discard.
       if (refuseWhileRemoving(paper, 'a new claim')) return;
       setReadingClaims(false);
+      openClaimsDrawer(paper);
       captureOpenEditor();
       // Resume a held draft rather than overwriting what was typed into it.
       if (!V.newClaim || V.newClaim.paper !== paper || !newClaimHasEdits(V.newClaim)) {

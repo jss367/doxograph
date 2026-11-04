@@ -135,10 +135,19 @@ Anthropic uploads must be removed from your Anthropic account separately.
 
 ## Paper overview
 
-Open a paper to see its summary, why it matters to your research, your own
-notes, and its saved reading progress together in **Paper overview**. The
-overview stays available when the PDF is hidden. Papers without a summary
-or PDF can still be annotated and added to the reading queue.
+Open a paper to see its summary, why it is in your pile, your own note, its
+reading progress, the findings it takes part in, and its artifacts together
+in the panel beside it. **In findings** lists the agreements and tensions the
+paper's claims are part of; each opens the findings page at that row.
+**Artifacts** lists the dataset records that link the paper and its code
+links; a dataset opens its record. The panel stays available when the PDF is
+hidden, and **Hide panel** in the header puts it away to read full width.
+
+The paper's claims sit under the panel in a drawer with their count, closed
+until you open it or something sends you to a claim: a citation, a link that
+names one, the keyboard, a new claim, or a filter. Whether it is open is
+remembered for each paper for the rest of the session. Papers without a
+summary or PDF can still be annotated and added to the reading queue.
 
 Use **Read** to open the PDF at your saved page, **Ask about this paper** to
 start a conversation, or **Add to reading queue** to save it for later.

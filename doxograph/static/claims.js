@@ -47,6 +47,7 @@ function selectClaim(id) {
   handPicked += 1;
   const row = S.claims.find((row) => row.id === id);
   if (row) rememberContinuation(row.paper, id);
+  if (row) openClaimsDrawer(row.paper);
 }
 
 // Claims with a save in flight. Their form is read-only until the request

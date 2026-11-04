@@ -359,7 +359,7 @@ document.addEventListener('keydown', async (event) => {
     selectNextUnreviewed(rows);
   } else if (event.key === 'e') {
     const row = selectedRow(rows);
-    if (row) { setReadingClaims(false); captureOpenEditor(); V.editing = row.id; renderContent(); }
+    if (row) { setReadingClaims(false); openClaimsDrawer(row.paper); captureOpenEditor(); V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
     const row = selectedRow(rows);
     if (!row) return;

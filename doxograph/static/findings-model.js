@@ -103,5 +103,12 @@ const FindingsModel = (() => {
       .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
   }
 
-  return {stripCitations, firstSentence, lead, unreviewedCount, papersOf, topics};
+  // The agreements and tensions a paper takes part in, through its claims.
+  function forPaper(state, key) {
+    const involves = (row) => (row.claims || []).some((claim) => claim.paper === key);
+    return [...(state.agreements || []).filter(involves).map((row) => ({...row, kind: 'agreement'})),
+            ...(state.tensions || []).filter(involves).map((row) => ({...row, kind: row.kind || 'tension', finding: 'tension'}))];
+  }
+
+  return {stripCitations, firstSentence, lead, unreviewedCount, papersOf, topics, forPaper};
 })();

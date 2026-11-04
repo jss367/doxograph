@@ -6,7 +6,7 @@ from playwright.async_api import expect
 from browser_support import browser_session, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
-from test_browser import _poll, _server
+from test_browser import open_claims, _poll, _server
 from test_research_tools_browser import ready
 
 
@@ -119,6 +119,7 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await open_claims(page)
                 await page.locator(f'#content [data-claim="{claim["id"]}"] [data-act="edit"]').click()
                 draft = page.locator(f'form[data-form="{claim["id"]}"] textarea[name="note"]')
                 await draft.fill('An unfinished thought beside the source.')
@@ -132,7 +133,7 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
                 await expect(page.locator('#side')).to_be_hidden()
                 await expect(page.locator('#claim-column')).to_be_hidden()
                 await expect(page.locator('#claims-resize')).to_be_hidden()
-                await expect(page.locator('#btn-reader-claims')).to_have_text('Show claims')
+                await expect(page.locator('#btn-reader-claims')).to_have_text('Show panel')
                 await expect(page.locator('#btn-reader-claims')).to_have_attribute('aria-expanded', 'false')
                 if width > 800:
                     reader = await page.locator('#reader').bounding_box()
@@ -188,6 +189,7 @@ def test_claim_editor_fits_reading_sidebar(engine, width):
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await open_claims(page)
                 await page.locator(f'#content [data-claim="{claim["id"]}"] [data-act="edit"]').click()
                 form = page.locator(f'form[data-form="{claim["id"]}"]')
                 await expect(form).to_be_visible()

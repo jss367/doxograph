@@ -1458,7 +1458,7 @@ def test_mark_drafts_survive_a_refused_switch_a_removed_mark_and_a_late_resume(e
                 assert await page.locator('#workspace').input_value() == 'default'
                 assert await rail.locator('[data-highlight-note]').input_value() == 'Changed note'
                 assert await page.locator('form[data-form] [name="text"]').input_value() == 'A claim in progress'
-                await page.get_by_role('button', name='Cancel', exact=True).first.click()
+                await page.locator('form[data-form]').get_by_role('button', name='Cancel', exact=True).click()
                 # The mark is removed in another window while its note is open.
                 data = httpx.get(url+'/api/notebook').json()
                 data['highlights'] = []

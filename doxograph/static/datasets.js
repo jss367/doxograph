@@ -2,7 +2,7 @@
    A view in the main pane. Edits save themselves shortly after typing stops,
    and leaving the view saves at once; a draft that cannot save stays put. */
 const Datasets = (() => {
-  let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
+  let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, loading = false, focusName = false, shown = false;
   let inspectedRevision;
   // Each record's linked research, gathered for the table being drawn.
   let researched = new WeakMap();
@@ -591,6 +591,28 @@ const Datasets = (() => {
       // that names one opens it in the editor.
       select = id => selected(table.view === 'table' ? null : id);
     }, show, hide, flush: () => autosave.flush(),
+    // The records linking a paper, for its side panel, from the list this
+    // page last read. The list is read once per workspace when a panel asks
+    // and nothing has read it yet; `onLoaded` redraws the panel.
+    forPaper(key) {
+      if (workspace !== client?.workspaceId) return [];
+      return items.filter(item => (item.papers || []).includes(key)).sort((a, b) => a.name.localeCompare(b.name));
+    },
+    loaded: () => workspace === client?.workspaceId && loaded,
+    async ensureLoaded(onLoaded) {
+      if (!client || loading) return;
+      if (workspace !== client.workspaceId) reset();
+      if (loaded) return;
+      const ws = workspace;
+      loading = true;
+      try {
+        const latest = (await request()).datasets;
+        if (ws !== client.workspaceId) return;
+        if (!loaded) { items = latest; loaded = true; }
+        onLoaded?.();
+      } catch (_) { /* the panel shows no artifacts until the next look */ }
+      finally { loading = false; }
+    },
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
     hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,

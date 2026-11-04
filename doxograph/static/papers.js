@@ -305,19 +305,50 @@ function renderPaperReadingProgress() {
   });
 }
 
+// The side panel beside a paper: what the model made of it, what the reader
+// thinks of it, and what it connects to. The claims sit under it in a drawer.
 function paperOverview(paper) {
   return `<section class="paper-overview" aria-labelledby="paper-overview-title">
-    <h3 id="paper-overview-title">Paper overview</h3>
+    <h3 id="paper-overview-title" class="visually-hidden">Paper overview</h3>
     <div class="paper-reading-progress"><span class="who">Reading progress</span>
       <p data-paper-progress="${esc(paper.key)}">${esc(paperReadingProgress(paper.key))}</p></div>
     ${(paper.labels || []).length ? `<div class="labels">${paper.labels.map(labelChip).join('')}</div>` : ''}
-    ${paperCode(paper)}
     <div class="paper-summary"><h4>Summary</h4>
       ${paper.summary ? `<p>${esc(paper.summary)}</p>` : '<p class="hint">No summary yet. You can read the paper and add your own notes.</p>'}</div>
-    ${paper.relevance ? `<div class="paper-relevance"><h4>Why it matters</h4><p>${esc(paper.relevance)}</p></div>` : ''}
+    ${paper.relevance ? `<div class="paper-relevance"><h4>Why it is here</h4><p>${esc(paper.relevance)}</p></div>` : ''}
     ${paperNote(paper.key)}
+    ${paperFindings(paper.key)}
+    ${paperArtifacts(paper)}
     ${proposedPanel(paper.key)}
   </section>`;
+}
+
+// The agreements and tensions this paper's claims take part in. Each opens
+// the findings page at its row.
+function paperFindings(key) {
+  const rows = FindingsModel.forPaper(S, key);
+  if (!rows.length) return '';
+  return `<div class="paper-findings"><h4>In findings</h4><ul>${rows.map((row) => {
+    const others = FindingsModel.papersOf({claims: row.claims.filter((c) => c.paper !== key)}).join(', ');
+    const sentence = FindingsModel.firstSentence(row.note) || `${row.kind} with ${others}`;
+    return `<li><button type="button" class="linkish" data-open-finding="${esc(row.id)}" data-finding-kind="${esc(row.finding || 'agreement')}">
+      <span class="ftag ${esc(row.finding || 'agreement')}">${esc(row.kind)}</span> ${esc(sentence)}</button></li>`;
+  }).join('')}</ul></div>`;
+}
+
+// What the paper introduces or uses that the reader has catalogued: dataset
+// records linking it, and its code. Each opens the record it came from.
+function paperArtifacts(paper) {
+  const datasets = Datasets.forPaper(paper.key);
+  if (!Datasets.loaded()) Datasets.ensureLoaded(() => { if (V.view === 'claims' && V.paper === paper.key && !editorHolds()) renderContent(); });
+  const code = webLinks(paper.code);
+  if (!datasets.length && !code.length) return '';
+  const roleNames = {training: 'training', evaluation: 'evaluation', reference: 'reference', 'project-output': 'project output'};
+  return `<div class="paper-artifacts paper-code"><h4>Artifacts</h4><ul>
+    ${datasets.map((d) => `<li><button type="button" class="linkish" data-open-dataset="${esc(d.id)}">${esc(d.name)}</button>
+      <span class="hint">dataset${(d.roles || []).length ? ` · ${d.roles.map((r) => roleNames[r] || r).join(', ')}` : ''}</span></li>`).join('')}
+    ${code.map((link) => `<li><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/i, ''))}</a> <span class="hint">code</span></li>`).join('')}
+  </ul></div>`;
 }
 
 // Only web addresses become links. The server checks what it saves, but a
