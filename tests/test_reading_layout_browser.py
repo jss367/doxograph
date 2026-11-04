@@ -1,5 +1,7 @@
 """The reading layout gives space to the source without losing library state."""
 
+import asyncio
+
 import httpx
 import pytest
 from playwright.async_api import expect
@@ -798,5 +800,47 @@ def test_drawer_focus_is_not_carried_to_another_paper(engine):
                 await page.go_back()
                 await expect(page.locator('#paperhead')).to_contain_text('The first paper')
                 await expect(toggle).not_to_be_focused()
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_a_late_search_answer_does_not_open_another_papers_drawer(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['The judges discuss sandbagging at length.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.'})
+    store.save_paper(store.new_paper('other', title='Sandbagging under oversight'))
+    store.pdf_path('other').write_bytes(minimal_pdf(['Models may be sandbagging on purpose.']))
+    store.add_claim('other', {'text': 'Weak judges miss subtle errors.'})
+
+    async def scenario():
+        held, release = asyncio.Event(), asyncio.Event()
+
+        async def hold(route):
+            held.set()
+            await release.wait()
+            await route.continue_()
+
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#papers li[data-paper="paper"]').click()
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                await page.route('**/api/search*', hold)
+                await page.locator('#btn-reader-filters').click()
+                await page.locator('#q').fill('sandbagging')
+                await asyncio.wait_for(held.wait(), timeout=10)
+
+                # The reader moves on before the answer comes back. It is drawn
+                # under the paper now open, whose drawer stays as it was left.
+                await page.locator('#papers li[data-paper="other"]').click()
+                await expect(page.locator('#paperhead')).to_contain_text('Sandbagging under oversight')
+                release.set()
+                await page.wait_for_function("V.textSearch?.q === 'sandbagging' && V.textSearch.loading === false")
+                await page.locator('#claims-drawer-list .pdfhit').first.wait_for(state='attached')
+                await expect(page.locator('#claims-drawer-list')).to_be_hidden()
 
     run_browser(scenario())
