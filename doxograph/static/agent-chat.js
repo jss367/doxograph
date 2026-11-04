@@ -9,7 +9,7 @@ const agentChats = ChatThreads.create({
   agents: () => ['api', 'claude_code', 'codex'],
   unified: true,
   render: renderAgentChat,
-  onArchiveStart: beginAskArchiveFocus,
+  onHistoryActionStart: beginAskHistoryActionFocus,
 });
 const activeAgentChat = () => agentChats.active;
 
@@ -151,7 +151,7 @@ function syncAgentChatControls() {
     ? 'Use extracted claims only' : 'Use paper metadata only';
   $('agent-settings').hidden = !setup;
   $('agent-codex-guidance').hidden = chat.agent !== 'codex';
-  $('agent-status').textContent = chat.archived ? 'Archived conversation. Restore it to ask another question.' : chat.archiving ? 'Saving conversation…' : chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
+  $('agent-status').textContent = chat.archived ? (chat.error || 'Archived conversation. Restore it to ask another question.') : chat.archiving ? 'Saving conversation…' : chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
 }
 
 $('btn-agent').addEventListener('click', event => {
@@ -351,7 +351,7 @@ function askHistoryVersion() {
   return askHistoryGeneration;
 }
 $('agent-history').addEventListener('toggle', askHistoryVersion);
-function beginAskArchiveFocus() {
+function beginAskHistoryActionFocus() {
   const history = $('agent-history'), generation = askHistoryVersion();
   const summary = history.querySelector(':scope > summary');
   const ownedFocus = history.open && history.contains(document.activeElement);
@@ -370,6 +370,7 @@ function closeAskHistory({focus = false} = {}) {
   if (focus) $('agent-history').querySelector('summary').focus();
   return true;
 }
+$('agent-clear').addEventListener('click', () => closeAskHistory());
 $('agent-history').addEventListener('click', event => {
   if (event.target.closest('[data-thread-open]')) {
     closeAskHistory({focus: $('agent-history').contains(document.activeElement)});

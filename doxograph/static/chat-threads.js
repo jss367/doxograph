@@ -27,7 +27,7 @@ const ChatThreads = (() => {
     return Array.from(question).length > 80 ? `${Array.from(question).slice(0, 79).join('').trimEnd()}…` : question;
   }
 
-  function create({ prefix, agents, render, unified = false, onArchiveStart = null }) {
+  function create({ prefix, agents, render, unified = false, onHistoryActionStart = null }) {
     const boxes = new Map();
     let box = null;
     // Orders list requests against finished saves: a list can only include saves finished before it began.
@@ -369,7 +369,7 @@ const ChatThreads = (() => {
         return;
       }
       if (!thread.revision || thread.dirty || writing(thread)) return;
-      const finishFocus = onArchiveStart?.();
+      const finishFocus = onHistoryActionStart?.();
       thread.archiving = true;
       thread.archiveError = '';
       const archived = !thread.archived;
@@ -430,18 +430,24 @@ const ChatThreads = (() => {
       const target = box;
       const thread = target?.active;
       if (!thread || !thread.revision || writing(thread)) return;
-      if (!await confirmDialog(`Delete “${title(thread)}”?`, { note: 'This conversation is removed from this workspace.', ok: 'Delete conversation' })) return;
+      const finishFocus = onHistoryActionStart?.();
+      if (!await confirmDialog(`Delete “${title(thread)}”?`, { note: 'This conversation is removed from this workspace.', ok: 'Delete conversation' })) {
+        finishFocus?.(false);
+        return;
+      }
+      let removed = false;
       thread.saving = true;
       sync();
       try {
         await api(`/api/chats/${thread.id}?revision=${thread.revision}`, { method: 'DELETE', headers: headers() });
+        removed = true;
         target.deleted.add(thread.id);
         target.threads = target.threads.filter(t => t !== thread);
         if (target.active === thread) target.active = target.threads.find(t => !t.archived) || blank();
       } catch (error) { thread.error = `Could not delete this conversation: ${error.message}`; }
       finally {
         thread.saving = false;
-        if (box === target) sync();
+        if (box === target) { sync(); finishFocus?.(removed); }
       }
     });
 
