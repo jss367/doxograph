@@ -123,3 +123,41 @@ def test_the_summary_and_relevance_are_edited_from_the_overview(engine):
             assert errors == []
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('field', ['summary', 'relevance'])
+def test_stale_overview_dialog_keeps_draft_and_newer_saved_text(engine, field):
+    from playwright.async_api import expect
+    from test_browser import _server
+
+    store.save_paper(store.new_paper(KEY, title='Study', **{field: 'Original text'}))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            first = await browser.new_page()
+            second = await browser.new_page()
+            with _server() as url:
+                for page in (first, second):
+                    await page.goto(f'{url}#paper={KEY}')
+                    await page.locator(f'.paper-{field} [data-act="edit-paper-text"]').click()
+                    await expect(page.locator('#ask-lines')).to_have_value('Original text')
+                await first.locator('#ask-lines').fill('First window correction')
+                await first.locator('#ask-lines').press('Control+Enter')
+                await expect(first.locator('#ask')).to_be_hidden()
+                await second.locator('#ask-lines').fill('Second window draft')
+                await second.locator('#ask-lines').press('Control+Enter')
+                await expect(second.locator('#ask-note')).to_contain_text('changed in another window')
+                await expect(second.locator('#ask-lines')).to_have_value('Second window draft')
+                assert store.load_paper(KEY)[field] == 'First window correction'
+                # Reopening takes a fresh snapshot, even before a state poll.
+                await second.locator('#ask-cancel').click()
+                await second.locator(f'.paper-{field} [data-act="edit-paper-text"]').click()
+                await expect(second.locator('#ask-lines')).to_have_value('First window correction')
+                await second.locator('#ask-lines').fill('Reconciled correction')
+                await second.locator('#ask-lines').press('Control+Enter')
+                await expect(second.locator('#ask')).to_be_hidden()
+                assert store.load_paper(KEY)[field] == 'Reconciled correction'
+
+    run_browser(scenario())
