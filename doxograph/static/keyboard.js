@@ -133,6 +133,8 @@ const CommandPalette = (() => {
     view('research', 'Edit research context and personal claims', 'research');
     view('datasets', 'Open datasets', 'datasets');
     view('people', 'Open people', 'people');
+    add('reading', 'Action', 'Open reading queue', 'Including entries for removed papers',
+      () => openPageView('tools', {tool: 'reading'}));
     add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', focusPaperImport, 'import');
     add('search', 'Action', 'Search claims and PDF text', '', focusClaimSearch);
     click('btn-agent', 'Open Ask', 'chat question conversation library');

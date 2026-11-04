@@ -65,7 +65,7 @@ const V = { paper: null, tag: null, label: null, ledger: null, q: '', kind: '', 
             drafts: {}, error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
-            noteEditing: null, noteDrafts: {},
+            noteEditing: null, noteDrafts: {}, topicDraft: '',
             paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
@@ -493,7 +493,7 @@ function resetWorkspaceView() {
     error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
-    noteEditing: null, noteDrafts: {},
+    noteEditing: null, noteDrafts: {}, topicDraft: '',
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
@@ -511,7 +511,7 @@ function hasWorkspaceDrafts() {
   return Boolean(V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length
-    || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
+    || topicNameDraft().trim() || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
 }
 
 let manualQuitWriteSequence = 0;
@@ -568,7 +568,8 @@ function hasQuitWriting() {
     !Object.hasOwn(V.quitSynthBases, topic) || text !== V.quitSynthBases[topic].text);
   return Boolean(changedClaims || changedSyntheses || V.newClaim || Object.keys(V.parkedNewClaims).length
     || Object.keys(V.unconfirmedClaims).length || Object.keys(V.unconfirmedSyntheses).length
-    || Object.keys(V.noteDrafts).length || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
+    || Object.keys(V.noteDrafts).length || topicNameDraft().trim()
+    || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
 }
 
 // Core editors keep some writing only in their visible form. Snapshot it
@@ -590,7 +591,7 @@ function workspaceWritingSnapshot() {
     return [key, saver.generation, saver.unconfirmed];
   });
   return JSON.stringify([workspaceClient.workspaceId, V.editing, V.drafts, V.newClaim, V.parkedNewClaims,
-    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft,
+    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft, V.topicDraft,
     V.unconfirmedClaims, V.unconfirmedSyntheses]);
 }
 let discardedWorkspaceWriting = null;

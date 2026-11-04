@@ -965,7 +965,7 @@ naming the claim they were made for. **Add a claim** skips retired ids.
 These are your own claims. Extraction links a paper's claims to them, which is
 what turns the corpus into an answer to "what external evidence do I have for
 this" rather than a pile of notes. The file can be edited by hand or from the
-web app, under *What I am studying* in the sidebar, which edits the research
+web app, under *What I am studying* on the Workspace page, which edits the research
 context in the same form.
 
 ### context.md
@@ -986,8 +986,7 @@ be looked for, since a short one turns up in prose that is not a citation of
 it. Nothing is fetched from arXiv or Crossref, and a paper no model has read
 is linked like any other.
 
-`doxograph cites` lists them in the shell, and the agent connection returns
-them for a paper.
+`doxograph cites` lists them in the shell.
 
 A numbered list is read one entry at a time, and an entry names one work: the
 longest title in it wins, so a paper whose title contains another's is cited

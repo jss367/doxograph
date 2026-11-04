@@ -26,6 +26,7 @@ function ledgerRow(claim, i) {
 // the form into `V.researchDraft` before any of that, and draw from the draft
 // when there is one, so navigating away and back finds the text as it was.
 function captureResearchDraft() {
+  if ($('new-tag')) V.topicDraft = $('new-tag').value;
   if (!$('research-form')) return;
   const current = readResearchForm();
   // A form nobody has typed into is not a draft. It is judged against what
@@ -105,8 +106,12 @@ function renderResearch() {
 // opens the library on the topic.
 function workspaceTopics() {
   return `<h2>Topics</h2><div id="workspace-topic-list">${workspaceTopicList()}</div>
-    <div class="row topic-add"><input id="new-tag" placeholder="new topic" aria-label="New topic">
+    <div class="row topic-add"><input id="new-tag" value="${esc(V.topicDraft || '')}" placeholder="new topic" aria-label="New topic">
     <button type="button" id="btn-tag">Add topic</button></div>`;
+}
+
+function topicNameDraft() {
+  return $('new-tag')?.value ?? V.topicDraft ?? '';
 }
 
 // Refresh confirmed vocabulary without replacing the research form, its

@@ -182,3 +182,60 @@ def test_topic_completion_respects_workspace_guards_and_late_reads(phase):
                 current = httpx.get(url + '/api/state', headers={'X-Doxograph-Workspace': other}).json()
                 assert not any(tag['name'] == 'synthetic-added-topic' for tag in current['tags'])
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('research_changed', [False, True])
+def test_unsent_topic_survives_workspace_redraw_and_is_part_of_quit_consent(research_changed):
+    async def scenario():
+        async with browser_session() as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-workspace').click()
+                context = page.locator('#research-context')
+                before = await context.input_value()
+                if research_changed:
+                    await context.fill('Keep this research writing')
+                await page.locator('#new-tag').fill('Unsubmitted <topic>')
+                await page.evaluate('renderAll()')
+                await expect(page.locator('#new-tag')).to_have_value('Unsubmitted <topic>')
+                await expect(context).to_have_value('Keep this research writing' if research_changed else before)
+                assert await page.evaluate('window.doxographSaveDrafts()') is False
+                first_snapshot = await page.evaluate('window.doxographQuitWritingSnapshot()')
+                await page.locator('#new-tag').fill('A different unsent topic')
+                assert await page.evaluate('window.doxographQuitWritingSnapshot()') != first_snapshot
+                await page.locator('#btn-papers').click()
+                assert await page.evaluate('window.doxographSaveDrafts()') is False
+                await page.locator('#btn-workspace').click()
+                await expect(page.locator('#new-tag')).to_have_value('A different unsent topic')
+                await expect(context).to_have_value('Keep this research writing' if research_changed else before)
+                await page.locator('#new-tag').fill('')
+                assert await page.evaluate('window.doxographSaveDrafts()') is (not research_changed)
+                assert not httpx.get(url + '/api/state').json()['tags']
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+def test_palette_opens_reading_queue_without_a_surviving_paper():
+    async def scenario():
+        async with browser_session() as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                notebook = httpx.get(url + '/api/notebook').json()
+                notebook['reading'] = [{'paper': 'a', 'status': 'queued', 'page': 1, 'bookmarks': []}]
+                assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
+                assert httpx.delete(url + '/api/papers/a').status_code == 200
+                assert httpx.delete(url + '/api/papers/b').status_code == 200
+                await page.goto(url)
+                await page.wait_for_function('libraryInitialized')
+                await page.locator('#btn-command-palette').click()
+                await page.locator('#command-query').fill('Open reading queue')
+                await expect(page.locator('#command-results').get_by_text('Open reading queue', exact=True)).to_have_count(1)
+                await page.locator('#command-results').get_by_text('Open reading queue', exact=True).click()
+                entry = page.locator('.reading-entry[data-reading="a"]')
+                await expect(entry).to_contain_text('Removed paper: a')
+                await entry.locator('[data-tool="reading-remove"]').click()
+                await expect(entry).to_have_count(0)
+                assert httpx.get(url + '/api/notebook').json()['reading'] == []
+    run_browser(scenario())
