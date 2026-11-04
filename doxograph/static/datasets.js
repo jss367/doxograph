@@ -4,7 +4,12 @@
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   // A paper panel's current read and its observer of confirmed cache changes.
-  let reading = null, afterChange = null;
+  let reading = null, afterChange = null, cacheVisit = {}, notifiedItems = items;
+  function notifyCache(visit) {
+    if (visit !== cacheVisit || workspace !== client.workspaceId || notifiedItems === items) return;
+    notifiedItems = items;
+    afterChange?.();
+  }
   let inspectedRevision;
   // Each record's linked research, gathered for the table being drawn.
   let researched = new WeakMap();
@@ -68,6 +73,7 @@ const Datasets = (() => {
   const autosave = createAutosave({current: () => draft, dirty,
     blocked: () => conflicted === draft ? conflict : !draft.name.trim() ? 'Give your dataset a name.' : customProblem(),
     async write(target) {
+      const visit = cacheVisit;
       const sent = body(target), first = !saved;
       let item;
       if (first) {
@@ -85,6 +91,7 @@ const Datasets = (() => {
             saved = structuredClone(item); conflicted = target;
             items = [...items.filter(row => row.id !== item.id), item];
             select(item.id); renderActions(); renderList();
+            notifyCache(visit);
             throw new Error(conflict);
           }
           item = await request('/' + item.id,'PUT',{...sent,revision:item.revision});
@@ -102,7 +109,7 @@ const Datasets = (() => {
       items = [...items.filter(row => row.id !== item.id), item];
       if (first) { select(item.id); renderActions(); }
       renderList();
-      if (workspace === client.workspaceId) afterChange?.();
+      notifyCache(visit);
     },
     changed: () => progress()});
   function customProblem() {
@@ -128,6 +135,7 @@ const Datasets = (() => {
   }
   async function run(task) {
     if (busy) return;
+    const visit = cacheVisit;
     setBusy(true);
     // Actions read the saved revision, so a save under way lands first. A
     // pending one is held while the editor is frozen and resumes after.
@@ -136,6 +144,9 @@ const Datasets = (() => {
     finally {
       setBusy(false);
       autosave.resume();
+      // Actions can confirm a delete, discard, reload or replacement even when
+      // the reader has moved to a paper. Publish only this visit's cache facts.
+      notifyCache(visit);
       if (focusName) { el('dataset-name')?.focus(); focusName = false; }
       // Hash navigation can arrive during a load, save, or discard prompt.
       // Drain the latest target once that work releases the editor.
@@ -394,6 +405,7 @@ const Datasets = (() => {
     void autosave.settle();
     workspace = client.workspaceId; items = []; draft = saved = null; loaded = false; inspectedRevision = undefined;
     reading = afterChange = null;
+    cacheVisit = {}; notifiedItems = items;
     el('datasets-search').value = '';
   }
   // The record a URL names, or else the one last open, or else the first.
@@ -615,11 +627,11 @@ const Datasets = (() => {
       if (workspace !== client.workspaceId) reset();
       afterChange = onChange;
       if (loaded || reading?.workspace === workspace) return;
-      const task = reading = {workspace};
+      const visit = cacheVisit, task = reading = {workspace};
       request().then(({datasets}) => {
         if (reading !== task || task.workspace !== workspace || workspace !== client.workspaceId) return;
         if (!loaded) { items = datasets; loaded = true; }
-        afterChange?.();
+        notifyCache(visit);
       }, () => { /* the panel lists no datasets until the next look */ })
         .finally(() => { if (reading === task) reading = null; });
     },

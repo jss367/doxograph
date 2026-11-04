@@ -399,8 +399,13 @@ function webLinks(links) {
 // The records are read once per workspace, and the panel redraws when they arrive.
 const DATASET_ROLES = {training: 'training', evaluation: 'evaluation', reference: 'reference', 'project-output': 'project output'};
 function paperArtifacts(paper) {
-  Datasets.ensureLoaded(() => { if (V.view === 'claims' && V.paper && !editorHolds()) renderContent(); });
   const datasets = Datasets.forPaper(paper.key);
+  const artifacts = rows => JSON.stringify(rows.map(({id, name, roles}) => [id, name, roles]));
+  const shown = artifacts(datasets), workspace = workspaceClient.workspaceId;
+  Datasets.ensureLoaded(() => {
+    if (workspace === workspaceClient.workspaceId && V.view === 'claims' && V.paper === paper.key && !editorHolds()
+        && artifacts(Datasets.forPaper(paper.key)) !== shown) renderContent();
+  });
   const links = webLinks(paper.code);
   if (!datasets.length && !links.length) return '';
   return `<div class="paper-artifacts paper-code"><h4>Artifacts</h4><ul>${datasets.map((d) => `
