@@ -260,6 +260,7 @@ body.resizing-claims { cursor: col-resize; user-select: none; }
   font-size: .72rem; font-weight: 600; color: var(--muted); }
 .paper-overview p { margin: 0; font-size: .88rem; line-height: 1.65; white-space: pre-wrap; }
 .paper-overview > div + div { margin-top: 1rem; }
+.paper-overview h4 .paper-text-edit { margin-left: .4rem; padding: .05rem .35rem; font-size: .72rem; font-weight: 400; }
 .paper-code ul { margin: 0; padding: 0; list-style: none; font-size: .88rem; line-height: 1.65; }
 .paper-code a { overflow-wrap: anywhere; }
 .paper-overview .note { margin-top: 1.25rem; }

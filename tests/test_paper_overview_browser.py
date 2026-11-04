@@ -155,7 +155,7 @@ def test_paper_overview_without_analysis_or_pdf_can_be_noted_and_queued(engine):
                 overview = page.get_by_role('region', name='Paper overview', exact=True)
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('Not started')
                 await expect(overview.locator('.paper-summary')).to_contain_text('No summary yet.')
-                await expect(overview.locator('.paper-relevance')).to_have_count(0)
+                await expect(overview.locator('.paper-relevance')).to_contain_text('Not written yet.')
                 await expect(page.get_by_role('button', name='Read', exact=True)).to_be_disabled()
                 await expect(page.get_by_role('button', name='Ask about this paper', exact=True)).to_be_enabled()
                 await overview.locator('textarea[data-note]').fill('A question to return to.')

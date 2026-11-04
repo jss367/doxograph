@@ -402,6 +402,7 @@ def _build_state() -> dict[str, Any]:
         "model": config.model(),
         "ai_provider": config.ai_provider(),
         "codex_model": config.codex_model(),
+        "claude_code_model": config.MODEL,
         "ai_enabled": config.ai_enabled(),
     }
 
