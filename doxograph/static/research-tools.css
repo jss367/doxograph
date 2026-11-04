@@ -262,7 +262,8 @@ body.resizing-claims { cursor: col-resize; user-select: none; }
 .paper-overview p { margin: 0; font-size: .88rem; line-height: 1.65; white-space: pre-wrap; }
 .paper-overview > div + div { margin-top: 1rem; }
 .paper-overview h4 .paper-text-edit { margin-left: .4rem; padding: .05rem .35rem; font-size: .72rem; font-weight: 400; }
-.paper-code ul { margin: 0; padding: 0; list-style: none; font-size: .88rem; line-height: 1.65; }
+.paper-code ul, .paper-findings ul { margin: 0; padding: 0; list-style: none; font-size: .88rem; line-height: 1.65; }
+.paper-findings .ftag { margin-right: .3rem; }
 .paper-code a { overflow-wrap: anywhere; }
 .paper-overview .note { margin-top: 1.25rem; }
 .paper-overview .note .who { font-weight: 600; }
@@ -283,8 +284,8 @@ body.resizing-claims { cursor: col-resize; user-select: none; }
 #claims-drawer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .75rem; padding: .55rem 0; font-size: .8rem; }
 #claims-drawer-bar .hint { font-size: .8rem; }
 #claims-drawer-bar > .warn { flex: 1 0 100%; margin: 0; }
-#claims-drawer-bar button.link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--accent); }
-#claims-drawer-bar button.link:hover { text-decoration: underline; }
+#claims-drawer-bar button.link, .paper-overview button.link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--accent); text-align: left; }
+#claims-drawer-bar button.link:hover, .paper-overview button.link:hover { text-decoration: underline; }
 #claims-drawer-bar .drawer-actions { display: flex; gap: .4rem; margin-left: auto; }
 #claims-drawer-list { height: min(40dvh, 28rem); overflow-y: auto; overflow-wrap: anywhere; padding: .25rem 0 1rem;
   border-top: 1px solid var(--line); }

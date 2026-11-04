@@ -3,6 +3,8 @@
    and leaving the view saves at once; a draft that cannot save stays put. */
 const Datasets = (() => {
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
+  // A paper panel's read of the list: the workspace it is for, and the redraw to run when it lands.
+  let reading = null, afterRead = null;
   let inspectedRevision;
   // Each record's linked research, gathered for the table being drawn.
   let researched = new WeakMap();
@@ -329,10 +331,13 @@ const Datasets = (() => {
   }
   // A record's research as the editor lists it: its own links, the papers of
   // linked claims, claims whose dataset facets match it, and removed sources.
-  function research(item) {
+  function facetMatch(item) {
     const names = new Set([item.name, ...item.facet_values].map(key).filter(Boolean));
-    const matches = claim => Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
+    return claim => Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
       && values.some(value => names.has(key(value))));
+  }
+  function research(item) {
+    const matches = facetMatch(item);
     const manual = new Set(item.claims.map(ref => ref.paper + ':' + ref.claim));
     const claims = client.state.claims.filter(claim => manual.has(claim.paper + ':' + claim.id) || matches(claim));
     const missing = item.claims.filter(ref => !claims.some(c => c.paper === ref.paper && c.id === ref.claim));
@@ -591,6 +596,35 @@ const Datasets = (() => {
       // that names one opens it in the editor.
       select = id => selected(table.view === 'table' ? null : id);
     }, show, hide, flush: () => autosave.flush(),
+    // The records a paper's panel lists: those whose Linked research names the
+    // paper, through their own links, linked claims, or matching dataset facets.
+    forPaper(key) {
+      if (!loaded || workspace !== client?.workspaceId) return [];
+      const claims = client.state.claims.filter(claim => claim.paper === key);
+      return items.filter(item => item.papers.includes(key) || item.claims.some(ref => ref.paper === key) || claims.some(facetMatch(item)))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+    loaded: () => loaded && workspace === client?.workspaceId,
+    // Reads the list for a paper's panel when nothing has yet. A read already
+    // under way for this workspace takes the latest redraw instead of starting
+    // another; one for a workspace since left neither fills the list nor holds
+    // up the read for the new one.
+    ensureLoaded(onLoaded) {
+      if (!client) return;
+      if (workspace !== client.workspaceId) reset();
+      if (loaded) return;
+      afterRead = onLoaded;
+      if (reading === workspace) return;
+      const ws = reading = workspace;
+      request().then(({datasets}) => {
+        if (ws !== workspace || ws !== client.workspaceId) return;
+        if (!loaded) { items = datasets; loaded = true; }
+        const redraw = afterRead;
+        afterRead = null;
+        redraw?.();
+      }, () => { /* the panel lists no datasets until the next look */ })
+        .finally(() => { if (reading === ws) reading = null; });
+    },
     // Reset first: a draft the writer chose to discard must not save on hide.
     resetWorkspace() { reset(); hide(); },
     hasUnsavedChanges:() => dirty() || busy || autosave.saving || autosave.unconfirmed,

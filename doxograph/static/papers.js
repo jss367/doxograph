@@ -316,9 +316,23 @@ function paperOverview(paper) {
     <div class="paper-relevance"><h4>Why it matters ${paperTextEdit(paper, 'relevance')}</h4>
       ${paper.relevance ? `<p>${esc(paper.relevance)}</p>` : '<p class="hint">Not written yet.</p>'}</div>
     ${paperNote(paper.key)}
+    ${paperFindings(paper.key)}
+    ${paperArtifacts(paper)}
     ${proposedPanel(paper.key)}
-    ${paperCode(paper)}
   </section>`;
+}
+
+// The agreements and tensions this paper's claims take part in, as the
+// drawer's handle counts them. Each opens the findings page at its row.
+function paperFindings(key) {
+  const rows = FindingsModel.forPaper(S, key);
+  if (!rows.length) return '';
+  return `<div class="paper-findings"><h4>In findings</h4><ul>${rows.map(({row, kind}) => {
+    const others = FindingsModel.papersOf({claims: row.claims.filter((c) => c.paper !== key)});
+    const sentence = FindingsModel.firstSentence(row.note) || `${kind} with ${others.join(' and ')}`;
+    return `<li><button type="button" class="link" data-act="open-finding" data-finding-id="${esc(row.id)}">
+      <span class="ftag ${esc(kind)}">${esc(kind === 'tension' ? (row.kind || 'tension') : 'agreement')}</span> ${esc(sentence)}</button></li>`;
+  }).join('')}</ul></div>`;
 }
 
 const PAPER_TEXT = {
@@ -366,11 +380,19 @@ function webLinks(links) {
   return (links || []).filter((link) => /^https?:\/\//i.test(link));
 }
 
-function paperCode(paper) {
+// What the paper introduces or uses: the dataset records linking it, as
+// their Linked research lists it, and its code. A dataset opens its record.
+// The records are read once per workspace, and the panel redraws when they arrive.
+const DATASET_ROLES = {training: 'training', evaluation: 'evaluation', reference: 'reference', 'project-output': 'project output'};
+function paperArtifacts(paper) {
+  if (!Datasets.loaded()) Datasets.ensureLoaded(() => { if (V.view === 'claims' && V.paper && !editorHolds()) renderContent(); });
+  const datasets = Datasets.forPaper(paper.key);
   const links = webLinks(paper.code);
-  if (!links.length) return '';
-  return `<div class="paper-code"><h4>Code</h4><ul>${links.map((link) => `
-    <li><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/i, ''))}</a></li>`).join('')}</ul></div>`;
+  if (!datasets.length && !links.length) return '';
+  return `<div class="paper-artifacts paper-code"><h4>Artifacts</h4><ul>${datasets.map((d) => `
+    <li><button type="button" class="link" data-act="open-dataset" data-dataset-id="${esc(d.id)}">${esc(d.name)}</button>
+      <span class="hint">dataset${d.roles.length ? ` · ${esc(d.roles.map((r) => DATASET_ROLES[r] || r).join(', '))}` : ''}</span></li>`).join('')}${links.map((link) => `
+    <li><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/i, ''))}</a> <span class="hint">code</span></li>`).join('')}</ul></div>`;
 }
 
 // A note is shown as the reader typed it: blank lines make paragraphs and

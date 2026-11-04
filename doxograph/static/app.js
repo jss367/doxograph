@@ -1139,6 +1139,8 @@ $('panes').addEventListener('click', async (event) => {
     if (act === 'toggle-claims') { setClaimsDrawer(!claimsDrawerOpen); return; }
     if (act === 'review-claims') { window.FocusedReview.open('#claims-drawer-bar [data-act="review-claims"]'); return; }
     if (act === 'claims-findings') { openFindings(); return; }
+    if (act === 'open-finding') { openFindingRow(button.dataset.findingId); return; }
+    if (act === 'open-dataset') { openPageView('datasets', {dataset: button.dataset.datasetId}); return; }
     if (act === 'add-ledger') {
       const rows = $('ledger-rows');
       const count = rows.querySelectorAll('[data-ledger-row]').length;
