@@ -104,16 +104,27 @@ function renderResearch() {
 // use that the vocabulary does not list is marked, as in the sidebar. A click
 // opens the library on the topic.
 function workspaceTopics() {
+  return `<h2>Topics</h2><div id="workspace-topic-list">${workspaceTopicList()}</div>
+    <div class="row topic-add"><input id="new-tag" placeholder="new topic" aria-label="New topic">
+    <button type="button" id="btn-tag">Add topic</button></div>`;
+}
+
+// Refresh confirmed vocabulary without replacing the research form, its
+// focus or a topic name being typed while an earlier request finishes.
+function syncWorkspaceTopics() {
+  const list = $('workspace-topic-list');
+  if (list) list.innerHTML = workspaceTopicList();
+}
+
+function workspaceTopicList() {
   const counts = S.tag_counts || {};
   const declared = (S.tags || []).map((t) => t.name);
   const names = [...declared, ...Object.keys(counts).filter((name) => !declared.includes(name)).sort()];
-  const add = `<div class="row topic-add"><input id="new-tag" placeholder="new topic" aria-label="New topic">
-    <button type="button" id="btn-tag">Add topic</button></div>`;
-  if (!names.length) return `<h2>Topics</h2><p class="hint">No topics yet. The vocabulary is written as papers are read.</p>${add}`;
-  return `<h2>Topics</h2><ul class="topic-list">${names.map((name) => {
+  if (!names.length) return '<p class="hint">No topics yet. The vocabulary is written as papers are read.</p>';
+  return `<ul class="topic-list">${names.map((name) => {
     const description = (S.tags.find((t) => t.name === name) || {}).description || '';
     return `<li data-open-topic="${esc(name)}" title="${esc(description)}">${esc(name)}${declared.includes(name) ? '' : ' *'}<span class="n">${counts[name] || 0}</span></li>`;
-  }).join('')}</ul>${add}`;
+  }).join('')}</ul>`;
 }
 
 function workspaceLabels() {

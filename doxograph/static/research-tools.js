@@ -120,7 +120,7 @@ const ResearchTools = (() => {
     const key = refKey(row);
     const connections = (client.state.notebook?.connections || []).filter(c => refKey(c.source) === key || refKey(c.target) === key).length;
     return `<div class="claim-selection"><label><input type="checkbox" data-select-claim="${html(key)}" ${claims.has(key) ? 'checked' : ''}> Select claim</label>
-      ${connections ? button('connections', `${connections} manual connection${connections === 1 ? '' : 's'}`) : ''}</div>`;
+      ${connections ? `<span class="hint">${connections} manual connection${connections === 1 ? '' : 's'}</span>` : ''}</div>`;
   }
   function paperCheckbox(p) {
     return `<input type="checkbox" class="paper-selection" aria-label="Select paper: ${html(p.title || p.key)}" data-select-paper="${html(p.key)}" ${papers.has(p.key) ? 'checked' : ''}>`;
