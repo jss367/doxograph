@@ -9,6 +9,7 @@ const agentChats = ChatThreads.create({
   agents: () => ['api', 'claude_code', 'codex'],
   unified: true,
   render: renderAgentChat,
+  onArchiveStart: beginAskArchiveFocus,
 });
 const activeAgentChat = () => agentChats.active;
 
@@ -343,9 +344,29 @@ function syncAskWorkspace() {
 }
 // The conversation list drops over the transcript, so it closes once a
 // conversation is picked and on Escape; settings.js closes it on a click elsewhere.
+let askHistoryGeneration = 0, askHistoryOpen = false;
+function askHistoryVersion() {
+  const open = $('agent-history').open;
+  if (open !== askHistoryOpen) { askHistoryOpen = open; askHistoryGeneration++; }
+  return askHistoryGeneration;
+}
+$('agent-history').addEventListener('toggle', askHistoryVersion);
+function beginAskArchiveFocus() {
+  const history = $('agent-history'), generation = askHistoryVersion();
+  const summary = history.querySelector(':scope > summary');
+  const ownedFocus = history.open && history.contains(document.activeElement);
+  // The action's button is disabled and may disappear. Park keyboard focus
+  // on a stable visible control while waiting, rather than behind the menu.
+  if (ownedFocus) summary.focus({preventScroll: true});
+  return succeeded => {
+    if (!history.open || generation !== askHistoryVersion() || $('library-agent').hidden) return;
+    if (succeeded && ownedFocus && document.activeElement === summary) closeAskHistory({focus: true});
+  };
+}
 function closeAskHistory({focus = false} = {}) {
   if (!$('agent-history').open) return false;
   $('agent-history').open = false;
+  askHistoryVersion();
   if (focus) $('agent-history').querySelector('summary').focus();
   return true;
 }

@@ -27,7 +27,7 @@ const ChatThreads = (() => {
     return Array.from(question).length > 80 ? `${Array.from(question).slice(0, 79).join('').trimEnd()}…` : question;
   }
 
-  function create({ prefix, agents, render, unified = false }) {
+  function create({ prefix, agents, render, unified = false, onArchiveStart = null }) {
     const boxes = new Map();
     let box = null;
     // Orders list requests against finished saves: a list can only include saves finished before it began.
@@ -369,6 +369,7 @@ const ChatThreads = (() => {
         return;
       }
       if (!thread.revision || thread.dirty || writing(thread)) return;
+      const finishFocus = onArchiveStart?.();
       thread.archiving = true;
       thread.archiveError = '';
       const archived = !thread.archived;
@@ -399,7 +400,8 @@ const ChatThreads = (() => {
         thread.archiving = false;
         if (box === target) {
           sync();
-          if (!target.active.archived) $(`${prefix}-question`).focus();
+          if (finishFocus) finishFocus(thread.archived === archived);
+          else if (!target.active.archived) $(`${prefix}-question`).focus();
         }
       }
     });
