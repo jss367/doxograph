@@ -235,3 +235,16 @@ def test_legacy_list_distinguishes_library_and_explicit_scopes(client):
     assert listed('/api/chats') == {ids['legacy-library'], ids['library']}
     assert listed('/api/chats?paper=study') == {ids[name] for name in ('legacy-paper', 'library', 'selected', 'paper')}
     assert listed('/api/chats?all_scopes=true') == set(ids.values())
+
+
+def test_saved_library_conversation_keeps_the_full_roster_of_10000_bounded_keys(client):
+    papers = [f'paper-{index:05d}-' + 'x' * 188 for index in range(10000)]
+    assert len(set(papers)) == 10000 and all(len(key) == 200 for key in papers)
+    response = client.put('/api/chats/' + ID, json={
+        'agent': 'codex', 'scope': {'mode': 'library', 'papers': papers},
+        'messages': PAIR, 'revision': 0, 'operation': op(),
+    })
+    assert response.status_code == 200, response.text
+    saved = client.get('/api/chats?all_scopes=true').json()['chats']
+    assert len(saved) == 1 and saved[0]['id'] == ID
+    assert saved[0]['scope']['papers'] == papers

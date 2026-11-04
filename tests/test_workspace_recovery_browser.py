@@ -1,5 +1,6 @@
 """Previous versions, portable downloads, and interrupted imports are usable in WebKit."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -35,6 +36,7 @@ def test_restore_previous_version_and_download_archive(engine):
                 await page.locator('[data-backup-restore]').first.click()
                 await _answer(page, 'Restore version')
                 await expect(page.locator('#backups-status')).to_contain_text('Restored.')
+                assert json.loads(path.read_text(encoding='utf-8'))['notes'] == 'Original conclusion'
                 if engine == 'chromium':
                     Path('.context').mkdir(exist_ok=True)
                     await page.screenshot(path='.context/previous-document-versions.png')
