@@ -350,7 +350,9 @@ function closeAskHistory({focus = false} = {}) {
   return true;
 }
 $('agent-history').addEventListener('click', event => {
-  if (event.target.closest('[data-thread-open]')) closeAskHistory();
+  if (event.target.closest('[data-thread-open]')) {
+    closeAskHistory({focus: $('agent-history').contains(document.activeElement)});
+  }
 });
 function closeAsk() {
   const restoreFocus = $('library-agent').contains(document.activeElement);
