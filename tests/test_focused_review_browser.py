@@ -345,3 +345,37 @@ def test_focused_review_returns_focus_to_the_claims_drawer(engine):
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_focused_review_falls_back_to_the_drawer_toggle(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('paper', title='Claims kept out of the way'))
+    store.pdf_path('paper').write_bytes(minimal_pdf(['A passage about oversight.']))
+    store.add_claim('paper', {'text': 'Oversight depends on the conditions.', 'reviewed': False})
+    store.add_claim('paper', {'text': 'Weak judges miss subtle errors.', 'reviewed': True})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(f'{url}/#view=claims&paper=paper&unreviewed=1')
+                await page.locator('#reader .pdf-page:not(.pending)').first.wait_for()
+                dialog = page.locator('#focused-review')
+                bar = page.locator('#claims-drawer-bar')
+
+                # Reviewing the only claim the filter shows takes the drawer's
+                # Review button away; focus lands on its toggle, which stays.
+                await bar.locator('[data-act="review-claims"]').click()
+                await dialog.get_by_role('button', name='Mark reviewed', exact=True).click()
+                await expect(page.locator('#focus-complete')).to_be_visible()
+                await page.keyboard.press('Escape')
+                await expect(dialog).not_to_be_visible()
+                await expect(bar.locator('[data-act="review-claims"]')).to_have_count(0)
+                await expect(bar.locator('[data-act="toggle-claims"]')).to_be_focused()
+                assert not errors
+
+    run_browser(scenario())

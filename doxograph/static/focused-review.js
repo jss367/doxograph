@@ -269,8 +269,11 @@ window.FocusedReview = (() => {
     scrollToSelected();
     // The sidebar's button is hidden while a PDF is open, so the drawer's own
     // Review button is the one to come back to there, when it is still shown.
-    const back = document.querySelector(opener);
-    (back?.getClientRects().length ? back : document.querySelector(SIDEBAR_REVIEW)).focus();
+    // Reviewing the last claim a filter shows takes that button away, and the
+    // drawer's toggle beside it is the nearest thing still on screen.
+    const back = [opener, '#claims-drawer-bar [data-act="toggle-claims"]']
+      .map(selector => document.querySelector(selector)).find(field => field?.getClientRects().length);
+    (back || document.querySelector(SIDEBAR_REVIEW)).focus();
   }
 
   function open(from = SIDEBAR_REVIEW) {
