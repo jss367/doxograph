@@ -13,7 +13,7 @@ from contextlib import contextmanager
 import httpx
 import pytest
 
-from browser_support import browser_session, run_browser
+from browser_support import CLAIMS_OPEN, browser_session, run_browser
 from doxograph import store
 
 
@@ -579,7 +579,9 @@ def test_switching_workspaces_hides_other_research_and_survives_reload():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 papers = page.locator("#papers")
-                assert "A consciousness paper" in await papers.inner_text()
+                # The list is drawn once the first read of the workspace lands,
+                # which can be after the page's load event on a busy machine.
+                await papers.get_by_text("A consciousness paper", exact=True).wait_for()
                 assert "An animal locomotion paper" not in await papers.inner_text()
 
                 await page.locator("#workspace").select_option(label="Animal locomotion")
@@ -4610,6 +4612,7 @@ def test_a_paper_is_held_from_the_moment_its_removal_starts_settling_deletes():
 
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            await page.add_init_script(CLAIMS_OPEN)
 
             async def hold_claim_delete(route, request):
                 if request.method == "DELETE":
@@ -5364,6 +5367,7 @@ def test_in_the_paper_and_alike_open_when_the_claims_are_not_grouped():
     async def scenario():
         async with browser_session("chromium") as browser:
             page = await browser.new_page()
+            await page.add_init_script(CLAIMS_OPEN)
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 card = page.locator(f'.claim[data-claim="{key}-c1"]')
@@ -5703,7 +5707,9 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     await page.locator('#papers [data-paper="paper-a"]').click()
                     field = page.locator('textarea[data-note="paper-a"]')
                     await field.fill("Worth reading for the method.")
-                await page.locator("#content .warn", has_text=message).wait_for(timeout=10000)
+                # Reading a PDF, the warning is on the claims drawer's handle.
+                warn = "#claims-drawer-bar .warn" if action == "verify" else "#content .warn"
+                await page.locator(warn, has_text=message).wait_for(timeout=10000)
                 if field is not None:
                     # Handed back, with what was typed, for the save to be retried.
                     assert await field.is_enabled()

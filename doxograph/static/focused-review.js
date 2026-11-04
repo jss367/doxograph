@@ -4,6 +4,11 @@ window.FocusedReview = (() => {
   const dialog = document.getElementById('focused-review');
   const body = document.getElementById('focus-body');
   let ids = [], workspace = null, current = null, editing = false, busy = false;
+  // Where focus goes back to on close: the button that opened the review. It is
+  // named by a selector, since the drawer's Review button is drawn afresh by
+  // every redraw and the one that was clicked is gone by then.
+  const SIDEBAR_REVIEW = '#btn-focus-review';
+  let opener = SIDEBAR_REVIEW, openerPaper = null;
   let shown = '', shownPaper = '', generation = 0, loadingTask = null, pdf = null, pdfRender = null, pageNumber = 1;
   const rows = () => {
     const byId = new Map(client.state.claims.map(item => [item.id, item]));
@@ -262,10 +267,17 @@ window.FocusedReview = (() => {
     if (workspace !== client.workspaceId) return;
     renderAll();
     scrollToSelected();
-    document.getElementById('btn-focus-review').focus();
+    // The sidebar's button is hidden while a PDF is open, so the drawer's own
+    // Review button is the one to come back to there, when it is still shown.
+    // Reviewing the last claim a filter shows takes that button away, and the
+    // drawer's toggle beside it is the nearest thing still on screen. On another
+    // paper by now, the button found there is that paper's, not the opener.
+    const back = [V.paper === openerPaper ? opener : null, '#claims-drawer-bar [data-act="toggle-claims"]'].filter(Boolean)
+      .map(selector => document.querySelector(selector)).find(field => field?.getClientRects().length);
+    (back || document.querySelector(SIDEBAR_REVIEW)).focus();
   }
 
-  function open() {
+  function open(from = SIDEBAR_REVIEW) {
     if (dialog.open) return;
     const items = visibleClaims();
     if (!items.length) { toast('No claims match your filters. Choose a paper or change your filters to start reviewing.'); return; }
@@ -273,6 +285,8 @@ window.FocusedReview = (() => {
     V.editing = null;
     ids = [...new Set(items.map(item => item.id))];
     workspace = client.workspaceId;
+    opener = from;
+    openerPaper = V.paper;
     current = items.some(item => item.id === V.selectedId) ? V.selectedId : items[0].id;
     editing = Boolean(V.drafts[current]);
     dialog.showModal();
@@ -326,7 +340,7 @@ window.FocusedReview = (() => {
     }
   }
 
-  document.getElementById('btn-focus-review').addEventListener('click', open);
+  document.getElementById('btn-focus-review').addEventListener('click', () => open());
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
   dialog.addEventListener('click', event => {
     const target = event.target.closest('button');

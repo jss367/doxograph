@@ -123,3 +123,109 @@ def test_the_summary_and_relevance_are_edited_from_the_overview(engine):
             assert errors == []
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('field', ['summary', 'relevance'])
+def test_stale_overview_dialog_keeps_draft_and_newer_saved_text(engine, field):
+    from playwright.async_api import expect
+    from test_browser import _server
+
+    store.save_paper(store.new_paper(KEY, title='Study', **{field: 'Original text'}))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            first = await browser.new_page()
+            second = await browser.new_page()
+            with _server() as url:
+                for page in (first, second):
+                    await page.goto(f'{url}#paper={KEY}')
+                    await page.locator(f'.paper-{field} [data-act="edit-paper-text"]').click()
+                    await expect(page.locator('#ask-lines')).to_have_value('Original text')
+                await second.evaluate("async () => { poller.stop(); if (poller.running) await poller.once().catch(() => {}); }")
+                await first.locator('#ask-lines').fill('First window correction')
+                await first.locator('#ask-lines').press('Control+Enter')
+                await expect(first.locator('#ask')).to_be_hidden()
+                await second.locator('#ask-lines').fill('Second window draft')
+                await second.locator('#ask-lines').press('Control+Enter')
+                await expect(second.locator('#ask-note')).to_contain_text('changed in another window')
+                await expect(second.locator('#ask-lines')).to_have_value('Second window draft')
+                assert store.load_paper(KEY)[field] == 'First window correction'
+                # Reopening takes a fresh snapshot, even before a state poll.
+                await second.locator('#ask-cancel').click()
+                await second.locator(f'.paper-{field} [data-act="edit-paper-text"]').click()
+                await expect(second.locator('#ask-lines')).to_have_value('First window correction')
+                await second.locator('#ask-lines').fill('Reconciled correction')
+                await second.locator('#ask-lines').press('Control+Enter')
+                await expect(second.locator('#ask')).to_be_hidden()
+                assert store.load_paper(KEY)[field] == 'Reconciled correction'
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('failed', [False, True])
+@pytest.mark.parametrize('newer', ['text', 'title', 'closed-title', 'navigation'])
+def test_superseded_text_snapshot_does_not_replace_draft(engine, failed, newer):
+    """A delayed snapshot or load error cannot disturb the newer editor."""
+    import asyncio
+    from playwright.async_api import expect
+    from test_browser import _server
+
+    store.save_paper(store.new_paper(KEY, title='Study', summary='Summary', relevance='Relevance'))
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page()
+            pending, release = asyncio.Event(), asyncio.Event()
+            requests = 0
+
+            async def snapshot(route):
+                nonlocal requests
+                requests += 1
+                if requests != 1:
+                    await route.continue_()
+                    return
+                response = await route.fetch()
+                pending.set()
+                await release.wait()
+                if failed:
+                    await route.fulfill(status=500, json={'detail': 'Superseded load failed'})
+                else:
+                    await route.fulfill(response=response)
+
+            with _server() as url:
+                await page.goto(f'{url}#paper={KEY}')
+                await page.locator('.paper-summary').wait_for()
+                await page.route('**/api/papers/*?with_revision=true', snapshot)
+                await page.evaluate("() => { window.olderEditDone = false; void editPaperText('" + KEY + "', 'summary').then(() => { window.olderEditDone = true; }); }")
+                await asyncio.wait_for(pending.wait(), timeout=5)
+                if newer == 'text':
+                    await page.locator('.paper-relevance [data-act="edit-paper-text"]').click()
+                    await expect(page.locator('#ask-lines')).to_have_value('Relevance')
+                    await page.locator('#ask-lines').fill('Keep this draft')
+                elif newer in ('title', 'closed-title'):
+                    await page.evaluate("() => { void editPaperTitle('" + KEY + "'); }")
+                    await page.locator('#ask-input').fill('Keep this title draft')
+                    if newer == 'closed-title':
+                        await page.locator('#ask-cancel').click()
+                else:
+                    # Even a round trip to the same route retires the request.
+                    await page.evaluate("() => { V.paper = null; syncHash(true); V.paper = '" + KEY + "'; syncHash(true); }")
+                release.set()
+                await page.wait_for_function('window.olderEditDone')
+                if newer == 'text':
+                    await expect(page.locator('#ask-title')).to_have_text('Why it matters for Study')
+                    await expect(page.locator('#ask-lines')).to_have_value('Keep this draft')
+                elif newer == 'title':
+                    await expect(page.locator('#ask-title')).to_have_text('Edit paper title')
+                    await expect(page.locator('#ask-input')).to_have_value('Keep this title draft')
+                else:
+                    await expect(page.locator('#ask')).to_be_hidden()
+                await expect(page.get_by_text('Could not load the text: Superseded load failed', exact=True)).to_have_count(0)
+                if newer in ('text', 'title'):
+                    await page.locator('#ask-cancel').click()
+
+    run_browser(scenario())

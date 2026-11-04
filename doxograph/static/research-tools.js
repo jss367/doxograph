@@ -956,7 +956,7 @@ const ResearchTools = (() => {
   function focusRailEntry(id) {
     document.querySelectorAll('.highlight-entry.focused').forEach(entry => entry.classList.remove('focused'));
     const entry = id && document.querySelector(`.highlight-entry[data-highlight="${CSS.escape(id)}"]`);
-    if (entry) { setReadingClaims(false); entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'}); }
+    if (entry) { setReadingOverview(false); entry.classList.add('focused'); entry.scrollIntoView({block:'nearest'}); }
   }
   async function setZoom(zoom) {
     if (!reader?.pages.length || !ZOOMS.includes(zoom)) return;
@@ -1081,7 +1081,7 @@ const ResearchTools = (() => {
       && Boolean(document.querySelector('[data-highlight-note]'));
   }
   function openMarkNote(highlight) {
-    setReadingClaims(false);
+    setReadingOverview(false);
     markEditor = {id:highlight.id, paper:highlight.paper, workspace:client.workspaceId, saved:highlight.note, text:highlight.note, removed:false};
     redrawContent();
     document.querySelector('[data-highlight-note]')?.focus();
@@ -1095,7 +1095,9 @@ const ResearchTools = (() => {
     V.q = ''; V.kind = ''; V.unreviewed = false; V.unverified = false;
     V.selectedId = claim;
     el('q').value = ''; el('kind').value = ''; el('only-unreviewed').checked = false; el('only-unverified').checked = false;
-    scheduleTextSearch(); syncHash(true); renderAll(); scrollToSelected();
+    scheduleTextSearch(); syncHash(true); renderAll();
+    // Only a claim asked for opens the drawer; the paper alone leaves it as it was.
+    scrollToSelected({reveal: Boolean(claim)});
   }
   const READER_TOOLS = new Set(['previous-page', 'next-page', 'go-page', 'bookmark', 'reader', 'highlight-selection', 'recolor-highlight',
     'highlight-page', 'show-highlight-note', 'edit-highlight', 'save-highlight', 'cancel-highlight', 'capture-highlight', 'remove-highlight', 'figure-mode', 'export-annotated', 'copy-removed-note', 'discard-removed-note', 'retry-reader']);

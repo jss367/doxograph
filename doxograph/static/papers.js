@@ -311,14 +311,28 @@ function paperOverview(paper) {
     <div class="paper-reading-progress"><span class="who">Reading progress</span>
       <p data-paper-progress="${esc(paper.key)}">${esc(paperReadingProgress(paper.key))}</p></div>
     ${(paper.labels || []).length ? `<div class="labels">${paper.labels.map(labelChip).join('')}</div>` : ''}
-    ${paperCode(paper)}
     <div class="paper-summary"><h4>Summary ${paperTextEdit(paper, 'summary')}</h4>
       ${paper.summary ? `<p>${esc(paper.summary)}</p>` : '<p class="hint">No summary yet. You can read the paper and add your own notes.</p>'}</div>
     <div class="paper-relevance"><h4>Why it matters ${paperTextEdit(paper, 'relevance')}</h4>
       ${paper.relevance ? `<p>${esc(paper.relevance)}</p>` : '<p class="hint">Not written yet.</p>'}</div>
     ${paperNote(paper.key)}
+    ${paperFindings(paper.key)}
+    ${paperArtifacts(paper)}
     ${proposedPanel(paper.key)}
   </section>`;
+}
+
+// The agreements and tensions this paper's claims take part in, as the
+// drawer's handle counts them. Each opens the findings page at its row.
+function paperFindings(key) {
+  const rows = FindingsModel.forPaper(S, key);
+  if (!rows.length) return '';
+  return `<div class="paper-findings"><h4>In findings</h4><ul>${rows.map(({row, kind}) => {
+    const others = FindingsModel.papersOf({claims: row.claims.filter((c) => c.paper !== key)});
+    const sentence = FindingsModel.firstSentence(row.note) || `${kind} with ${others.join(' and ')}`;
+    return `<li><button type="button" class="link" data-act="open-finding" data-finding-id="${esc(row.id)}">
+      <span class="ftag ${esc(kind)}">${esc(kind === 'tension' ? (row.kind || 'tension') : 'agreement')}</span> ${esc(sentence)}</button></li>`;
+  }).join('')}</ul></div>`;
 }
 
 const PAPER_TEXT = {
@@ -333,10 +347,24 @@ function paperTextEdit(paper, field) {
 
 // The model writes the summary and why it matters when it reads the paper;
 // the reader can rewrite either, and a later re-read keeps what they wrote.
+let paperTextRequest = 0;
 async function editPaperText(key, field) {
-  const paper = S.papers.find((x) => x.key === key);
-  if (!paper) return;
+  const request = ++paperTextRequest;
+  const dialog = askGeneration, navigation = navigationVersion();
   const workspace = workspaceClient.workspaceId;
+  const current = () => request === paperTextRequest && workspace === workspaceClient.workspaceId
+    && dialog === askGeneration && navigation === navigationVersion();
+  let snapshot;
+  try {
+    snapshot = await api(`/api/papers/${encodeURIComponent(key)}?with_revision=true`, {
+      headers: {'X-Doxograph-Workspace': workspace},
+    });
+  } catch (error) {
+    if (current()) toast(`Could not load the text: ${error.message}`, {tone: 'warn'});
+    return;
+  }
+  if (!current()) return;
+  const paper = snapshot.paper;
   const answer = await askDialog({
     title: `${PAPER_TEXT[field].heading} for ${paper.title || key}`,
     note: 'Re-reading the paper keeps your version. Clear it to let the next re-read write a new one. '
@@ -349,7 +377,7 @@ async function editPaperText(key, field) {
         await api(`/api/papers/${encodeURIComponent(key)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-          body: JSON.stringify({ [field]: text.trim() }),
+          body: JSON.stringify({ [field]: text.trim(), expected_revision: snapshot.revision }),
         });
         return null;
       } catch (error) { return `Could not save the text: ${error.message}`; }
@@ -366,11 +394,24 @@ function webLinks(links) {
   return (links || []).filter((link) => /^https?:\/\//i.test(link));
 }
 
-function paperCode(paper) {
+// What the paper introduces or uses: the dataset records linking it, as
+// their Linked research lists it, and its code. A dataset opens its record.
+// The records are read once per workspace, and the panel redraws when they arrive.
+const DATASET_ROLES = {training: 'training', evaluation: 'evaluation', reference: 'reference', 'project-output': 'project output'};
+function paperArtifacts(paper) {
+  const datasets = Datasets.forPaper(paper.key);
+  const artifacts = rows => JSON.stringify(rows.map(({id, name, roles}) => [id, name, roles]));
+  const shown = artifacts(datasets), workspace = workspaceClient.workspaceId;
+  Datasets.ensureLoaded(() => {
+    if (workspace === workspaceClient.workspaceId && V.view === 'claims' && V.paper === paper.key && !editorHolds()
+        && artifacts(Datasets.forPaper(paper.key)) !== shown) renderContent();
+  });
   const links = webLinks(paper.code);
-  if (!links.length) return '';
-  return `<div class="paper-code"><h4>Code</h4><ul>${links.map((link) => `
-    <li><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/i, ''))}</a></li>`).join('')}</ul></div>`;
+  if (!datasets.length && !links.length) return '';
+  return `<div class="paper-artifacts paper-code"><h4>Artifacts</h4><ul>${datasets.map((d) => `
+    <li><button type="button" class="link" data-act="open-dataset" data-dataset-id="${esc(d.id)}">${esc(d.name)}</button>
+      <span class="hint">dataset${d.roles.length ? ` · ${esc(d.roles.map((r) => DATASET_ROLES[r] || r).join(', '))}` : ''}</span></li>`).join('')}${links.map((link) => `
+    <li><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/i, ''))}</a> <span class="hint">code</span></li>`).join('')}</ul></div>`;
 }
 
 // A note is shown as the reader typed it: blank lines make paragraphs and

@@ -47,6 +47,36 @@ class ChatBody(BaseModel):
         return messages
 
 
+# Provider codes that name a temporary rate limit. Other 429s are quota failures, which waiting does not fix.
+_RATE_LIMIT_CODES = {"rate_limit_error", "rate_limit_exceeded"}
+
+
+def _error_code(exc: Exception) -> str | None:
+    """The provider's error code, read from structured fields only; its message may quote private text."""
+    body = getattr(exc, "body", None)
+    if body is None:
+        try:
+            body = exc.response.json()  # type: ignore[attr-defined]
+        except (AttributeError, ValueError):
+            return None
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict):
+        code = error.get("code") or error.get("type")
+        return code if isinstance(code, str) else None
+    return None
+
+
+def _retry_headers(exc: Exception, status: int | None) -> dict[str, str] | None:
+    """Headers telling the page a failure is the provider's and worth retrying, or None when it is not."""
+    if not (status in (503, 529) or (status == 429 and _error_code(exc) in _RATE_LIMIT_CODES)):
+        return None
+    headers = {"X-Doxograph-Retryable": "true"}
+    retry_after = getattr(getattr(exc, "response", None), "headers", {}).get("retry-after")
+    if retry_after:
+        headers["Retry-After"] = retry_after
+    return headers
+
+
 @contextlib.contextmanager
 def _chat_errors(label: str) -> Iterator[None]:
     """Map the failures of a model-backed chat to the response the page shows."""
@@ -78,7 +108,7 @@ def _chat_errors(label: str) -> Iterator[None]:
             detail = "The model service timed out. Try again."
         else:
             detail = "The model service could not be reached or is unavailable. Check your connection and provider settings, then retry."
-        raise HTTPException(502, detail) from exc
+        raise HTTPException(502, detail, headers=_retry_headers(exc, status)) from exc
     except RuntimeError as exc:
         logger.exception(f"{label} model request failed")
         raise HTTPException(502, "The model could not complete this request. Check its login and usage limits, then retry.") from exc

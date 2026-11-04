@@ -9,10 +9,12 @@ on them, but the reader sees findings first and claims on demand.
 
 Three pages in the header and one pane:
 
-- **Papers.** The library list and the reader. The reader shows the PDF, the
-  summary, why the paper is here, and the reader's note. Claims are a drawer
-  under the PDF with a count, closed by default. Datasets become artifacts on
-  the paper's side panel with a filter chip on the list.
+- **Papers.** The library list and the reader. The reader shows the PDF with
+  its claims in a drawer under it, closed by default, whose handle counts
+  them, the unreviewed ones, and the findings they feed. The column beside
+  the PDF holds the summary, why the paper is here, the reader's note, marks,
+  and code links. Datasets become artifacts in that column with a filter
+  chip on the list.
 - **Findings.** The landing page. One section per topic in vocabulary order:
   a short synthesis, then agreements, then tensions as single rows. A row
   opens to show its note and the claims it rests on. One button runs
@@ -31,8 +33,8 @@ Three pages in the header and one pane:
    synthesis prompt. Header button. *Done.*
 2. Ask pane: persistent across views, scope chip, merged with per-paper chat.
    *Done.*
-3. Reader: claims drawer, side panel with summary, relevance, note, artifacts.
-   *Proposed and not taken; the reader keeps its claims beside the PDF.*
+3. Reader: claims drawer under the PDF; the column beside it holds the
+   overview, the note, findings and artifacts. *Done.*
 4. Header navigation, Workspace page, Findings as the landing page, and the
    cuts: the map, facets, workspace notes, research notes, the three-mode
    sidebar, compare and organize, evidence boards, research questions, claim

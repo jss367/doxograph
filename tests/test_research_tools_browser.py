@@ -84,7 +84,8 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('.paperhead h2', has_text='A paper without a PDF').wait_for()
                 assert await page.locator('#reader').is_hidden()
                 assert await page.locator('#panes.reading').count() == 0
-                # A paper with a PDF opens beside its rail: note first, then highlights, then claims.
+                # A paper with a PDF opens beside its rail of note and highlights,
+                # with its claims in the drawer under it.
                 await page.locator('#papers li[data-paper="paper"]').click()
                 await page.locator('#panes.reading').wait_for()
                 await page.locator('#reader .pdf-page[data-page="1"] .textLayer span').first.wait_for()
@@ -97,7 +98,8 @@ def test_paper_reads_beside_its_notes(engine):
                 assert await page.locator('.paperhead').get_by_role('button', name='Write a note').count() == 0
                 assert await page.locator('.paperhead').get_by_role('button', name='Read & capture').count() == 0
                 assert await rail.locator('.highlights').count() == 1
-                assert await rail.locator('.claim').count() == 1
+                assert await rail.locator('.claim').count() == 0
+                assert await page.locator('#claims-drawer-list .claim').count() == 1
                 # The note is written in the rail and stays there.
                 await rail.locator('textarea[data-note="paper"]').fill('Read this for the task differences.')
                 await rail.get_by_role('button', name='Done', exact=True).click()
@@ -141,7 +143,8 @@ def test_paper_reads_beside_its_notes(engine):
                 await form.locator('[name="text"]').fill('Recovery is conditional.')
                 await form.locator('[name="note"]').fill('Check the task differences.')
                 await form.get_by_role('button', name='Save', exact=True).click()
-                await page.locator('#content .claim', has_text='Recovery is conditional.').wait_for()
+                # The claim is written in the drawer under the PDF, which opens for it.
+                await page.locator('#claims-drawer-list .claim', has_text='Recovery is conditional.').wait_for()
                 claim = next(c for c in httpx.get(url+'/api/state').json()['claims'] if c['text'] == 'Recovery is conditional.')
                 assert claim['quote_verified'] is True and claim['locator'] == 'p. 1' and claim['note'] == 'Check the task differences.'
                 # Capturing a claim leaves its source visibly marked in the PDF.
@@ -150,8 +153,12 @@ def test_paper_reads_beside_its_notes(engine):
                 source_box = await source.bounding_box()
                 assert abs(source_box['x'] - bounds['x']) < 4 and abs(source_box['width'] - bounds['width']) < 4
                 badge = page.get_by_role('button', name='Show claim: Recovery is conditional. — Check the task differences.', exact=True)
+                # The badge shows the claim, opening the drawer to do it.
+                await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
                 await badge.click()
-                assert await page.locator(f'#content .claim[data-claim="{claim["id"]}"]').evaluate("e => e.classList.contains('sel')")
+                card = page.locator(f'#claims-drawer-list .claim[data-claim="{claim["id"]}"]')
+                await card.wait_for()
+                assert await card.evaluate("e => e.classList.contains('sel')")
                 # The PDF indicates an attached highlight note and opens that note.
                 note_badge = page.get_by_role('button', name='Show note: Which conditions?', exact=True)
                 await note_badge.click()
@@ -167,7 +174,7 @@ def test_paper_reads_beside_its_notes(engine):
                 await page.locator('#reader-zoom').select_option('fit')
                 await ready(page)
                 # A claim's PDF link scrolls the paper open beside it rather than opening a tab.
-                await rail.locator('.claim', has_text='Findings continue.').locator('.pdflink').click()
+                await page.locator('#claims-drawer-list .claim', has_text='Findings continue.').locator('.pdflink').click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '2'")
                 assert len(page.context.pages) == 1
                 # Bookmarking a page puts the paper on the reading queue at that page.
@@ -354,6 +361,9 @@ def test_paper_reads_beside_its_notes(engine):
                 # way out, to the workspace the paper is in, not the new one.
                 await page.get_by_role('button', name='Next page', exact=True).click()
                 await page.wait_for_function("document.querySelector('#reader-page').value === '3'")
+                # The page number moves before the page is drawn, and a switch
+                # waits for that to finish.
+                await page.locator('#reader .pdf-page[data-page="3"]:not(.pending)').wait_for()
                 await page.locator('#workspace').select_option(other['id'])
                 await page.locator('#papers li[data-paper="elsewhere"]').wait_for()
                 await saved_page(url, 3)

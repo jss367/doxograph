@@ -7,7 +7,7 @@
 // and takes the passage.
 function startClaimFromPassage(paper, passage) {
   if (refuseWhileRemoving(paper, 'a new claim')) return;
-  setReadingClaims(false);
+  revealClaims();
   captureOpenEditor();
   const held = V.newClaim && V.newClaim.paper === paper ? V.newClaim : blankClaim(paper);
   V.newClaim = { ...held, quote: passage.quote, locator: passage.locator, note: passage.note || held.note || '' };
@@ -93,6 +93,30 @@ function evidenceQualityHtml(row) {
     ${row.conditions ? `<p class="cev"><strong>Conditions:</strong> ${esc(row.conditions)}</p>` : ''}
     ${row.limitations ? `<p class="cev"><strong>Limitations:</strong> ${esc(row.limitations)}</p>` : ''}
     ${row.evidence_origin ? `<p class="hint">Evidence origin: ${esc(row.evidence_origin)}</p>` : ''}`;
+}
+
+// The handle of the drawer the claims sit in under a PDF: how many the paper
+// holds, how many still want a look, and the findings they feed.
+function claimsDrawerBar(paper, rows) {
+  const claims = S.claims.filter((row) => row.paper === paper);
+  const noun = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const count = rows.length === claims.length ? noun(claims.length, 'claim', 'claims') : `${rows.length} of ${noun(claims.length, 'claim', 'claims')}`;
+  const unreviewed = claims.filter((row) => !row.reviewed).length;
+  const feeding = (findings) => (findings || []).filter((finding) => finding.status !== 'dismissed' && (finding.topics || []).length > 0
+    && (finding.claims || []).some((claim) => claim.paper === paper)).length;
+  const agreements = feeding(S.agreements);
+  const tensions = feeding(S.tensions);
+  const facts = [];
+  if (unreviewed) facts.push(`${unreviewed} unreviewed`);
+  if (agreements || tensions) {
+    const findings = [agreements && noun(agreements, 'agreement', 'agreements'), tensions && noun(tensions, 'tension', 'tensions')].filter(Boolean).join(' and ');
+    facts.push(`<button type="button" class="link" data-act="claims-findings" title="Open the findings these claims feed">in ${findings}</button>`);
+  }
+  return `<strong>${count}</strong>${facts.length ? `<span class="hint">${facts.join(' · ')}</span>` : ''}
+    <span class="drawer-actions">
+      <button type="button" data-act="toggle-claims" aria-controls="claims-drawer-list" aria-expanded="false">Show claims</button>
+      ${rows.length ? '<button type="button" data-act="review-claims" title="Review these claims one at a time beside the PDF">Review</button>' : ''}
+    </span>`;
 }
 
 function claimCard(row, shown, group = '') {
@@ -249,8 +273,8 @@ function quoteContextHtml(row) {
 function closeSimilar() {
   if (!V.similar) return;
   V.similar = null;
-  document.querySelectorAll('#content .alike').forEach((node) => node.remove());
-  document.querySelectorAll('#content [data-act="similar"]').forEach((button) => {
+  document.querySelectorAll('#panes .alike').forEach((node) => node.remove());
+  document.querySelectorAll('#panes [data-act="similar"]').forEach((button) => {
     button.textContent = 'alike';
   });
 }

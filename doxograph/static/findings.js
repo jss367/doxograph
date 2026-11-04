@@ -127,6 +127,15 @@ function openFindings() {
   renderAll();
 }
 
+// The findings page with one row open and on screen: from a paper's panel.
+function openFindingRow(id) {
+  findingsOpen.add(id);
+  openFindings();
+  const row = document.querySelector(`.frow[data-finding="${CSS.escape(id)}"]`);
+  row?.scrollIntoView({block: 'center'});
+  row?.querySelector('summary')?.focus({preventScroll: true});
+}
+
 $('btn-findings').addEventListener('click', openFindings);
 
 // A row's open state is the reader's, kept across the redraws listed above.

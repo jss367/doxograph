@@ -64,3 +64,24 @@ test('two papers by the same first author in the same year are told apart by the
   const a = claim('a-c1', 'doe2026steering', 'Jane Doe', 2026), b = claim('b-c1', 'doe2026recovery', 'Jane Doe', 2026);
   assert.deepEqual(FindingsModel.papersOf({claims: [a, b]}), ['Doe 2026 (doe2026recovery)', 'Doe 2026 (doe2026steering)']);
 });
+
+for (const kind of ['agreement', 'tension']) {
+  test(`${kind} paper links exclude topicless, dismissed and unrelated findings`, () => {
+    const row = {id:'live', topics:['remaining'], status:'open', claims:[{paper:'a'}, {paper:'b'}]};
+    const rows = [row, {...row,id:'orphan',topics:[]}, {...row,id:'missing',topics:undefined},
+      {...row,id:'dismissed',status:'dismissed'}, {...row,id:'other',claims:[{paper:'b'}]}];
+    const state = {[kind === 'agreement' ? 'agreements' : 'tensions']: rows};
+    assert.deepEqual(FindingsModel.forPaper(state, 'a').map(({row}) => row.id), ['live']);
+  });
+  test(`${kind} stays linked with remaining topics and returns after restoration`, () => {
+    const row = {id:'live', topics:['first','remaining'], status:'confirmed', claims:[{paper:'a'}, {paper:'b'}]};
+    const state = {[kind === 'agreement' ? 'agreements' : 'tensions']: [row]};
+    assert.equal(FindingsModel.forPaper(state, 'a').length, 1);
+    row.topics.shift();
+    assert.equal(FindingsModel.forPaper(state, 'a').length, 1);
+    row.topics.length = 0;
+    assert.equal(FindingsModel.forPaper(state, 'a').length, 0);
+    row.topics.push('restored');
+    assert.equal(FindingsModel.forPaper(state, 'a').length, 1);
+  });
+}

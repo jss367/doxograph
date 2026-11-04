@@ -62,7 +62,7 @@ function syncAgentChatControls() {
     ? 'Use extracted claims only' : 'Use paper metadata only';
   $('agent-settings').hidden = !setup;
   $('agent-codex-guidance').hidden = chat.agent !== 'codex';
-  $('agent-status').textContent = chat.archived ? (chat.error || 'Archived conversation. Restore it to ask another question.') : chat.archiving ? 'Saving conversation…' : chat.busy ? (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
+  $('agent-status').textContent = chat.archived ? (chat.error || 'Archived conversation. Restore it to ask another question.') : chat.archiving ? 'Saving conversation…' : chat.busy ? chat.retryNote || (chat.scope.mode === 'paper' ? 'Reading the paper…' : 'Looking through selected sources…') : chat.reading ? 'Reading attachments…' : setup || chat.error || problem || agentChats.issues.join(' ');
 }
 
 $('btn-agent').addEventListener('click', event => {
@@ -85,10 +85,13 @@ $('agent-form').addEventListener('submit', (event) => {
   const workspace = agentChats.workspace;
   if (scopeProblem(activeAgentChat())) return;
   agentChats.ask(async (chat, messages, scope) => {
-    const result = await api('/api/ask', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-      body: JSON.stringify({ messages, agent: chat.agent, scope, conversation_id: chat.id }),
-    });
+    let result;
+    try {
+      result = await ChatRetry.run(() => api('/api/ask', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
+        body: JSON.stringify({ messages, agent: chat.agent, scope, conversation_id: chat.id }),
+      }), { onRetry: note => { chat.retryNote = note; agentChats.sync(); } });
+    } finally { delete chat.retryNote; }
     return { content: result.answer, assistant: result.assistant || 'Assistant', model: result.model || '',
       activity: result.activity || [], scope: result.scope, evidence: result.evidence, citations: result.citations || [] };
   });

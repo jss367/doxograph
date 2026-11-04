@@ -339,7 +339,7 @@ document.addEventListener('keydown', async (event) => {
     selectNextUnreviewed(rows);
   } else if (event.key === 'e') {
     const row = selectedRow(rows);
-    if (row) { setReadingClaims(false); captureOpenEditor(); V.editing = row.id; renderContent(); }
+    if (row) { revealClaims(); captureOpenEditor(); V.editing = row.id; renderContent(); }
   } else if (event.key === 'r') {
     const row = selectedRow(rows);
     if (!row) return;
@@ -368,7 +368,11 @@ document.addEventListener('keydown', async (event) => {
   }
 });
 
-function scrollToSelected() {
+// Scrolls the selected claim into view, opening the drawer it is in unless
+// the reader only came back to the page as they left it.
+function scrollToSelected({reveal = true} = {}) {
   const el = document.querySelector('.claim.sel');
-  if (el) { setReadingClaims(false); el.scrollIntoView({ block: 'nearest' }); }
+  if (!el) return;
+  if (reveal) revealClaims();
+  el.scrollIntoView({ block: 'nearest' });
 }
