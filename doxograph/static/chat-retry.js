@@ -4,7 +4,15 @@
 // Anything else, including a lost connection, is not known to be safe to resend.
 const ChatRetry = (() => {
   const DELAYS = [15000, 30000, 60000];
-  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const wait = async ms => {
+    // Browsers turn overflowing timer delays into an almost immediate callback.
+    const maxTimer = 2147483647;
+    while (ms > maxTimer) {
+      await new Promise(resolve => setTimeout(resolve, maxTimer));
+      ms -= maxTimer;
+    }
+    await new Promise(resolve => setTimeout(resolve, ms));
+  };
 
   async function run(send, { delays = DELAYS, sleep = wait, onRetry = () => {} } = {}) {
     for (let attempt = 0; ; attempt += 1) {

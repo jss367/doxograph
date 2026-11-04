@@ -12,16 +12,27 @@ function createWorkspaceClient({ workspaceId = 'default', fetch: send = globalTh
   // refresh after an action alike, for anything that must wait them out.
   let pendingMutations = 0, pullsAsked = 0, pullSettled = 0, pullsInFlight = 0;
 
+  function retryAfterDelay(header) {
+    const value = header?.trim();
+    if (!value) return undefined;
+    // Date.parse also accepts bare numbers and other non-HTTP date strings.
+    const httpDate = /^(?:[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]+, \d{2}-[A-Za-z]{3}-\d{2} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]{3} [A-Za-z]{3} [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
+    // The obsolete asctime form also denotes GMT, regardless of local timezone.
+    const date = value.endsWith(' GMT') ? value : `${value} GMT`;
+    const milliseconds = /^\d+$/.test(value) ? Number(value) * 1000
+      : httpDate.test(value) ? Math.max(0, Date.parse(date) - Date.now()) : NaN;
+    return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : undefined;
+  }
+
   async function checkResponse(response) {
     if (!response.ok) {
       let detail = response.statusText;
       try { detail = (await response.json()).detail || detail; } catch (_) { /* keep statusText */ }
       if (Array.isArray(detail)) detail = [...new Set(detail.map(issue => issue.msg || 'Invalid input.'))].join(' ');
       // Only the server can say a failure was the provider's and temporary; `retryAfter` is in milliseconds.
-      const seconds = Number(response.headers.get('Retry-After'));
       throw Object.assign(new Error(detail), { status: response.status,
         retryable: response.headers.get('X-Doxograph-Retryable') === 'true',
-        retryAfter: response.headers.get('Retry-After') && Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined });
+        retryAfter: retryAfterDelay(response.headers.get('Retry-After')) });
     }
     return response;
   }

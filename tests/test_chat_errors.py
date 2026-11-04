@@ -119,3 +119,36 @@ def test_only_temporary_provider_failures_are_marked_retryable(monkeypatch, stat
 def test_cli_failures_are_never_marked_retryable(monkeypatch):
     monkeypatch.setattr(chat, 'answer', Mock(side_effect=RuntimeError('Codex returned no complete answer.')))
     assert 'X-Doxograph-Retryable' not in ask().headers
+
+
+@pytest.mark.parametrize('header', [
+    '120', 'Wed, 04 Nov 2026 21:02:00 GMT',
+    'Wed, 04 Nov 2026 20:59:59 GMT', 'not a date',
+])
+def test_retry_after_reaches_the_client_unchanged(monkeypatch, header):
+    monkeypatch.setattr(chat, 'answer', Mock(side_effect=provider_failure(
+        503, headers={'Retry-After': header})))
+    result = ask()
+    assert result.status_code == 502
+    assert result.headers['X-Doxograph-Retryable'] == 'true'
+    assert result.headers['Retry-After'] == header
+
+
+@pytest.mark.parametrize('kind', ['network', 'timeout', 'anthropic-rate', 'anthropic-quota'])
+def test_retry_markers_require_a_known_temporary_provider_response(monkeypatch, kind):
+    request = httpx.Request('POST', 'https://provider.example/mock')
+    response = httpx.Response(429, request=request, headers={'Retry-After': '120'})
+    error = {
+        'network': httpx.ConnectError('private network diagnostic', request=request),
+        'timeout': httpx.ReadTimeout('private timeout diagnostic', request=request),
+        'anthropic-rate': anthropic.RateLimitError('private provider diagnostic',
+            response=response, body={'error': {'type': 'rate_limit_error'}}),
+        'anthropic-quota': anthropic.RateLimitError('private provider diagnostic',
+            response=response, body={'error': {'type': 'insufficient_quota'}}),
+    }[kind]
+    monkeypatch.setattr(chat, 'answer', Mock(side_effect=error))
+    result = ask()
+    assert result.status_code == 502
+    assert ('X-Doxograph-Retryable' in result.headers) is (kind == 'anthropic-rate')
+    assert ('Retry-After' in result.headers) is (kind == 'anthropic-rate')
+    assert 'private' not in result.text
