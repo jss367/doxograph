@@ -4,7 +4,6 @@
 // and the filter controls. Shares the library state declared in app.js.
 
 function focusClaimSearch() {
-  revealSidebar($('papers'));
   if (!['library', 'claims'].includes(V.view)) { showView('library'); syncHash(true); renderAll(); }
   if (readingPaper()) setReadingFilters(true);
   $('q').focus();

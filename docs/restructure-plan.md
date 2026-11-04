@@ -28,11 +28,14 @@ Three pages in the header and one pane:
 ## Order of work
 
 1. Findings page, additive. Combined analysis job on the server. Shorter
-   synthesis prompt. Header button. *(this PR)*
+   synthesis prompt. Header button. *Done.*
 2. Ask pane: persistent across views, scope chip, merged with per-paper chat.
+   *Done.*
 3. Reader: claims drawer, side panel with summary, relevance, note, artifacts.
+   *Proposed and not taken; the reader keeps its claims beside the PDF.*
 4. Header navigation, Workspace page, Findings as the landing page, and the
-   cuts: facets, map, saved searches, evidence boards, research questions,
-   marks and questions, claim connections, compare and organize, research
-   notes, the workspace notes editor on the library page, the datasets sheet.
+   cuts: the map, facets, workspace notes, research notes, the three-mode
+   sidebar, compare and organize, evidence boards, research questions, claim
+   connections, marks and saved searches. The data files and their APIs stay.
+   *Done.*
 5. Run analysis automatically after extraction through the job queue.

@@ -1063,7 +1063,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 nav = page.locator('#btn-workspace')
-                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+                await page.wait_for_function("S.ledger.length === 1")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1076,7 +1076,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 store.save_context("Written from the shell meanwhile.")
                 await page.wait_for_function(   # a poll picks it up
                     "S.context === 'Written from the shell meanwhile.'")
-                assert "unsaved edits" not in (await nav.text_content())
+                assert not await page.evaluate("researchFormDirty()")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1088,7 +1088,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                     "S.context === 'Changed again while the form was open.'")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                assert "unsaved edits" not in (await nav.text_content())
+                assert not await page.evaluate("researchFormDirty()")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1110,7 +1110,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 # kept, and the sidebar says so meanwhile.
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                await nav.get_by_text("unsaved edits", exact=False).wait_for()
+                await page.wait_for_function("researchFormDirty()")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1121,8 +1121,8 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
 
                 # Back on the claims, and the sidebar counts the new state.
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                await nav.get_by_text("context written · 2 claims of my own").wait_for()
-                assert "unsaved edits" not in (await nav.text_content())   # the saved form left no draft
+                await page.wait_for_function("S.context && S.ledger.length === 2")
+                assert not await page.evaluate("researchFormDirty()")   # the saved form left no draft
                 # The editor offers the new ledger claim as a link target.
                 await page.locator('.claim[data-claim="paper-a-c1"] button[data-act="edit"]').click()
                 options = page.locator('form[data-form] select[name="link-claim"] option')
@@ -1148,7 +1148,7 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 nav = page.locator('#btn-workspace')
-                await nav.get_by_text("2 claims of my own", exact=False).wait_for()
+                await page.wait_for_function("S.ledger.length === 2")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1231,7 +1231,7 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
                 await form.locator('[name="ledger-text"]').fill("Recovery is path-dependent, at every scale.")
                 await form.get_by_role("button", name="Save").click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+                await page.wait_for_function("S.ledger.length === 1")
 
     run_browser(scenario())
     assert store.load_context() == "Changed from the shell while the form was open."
@@ -1318,7 +1318,7 @@ def test_analysis_setting_survives_reload_and_disables_actions():
                 await expect(toggle).not_to_be_checked()
                 await page.get_by_role("button", name="Close settings").click()
                 for view in ["tensions", "agreements"]:
-                    await page.locator(f'#{view}-nav [data-view="{view}"]').click()
+                    await page.evaluate(f"openPage('{view}')")
                     await expect(page.locator(f'[data-act="find-{view}"]')).to_be_disabled()
                 await page.locator('#workspace').select_option(label="Other")
                 await expect(page.locator('#btn-retag')).to_be_disabled()
@@ -1344,7 +1344,7 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
             other_page = await context.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator(f'#{view}-nav [data-view="{view}"]').click()
+                await page.evaluate(f"openPage('{view}')")
                 await page.get_by_role("button", name="Settings", exact=True).click()
                 toggle = page.get_by_label("Enable AI analysis")
                 await expect(toggle).to_be_checked()
@@ -1392,7 +1392,7 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
                 else:
                     await page.locator('.synth[data-topic="recovery"] [data-act="edit-synth"]').click()
                     field = page.locator('textarea[data-synth="recovery"]')
-                    action = page.locator('.synth[data-topic="recovery"] [data-act="synthesize"]')
+                    action = page.locator('#btn-retag')
                 await field.fill("Unsaved draft that polling must preserve.")
                 await field.evaluate("el => el.setSelectionRange(8, 13)")
                 original_field = await field.element_handle()
