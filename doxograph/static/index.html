@@ -506,13 +506,13 @@
         <button type="button" id="agent-claims-only">Use extracted claims only</button></div>
       <div id="agent-starters" class="row"></div>
       <label for="agent-question">Question</label>
-      <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
-      <div id="agent-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
-      <div class="chat-attachment-picker">
-        <button type="button" id="agent-attach">Attach files…</button>
+      <div class="chat-composer">
+        <textarea id="agent-question" rows="3" maxlength="8000" required></textarea>
+        <button type="button" id="agent-attach" class="chat-attach" aria-label="Attach files"
+          title="Attach files. You can also drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.">+</button>
         <input type="file" id="agent-files" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.csv,.tsv,.json,.jsonl,.log,.py,.js,.ts,.html,.css,.xml,.yaml,.yml,.toml,.tex,.rst">
-        <span class="hint">Drop files or paste images. Images, PDFs, and UTF-8 text · 4 MB per file.</span>
       </div>
+      <div id="agent-attachments" class="chat-attachments" aria-label="Attachments to send"></div>
       <p class="hint" id="agent-status" role="status"></p>
       <div class="row right"><button type="button" id="agent-settings" hidden>Open Settings</button>
         <button type="button" id="agent-clear">New conversation</button>

@@ -187,8 +187,8 @@ Failed requests keep the draft for an explicit retry. Removing a paper preserves
 its conversations and saved evidence; repair unavailable sources before another
 question. Saved notes remain independent of their conversations.
 
-Use **Attach files…**, drop files into the chat, or paste an image into the
-question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files
+Use the **+** button in the question field, drop files into the chat, or paste
+an image into the question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files
 (including Markdown, CSV, JSON, and source code) are supported. You can send files
 with or without a typed question, preview images, remove files before sending,
 and download them from saved messages. Up to five files per message, 4 MB per
