@@ -6,7 +6,7 @@ import httpx
 import pytest
 from playwright.async_api import expect
 
-from browser_support import browser_session, run_browser
+from browser_support import browser_session, close_ask_conversations, open_ask_conversations, run_browser
 from doxograph import config
 from test_browser import _server
 
@@ -49,6 +49,7 @@ def test_conversations_list_archive_restore_reload_and_keep_drafts(engine):
             assert positions == sorted(set(positions))
             first = page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]')
             second = page.locator(f'#agent-thread [data-thread-open="{"b" * 32}"]')
+            await open_ask_conversations(page)
             await first.focus()
             await page.keyboard.press('Enter')
             await expect(first).to_have_attribute('aria-current', 'true')
@@ -56,34 +57,43 @@ def test_conversations_list_archive_restore_reload_and_keep_drafts(engine):
             await page.locator('#agent-clear').click()
             await page.locator('#agent-question').fill('An independent question')
             draft_id = await page.locator('#agent-thread [aria-current="true"]').get_attribute('data-thread-open')
+            await open_ask_conversations(page)
             await second.click()
             await page.locator('#agent-question').fill('Compare the measurement conditions')
+            await open_ask_conversations(page)
             await first.click()
             await expect(page.locator('#agent-question')).to_have_value('Keep this draft with the evidence question')
 
             # Archive another row without changing the current draft or transcript.
             archive_third = page.locator(f'[data-thread-archive="{"c" * 32}"]')
+            await open_ask_conversations(page)
             await archive_third.click()
             await expect(rows).to_have_count(3)
             await expect(page.locator('#agent-question')).to_have_value('Keep this draft with the evidence question')
+            await open_ask_conversations(page)
             await page.locator('#agent-archive summary').click()
             await expect(page.locator('#agent-archived [data-thread-open]')).to_have_count(1)
             if engine == 'chromium':
                 Path('.context').mkdir(exist_ok=True)
                 await page.screenshot(path='.context/conversation-list.png')
 
+            await open_ask_conversations(page)
             await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
             await expect(first).not_to_be_visible()
             await expect(page.locator('#agent-question')).to_have_value('An independent question')
+            await open_ask_conversations(page)
             await second.click()
             await expect(page.locator('#agent-question')).to_have_value('Compare the measurement conditions')
             archived_first = page.locator(f'#agent-archived [data-thread-open="{"a" * 32}"]')
+            await open_ask_conversations(page)
             await archived_first.click()
             await expect(page.locator('#agent-messages')).to_contain_text('improved recovery')
             await expect(page.locator('#agent-send')).to_be_disabled()
+            await open_ask_conversations(page)
             await page.get_by_role('button', name='Restore Which findings have the strongest evidence?', exact=True).click()
             await expect(first).to_have_attribute('aria-current', 'true')
             await expect(page.locator('#agent-question')).to_have_value('Keep this draft with the evidence question')
+            await open_ask_conversations(page)
             await page.locator(f'[data-thread-open="{draft_id}"]').click()
             await expect(page.locator('#agent-question')).to_have_value('An independent question')
 
@@ -91,10 +101,13 @@ def test_conversations_list_archive_restore_reload_and_keep_drafts(engine):
             await page.locator('#btn-agent:enabled').click()
             await expect(rows).to_have_count(2)
             await expect(page.locator('#agent-archive summary')).to_have_text('Archived conversations (1)')
+            await open_ask_conversations(page)
             await first.click()
             await expect(page.locator('#agent-messages a[data-chat-download]')).to_have_text('context.txt')
             # When all saved conversations are archived, a fresh one stays usable.
+            await open_ask_conversations(page)
             for letter in ['a', 'b']:
+                await open_ask_conversations(page)
                 await page.locator(f'[data-thread-archive="{letter * 32}"]').click()
                 await expect(page.locator(f'#agent-thread [data-thread-open="{letter * 32}"]')).to_have_count(0)
             await expect(rows).to_have_text(['New conversation'])
@@ -127,6 +140,7 @@ def test_archive_failure_and_lost_response_keep_saved_conversations(engine):
                     await route.continue_()
 
             await page.route('**/api/chats/*', fail_archive)
+            await open_ask_conversations(page)
             await archive.click()
             await expect(page.locator('.chat-thread-error')).to_contain_text('Disk full')
             await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(3)
@@ -141,12 +155,15 @@ def test_archive_failure_and_lost_response_keep_saved_conversations(engine):
                     await route.continue_()
 
             await page.route('**/api/chats/*', lose_response)
+            await open_ask_conversations(page)
             await archive.click()
             await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(2)
             saved = next(c for c in httpx.get(url + '/api/chats').json()['chats'] if c['id'] == 'a' * 32)
             assert saved['archived'] and saved['messages'] == original['messages']
             await page.unroute('**/api/chats/*', lose_response)
+            await open_ask_conversations(page)
             await page.locator('#agent-archive summary').click()
+            await open_ask_conversations(page)
             await page.get_by_role('button', name='Restore Which findings have the strongest evidence?', exact=True).click()
             await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(3)
 
@@ -166,6 +183,7 @@ def test_lost_active_archive_response_selects_a_usable_conversation(engine, othe
             page.on('pageerror', lambda error: errors.append(str(error)))
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
+            await open_ask_conversations(page)
             await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
             await page.locator('#agent-question').fill('Keep the archived conversation draft')
 
@@ -177,6 +195,7 @@ def test_lost_active_archive_response_selects_a_usable_conversation(engine, othe
                     await route.continue_()
 
             await page.route('**/api/chats/*', lose_response)
+            await open_ask_conversations(page)
             await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
             active = page.locator('#agent-thread [aria-current="true"]')
             await expect(active).to_have_count(1)
@@ -193,7 +212,9 @@ def test_lost_active_archive_response_selects_a_usable_conversation(engine, othe
             assert first['archived'] and first['messages'] == original['messages']
             assert await page.locator('.chat-thread-error').count() == 0
             # Recovery also selects a restored row after its response is lost.
+            await open_ask_conversations(page)
             await page.locator('#agent-archive summary').click()
+            await open_ask_conversations(page)
             await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
             await expect(active).to_have_attribute('data-thread-open', 'a' * 32)
             await expect(page.locator('#agent-question')).to_have_value('Keep the archived conversation draft')
@@ -225,6 +246,7 @@ def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
                     if request.method == 'GET' and '/api/research-notes' in request.url else None)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
+            await open_ask_conversations(page)
             await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
             await page.locator('#agent-question').fill('Keep this draft with its conversation')
             button = page.locator('[data-agent-action]')
@@ -242,6 +264,7 @@ def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
                     await route.fulfill(response=response)
 
                 await page.route('**/api/chats/*', hold_response)
+                await open_ask_conversations(page)
                 await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
                 await asyncio.wait_for(held.wait(), timeout=10)
                 try:
@@ -265,12 +288,15 @@ def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
                 await page.wait_for_function('!activeAgentChat().archiving')
                 await page.unroute('**/api/chats/*', hold_response)
                 if archived:
+                    await open_ask_conversations(page)
                     await page.locator('#agent-archive summary').click()
+                    await open_ask_conversations(page)
                     await page.locator(f'#agent-archived [data-thread-open="{"a" * 32}"]').click()
                 await expect(button).to_be_enabled()
                 await expect(page.locator('#agent-question')).to_have_value('Keep this draft with its conversation')
             await expect(page.locator('#agent-thread [aria-current="true"]')).to_have_attribute('data-thread-open', 'a' * 32)
             # Both actions work again after the archive transition finishes.
+            await close_ask_conversations(page)
             await button.click()
             if action == 'missing-note':
                 await expect(page.locator('#agent-messages')).to_contain_text('The saved note was deleted')
@@ -314,10 +340,12 @@ def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive
             for page in [reader, archiver]:
                 await page.goto(url)
                 await page.locator('#btn-agent:enabled').click()
+                await open_ask_conversations(page)
                 await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
             await reader.locator('#agent-question').fill('Keep this draft after another window archives it')
             await reader.locator('#agent-close').click()
             for letter in ['a', 'b', 'c'] if not other_active else ['a']:
+                await open_ask_conversations(archiver)
                 await archiver.locator(f'[data-thread-archive="{letter * 32}"]').click()
                 await expect(archiver.locator(f'#agent-thread [data-thread-open="{letter * 32}"]')).to_have_count(0)
             await reader.locator('#btn-agent').click()
@@ -329,7 +357,9 @@ def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive
                 await expect(active).to_have_text('New conversation')
                 await expect(reader.locator('#agent-messages')).to_be_empty()
             # Explicit archive browsing remains stable when the dialog is reopened.
+            await open_ask_conversations(reader)
             await reader.locator('#agent-archive summary').click()
+            await open_ask_conversations(reader)
             await reader.locator(f'#agent-archived [data-thread-open="{"a" * 32}"]').click()
             await expect(reader.locator('#agent-question')).to_be_disabled()
             await expect(reader.locator('#agent-question')).to_have_value('Keep this draft after another window archives it')
@@ -339,7 +369,9 @@ def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive
             await expect(reader.locator('#agent-messages')).to_contain_text('improved recovery')
             # Restoration in the second window returns the original draft to use.
             await reader.locator('#agent-close').click()
+            await open_ask_conversations(archiver)
             await archiver.locator('#agent-archive summary').click()
+            await open_ask_conversations(archiver)
             await archiver.locator(f'[data-thread-archive="{"a" * 32}"]').click()
             await expect(archiver.locator('#agent-thread [aria-current="true"]')).to_have_attribute('data-thread-open', 'a' * 32)
             await reader.locator('#btn-agent').click()
@@ -362,6 +394,7 @@ def test_lost_archive_reconciliation_keeps_note_actions_blocked_when_reopened(en
             page = await browser.new_page(viewport=VIEWPORT)
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
+            await open_ask_conversations(page)
             await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
             held, release = asyncio.Event(), asyncio.Event()
             writes = []
@@ -382,6 +415,7 @@ def test_lost_archive_reconciliation_keeps_note_actions_blocked_when_reopened(en
 
             await page.route('**/api/chats/*', lose_patch)
             await page.route('**/api/chats?all_scopes=true', hold_lists)
+            await open_ask_conversations(page)
             await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
             await asyncio.wait_for(held.wait(), timeout=10)
             try:
@@ -412,15 +446,21 @@ def test_conversation_list_keeps_rows_visible_in_short_windows(engine):
             page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
             await page.goto(url)
             await page.locator('#btn-agent:enabled').click()
-            first = page.locator('#agent-thread li').first
-            await expect(page.locator('#agent-thread [data-thread-open]')).to_have_count(3)
-            # Laptop heights once squeezed the list to its heading.
+            rows = page.locator('#agent-thread [data-thread-open]')
+            await expect(rows).to_have_count(3)
+            # The list stays closed, leaving the transcript the room.
+            await expect(rows.first).to_be_hidden()
+            # Laptop heights once squeezed the list to its heading; dropped down, it
+            # lies over the transcript, so every row fits.
             for height in [720, 800, 850, 900]:
                 await page.set_viewport_size({'width': 1440, 'height': height})
-                listed = await page.locator('#library-agent > .chat-conversations').bounding_box()
-                heading = await page.locator('.chat-conversations h3').bounding_box()
-                row = await first.bounding_box()
-                assert listed['height'] >= heading['height'] + row['height'] * 1.5, height
+                await open_ask_conversations(page)
+                panel = await page.locator('.agent-history-panel').bounding_box()
+                last = await rows.last.bounding_box()
+                assert last['y'] + last['height'] <= panel['y'] + panel['height'] <= height, height
+                await page.keyboard.press('Escape')
+                await expect(rows.first).to_be_hidden()
+                await expect(page.locator('#library-agent')).to_be_visible()
                 await page.locator('#agent-send').scroll_into_view_if_needed()
                 send = await page.locator('#agent-send').bounding_box()
                 assert send['y'] + send['height'] <= height, height

@@ -41,7 +41,7 @@ The scope sits directly above the question box. A paper comparison shows **Sourc
 
 The source picker searches titles, authors, claim text, and topics, and marks each result as a paper or a claim. Adding a claim visibly adds its originating paper to the evidence. Removing the last source leaves an empty selection with Send disabled; it never falls back to the whole library.
 
-For claim questions, **Search the rest of the library** sits beside the evidence setting. It keeps the claim in focus and widens the evidence. The hint explains that finding conflicting evidence from other papers requires this.
+For claim questions, **Search whole library** sits beside the evidence setting. It keeps the claim in focus and widens the evidence. The hint explains that finding conflicting evidence from other papers requires this.
 
 The picker, chips, and scope controls work from the keyboard, and a chip's state is readable without color or hover.
 

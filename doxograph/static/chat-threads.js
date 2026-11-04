@@ -27,7 +27,7 @@ const ChatThreads = (() => {
     return Array.from(question).length > 80 ? `${Array.from(question).slice(0, 79).join('').trimEnd()}…` : question;
   }
 
-  function create({ prefix, agents, render, unified = false }) {
+  function create({ prefix, agents, render, unified = false, onHistoryActionStart = null }) {
     const boxes = new Map();
     let box = null;
     // Orders list requests against finished saves: a list can only include saves finished before it began.
@@ -85,6 +85,7 @@ const ChatThreads = (() => {
       $(`${prefix}-archive`).hidden = !archived.length;
       if (thread.archived) $(`${prefix}-archive`).open = true;
       $(`${prefix}-archive-label`).textContent = `Archived conversations (${archived.length})`;
+      $(`${prefix}-current`).textContent = `${title(thread)}${thread.busy ? ' (answering…)' : ''}`;
       $(`${prefix}-agent`).innerHTML = agents().map(a => `<option value="${a}">${esc(agentLabel(a))}</option>`).join('');
       $(`${prefix}-agent`).value = thread.agent;
       $(`${prefix}-agent`).disabled = thread.busy || thread.saving || thread.archiving || thread.archived;
@@ -368,6 +369,7 @@ const ChatThreads = (() => {
         return;
       }
       if (!thread.revision || thread.dirty || writing(thread)) return;
+      const finishFocus = onHistoryActionStart?.();
       thread.archiving = true;
       thread.archiveError = '';
       const archived = !thread.archived;
@@ -398,7 +400,8 @@ const ChatThreads = (() => {
         thread.archiving = false;
         if (box === target) {
           sync();
-          if (!target.active.archived) $(`${prefix}-question`).focus();
+          if (finishFocus) finishFocus(thread.archived === archived);
+          else if (!target.active.archived) $(`${prefix}-question`).focus();
         }
       }
     });
@@ -427,18 +430,24 @@ const ChatThreads = (() => {
       const target = box;
       const thread = target?.active;
       if (!thread || !thread.revision || writing(thread)) return;
-      if (!await confirmDialog(`Delete “${title(thread)}”?`, { note: 'This conversation is removed from this workspace.', ok: 'Delete conversation' })) return;
+      const finishFocus = onHistoryActionStart?.();
+      if (!await confirmDialog(`Delete “${title(thread)}”?`, { note: 'This conversation is removed from this workspace.', ok: 'Delete conversation' })) {
+        finishFocus?.(false);
+        return;
+      }
+      let removed = false;
       thread.saving = true;
       sync();
       try {
         await api(`/api/chats/${thread.id}?revision=${thread.revision}`, { method: 'DELETE', headers: headers() });
+        removed = true;
         target.deleted.add(thread.id);
         target.threads = target.threads.filter(t => t !== thread);
         if (target.active === thread) target.active = target.threads.find(t => !t.archived) || blank();
       } catch (error) { thread.error = `Could not delete this conversation: ${error.message}`; }
       finally {
         thread.saving = false;
-        if (box === target) sync();
+        if (box === target) { sync(); finishFocus?.(removed); }
       }
     });
 

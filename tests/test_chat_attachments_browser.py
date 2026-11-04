@@ -6,7 +6,7 @@ import httpx
 import pytest
 from playwright.async_api import expect
 
-from browser_support import browser_session, run_browser
+from browser_support import browser_session, close_ask_conversations, open_ask_conversations, run_browser
 from doxograph import config, store
 from pdfs import minimal_pdf
 from test_browser import _server
@@ -50,6 +50,7 @@ def test_chat_files_retry_reopen_followup_and_download(engine, entry):
                         await page.locator('[data-paper-chat="study"]:visible').click()
                     await expect(page.locator(f'#{prefix}-attach')).to_be_enabled()
                     if entry == 'paper' and len(requests) > 1:
+                        await open_ask_conversations(page)
                         await page.locator('#agent-thread [data-thread-open]').nth(1).click()
 
                 await open_chat()
@@ -68,7 +69,9 @@ def test_chat_files_retry_reopen_followup_and_download(engine, entry):
                 await page.locator(f'#{prefix}-send').click()
                 await expect(page.locator(f'#{prefix}-messages .chat-attachment')).to_have_count(2)
                 await expect(page.locator(f'#{prefix}-attachments .chat-attachment')).to_have_count(0)
+                await open_ask_conversations(page)
                 await expect(page.locator(f'#{prefix}-delete')).to_be_visible()
+                await close_ask_conversations(page)
                 assert requests[1]['messages'][0]['attachments'][0] == image
                 saved_url = url + '/api/chats' + ('?paper=study' if entry == 'paper' else '')
                 saved = httpx.get(saved_url).json()['chats'][0]
@@ -146,8 +149,10 @@ def test_invalid_files_show_readable_errors_and_drafts_stay_with_their_chat(engi
                 await page.locator('#agent-attachments button').click()
                 await page.locator('#agent-files').set_input_files({'name': 'draft.md', 'mimeType': 'text/markdown', 'buffer': b'A draft attachment'})
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(1)
+                await open_ask_conversations(page)
                 await page.locator('#agent-thread [aria-current="false"]').click()
                 await expect(page.locator('#agent-attachments .chat-attachment')).to_have_count(0)
+                await open_ask_conversations(page)
                 await page.locator(f'[data-thread-open="{selected}"]').click()
                 await expect(page.locator('#agent-attachments')).to_contain_text('draft.md')
                 await page.locator('#agent-clear').click()
