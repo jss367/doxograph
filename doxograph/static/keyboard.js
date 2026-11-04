@@ -127,7 +127,7 @@ const CommandPalette = (() => {
       showView(next); syncHash(true); renderAll();
     });
     view('findings', 'Browse findings', 'findings');
-    add('update-findings', 'Action', 'Update findings', 'Find tensions, then agreements, then write each topic\'s synthesis', () => { openFindings(); updateFindings(); });
+    if (S.ai_enabled === true) add('update-findings', 'Action', 'Update findings', 'Find tensions, then agreements, then write each topic\'s synthesis', () => { openFindings(); updateFindings(); });
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
