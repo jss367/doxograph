@@ -12,8 +12,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var pendingDrops: [URL] = []
     /// An update is in progress; a second one must wait for it.
     private var updating = false
+    /// A relaunch prompt is open, and no new update may start until it is
+    /// answered. The prompt is a sheet, not app-modal, so the Update menu would
+    /// otherwise stay live under it, and a Relaunch answered during a newer
+    /// update would quit, and relaunch from, a bundle half rebuilt. Kept apart
+    /// from `updating`, which the quit reads as an update under way and asks
+    /// about as one.
+    private var relaunchOffered = false
     /// The bundle was replaced by an update, and the quit under way should be
-    /// followed by a launch of the new one.
+    /// followed by a launch of the new one. Update stays shut while this is
+    /// set, too: the quit asks about a running update only before its saves
+    /// and probe, which answer later, so an update begun in between would be
+    /// killed by a quit that never asked about it, and the relaunch would come
+    /// from a bundle it was halfway through rebuilding. Every way of staying
+    /// clears this, which opens Update again.
     private var relaunchAfterQuit = false
 
     /// Appended to an update's report when the server is not this app's to
@@ -127,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// restart: the update still happens, and the alert says the terminal has to
     /// do the rest.
     @objc func updateDoxograph(_ sender: Any?) {
-        guard !updating else { return }
+        guard !updating, !relaunchOffered, !relaunchAfterQuit else { return }
         updating = true
         window.showStatus("Checking for updates…")
         // Finding the command can fall back to a login shell, which is slow.
@@ -188,15 +200,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.informativeText = ownsServer ? outcome.changes : outcome.changes + Self.adoptedServerNote
             alert.addButton(withTitle: "Relaunch")
             alert.addButton(withTitle: "Later")
-            guard alert.runModal() == .alertFirstButtonReturn else {
-                if ready { window.hideStatus() }
-                // The old bundle keeps running, but the Python is new, and a
-                // server that failed to start may start now.
-                if serverFailed { startServer() }
-                return
+            // Either answer is given with no update running, since none may
+            // start while this is open, so neither has a newer one to defer to.
+            let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+                guard let self else { return }
+                self.relaunchOffered = false
+                guard response == .alertFirstButtonReturn else {
+                    if self.ready { self.window.hideStatus() }
+                    // The old bundle keeps running, but the Python is new, and a
+                    // server that failed to start may start now.
+                    if self.serverFailed { self.startServer() }
+                    return
+                }
+                self.relaunchAfterQuit = true
+                NSApp.terminate(nil)
             }
-            relaunchAfterQuit = true
-            NSApp.terminate(nil)
+            // Run modally from the updater's main-queue callback, this alert
+            // was seen to go blank until a screenshot redrew it. A sheet on the
+            // window avoids that path, as `inform` and `warn` already do.
+            relaunchOffered = true
+            window.present(alert, then: handle)
 
         case .success(let outcome):
             if serverFailed {
@@ -483,9 +506,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard ready else {
             let uploading = Uploader.uploadsInFlight
             guard uploading > 0 else { return .terminateNow }
-            relaunchAfterQuit = false
-            return confirmInterruption(.quit, uploading: uploading, reading: 0)
-                ? .terminateNow : .terminateCancel
+            // Only staying calls the relaunch off; a quit let through here
+            // still owes the new bundle its launch.
+            guard confirmInterruption(.quit, uploading: uploading, reading: 0) else {
+                relaunchAfterQuit = false
+                return .terminateCancel
+            }
+            return .terminateNow
         }
         // Autosaved writing may still be waiting after the last keystroke.
         // Save it first; manual editors report their unsaved writing so the
@@ -796,8 +823,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(addPapers(_:)), #selector(openCommandPalette(_:)): return ready
         // Not while the server is still coming up, since the restart after
         // the update needs to know whether it is owned. A start that failed is
-        // settled, and updating is then the way out.
-        case #selector(updateDoxograph(_:)): return (ready || serverFailed) && !updating
+        // settled, and updating is then the way out. Not under an unanswered
+        // relaunch prompt either, whose Relaunch must not land mid-update, nor
+        // while the quit that Relaunch began is still saving and asking.
+        case #selector(updateDoxograph(_:)):
+            return (ready || serverFailed) && !updating && !relaunchOffered && !relaunchAfterQuit
         default: return true
         }
     }

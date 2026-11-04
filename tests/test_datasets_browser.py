@@ -1235,12 +1235,12 @@ def test_dataset_table_counts_research_as_the_editor_does_and_ignores_a_stale_so
                 # A facet match counts its claim and paper beside a linked paper.
                 httpx.post(url + '/api/datasets', json={'name': 'Eval corpus', 'papers': ['review']}).raise_for_status()
                 httpx.post(url + '/api/datasets', json={'name': 'Unlinked'}).raise_for_status()
-                await page.goto(url)
                 # A remembered sort whose column is gone keeps no direction either.
-                await page.evaluate('''localStorage.setItem('doxograph-dataset-table', JSON.stringify(
+                # Install the preference before boot so this setup needs only
+                # one navigation, without racing startup against a fragment change.
+                await page.add_init_script('''localStorage.setItem('doxograph-dataset-table', JSON.stringify(
                     {view: 'table', columns: ['papers', 'claims'], sort: 'retired', descending: true}))''')
                 await page.goto(url + '/#view=datasets')
-                await page.reload()
                 view = page.locator('#datasets-sheet')
                 await view.wait_for(state='visible')
                 await ready(page)
