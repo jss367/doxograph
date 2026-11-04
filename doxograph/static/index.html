@@ -21,9 +21,13 @@
     <select id="workspace" aria-label="Workspace"></select>
     <button type="button" id="btn-workspace-add" aria-label="Create workspace" title="Create workspace"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14 M5 12h14"/></svg></button>
   </span>
+  <nav class="pages" aria-label="Pages">
+    <button type="button" id="btn-papers" title="The papers in this workspace, and the one being read">Papers</button>
+    <button type="button" id="btn-findings" title="What the papers hold on each topic, where they agree, and where they disagree">Findings</button>
+    <button type="button" id="btn-workspace" title="What you are studying, your own claims, the topics, and the workspace's settings">Workspace</button>
+  </nav>
   <div class="actions">
     <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide claims</button>
-    <button type="button" id="btn-findings" title="What the papers hold on each topic, where they agree, and where they disagree">Findings</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
       aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask about the paper, the findings, or the whole library; the pane stays open while you read">Ask</button>

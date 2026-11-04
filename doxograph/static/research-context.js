@@ -70,11 +70,14 @@ function renderResearch() {
   const context = draft ? draft.context : (S.context || '');
   const ledger = draft ? draft.claims : (S.ledger || []);
   let html = `<div class="paperhead">
-    <h2>What I am studying</h2>
-    <p class="ps">The context goes into every model pass and is the main lever on the
-      <em>why it is here</em> line. Your own claims are what a paper's claims are linked
-      against: supports, contradicts, supplies a method for, refines.</p>
-  </div>`;
+    <h2>Workspace</h2>
+    <p class="pm">${esc(S.workspace?.name || '')} · ${S.papers.length} paper${S.papers.length === 1 ? '' : 's'} · ${S.claims.length} claim${S.claims.length === 1 ? '' : 's'}</p>
+  </div>
+  <div class="workspace-page">
+  <h2>What I am studying</h2>
+  <p class="ps">The context goes into every model pass and is the main lever on the
+    <em>why it is here</em> line. Your own claims are what a paper's claims are linked
+    against: supports, contradicts, supplies a method for, refines.</p>`;
   if (V.error) html += `<p class="warn">${esc(V.error)}</p>`;
   html += `<form class="edit research" id="research-form">
     <div><label for="research-context">Research context</label>
@@ -87,10 +90,57 @@ function renderResearch() {
       <button type="button" data-act="cancel-research">Cancel</button>
       <button type="submit" class="primary">Save</button>
     </div>
-  </form>`;
+  </form>
+  ${workspaceTopics()}
+  ${workspaceLabels()}
+  <h2>Actions</h2>
+  <div class="actions-row">
+    <button type="button" data-reader-command="btn-export">Export HTML</button>
+    <button type="button" data-reader-command="btn-bib">Export BibTeX</button>
+    <button type="button" data-reader-command="btn-workspace-archive">Download archive</button>
+    <button type="button" data-reader-command="btn-workspace-backups">Previous versions</button>
+    <button type="button" data-reader-command="btn-retag" data-ai-action ${S.ai_enabled === true ? '' : 'disabled'}>Retag all</button>
+    <button type="button" data-reader-command="btn-settings">Settings</button>
+    <button type="button" data-reader-command="btn-workspace-rename">Rename workspace</button>
+    <button type="button" class="danger" data-reader-command="btn-workspace-delete">Delete workspace</button>
+  </div>
+  </div>`;
   $('content').innerHTML = html;
   if (main) main.scrollTop = scrollTop;
 }
+
+// The topic vocabulary with its use, in the vocabulary's order; a topic in
+// use that the vocabulary does not list is marked, as in the sidebar. A click
+// opens the library on the topic.
+function workspaceTopics() {
+  const counts = S.tag_counts || {};
+  const declared = (S.tags || []).map((t) => t.name);
+  const names = [...declared, ...Object.keys(counts).filter((name) => !declared.includes(name)).sort()];
+  if (!names.length) return '<h2>Topics</h2><p class="hint">No topics yet. The vocabulary is written as papers are read.</p>';
+  return `<h2>Topics</h2><ul class="topic-list">${names.map((name) => {
+    const description = (S.tags.find((t) => t.name === name) || {}).description || '';
+    return `<li data-open-topic="${esc(name)}" title="${esc(description)}">${esc(name)}${declared.includes(name) ? '' : ' *'}<span class="n">${counts[name] || 0}</span></li>`;
+  }).join('')}</ul>`;
+}
+
+function workspaceLabels() {
+  const entries = Object.entries(S.label_counts || {});
+  if (!entries.length) return '';
+  return `<h2>Labels</h2><ul class="label-list">${entries.map(([name, count]) => `<li>${labelChip(name)} <span class="hint">${count}</span></li>`).join('')}</ul>`;
+}
+
+// A topic on the Workspace page opens the library's claims on that topic,
+// the way the command palette does, leaving the research form behind with
+// its draft kept.
+document.addEventListener('click', (event) => {
+  const topic = event.target.closest('[data-open-topic]');
+  if (!topic) return;
+  captureResearchDraft();
+  followToPaper(null);
+  V.tag = topic.dataset.openTopic;
+  syncHash(true);
+  renderAll();
+});
 
 // Whether the research form on screen differs from what the server holds. The
 // form is the only place its edits live until Save, so leaving the workspace
