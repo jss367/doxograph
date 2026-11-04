@@ -45,6 +45,10 @@ def portable_links(text: str, notes: dict[str, str], prefix: str = '..') -> str:
         parsed = urlsplit(destination)
         if parsed.scheme or parsed.netloc:
             return destination
+        params = parse_qs(parsed.query)
+        asset = parsed.path.startswith(('/pdf/', '/api/research-notes/images/'))
+        if asset and params.get('workspace', ['default'])[0] != config.workspace_id():
+            return destination
         scope = parse_qs(parsed.fragment).get('ws', ['default'])[0]
         if parsed.path == '/' and scope != config.workspace_id():
             return destination
@@ -52,7 +56,6 @@ def portable_links(text: str, notes: dict[str, str], prefix: str = '..') -> str:
             name = parsed.path.rsplit('/', 1)[-1]
             if re.fullmatch(r'[a-f0-9]{64}\.(png|jpg|gif|webp)', name):
                 return f'{prefix}/data/note-images/{name}'
-        params = parse_qs(parsed.query)
         note = params.get('note', [''])[0]
         if note in notes:
             return f'{prefix}/notes/{notes[note]}'
@@ -233,7 +236,8 @@ def _paper_markdown(key: str, paper: dict[str, Any], marks: list[dict[str, Any]]
         lines.extend(['Source: ' + notebook.md(source), ''])
     if paper.get('code'):
         lines.extend(['Code: ' + notebook.md(', '.join(paper['code'])), ''])
-    for label, value in (('Summary', paper.get('summary')), ('My paper notes', paper.get('notes'))):
+    for label, value in (('Summary', paper.get('summary')), ('Why it matters', paper.get('relevance')),
+                         ('My paper notes', paper.get('notes'))):
         if value:
             lines.extend(['## ' + label, '', portable_links(value, note_names), ''])
     for claim in paper.get('claims', []):

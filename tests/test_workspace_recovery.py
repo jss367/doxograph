@@ -241,3 +241,31 @@ def test_deleting_a_legacy_note_remembers_its_revision_floor():
     with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
         client.delete(f'/api/research-notes/{identifier}?revision=10').raise_for_status()
     assert research_notes.next_revision(identifier, 1) == 11
+
+
+@pytest.mark.parametrize('asset', ['pdf/study', 'api/research-notes/images/' + 'a' * 64 + '.png'])
+def test_archive_asset_links_preserve_workspace_identity(asset):
+    other = config.create_workspace('Other research')
+    destination = 'data/pdfs/study.pdf' if asset.startswith('pdf/') else 'data/note-images/' + 'a' * 64 + '.png'
+    for workspace in ('default', other['id']):
+        with config.use_workspace(workspace):
+            local = f'[Source](/{asset}?workspace={workspace}#page=3)'
+            expected = f'[Source](../{destination}' + ('#page=3)' if asset.startswith('pdf/') else ')')
+            assert workspace_archive.portable_links(local, {}) == expected
+            remote = other['id'] if workspace == 'default' else 'default'
+            foreign = f'[Source](/{asset}?workspace={remote}#page=3)'
+            assert workspace_archive.portable_links(foreign, {}) == foreign
+    with config.use_workspace(other['id']):
+        # Unscoped URLs address the default workspace.
+        unscoped = f'[Source](/{asset})'
+        assert workspace_archive.portable_links(unscoped, {}) == unscoped
+
+
+def test_archive_readable_paper_includes_manual_relevance():
+    store.save_paper(store.new_paper('study', summary='Summary', relevance='My reason for including this paper'))
+    path = workspace_archive.build()
+    try:
+        with zipfile.ZipFile(path) as archive:
+            assert '## Why it matters\n\nMy reason for including this paper' in archive.read('papers/study.md').decode()
+    finally:
+        path.unlink()

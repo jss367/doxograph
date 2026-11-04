@@ -48,6 +48,8 @@ function toast(message, { actions = [], timeout = 6000, tone = '', onExpire = nu
   return handle;
 }
 
+// Async dialog openers must not replace a newer prompt, even after it closes.
+let askGeneration = 0;
 let askResolve = null;
 let askSubmit = null;
 let askBusy = false;
@@ -60,6 +62,7 @@ let askBusy = false;
 const askField = () => ($('ask-lines').hidden ? $('ask-input') : $('ask-lines'));
 
 function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK', cancel = 'Cancel', onSubmit = null }) {
+  askGeneration++;
   // A replacement prompt cancels the previous caller rather than stranding it.
   if (askResolve) settleAsk(null);
   const dialog = $('ask');
@@ -97,6 +100,7 @@ function askDialog({ title, note = '', input = null, labelChoices = [], ok = 'OK
 // Every way out of the dialog lands here. The pending promise is taken first,
 // so closing the element does not settle it a second time with a cancel.
 function settleAsk(value) {
+  askGeneration++;
   const resolve = askResolve;
   askResolve = null;
   askSubmit = null;

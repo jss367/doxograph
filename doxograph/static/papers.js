@@ -333,10 +333,24 @@ function paperTextEdit(paper, field) {
 
 // The model writes the summary and why it matters when it reads the paper;
 // the reader can rewrite either, and a later re-read keeps what they wrote.
+let paperTextRequest = 0;
 async function editPaperText(key, field) {
-  const paper = S.papers.find((x) => x.key === key);
-  if (!paper) return;
+  const request = ++paperTextRequest;
+  const dialog = askGeneration, navigation = navigationVersion();
   const workspace = workspaceClient.workspaceId;
+  const current = () => request === paperTextRequest && workspace === workspaceClient.workspaceId
+    && dialog === askGeneration && navigation === navigationVersion();
+  let snapshot;
+  try {
+    snapshot = await api(`/api/papers/${encodeURIComponent(key)}?with_revision=true`, {
+      headers: {'X-Doxograph-Workspace': workspace},
+    });
+  } catch (error) {
+    if (current()) toast(`Could not load the text: ${error.message}`, {tone: 'warn'});
+    return;
+  }
+  if (!current()) return;
+  const paper = snapshot.paper;
   const answer = await askDialog({
     title: `${PAPER_TEXT[field].heading} for ${paper.title || key}`,
     note: 'Re-reading the paper keeps your version. Clear it to let the next re-read write a new one. '
@@ -349,7 +363,7 @@ async function editPaperText(key, field) {
         await api(`/api/papers/${encodeURIComponent(key)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
-          body: JSON.stringify({ [field]: text.trim() }),
+          body: JSON.stringify({ [field]: text.trim(), expected_revision: snapshot.revision }),
         });
         return null;
       } catch (error) { return `Could not save the text: ${error.message}`; }
