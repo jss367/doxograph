@@ -1197,6 +1197,16 @@ common, "recovers in 46% of rollouts" against "almost never returns to the
 task", and filtering the prompt by word overlap would quietly throw those
 away.
 
+## Pages
+
+The header has three pages. **Papers** is the library and the paper being
+read. **Findings** is what the papers hold on each topic, where they agree,
+and where they disagree. **Workspace** is what you are studying and your own
+claims, the topic vocabulary with its use, the labels in use, and the
+workspace's actions: export, archive, previous versions, retagging, settings,
+renaming and deletion. Opening Doxograph without a page in the address lands
+on Findings once the workspace has any, and on Papers before that.
+
 ## Findings
 
 **Findings**, in the header, is the page to read once a few papers share a
