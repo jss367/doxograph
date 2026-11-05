@@ -286,6 +286,8 @@ window.addEventListener('storage', (event) => {
 // or the Menu key does not. Coordinates can't tell them apart: browsers differ
 // on what they report for a keyboard-opened menu.
 document.querySelector('.research-tools-nav').addEventListener('pointerdown', () => { sideNavPointer = true; });
+// Shift+F10 and the Menu key press a key first, which clears a pointerdown left by an earlier click.
+document.querySelector('.research-tools-nav').addEventListener('keydown', () => { sideNavPointer = false; });
 document.querySelector('.research-tools-nav').addEventListener('contextmenu', (event) => {
   const byPointer = sideNavPointer;
   sideNavPointer = false;

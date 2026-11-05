@@ -587,7 +587,9 @@ def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
     config.set_ai_enabled(False)
     # A keyboard-opened menu has no pointerdown before it, and some browsers
     # give it the focused element's coordinates rather than zeros.
-    keyboard_menu = ("el => { const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('contextmenu', "
+    keyboard_menu = ("el => { const r = el.getBoundingClientRect(); "
+                     "el.dispatchEvent(new KeyboardEvent('keydown', {key: 'F10', shiftKey: true, bubbles: true})); "
+                     "el.dispatchEvent(new MouseEvent('contextmenu', "
                      "{bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5})); }")
     focused = "() => document.activeElement && document.activeElement.id"
 
@@ -603,7 +605,10 @@ def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
                 datasets = page.locator('#btn-datasets')
                 menu_item = page.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar')
 
-                # A keyboard-opened menu takes focus, and Escape hands it back.
+                # A keyboard-opened menu takes focus, and Escape hands it back,
+                # even after an earlier click on the button.
+                await datasets.click()
+                await page.locator('#datasets-sheet').wait_for(state='visible')
                 await datasets.evaluate(keyboard_menu)
                 await page.wait_for_function("document.activeElement?.dataset.act === 'hide-side-nav'")
                 await page.keyboard.press('Escape')
