@@ -73,3 +73,47 @@ def test_benchmarks_are_made_from_the_names_claims_give_and_link_those_claims(en
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_adding_from_claims_shows_records_another_window_made_first(engine):
+    config.set_ai_enabled(False)
+    store.save_paper(store.new_paper('study', title='Monitor study'))
+    claim = store.add_claim('study', {'text': 'Monitors reach 0.9 AUROC.'})
+    store.add_facet('benchmark', 'Benchmarks a result is measured on')
+    store.update_claim('study', claim['id'], {'facets': {'benchmark': ['CUA-SHADE-Arena', 'HarmBench']}})
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1400, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url + '/#view=benchmarks')
+                await ready(page)
+                add = page.locator('#benchmark-from-facets')
+                await expect(add).to_have_text('Add 2 benchmarks named in claims')
+                # Another window makes one of them while this one still offers both.
+                httpx.post(url + '/api/benchmarks/from-facets', json={'names': ['HarmBench']}).raise_for_status()
+                await add.click()
+                await _answer(page, 'Add 2 benchmarks')
+                await ready(page)
+                await expect(page.locator('#benchmarks-status')).to_have_text('Added 1 benchmark.')
+                await expect(page.locator('#benchmarks-list strong')).to_have_text(['CUA-SHADE-Arena', 'HarmBench'])
+                await expect(add).to_be_hidden()
+
+                # When the other window made all of them, this one says so and shows them.
+                store.update_claim('study', claim['id'], {'facets': {'benchmark': ['CUA-SHADE-Arena', 'HarmBench', 'MMLU']}})
+                await page.evaluate('refreshAll()')
+                await expect(add).to_have_text('Add a benchmark named in claims')
+                httpx.post(url + '/api/benchmarks/from-facets', json={'names': ['MMLU']}).raise_for_status()
+                await add.click()
+                await _answer(page, 'Add a benchmark')
+                await ready(page)
+                await expect(page.locator('#benchmarks-status')).to_have_text('Every benchmark your claims name already has a record.')
+                await expect(page.locator('#benchmarks-list strong')).to_have_text(['CUA-SHADE-Arena', 'HarmBench', 'MMLU'])
+                await expect(add).to_be_hidden()
+                assert not errors
+
+    run_browser(scenario())

@@ -181,7 +181,12 @@ function createCatalog(kind) {
     // Only the visible layout holds the records, so each name appears once on the page.
     el(many + '-table').innerHTML = table.view === 'table' ? renderTable(filtered) || empty : '';
     el(many + '-count').textContent = `${items.length} ${items.length === 1 ? one : many}`;
-    const named = loaded ? unnamed() : [];
+    renderFromFacets();
+  }
+  // Claims can name new ones while the page is open, so every redraw of the
+  // app updates this button, not only a redraw of the list.
+  function renderFromFacets() {
+    const named = loaded && client ? unnamed() : [];
     el(one + '-from-facets').hidden = !named.length;
     el(one + '-from-facets').textContent = `Add ${named.length === 1 ? kind.a : `${named.length} ${many}`} named in claims`;
   }
@@ -471,6 +476,7 @@ function createCatalog(kind) {
     finally { revealed = target; }
   }
   async function show(id) {
+    renderFromFacets();
     // A link to a record is a request to read it, whatever layout was last used.
     if (id && table.view === 'table') { showView('list'); remember(); renderList(); }
     // The URL catching up with a record picked here is not a new destination,
@@ -563,10 +569,14 @@ function createCatalog(kind) {
       if (!await confirmDialog(`Add a record for each ${one} your claims name?`,
                                {note:names.join(', '), ok:`Add ${names.length === 1 ? kind.a : `${names.length} ${many}`}`})) return;
       const added = (await request('/from-facets', 'POST', {names}))[many];
-      if (!mutateItems(rows => [...rows, ...added], visit)) return;
+      // The answer lists only the records this request made. Another window,
+      // or an earlier try whose answer was lost, may have made the rest, so
+      // read the whole catalog again.
+      if (!await readItems(() => visit === cacheVisit)) return;
       renderList();
-      if (!draft && added.length) choose([...added].sort((a, b) => a.name.localeCompare(b.name))[0]);
-      status(`Added ${added.length} ${added.length === 1 ? one : many}.`);
+      const made = items.filter(item => added.some(row => row.id === item.id)).sort((a, b) => a.name.localeCompare(b.name));
+      if (!draft && made.length) choose(made[0]);
+      status(added.length ? `Added ${added.length} ${added.length === 1 ? one : many}.` : `Every ${one} your claims name already has a record.`);
     } else if (name === 'follow') {
       const {paper,claim} = target.dataset;
       navigate(paper,claim);
