@@ -190,6 +190,14 @@
             </label>
           </div>
         </fieldset>
+        <fieldset>
+          <legend>Sidebar</legend>
+          <div class="choice-row two">
+            <label><input type="checkbox" name="side-nav" value="datasets"> Datasets</label>
+            <label><input type="checkbox" name="side-nav" value="people"> People</label>
+          </div>
+          <p class="hint">Right-click either one in the sidebar to hide it.</p>
+        </fieldset>
         <div class="settings-foot">
           <span class="hint">Appearance saved in this browser</span>
           <button type="button" id="btn-reset-theme">Reset appearance</button>
@@ -234,8 +242,8 @@
         <ul class="plist" id="papers" tabindex="0" aria-label="Papers in this workspace"></ul>
       </div>
     <div class="sec research-tools-nav">
-      <button type="button" id="btn-datasets" title="Datasets used or produced by this project"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5 M4 12c0 4 16 4 16 0"/></svg>Datasets</button>
-      <button type="button" id="btn-people" title="The authors of your papers, and your notes on them"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5 M16 4.8a3.5 3.5 0 0 1 0 6.4 M18 13.8c2.2.7 3.5 2.8 3.5 6.2"/></svg>People</button>
+      <button type="button" id="btn-datasets" data-side-nav="datasets" title="Datasets used or produced by this project"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5 M4 12c0 4 16 4 16 0"/></svg>Datasets</button>
+      <button type="button" id="btn-people" data-side-nav="people" title="The authors of your papers, and your notes on them"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5 M16 4.8a3.5 3.5 0 0 1 0 6.4 M18 13.8c2.2.7 3.5 2.8 3.5 6.2"/></svg>People</button>
     </div>
     <div class="sec" id="labels-sec" hidden>
       <h3>Labels</h3>

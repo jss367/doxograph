@@ -234,6 +234,54 @@ $('ai-provider-form').addEventListener('submit', async (event) => {
   }
 });
 
+// --- sidebar buttons ------------------------------------------------------
+// Datasets and People can each be hidden from the sidebar by right-clicking
+// them, and brought back from Settings. The pages stay reachable from the
+// palette and from links, so hiding only removes the button.
+const SIDE_NAV_KEY = 'doxograph-hidden-side-nav';
+let hiddenSideNav = new Set();
+try {
+  const saved = JSON.parse(localStorage.getItem(SIDE_NAV_KEY));
+  if (Array.isArray(saved)) hiddenSideNav = new Set(saved);
+} catch (_) { /* every button shows */ }
+
+function syncSideNav() {
+  const buttons = [...document.querySelectorAll('[data-side-nav]')];
+  for (const button of buttons) button.hidden = hiddenSideNav.has(button.dataset.sideNav);
+  document.querySelector('.research-tools-nav').hidden = buttons.every(button => button.hidden);
+  for (const box of document.querySelectorAll('input[name="side-nav"]')) box.checked = !hiddenSideNav.has(box.value);
+}
+
+function setSideNavHidden(name, hidden) {
+  if (hidden) hiddenSideNav.add(name); else hiddenSideNav.delete(name);
+  try { localStorage.setItem(SIDE_NAV_KEY, JSON.stringify([...hiddenSideNav])); } catch (_) { /* preference remains for this page */ }
+  syncSideNav();
+}
+
+syncSideNav();
+
+document.querySelector('.research-tools-nav').addEventListener('contextmenu', (event) => {
+  const button = event.target.closest('[data-side-nav]');
+  if (!button) return;
+  event.preventDefault();
+  const menu = $('ctxmenu');
+  menu.innerHTML = `<li><button type="button" data-act="hide-side-nav" data-side-nav-target="${esc(button.dataset.sideNav)}">Hide from sidebar</button></li>`;
+  menu.hidden = false;
+  const { width, height } = menu.getBoundingClientRect();
+  const x = event.clientX || button.getBoundingClientRect().left;
+  const y = event.clientY || button.getBoundingClientRect().bottom;
+  menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 4))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 4))}px`;
+  if (!event.clientX && !event.clientY) menu.querySelector('button').focus({ preventScroll: true });
+});
+
+$('ctxmenu').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-act="hide-side-nav"]');
+  if (!button) return;
+  closePaperMenu();
+  setSideNavHidden(button.dataset.sideNavTarget, true);
+});
+
 function syncThemeControls() {
   const appearance = document.querySelector(`input[name="appearance"][value="${themeSettings.appearance}"]`);
   const colors = document.querySelector(`input[name="color-theme"][value="${themeSettings.colors}"]`);
@@ -272,6 +320,8 @@ $('settings-menu').addEventListener('change', (event) => {
     applyThemeSettings({ ...themeSettings, appearance: event.target.value }, true);
   } else if (event.target.name === 'color-theme') {
     applyThemeSettings({ ...themeSettings, colors: event.target.value }, true);
+  } else if (event.target.name === 'side-nav') {
+    setSideNavHidden(event.target.value, !event.target.checked);
   }
 });
 $('btn-reset-theme').addEventListener('click', () => {

@@ -543,6 +543,46 @@ def test_sidebar_datasets_button_opens_the_catalog(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_sidebar_buttons_hide_on_right_click_and_return_from_settings(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1100, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                side = page.locator('#side')
+                datasets = side.get_by_role('button', name='Datasets', exact=True)
+                people = side.get_by_role('button', name='People', exact=True)
+                await datasets.click(button='right')
+                await page.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
+                await datasets.wait_for(state='hidden')
+                assert await people.is_visible()
+                assert await page.locator('#ctxmenu').is_hidden()
+
+                await people.click(button='right')
+                await page.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
+                await page.locator('.research-tools-nav').wait_for(state='hidden')
+
+                # The choice survives a reload, and Settings brings a button back.
+                await page.reload()
+                await page.locator('#btn-settings').wait_for()
+                assert await page.locator('.research-tools-nav').is_hidden()
+                await page.locator('#btn-settings').click()
+                box = page.locator('input[name="side-nav"][value="datasets"]')
+                assert not await box.is_checked()
+                await box.check()
+                await datasets.wait_for(state='visible')
+                assert await people.is_hidden()
+            assert errors == []
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))
