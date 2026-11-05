@@ -384,7 +384,7 @@ The header's **More workspace actions** menu also holds **Export BibTeX**,
 Active filters remain visible as removable chips after the controls close.
 Select claims or papers to reveal **Ask about selection** and **Clear selection**.
 
-The sidebar holds **Add papers**, the paper list, **People**, and the labels
+The sidebar holds **Add papers**, the paper list, **Datasets**, **People**, and the labels
 in use; everything else is on the three pages in the header.
 The paper list scrolls within the library so a large collection does not push
 the other tools out of reach. **Add papers** starts collapsed when the workspace
@@ -588,9 +588,9 @@ are excluded from Doxograph's built-in model requests.
   downloads a copy of the paper with its marks written in as standard PDF
   highlight and rectangle annotations, carrying your notes and questions, so
   other PDF readers show them. The stored PDF is never changed.
-- **Datasets** catalogs the data your project uses or produces. A record
-  opens from **Artifacts** on a paper it links, from **Jump to…**, or from its
-  own address, in the main pane with the sidebar still beside it, so you can
+- **Datasets**, in the sidebar, catalogs the data your project uses or produces.
+  A record opens from **Artifacts** on a paper it links, from **Jump to…**, or
+  from its own address, in the main pane with the sidebar still beside it, so you can
   follow a linked paper or claim and come back with **Back**. Edits save
   as you type, and leaving the catalog saves at once; a new record saves once
   it has a name. Each record has its own link. Add a record with a name, description, source URL or local path, version,

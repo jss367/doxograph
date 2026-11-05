@@ -516,6 +516,33 @@ def test_replacing_dataset_draft_requires_inspecting_intervening_changes(engine,
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_sidebar_datasets_button_opens_the_catalog(engine):
+    config.set_ai_enabled(False)
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1100, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                httpx.post(url + '/api/datasets', json={'name': 'Corpus'})
+                await page.goto(url)
+                button = page.locator('#side').get_by_role('button', name='Datasets', exact=True)
+                await button.click()
+                await page.locator('#datasets-sheet').wait_for(state='visible')
+                await ready(page)
+                assert 'view=datasets' in page.url
+                assert await button.get_attribute('aria-current') == 'page'
+                await page.locator('#side').get_by_role('button', name='People', exact=True).click()
+                await page.locator('#datasets-sheet').wait_for(state='hidden')
+                assert await button.get_attribute('aria-current') is None
+            assert errors == []
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))

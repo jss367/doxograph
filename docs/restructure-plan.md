@@ -13,8 +13,8 @@ Three pages in the header and one pane:
   its claims in a drawer under it, closed by default, whose handle counts
   them, the unreviewed ones, and the findings they feed. The column beside
   the PDF holds the summary, why the paper is here, the reader's note, marks,
-  and code links. Datasets become artifacts in that column with a filter
-  chip on the list.
+  and code links. A paper's datasets show as artifacts in that column, and
+  the full catalog stays in the sidebar beside People.
 - **Findings.** The landing page. One section per topic in vocabulary order:
   a short synthesis, then agreements, then tensions as single rows. A row
   opens to show its note and the claims it rests on. One button runs

@@ -877,7 +877,7 @@ function restoreNoteCursor(cursor) {
 // their own page in the main pane, and their drafts while the reader is away.
 // Showing one that is already up is a no-op, so every redraw can come through here.
 function pageViews() {
-  return {datasets: [Datasets, [V.dataset], null],
+  return {datasets: [Datasets, [V.dataset], $('btn-datasets')],
     people: [People, [V.person, V.author], $('btn-people')],
     tools: [ResearchTools, [V.tool, V.board], toolButton()]};
 }
@@ -1645,6 +1645,7 @@ async function updateFromPoll() {
 async function boot() {
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
   People.connect(workspaceClient, followToPaper, (id, author) => { V.person = id; V.author = author; syncHash(); });
+  $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
   $('btn-people').addEventListener('click', () => openPageView('people'));
   ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
     selected: followTools});
