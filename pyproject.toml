@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "doxograph"
-version = "0.24.0"
+dynamic = ["version"]
 description = "Extract claims from papers and browse them by topic."
 requires-python = ">=3.13"
 dependencies = [
@@ -40,6 +40,9 @@ doxograph = "doxograph.__main__:main"
 
 [tool.setuptools]
 packages = ["doxograph"]
+
+[tool.setuptools.dynamic]
+version = {attr = "doxograph.__version__"}
 
 [tool.setuptools.package-data]
 doxograph = ["static/*", "static/vendor/*", "static/vendor/fonts/*", "static/vendor/cmaps/*", "static/vendor/standard_fonts/*", "static/vendor/wasm/*"]
