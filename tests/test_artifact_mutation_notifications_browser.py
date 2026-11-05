@@ -47,7 +47,7 @@ def test_artifacts_follow_confirmed_delete_only(engine, result):
             with _server() as url:
                 await page.goto(url + "/#view=datasets&dataset=" + item["id"])
                 await expect(page.locator("#dataset-name")).to_have_value(item["name"])
-                await page.locator('[data-dataset-action="delete"]').click()
+                await page.locator('[data-catalog-action="delete"]').click()
                 await page.locator("#ask-ok").click()
                 await started.wait()
                 await page.locator('#papers li[data-paper="a"]').click()
@@ -126,7 +126,7 @@ def test_delete_notification_respects_later_reader(engine, boundary):
             with _server() as url:
                 await page.goto(url + "/#view=datasets&dataset=" + item["id"])
                 await expect(page.locator("#dataset-name")).to_have_value(item["name"])
-                await page.locator('[data-dataset-action="delete"]').click()
+                await page.locator('[data-catalog-action="delete"]').click()
                 if boundary == "cancel":
                     await page.locator("#ask-cancel").click()
                     assert not started.is_set()
@@ -255,7 +255,7 @@ def test_artifact_read_notifications_keep_inspection_semantics(engine, action, r
                 before = item["name"]
                 if action == "replace":
                     revise_artifact(item["id"], "First saved artifact")
-                    await page.locator('[data-dataset-action="reload"]').click()
+                    await page.locator('[data-catalog-action="reload"]').click()
                     await expect(page.locator("#dataset-saved-version")).to_be_visible()
                     await page.wait_for_function(
                         "document.querySelector('#datasets-sheet').getAttribute('aria-busy')==='false'"
@@ -264,7 +264,7 @@ def test_artifact_read_notifications_keep_inspection_semantics(engine, action, r
                 if result == "new":
                     revise_artifact(item["id"], "Fresh saved artifact")
                 await page.route("**/api/datasets", held)
-                await page.locator('[data-dataset-action="' + action + '"]').click()
+                await page.locator('[data-catalog-action="' + action + '"]').click()
                 await started.wait()
                 await page.locator('#papers li[data-paper="a"]').click()
                 await expect(page.locator(".paper-artifacts")).to_contain_text(before)
@@ -350,7 +350,7 @@ def test_discard_recovery_publishes_only_confirmed_cache_facts(engine, foreign):
                 await page.goto(url + "/#view=datasets")
                 await expect(page.locator("#dataset-new")).to_be_enabled()
                 await page.locator("#dataset-new").click()
-                await page.locator(".dataset-link-picker > summary").click()
+                await page.locator(".catalog-link-picker > summary").click()
                 await page.locator('input[data-link-paper="a"]').check()
                 # No valid create can start until its intended paper is linked.
                 await page.locator("#dataset-name").fill("Created artifact")
@@ -370,7 +370,7 @@ def test_discard_recovery_publishes_only_confirmed_cache_facts(engine, foreign):
 
                 await page.route("**/api/datasets", collection)
                 await page.route("**/api/datasets/*?*", remove)
-                await page.locator('[data-dataset-action="cancel"]').click()
+                await page.locator('[data-catalog-action="cancel"]').click()
                 await page.locator("#ask-ok").click()
                 await started.wait()
                 await page.locator('#papers li[data-paper="a"]').click()
@@ -426,14 +426,14 @@ def test_cancel_replacement_keeps_dirty_draft_and_confirmed_artifacts(engine):
                 await page.goto(url + "/#view=datasets&dataset=" + item["id"])
                 await expect(page.locator("#dataset-name")).to_have_value(item["name"])
                 revise_artifact(item["id"], "First saved artifact")
-                await page.locator('[data-dataset-action="reload"]').click()
+                await page.locator('[data-catalog-action="reload"]').click()
                 await expect(page.locator("#dataset-saved-version")).to_be_visible()
                 await page.wait_for_function(
                     "document.querySelector('#datasets-sheet').getAttribute('aria-busy')==='false'"
                 )
                 await page.locator("#dataset-name").fill("Unsaved local draft")
                 await page.route("**/api/datasets", held)
-                await page.locator('[data-dataset-action="replace"]').click()
+                await page.locator('[data-catalog-action="replace"]').click()
                 await started.wait()
                 await page.locator('#papers li[data-paper="a"]').click()
                 await expect(page.locator(".paper-artifacts")).to_contain_text(

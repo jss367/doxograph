@@ -19,18 +19,18 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from . import backups, bib, chats, config, datasets, notebook, people, research_notes, storage, store
+from . import backups, benchmarks, bib, catalogs, chats, config, datasets, notebook, people, research_notes, storage, store
 
 router = APIRouter(prefix='/api/workspace')
 _downloads: dict[str, tuple[Path, str, float]] = {}
 _download_lock = threading.Lock()
 CLAIM_DETAILS = (('evidence', 'Evidence'), ('conditions', 'Conditions'), ('limitations', 'Limitations'),
                  ('evidence_origin', 'Evidence origin'), ('evidence_relationship', 'Replication assessment'), ('note', 'My note'))
-DATASET_DETAILS = (('description', 'Description'), ('source', 'Source'), ('version', 'Version'),
-                   ('license', 'License'), ('access_notes', 'Access notes'))
+RECORD_DETAILS = (('description', 'Description'), ('source', 'Source'), ('version', 'Version'),
+                  ('license', 'License'), ('access_notes', 'Access notes'))
 PERSON_DETAILS = (('affiliation', 'Affiliation'), ('homepage', 'Web page'))
 README = ('# Portable research workspace\n\nOpen index.md in a Markdown reader. '
-          'The papers, notes, datasets, people, boards, images, PDFs, and references work without a running Doxograph server. '
+          'The papers, notes, datasets, benchmarks, people, boards, images, PDFs, and references work without a running Doxograph server. '
           'Dataset records contain source references; external dataset files are not copied into this archive. '
           'Original workspace files are under data/. Keep a copy before copying those files into an empty workspace data directory. '
           'The archive excludes installation settings, credential files, active job inputs, and other workspaces. '
@@ -82,7 +82,7 @@ def _snapshot_locks() -> Iterator[list[str]]:
     while True:
         locks = contextlib.ExitStack()
         try:
-            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'datasets', 'people', 'context', 'ledger',
+            for name in ('facets', 'vocabulary', 'notebook', 'research-notes', 'datasets', 'benchmarks', 'people', 'context', 'ledger',
                          'agreements', 'tensions', 'syntheses', 'retired-keys', 'chats'):
                 locks.enter_context(store.document_lock(name, blocking=False))
             keys = store.paper_keys()
@@ -154,6 +154,7 @@ def build() -> Path:
             keys = [key for key in keys if store.paper_path(key).is_file()]
             notes = research_notes.load()
             saved_datasets = datasets.load()
+            saved_benchmarks = benchmarks.load()
             saved_people = people.load()
             saved_notebook = notebook.load()
             note_names = {n['id']: f'{(store.slugify(n["title"]) or "note")[:80]}-{n["id"]}.md' for n in notes}
@@ -163,7 +164,8 @@ def build() -> Path:
                 saved_papers = _write_papers(out, keys, saved_notebook['highlights'], note_names)
                 for note in notes:
                     out.write('notes/' + note_names[note['id']], '# ' + notebook.md(note['title']) + '\n\n' + portable_links(note['body'], note_names))
-                out.write('datasets.md', _datasets_markdown(saved_datasets, saved_papers))
+                out.write('datasets.md', _catalog_markdown(datasets.catalog, '# Project datasets', saved_datasets, saved_papers))
+                out.write('benchmarks.md', _catalog_markdown(benchmarks.catalog, '# Benchmarks', saved_benchmarks, saved_papers))
                 out.write('people.md', _people_markdown(saved_people, saved_papers, note_names))
                 out.write('workspace-notes.md', portable_links(saved_notebook['notes'], note_names, '.'))
                 _write_boards(out, saved_notebook['boards'], saved_papers)
@@ -266,43 +268,43 @@ def _claim_markdown(key: str, claim: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _datasets_markdown(saved_datasets: list[dict[str, Any]], saved_papers: list[dict[str, Any]]) -> str:
-    lines = ['# Project datasets', '']
+def _catalog_markdown(catalog: catalogs.Catalog, title: str, saved: list[dict[str, Any]],
+                      saved_papers: list[dict[str, Any]]) -> str:
+    lines = [title, '']
     papers_by_key = {paper['key']: paper for paper in saved_papers}
-    for dataset in saved_datasets:
-        lines.extend(['## ' + notebook.md(dataset['name']), ''])
-        for field_name, label in DATASET_DETAILS:
-            if dataset[field_name]:
-                lines.extend([label + ': ' + notebook.md(dataset[field_name]), ''])
-        for custom in dataset['custom_fields']:
+    for record in saved:
+        lines.extend(['## ' + notebook.md(record['name']), ''])
+        for field_name, label in RECORD_DETAILS:
+            if record[field_name]:
+                lines.extend([label + ': ' + notebook.md(record[field_name]), ''])
+        for custom in record['custom_fields']:
             if custom['value']:
                 lines.extend([notebook.md(custom['name']) + ': ' + notebook.md(custom['value']), ''])
-        lines.extend(['Roles: ' + ', '.join(role.replace('-', ' ') for role in dataset['roles']), ''])
-        if dataset['labels']:
-            lines.extend(['Labels: ' + notebook.md(', '.join(dataset['labels'])), ''])
-        if dataset['facet_values']:
-            lines.extend(['Other dataset names: ' + notebook.md(', '.join(dataset['facet_values'])), ''])
-        lines.extend(_dataset_sources(dataset, saved_papers, papers_by_key))
+        if 'roles' in record:
+            lines.extend(['Roles: ' + ', '.join(role.replace('-', ' ') for role in record['roles']), ''])
+        if record['labels']:
+            lines.extend(['Labels: ' + notebook.md(', '.join(record['labels'])), ''])
+        if record['facet_values']:
+            lines.extend([f'Other {catalog.noun} names: ' + notebook.md(', '.join(record['facet_values'])), ''])
+        lines.extend(_record_sources(catalog, record, saved_papers, papers_by_key))
         lines.append('')
     return '\n'.join(lines)
 
 
-def _dataset_sources(dataset: dict[str, Any], saved_papers: list[dict[str, Any]],
-                     papers_by_key: dict[str, dict[str, Any]]) -> list[str]:
-    """List a dataset's papers and claims, including sources removed since they were linked.
+def _record_sources(catalog: catalogs.Catalog, record: dict[str, Any], saved_papers: list[dict[str, Any]],
+                    papers_by_key: dict[str, dict[str, Any]]) -> list[str]:
+    """List a record's papers and claims, including sources removed since they were linked.
 
-    A claim belongs to the dataset when it was linked by hand or when one of its
-    dataset facet values names the dataset or one of its other names.
+    A claim belongs to the record when it was linked by hand or when one of its
+    catalog's facet values names the record or one of its other names.
     """
-    names = {store.facet_value_key(value) for value in [dataset['name'], *dataset['facet_values']]}
-    references = {(ref['paper'], ref['claim']) for ref in dataset['claims']}
+    references = {(ref['paper'], ref['claim']) for ref in record['claims']}
     for saved in saved_papers:
         for claim in saved.get('claims', []):
-            if any(store.facet_value_key(value) in names for facet in ('dataset', 'datasets')
-                   for value in claim.get('facets', {}).get(facet, [])):
+            if catalog.matches(record, claim):
                 references.add((saved['key'], claim['id']))
     lines = []
-    for key in sorted(set(dataset['papers']) | {paper for paper, _ in references}):
+    for key in sorted(set(record['papers']) | {paper for paper, _ in references}):
         paper = papers_by_key.get(key)
         if paper:
             lines.append(f'- [{notebook.md(paper.get("title") or key)}](papers/{key}.md)')
@@ -362,7 +364,7 @@ def _write_boards(out: _Archive, boards: list[dict[str, Any]], saved_papers: lis
 
 def _index_markdown(saved_papers: list[dict[str, Any]], notes: list[dict[str, Any]], note_names: dict[str, str]) -> str:
     return ('# ' + notebook.md(_workspace_name()) + '\n\n'
-            + '[Project datasets](datasets.md) · [People](people.md)\n\n'
+            + '[Project datasets](datasets.md) · [Benchmarks](benchmarks.md) · [People](people.md)\n\n'
             + '\n'.join(f'- [{notebook.md(p.get("title") or p["key"])}](papers/{p["key"]}.md)' for p in saved_papers)
             + '\n\n## Research notes\n\n'
             + '\n'.join(f'- [{notebook.md(n["title"])}](notes/{note_names[n["id"]]})' for n in notes))

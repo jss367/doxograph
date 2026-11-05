@@ -163,7 +163,7 @@ def test_artifact_panel_observes_confirmed_dataset_changes(engine, field, timing
                 elif field == "roles":
                     await page.locator('[data-role="training"]').check()
                 else:
-                    await page.locator(".dataset-link-picker > summary").click()
+                    await page.locator(".catalog-link-picker > summary").click()
                     await page.locator('input[data-link-paper="a"]').check()
                 if timing == "early":
                     await started.wait()

@@ -142,9 +142,9 @@ or PDF can still be annotated and added to the reading queue.
 
 **In findings** lists the agreements and tensions the paper's claims feed,
 leaving out dismissed ones; each opens the findings page at its row.
-**Artifacts** lists the dataset records whose linked research includes the
-paper, through its own links, a linked claim, or a matching dataset facet,
-and the paper's code links. A dataset opens its record.
+**Artifacts** lists the dataset and benchmark records whose linked research
+includes the paper, through its own links, a linked claim, or a matching
+facet, and the paper's code links. A dataset or benchmark opens its record.
 
 The model writes the summary and why it matters when it reads the paper.
 Click **edit** beside either to rewrite it. Re-reading the paper replaces
@@ -384,9 +384,9 @@ The header's **More workspace actions** menu also holds **Export BibTeX**,
 Active filters remain visible as removable chips after the controls close.
 Select claims or papers to reveal **Ask about selection** and **Clear selection**.
 
-The sidebar holds **Add papers**, the paper list, **Datasets**, **People**, and the labels
+The sidebar holds **Add papers**, the paper list, **Datasets**, **Benchmarks**, **People**, and the labels
 in use; everything else is on the three pages in the header.
-Right-click **Datasets** or **People** to hide it from the sidebar; the page
+Right-click **Datasets**, **Benchmarks**, or **People** to hide it from the sidebar; the page
 stays reachable from **Jump to…** and from links, and **Settings → Sidebar**
 brings the button back.
 The paper list scrolls within the library so a large collection does not push
@@ -654,6 +654,19 @@ are excluded from Doxograph's built-in model requests.
   available across restarts. Keep using the same browser and source path and
   export reviews before moving files. An occupied port reports an error; it
   never opens an unrelated server. Dataset files stay unchanged.
+- **Benchmarks**, in the sidebar, catalogs the evaluations your papers report
+  results on. It works as **Datasets** does, with the same fields, custom
+  fields, labels, links, table, autosave, backups, and conflict protection,
+  except that a benchmark has no roles and no Loupe viewer. **Linked research**
+  includes claims whose `benchmark` or `benchmarks` facets match the record's
+  name or one of its **Other benchmark names in findings**, so with a
+  `benchmark` facet defined, every claim measured on a benchmark appears on its
+  record without linking it by hand. When claims name benchmarks no record
+  covers yet, **Add N benchmarks named in claims** lists them, most used
+  first, and makes a record for each. **Datasets** has the same button for
+  its `dataset` and `datasets` facets. Records stay in the selected workspace
+  in `benchmarks.json`, and workspace archives include a readable
+  `benchmarks.md`.
 - **People**, in the sidebar, gives every author in the workspace a page with
   their papers, the claims extracted from them, and their coauthors. Click an
   author's name on a paper card or in a paper's header to open it. Names match
@@ -828,6 +841,8 @@ ledger.yaml          your own claims, for linking against
 context.md           what your research is about, given to the extractor
 research-notes.json  your long-form Markdown notes, with per-note revisions
 research-note-revisions.json  revision counters retained across note deletion and restoration
+datasets.json        your dataset records
+benchmarks.json      your benchmark records
 people.json          your notes on authors, and the spellings of their names
 note-images/        local images embedded in workspace and research notes
 chats/<id>.json     saved paper and library conversations, one file each

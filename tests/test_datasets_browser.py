@@ -366,7 +366,7 @@ def test_dataset_editor_and_linked_research(engine):
                 assert saved['facet_values'] == ['EVAL, corpus']
                 assert saved['labels'] == ['needs review', 'Open source']
                 assert await dialog.get_by_label('Labels', exact=True).input_value() == 'needs review, Open source'
-                assert await page.locator('#datasets-list .dataset-label').all_text_contents() == saved['labels']
+                assert await page.locator('#datasets-list .catalog-label').all_text_contents() == saved['labels']
                 await page.locator('#datasets-search').fill('OPEN SOURCE')
                 assert await page.locator('#datasets-list button').count() == 1
                 await page.locator('#datasets-search').fill('private')
@@ -562,8 +562,9 @@ def test_sidebar_buttons_hide_on_right_click_and_return_from_settings(engine):
                 assert await people.is_visible()
                 assert await page.locator('#ctxmenu').is_hidden()
 
-                await people.click(button='right')
-                await page.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
+                for button in (people, side.get_by_role('button', name='Benchmarks', exact=True)):
+                    await button.click(button='right')
+                    await page.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
                 await page.locator('.research-tools-nav').wait_for(state='hidden')
 
                 # The choice survives a reload, and Settings brings a button back.
@@ -619,7 +620,7 @@ def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
                 await datasets.evaluate(keyboard_menu)
                 await menu_item.press('Enter')
                 await datasets.wait_for(state='hidden')
-                assert await page.evaluate(focused) == 'btn-people'
+                assert await page.evaluate(focused) == 'btn-benchmarks'
 
                 # A tab opened before a change elsewhere follows it, and its own
                 # change keeps the other tab's.
@@ -632,7 +633,7 @@ def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
                 await other.locator('#btn-datasets').focus()
                 await page.locator('input[name="side-nav"][value="datasets"]').uncheck()
                 await other.locator('#btn-datasets').wait_for(state='hidden')
-                assert await other.evaluate(focused) == 'btn-people'
+                assert await other.evaluate(focused) == 'btn-benchmarks'
                 await other.locator('#btn-people').click(button='right')
                 await other.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
                 assert sorted(await other.evaluate("JSON.parse(localStorage.getItem('doxograph-hidden-side-nav'))")) == ['datasets', 'people']
@@ -645,7 +646,7 @@ def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
                 await page.reload()
                 await page.locator('#btn-settings').wait_for()
                 await page.evaluate("() => { Storage.prototype.setItem = () => { throw new Error('full'); }; }")
-                for name in ('Datasets', 'People'):
+                for name in ('Datasets', 'Benchmarks', 'People'):
                     await page.locator('#side').get_by_role('button', name=name, exact=True).click(button='right')
                     await menu_item.click()
                 await page.locator('.research-tools-nav').wait_for(state='hidden')
@@ -1402,8 +1403,8 @@ def test_dataset_table_counts_research_as_the_editor_does_and_ignores_a_stale_so
                 await table.locator('tbody tr').filter(has_text='Eval corpus').locator('td').first.click()
                 await ready(page)
                 research = view.locator('#dataset-research')
-                assert await research.locator('.dataset-source').count() == 2
-                assert await research.locator('.dataset-claim-link').all_inner_texts() == [matched['text']]
+                assert await research.locator('.catalog-source').count() == 2
+                assert await research.locator('.catalog-claim-link').all_inner_texts() == [matched['text']]
                 assert not errors
 
     run_browser(scenario())

@@ -62,7 +62,7 @@ const NEW_CLAIM_ID = '__new__';
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
 const V = { paper: null, tag: null, label: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
-            drafts: {}, error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+            drafts: {}, error: null, view: 'library', dataset: null, benchmark: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
             noteEditing: null, noteDrafts: {}, topicDraft: '',
@@ -114,7 +114,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'datasets', 'people', 'tools'];
+const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'datasets', 'benchmarks', 'people', 'tools'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -135,6 +135,7 @@ function currentHash() {
   if (!V.group) params.set('group', '0');
   if (V.view === 'claims' && V.selectedId) params.set('sel', V.selectedId);
   if (V.view === 'datasets' && V.dataset) params.set('dataset', V.dataset);
+  if (V.view === 'benchmarks' && V.benchmark) params.set('benchmark', V.benchmark);
   if (V.view === 'people' && V.person) params.set('person', V.person);
   else if (V.view === 'people' && V.author) params.set('author', V.author);
   if (V.view === 'tools') {
@@ -161,7 +162,7 @@ let restoringHistory = false;
 // Background claim selection is not navigation.
 let navigationSeq = 0, navigationRoute = null;
 function navigationRouteNow() {
-  const record = {notes: V.note, datasets: V.dataset, people: [V.person, V.author], tools: [V.tool, V.board]}[V.view] ?? null;
+  const record = {notes: V.note, datasets: V.dataset, benchmarks: V.benchmark, people: [V.person, V.author], tools: [V.tool, V.board]}[V.view] ?? null;
   return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.ledger,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, record]);
 }
@@ -260,6 +261,7 @@ function applyHash() {
   V.group = params.get('group') !== '0';
   V.selectedId = params.get('sel') || null;
   V.dataset = params.get('dataset') || null;
+  V.benchmark = params.get('benchmark') || null;
   V.person = params.get('person') || null;
   V.author = V.person ? null : params.get('author') || null;
   V.note = params.get('note') || null;
@@ -490,7 +492,7 @@ function resetWorkspaceView() {
   Object.assign(V, {
     paper: null, tag: null, label: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
-    error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
+    error: null, view: 'library', dataset: null, benchmark: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
     noteEditing: null, noteDrafts: {}, topicDraft: '',
@@ -609,14 +611,14 @@ function canLeaveWorkspace() {
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
     && !V.synthSaving && !paperNotesSaving() && !V.researchSaving && !trash.size
-    && !Datasets.hasUnsavedChanges() && !People.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
+    && !Datasets.hasUnsavedChanges() && !Benchmarks.hasUnsavedChanges() && !People.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
 }
 
 // The native app calls this before quitting. Writing saves itself a moment
 // after typing stops, and the words typed in that moment are saved here.
 window.doxographSaveDrafts = async () => {
   workspaceWritingSnapshot();
-  const saved = (await Promise.all([Datasets.flush(), People.flush(), flushPaperNotes(),
+  const saved = (await Promise.all([Datasets.flush(), Benchmarks.flush(), People.flush(), flushPaperNotes(),
     typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
   // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
   // writing after the waits too, and warn rather than silently saving a judgment.
@@ -627,7 +629,7 @@ window.doxographSaveDrafts = async () => {
 // Consent to lose writing belongs to its content and identity, not a quit
 // attempt alone. Native compares this only while input remains frozen.
 window.doxographQuitWritingSnapshot = () => JSON.stringify([
-  workspaceWritingSnapshot(), Datasets.writingSnapshot(), People.writingSnapshot(),
+  workspaceWritingSnapshot(), Datasets.writingSnapshot(), Benchmarks.writingSnapshot(), People.writingSnapshot(),
   ResearchTools.writingSnapshot(), [...document.querySelectorAll('input:not([type="password"]):not([type="file"]),textarea,select,[contenteditable="true"]')]
     .map(field => [field.id, field.name, field.value ?? field.textContent, field.checked]),
 ]);
@@ -636,7 +638,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
     // A paper note that cannot save is a draft, which confirmLeave asks about.
     await flushPaperNotes();
-    return await Datasets.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+    return await Datasets.beforeWorkspaceSwitch() && await Benchmarks.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave: canLeaveWorkspace,
@@ -650,7 +652,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   },
   beforeLeave: flushTrash,
   async beforeSelect() {
-    if (!await Datasets.beforeWorkspaceSelect() || !await People.beforeWorkspaceSelect()
+    if (!await Datasets.beforeWorkspaceSelect() || !await Benchmarks.beforeWorkspaceSelect() || !await People.beforeWorkspaceSelect()
         || !await ResearchTools.beforeWorkspaceSelect()) return false;
     // All earlier waits leave core editors interactive. Consent applies only
     // to the snapshot shown when asking, not later writing or pending saves.
@@ -669,7 +671,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     // This synchronous last check runs after beforeSelect's Promise and
     // immediately before selection, so a late save/draft cannot slip through.
     if (!canLeaveWorkspace()) return false;
-    if (!Datasets.canWorkspaceSelect() || !People.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
+    if (!Datasets.canWorkspaceSelect() || !Benchmarks.canWorkspaceSelect() || !People.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
     if (hasWorkspaceDrafts() && workspaceWritingSnapshot() !== discardedWorkspaceWriting) {
       toast('Your writing changed. Switch workspaces again to review it.', { tone: 'warn' });
       return false;
@@ -873,11 +875,12 @@ function restoreNoteCursor(cursor) {
   field.setSelectionRange(cursor.start, cursor.end);
 }
 
-// The dataset catalog, the people, the research notes, and the research tools each keep
+// The dataset and benchmark catalogs, the people, the research notes, and the research tools each keep
 // their own page in the main pane, and their drafts while the reader is away.
 // Showing one that is already up is a no-op, so every redraw can come through here.
 function pageViews() {
   return {datasets: [Datasets, [V.dataset], $('btn-datasets')],
+    benchmarks: [Benchmarks, [V.benchmark], $('btn-benchmarks')],
     people: [People, [V.person, V.author], $('btn-people')],
     tools: [ResearchTools, [V.tool, V.board], toolButton()]};
 }
@@ -1095,6 +1098,7 @@ $('panes').addEventListener('click', async (event) => {
     if (act === 'claims-findings') { openFindings(); return; }
     if (act === 'open-finding') { openFindingRow(button.dataset.findingId); return; }
     if (act === 'open-dataset') { openPageView('datasets', {dataset: button.dataset.datasetId}); return; }
+    if (act === 'open-benchmark') { openPageView('benchmarks', {benchmark: button.dataset.benchmarkId}); return; }
     if (act === 'add-ledger') {
       const rows = $('ledger-rows');
       const count = rows.querySelectorAll('[data-ledger-row]').length;
@@ -1644,8 +1648,10 @@ async function updateFromPoll() {
 
 async function boot() {
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
+  Benchmarks.connect(workspaceClient, followToPaper, (id) => { V.benchmark = id; syncHash(); });
   People.connect(workspaceClient, followToPaper, (id, author) => { V.person = id; V.author = author; syncHash(); });
   $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
+  $('btn-benchmarks').addEventListener('click', () => openPageView('benchmarks'));
   $('btn-people').addEventListener('click', () => openPageView('people'));
   ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
     selected: followTools});
