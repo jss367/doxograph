@@ -419,7 +419,7 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     try:
         run(args.url, without_notes=args.without_notes, workspace=args.workspace,
             papers=args.papers, papers_file=args.papers_file, evidence_log=args.evidence_log, library_snapshot=args.library_snapshot, evidence_limit=args.evidence_limit,
-            allow_labels=args.allow_labels)
+            allow_labels=args.allow_labels, allow_edits=args.allow_edits)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -469,6 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="leave out personal notes, claim notes, and links to your own claims")
     p.add_argument("--workspace", help="restrict all tools to this workspace ID")
     p.add_argument("--allow-labels", action="store_true", help="allow paper label edits (requires --workspace)")
+    p.add_argument("--allow-edits", action="store_true",
+                   help="allow updating papers and creating or updating claims, datasets, people, and notes "
+                        "(requires --workspace)")
     source_scope = p.add_mutually_exclusive_group()
     source_scope.add_argument("--papers", nargs="+", help="restrict tools to these paper keys (requires --workspace)")
     source_scope.add_argument("--papers-file", help=argparse.SUPPRESS)
