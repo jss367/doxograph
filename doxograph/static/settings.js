@@ -253,10 +253,13 @@ function readSideNav() {
 readSideNav();
 
 function syncSideNav() {
+  const focused = document.activeElement?.closest?.('[data-side-nav]');
   const buttons = [...document.querySelectorAll('[data-side-nav]')];
   for (const button of buttons) button.hidden = hiddenSideNav.has(button.dataset.sideNav);
   document.querySelector('.research-tools-nav').hidden = buttons.every(button => button.hidden);
   for (const box of document.querySelectorAll('input[name="side-nav"]')) box.checked = !hiddenSideNav.has(box.value);
+  // A hidden button can't hold focus; keep keyboard users in the sidebar.
+  if (focused?.hidden) (document.querySelector('[data-side-nav]:not([hidden])') || $('papers')).focus({ preventScroll: true });
 }
 
 function setSideNavHidden(name, hidden) {
@@ -304,11 +307,11 @@ $('ctxmenu').addEventListener('keydown', (event) => {
 $('ctxmenu').addEventListener('click', (event) => {
   const button = event.target.closest('[data-act="hide-side-nav"]');
   if (!button) return;
+  // Hand focus back to the button first, so hiding it moves focus on in the sidebar.
+  sideNavMenuTrigger?.focus({ preventScroll: true });
   sideNavMenuTrigger = null;
   closePaperMenu();
   setSideNavHidden(button.dataset.sideNavTarget, true);
-  // The button that held focus is gone; keep keyboard users in the sidebar.
-  (document.querySelector('[data-side-nav]:not([hidden])') || $('papers')).focus({ preventScroll: true });
 });
 
 function syncThemeControls() {

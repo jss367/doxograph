@@ -621,8 +621,10 @@ def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
                 await page.locator('#btn-settings').click()
                 await page.locator('input[name="side-nav"][value="datasets"]').check()
                 await other.locator('#btn-datasets').wait_for(state='visible')
+                await other.locator('#btn-datasets').focus()
                 await page.locator('input[name="side-nav"][value="datasets"]').uncheck()
                 await other.locator('#btn-datasets').wait_for(state='hidden')
+                assert await other.evaluate(focused) == 'btn-people'
                 await other.locator('#btn-people').click(button='right')
                 await other.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
                 assert sorted(await other.evaluate("JSON.parse(localStorage.getItem('doxograph-hidden-side-nav'))")) == ['datasets', 'people']
