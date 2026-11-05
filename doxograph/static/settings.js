@@ -234,6 +234,99 @@ $('ai-provider-form').addEventListener('submit', async (event) => {
   }
 });
 
+// --- sidebar buttons ------------------------------------------------------
+// Datasets and People can each be hidden from the sidebar by right-clicking
+// them, and brought back from Settings. The pages stay reachable from the
+// palette and from links, so hiding only removes the button.
+const SIDE_NAV_KEY = 'doxograph-hidden-side-nav';
+let hiddenSideNav = new Set();
+let sideNavMenuTrigger = null;
+let sideNavPointer = false;
+let sideNavUnsaved = false;   // a failed save leaves this page's choice newer than the stored one
+
+// Another tab may have changed the choice since this page loaded, so read it
+// again before each change rather than overwrite it with a stale copy.
+function readSideNav() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIDE_NAV_KEY));
+    if (Array.isArray(saved)) hiddenSideNav = new Set(saved);
+  } catch (_) { /* keep what this page has */ }
+}
+readSideNav();
+
+function syncSideNav() {
+  const focused = document.activeElement?.closest?.('[data-side-nav]');
+  const buttons = [...document.querySelectorAll('[data-side-nav]')];
+  for (const button of buttons) button.hidden = hiddenSideNav.has(button.dataset.sideNav);
+  document.querySelector('.research-tools-nav').hidden = buttons.every(button => button.hidden);
+  for (const box of document.querySelectorAll('input[name="side-nav"]')) box.checked = !hiddenSideNav.has(box.value);
+  // A hidden button can't hold focus; keep keyboard users in the sidebar.
+  if (focused?.hidden) (document.querySelector('[data-side-nav]:not([hidden])') || $('papers')).focus({ preventScroll: true });
+}
+
+function setSideNavHidden(name, hidden) {
+  if (!sideNavUnsaved) readSideNav();
+  if (hidden) hiddenSideNav.add(name); else hiddenSideNav.delete(name);
+  try {
+    localStorage.setItem(SIDE_NAV_KEY, JSON.stringify([...hiddenSideNav]));
+    sideNavUnsaved = false;
+  } catch (_) { sideNavUnsaved = true; /* preference remains for this page */ }
+  syncSideNav();
+}
+
+syncSideNav();
+window.addEventListener('storage', (event) => {
+  if (event.key !== SIDE_NAV_KEY) return;
+  hiddenSideNav = new Set();
+  readSideNav();
+  syncSideNav();
+});
+
+// A menu opened by the pointer follows a pointerdown; one opened with Shift+F10
+// or the Menu key does not. Coordinates can't tell them apart: browsers differ
+// on what they report for a keyboard-opened menu.
+document.querySelector('.research-tools-nav').addEventListener('pointerdown', () => { sideNavPointer = true; });
+// Shift+F10 and the Menu key press a key first, which clears a pointerdown left by an earlier click.
+document.querySelector('.research-tools-nav').addEventListener('keydown', () => { sideNavPointer = false; });
+document.querySelector('.research-tools-nav').addEventListener('contextmenu', (event) => {
+  const byPointer = sideNavPointer;
+  sideNavPointer = false;
+  const button = event.target.closest('[data-side-nav]');
+  if (!button) return;
+  event.preventDefault();
+  const menu = $('ctxmenu');
+  menu.innerHTML = `<li><button type="button" data-act="hide-side-nav" data-side-nav-target="${esc(button.dataset.sideNav)}">Hide from sidebar</button></li>`;
+  menu.hidden = false;
+  const { width, height } = menu.getBoundingClientRect();
+  const x = byPointer ? event.clientX : button.getBoundingClientRect().left;
+  const y = byPointer ? event.clientY : button.getBoundingClientRect().bottom;
+  menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 4))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 4))}px`;
+  // Opened from the keyboard, focus goes into the menu and Escape brings it back.
+  sideNavMenuTrigger = byPointer ? null : button;
+  if (sideNavMenuTrigger) menu.querySelector('button').focus({ preventScroll: true });
+});
+
+$('ctxmenu').addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !sideNavMenuTrigger || !$('ctxmenu').querySelector('[data-act="hide-side-nav"]')) return;
+  const trigger = sideNavMenuTrigger;
+  sideNavMenuTrigger = null;
+  closePaperMenu();
+  trigger.focus({ preventScroll: true });
+  event.preventDefault();
+  event.stopPropagation();   // the menu was ours; no editor behind it should see this Escape
+});
+
+$('ctxmenu').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-act="hide-side-nav"]');
+  if (!button) return;
+  // Hand focus back to the button first, so hiding it moves focus on in the sidebar.
+  sideNavMenuTrigger?.focus({ preventScroll: true });
+  sideNavMenuTrigger = null;
+  closePaperMenu();
+  setSideNavHidden(button.dataset.sideNavTarget, true);
+});
+
 function syncThemeControls() {
   const appearance = document.querySelector(`input[name="appearance"][value="${themeSettings.appearance}"]`);
   const colors = document.querySelector(`input[name="color-theme"][value="${themeSettings.colors}"]`);
@@ -272,6 +365,8 @@ $('settings-menu').addEventListener('change', (event) => {
     applyThemeSettings({ ...themeSettings, appearance: event.target.value }, true);
   } else if (event.target.name === 'color-theme') {
     applyThemeSettings({ ...themeSettings, colors: event.target.value }, true);
+  } else if (event.target.name === 'side-nav') {
+    setSideNavHidden(event.target.value, !event.target.checked);
   }
 });
 $('btn-reset-theme').addEventListener('click', () => {

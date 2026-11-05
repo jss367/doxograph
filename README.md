@@ -386,6 +386,9 @@ Select claims or papers to reveal **Ask about selection** and **Clear selection*
 
 The sidebar holds **Add papers**, the paper list, **Datasets**, **People**, and the labels
 in use; everything else is on the three pages in the header.
+Right-click **Datasets** or **People** to hide it from the sidebar; the page
+stays reachable from **Jump to…** and from links, and **Settings → Sidebar**
+brings the button back.
 The paper list scrolls within the library so a large collection does not push
 the other tools out of reach. **Add papers** starts collapsed when the workspace
 already has papers; open it or use **Jump to… → Add papers** to import more.

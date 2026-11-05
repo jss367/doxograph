@@ -1,4 +1,5 @@
 .research-tools-nav { display: flex; flex-direction: column; gap: .15rem; }
+.research-tools-nav[hidden], .research-tools-nav button[hidden] { display: none; }
 .question-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .8rem; margin: 1rem 0; }
 .question-overview > div { padding: .8rem; border: 1px solid var(--line); border-radius: 8px; }
 .question-overview h3 { margin-top: 0; }
