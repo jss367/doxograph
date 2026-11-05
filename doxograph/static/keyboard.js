@@ -99,7 +99,7 @@ const CommandPalette = (() => {
     parkSynthEditor();
     parkNoteEditor();
     showView(paper || tag ? 'claims' : 'library');
-    Object.assign(V, {paper, tag, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false,
+    Object.assign(V, {paper, tag, label: null, ledger: null, q: '', kind: '', unreviewed: false,
       unverified: false, editing: null, selectedId: null});
     $('q').value = ''; $('kind').value = '';
     $('only-unreviewed').checked = false; $('only-unverified').checked = false;
@@ -118,37 +118,23 @@ const CommandPalette = (() => {
     const topics = new Map(S.tags.map(t => [t.name, t.description || '']));
     Object.keys(S.tag_counts).forEach(name => { if (!topics.has(name)) topics.set(name, ''); });
     topics.forEach((description, name) => add(`topic:${name}`, 'Topic', name, description, () => library(null, name)));
-    (S.notebook?.boards || []).forEach(b => add(`board:${b.id}`, 'Board', b.title,
-      `${b.entries.length} entries · Evidence board`, () => ResearchTools.openBoard(b.id)));
     add('all', 'Action', 'Show all papers', 'Browse every claim in this workspace', () => library(), 'library home');
     const click = (id, title, keywords = '') => {
-      if (!$(id).disabled) add(id, 'Action', title, '', () => {
-        revealSidebar($(id));
-        $(id).click();
-      }, keywords);
+      if (!$(id).disabled) add(id, 'Action', title, '', () => $(id).click(), keywords);
     };
     const view = (id, title, next) => add(id, 'Action', title, '', () => {
       if (V.view === next) return;
       showView(next); syncHash(true); renderAll();
-      if (next === 'graph') loadCitations();
     });
-    view('map', 'Open paper map', 'graph');
     view('findings', 'Browse findings', 'findings');
+    if (S.ai_enabled === true) add('update-findings', 'Action', 'Update findings', 'Find tensions, then agreements, then write each topic\'s synthesis', () => { openFindings(); updateFindings(); });
     view('tensions', 'Browse tensions', 'tensions');
     view('agreements', 'Browse agreements', 'agreements');
     view('research', 'Edit research context and personal claims', 'research');
     view('datasets', 'Open datasets', 'datasets');
     view('people', 'Open people', 'people');
-    view('notes', 'Open research notes', 'notes');
-    ['questions', 'boards', 'reading', 'marks', 'searches', 'connections', 'compare'].forEach(tool => {
-      const titles = {questions: 'Open research questions', boards: 'Open evidence boards', reading: 'Open reading queue', marks: 'Open marks and questions', searches: 'Open saved searches',
-        connections: 'Open claim connections', compare: 'Compare selected claims and papers'};
-      add(`tool:${tool}`, 'Action', titles[tool], '', () => {
-        const target = document.querySelector(`[data-tool="${tool}"]`);
-        revealSidebar(target);
-        target.click();
-      });
-    });
+    add('reading', 'Action', 'Open reading queue', 'Including entries for removed papers',
+      () => openPageView('tools', {tool: 'reading'}));
     add('import', 'Action', 'Add papers', 'Paste references or drop PDFs', focusPaperImport, 'import');
     add('search', 'Action', 'Search claims and PDF text', '', focusClaimSearch);
     click('btn-agent', 'Open Ask', 'chat question conversation library');
@@ -160,10 +146,6 @@ const CommandPalette = (() => {
     click('btn-settings', 'Open settings', 'appearance theme color AI');
     click('btn-help', 'Show keyboard shortcuts', 'help');
     click('btn-retag', 'Retag all papers');
-    click('btn-update-findings', 'Update findings');
-    click('btn-tensions', 'Find tensions');
-    click('btn-agreements', 'Find agreements');
-    click('btn-synth', 'Synthesize topics');
     return entries;
   }
 
@@ -207,7 +189,7 @@ const CommandPalette = (() => {
     list.innerHTML = results.map((e, i) => `<li id="command-result-${i}" role="option" data-command="${i}" aria-selected="false">
       <span class="command-kind">${esc(e.kind)}</span><span class="command-label"><strong>${esc(e.title)}</strong>
       ${e.detail ? `<small>${esc(e.detail)}</small>` : ''}</span></li>`).join('');
-    $('command-status').textContent = !results.length ? 'No matches. Try a different title, topic, board, or action.'
+    $('command-status').textContent = !results.length ? 'No matches. Try a different title, topic, or action.'
       : `${results.length < matched.length ? `${results.length} of ${matched.length}` : results.length} results in ${currentWorkspace()?.name || 'this workspace'}${results.length < matched.length ? ' · Type to narrow your search' : ''}`;
     select(force ? 0 : Math.max(0, results.findIndex(e => e.id === previous)), false);
   }
@@ -226,8 +208,8 @@ const CommandPalette = (() => {
     const entry = results[active];
     if (!entry) return;
     if (sourceWorkspace !== workspaceClient.workspaceId || workspaceController.pending) { dialog.close(); return; }
-    // Recheck the live catalog: a background refresh may have removed a paper,
-    // board, topic, or disabled an AI action since it was highlighted.
+    // Recheck the live catalog: a background refresh may have removed a paper or
+    // topic, or disabled an AI action, since it was highlighted.
     const live = catalog().find(e => e.id === entry.id);
     if (!live) { sync(true); return; }
     dialog.close();
@@ -297,7 +279,7 @@ document.addEventListener('keydown', async (event) => {
   }
   // These independent editors own their keyboard. Escape here must not reach
   // the claim-editor fallback and discard a draft elsewhere in the view.
-  if (event.target.closest?.('#workspace-notes-panel, #datasets-sheet, #people-sheet, #research-notes, #research-tools')) return;
+  if (event.target.closest?.('#datasets-sheet, #people-sheet, #research-tools')) return;
   if (event.key === 'Escape') {
     const menu = document.querySelector('.paper-actions[open]');
     if (menu) {

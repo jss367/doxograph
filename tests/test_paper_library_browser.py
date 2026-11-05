@@ -10,7 +10,7 @@ from playwright.async_api import expect
 from browser_support import browser_session, run_browser
 from doxograph import config, notebook, store
 from pdfs import minimal_pdf
-from test_browser import _answer, _paper, _poll, _server
+from test_browser import _paper, _poll, _server
 
 
 @pytest.mark.browser
@@ -202,9 +202,6 @@ def test_paper_library_metadata_navigation_and_selection(engine, width):
                 await expect(page.locator("#selection-count")).to_have_text("0 claims · 1 papers selected")
                 await expect(cards).to_have_count(4)
                 await page.get_by_role("button", name="Clear selection", exact=True).click()
-                await page.get_by_role("button", name="Select visible papers", exact=True).click()
-                await expect(page.locator("#selection-count")).to_have_text("0 claims · 4 papers selected")
-                await page.get_by_role("button", name="Clear selection", exact=True).click()
 
                 # Keyboard focus survives polling, including a changed library.
                 link = card.get_by_role("link", name=title, exact=True)
@@ -219,7 +216,6 @@ def test_paper_library_metadata_navigation_and_selection(engine, width):
                 assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
                 if engine == "chromium" and width == 1440:
-                    await page.locator("#workspace-notes-toggle").click()
                     await page.locator("#paper-sort").select_option("year-desc")
                     Path(".context").mkdir(exist_ok=True)
                     await page.screenshot(path=".context/paper-library.png")
@@ -241,7 +237,7 @@ def test_paper_library_metadata_navigation_and_selection(engine, width):
                 await card.get_by_role("link", name=title, exact=True).click()
                 if width < 800:
                     await page.locator('#btn-reader-library').click()
-                await page.locator('#graph-nav [data-view="graph"]').click()
+                await page.locator('#btn-findings').click()
                 await page.keyboard.press("/")
                 await expect(cards).to_have_count(4)
                 await expect(page.locator("#library-view-switch")).to_be_visible()
@@ -309,17 +305,6 @@ def test_library_search_topics_labels_sort_and_live_status(engine):
                 await expect(cards).to_have_count(1)
                 await expect(cards.first).to_have_attribute("data-library-paper", "two")
 
-                # A saved library search returns to papers after claim review.
-                await page.get_by_role("button", name="Save this search", exact=True).click()
-                await _answer(page, "Save search", "Favorite papers")
-                await expect(page.locator("#research-body [data-search]")).to_have_count(1)
-                await page.go_back()
-                await page.get_by_role("button", name="Extracted claims", exact=True).click()
-                await page.locator('.research-tools-nav [data-tool="searches"]').click()
-                await page.get_by_role("button", name="Open search", exact=True).click()
-                await expect(cards).to_have_count(1)
-                await expect(cards.first).to_have_attribute("data-library-paper", "two")
-
                 saved = notebook.Notebook.model_validate(notebook.load())
                 saved.reading = [notebook.Reading(paper="two", status="finished")]
                 notebook.save_notebook(saved)
@@ -355,7 +340,6 @@ def test_library_search_highlights_and_prioritizes_authors_and_titles(engine):
                 await page.goto(url)
                 cards = page.locator(".library-paper")
                 await expect(cards).to_have_count(5)
-                await page.locator("#workspace-notes-toggle").click()
                 await page.locator("#paper-sort").select_option("title")
                 await page.locator("#q").fill("storf")
                 await expect(cards).to_have_count(4)

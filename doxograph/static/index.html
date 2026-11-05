@@ -8,7 +8,6 @@
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/research-tools.css">
 <link rel="stylesheet" href="/vendor/katex.min.css">
-<link rel="stylesheet" href="/research-notes.css">
 <link rel="stylesheet" href="/datasets.css">
 <link rel="stylesheet" href="/people.css">
 </head>
@@ -29,7 +28,7 @@
   <div class="actions">
     <button type="button" id="btn-reader-claims" class="reader-only" aria-controls="claim-column" aria-expanded="true">Hide overview</button>
     <button type="button" id="btn-command-palette" aria-haspopup="dialog" aria-controls="command-palette"
-      aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, board, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
+      aria-keyshortcuts="Meta+K Control+K" title="Jump to a paper, topic, or action (⌘K / Ctrl+K)">Jump to… <kbd>⌘K</kbd></button>
     <button type="button" id="btn-agent" aria-controls="library-agent" aria-expanded="false" disabled title="Ask about the paper, the findings, or the whole library; the pane stays open while you read">Ask</button>
     <button type="button" id="btn-export">Export HTML</button>
     <details id="workspace-actions" class="action-disclosure">
@@ -207,15 +206,8 @@
 
 <div id="layout">
   <aside id="side">
-    <nav class="sidebar-focus" aria-label="Workspace tools">
-      <button type="button" data-sidebar-focus="library" aria-controls="sidebar-library" aria-pressed="false">Library</button>
-      <button type="button" data-sidebar-focus="review" aria-controls="sidebar-review" aria-pressed="false">Review</button>
-      <button type="button" data-sidebar-focus="write" aria-controls="sidebar-write" aria-pressed="false">Write</button>
-    </nav>
     <p id="ai-action-status" class="hint" hidden>AI analysis is off. Read and annotate locally, or enable analysis in Settings.</p>
-    <details id="sidebar-library" class="sidebar-group" data-sidebar-group="library" open>
-      <summary><span>Library</span><span class="sidebar-description">Find and read sources</span></summary>
-      <details id="paper-import" open><summary>Add papers</summary>
+    <details id="paper-import" open><summary>Add papers</summary>
         <div class="drop" id="drop">Drop PDFs anywhere on this page</div>
         <textarea id="refs" placeholder="Paste arXiv IDs, arXiv or DOI links, PDF URLs, or LessWrong posts — one per line"></textarea>
         <div class="row">
@@ -226,7 +218,7 @@
         <p class="hint" id="import-status" role="status" hidden></p>
         <p class="warn" id="ref-warn" hidden></p>
       </details>
-      <div class="sec paper-library">
+    <div class="sec paper-library">
         <div class="sechead">
           <h3>Papers</h3>
           <select id="paper-sort" aria-label="Sort papers">
@@ -239,82 +231,13 @@
         </div>
         <ul class="plist" id="papers" tabindex="0" aria-label="Papers in this workspace"></ul>
       </div>
-      <div class="sec research-tools-nav">
-        <button type="button" id="btn-datasets" title="Datasets used or produced by this project"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5 M4 12c0 4 16 4 16 0"/></svg>Datasets</button>
-        <button type="button" id="btn-people" title="The authors of your papers, and your notes on them"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5 M16 4.8a3.5 3.5 0 0 1 0 6.4 M18 13.8c2.2.7 3.5 2.8 3.5 6.2"/></svg>People</button>
-        <button type="button" data-tool="searches"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg>Saved searches</button>
-      </div>
-      <div class="sec" id="labels-sec" hidden>
-        <h3>Labels</h3>
-        <ul class="taglist" id="labels"></ul>
-      </div>
-      <div class="sec" id="facets-sec">
-        <h3>Facets</h3>
-        <div id="facets"></div>
-        <div class="row">
-          <button type="button" id="btn-facet">New facet</button>
-          <button type="button" id="btn-fill-facets" data-ai-action disabled hidden style="margin-left:auto"
-            title="Ask the model for the facet values on papers read before a facet was added or redescribed">Fill in</button>
-        </div>
-      </div>
-      <div class="sec">
-        <h3>Map</h3>
-        <ul class="plist" id="graph-nav"></ul>
-      </div>
-      <div class="sec">
-        <h3>Topics</h3>
-        <ul class="taglist" id="tags"></ul>
-        <div class="row">
-          <input id="new-tag" placeholder="new topic" style="flex:1">
-          <button type="button" id="btn-tag">Add</button>
-        </div>
-        <div class="row right">
-          <button type="button" id="btn-synth" data-ai-action disabled title="Ask the model what the papers, taken together, hold on each topic with two or more papers">Synthesize topics</button>
-        </div>
-      </div>
-    </details>
-    <details id="sidebar-review" class="sidebar-group" data-sidebar-group="review" open>
-      <summary><span>Review</span><span class="sidebar-description">Check and compare evidence</span></summary>
-      <div class="sec research-tools-nav">
-        <button type="button" data-tool="reading"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Reading queue</button>
-        <button type="button" data-tool="marks"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4Z"/></svg>Marks and questions</button>
-        <button type="button" data-tool="connections"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 10 7-4 M8 14l7 4"/></svg>Claim connections</button>
-      </div>
-      <div class="sec">
-        <h3>Findings</h3>
-        <ul class="plist" id="findings-nav"></ul>
-        <div class="row right">
-          <button type="button" id="btn-update-findings" data-ai-action disabled title="Find tensions, then agreements, then write each topic's synthesis">Update findings</button>
-        </div>
-      </div>
-      <div class="sec">
-        <h3>Tensions</h3>
-        <ul class="plist" id="tensions-nav"></ul>
-        <div class="row right">
-          <button type="button" id="btn-tensions" data-ai-action disabled title="Ask the model which claims in each topic pull against each other">Find tensions</button>
-        </div>
-      </div>
-      <div class="sec">
-        <h3>Agreements</h3>
-        <ul class="plist" id="agreements-nav"></ul>
-        <div class="row right">
-          <button type="button" id="btn-agreements" data-ai-action disabled title="Ask the model which claims in each topic assert the same finding">Find agreements</button>
-        </div>
-      </div>
-    </details>
-    <details id="sidebar-write" class="sidebar-group" data-sidebar-group="write" open>
-      <summary><span>Write</span><span class="sidebar-description">Develop your conclusions</span></summary>
-      <div class="sec research-tools-nav">
-        <button type="button" data-tool="notes" title="Questions, working conclusions, and next steps for this workspace"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5Z M14 3v5h5 M8 12h8 M8 16h6"/></svg>Workspace notes</button>
-        <button type="button" id="btn-research-notes" title="Long-form documents for arguments, reviews, and plans"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-3H4Z M13 7a3 3 0 0 1 3-3h5v14h-4a4 4 0 0 0-4 3"/></svg>Research notes</button>
-        <button type="button" data-tool="questions">Research questions</button>
-        <button type="button" data-tool="boards"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16 M9 11h12 M15 11v9"/></svg>Evidence boards</button>
-      </div>
-      <div class="sec">
-        <h3>Research context</h3>
-        <ul class="plist" id="research-nav"></ul>
-      </div>
-    </details>
+    <div class="sec research-tools-nav">
+      <button type="button" id="btn-people" title="The authors of your papers, and your notes on them"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5 M16 4.8a3.5 3.5 0 0 1 0 6.4 M18 13.8c2.2.7 3.5 2.8 3.5 6.2"/></svg>People</button>
+    </div>
+    <div class="sec" id="labels-sec" hidden>
+      <h3>Labels</h3>
+      <ul class="taglist" id="labels"></ul>
+    </div>
   </aside>
 
   <div id="side-resize" role="separator" aria-orientation="vertical" tabindex="0"
@@ -331,41 +254,6 @@
       <p class="eyebrow">Your workspace</p>
       <h2>Research library</h2>
       <p class="stats" id="stats"></p>
-    </div>
-    <div id="workspace-notes-home">
-      <section id="workspace-notes-panel" class="workspace-notes" aria-labelledby="workspace-notes-title" hidden>
-        <div class="workspace-notes-heading">
-          <h2 id="workspace-notes-title">Workspace notes</h2>
-          <button type="button" id="workspace-notes-toggle" aria-expanded="true" aria-controls="workspace-notes-editor">Collapse notes</button>
-        </div>
-        <p class="hint">Your questions, working conclusions, and next steps.</p>
-        <p id="workspace-notes-preview" hidden></p>
-        <div id="workspace-notes-editor">
-          <div class="note-toolbar" aria-label="Workspace writing tools">
-            <button type="button" data-workspace-format="heading">Heading</button>
-            <button type="button" data-workspace-format="bold">Bold</button>
-            <button type="button" data-workspace-format="equation">Equation</button>
-            <button type="button" data-workspace-format="table">Table</button>
-            <button type="button" data-workspace-format="link">Link</button>
-            <button type="button" id="workspace-notes-add-image">Image</button>
-            <input id="workspace-notes-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-            <label class="note-view-label">View <select id="workspace-notes-view">
-              <option value="write">Write</option><option value="split">Split</option><option value="preview">Preview</option>
-            </select></label>
-          </div>
-          <div id="workspace-notes-pages" class="note-pages" data-mode="write">
-            <div class="note-write"><textarea id="workspace-notes" aria-labelledby="workspace-notes-title" rows="4" spellcheck="true" placeholder="What are you investigating? Capture questions, thoughts, and next steps. Changes save automatically."></textarea></div>
-            <div class="note-read"><article id="workspace-notes-rich-preview" class="note-prose" aria-label="Workspace notes preview"></article></div>
-          </div>
-          <p id="workspace-notes-image-status" class="hint" role="status" hidden></p>
-        </div>
-        <div class="workspace-notes-footer">
-          <label><input type="checkbox" id="workspace-notes-keep"> Keep open while reading</label>
-          <span id="workspace-notes-status" class="hint" role="status" aria-live="polite"></span>
-          <button type="button" id="workspace-notes-retry" hidden>Retry save</button>
-          <button type="button" id="workspace-notes-reload" hidden>Reload saved version</button>
-        </div>
-      </section>
     </div>
     <section id="continue-reading" class="continue-reading" aria-labelledby="continue-title" hidden></section>
     <div id="reading-navigation" class="reader-only">
@@ -395,10 +283,7 @@
       </div>
       <div id="selection-tools" class="selection-tools">
         <span id="selection-count">Select claims or papers to work with them</span>
-        <button type="button" data-tool="select-visible">Select visible claims</button>
         <button type="button" id="ask-selection" data-needs-selection hidden>Ask about selection</button>
-        <button type="button" data-tool="compare" data-needs-selection hidden>Compare & organize</button>
-        <button type="button" data-tool="save-search">Save this search</button>
         <button type="button" id="btn-focus-review" title="Review the claims matching your current filters beside their source PDFs">Focused review</button>
         <button type="button" data-tool="clear-selection" data-needs-selection hidden>Clear selection</button>
       </div>
@@ -414,7 +299,6 @@
         aria-controls="claim-column" aria-label="Width of the overview pane"
         title="Drag to resize the overview pane — double-click to put it back"></div>
       <div id="claim-column">
-        <div id="workspace-notes-reading"></div>
         <div id="content"></div>
       </div>
     </div>
@@ -458,21 +342,6 @@
         <div id="person-document"></div>
       </div>
     </section>
-    <section id="research-notes" class="notes-sheet main-page" aria-labelledby="notes-heading" hidden>
-      <div class="sheet-head">
-        <div><h2 id="notes-heading">Research notes</h2><span class="hint">Long-form documents for arguments, reviews, and plans, connected to your library.</span></div>
-      </div>
-      <p id="notes-status" class="hint" role="status" aria-live="polite"></p>
-      <div class="notes-layout">
-        <aside class="notes-library">
-          <button type="button" data-notes-action="new" class="primary">New note</button>
-          <label for="notes-search" class="sr-only">Search research notes</label>
-          <input type="search" id="notes-search" placeholder="Search notes…">
-          <nav id="notes-list" aria-label="Research notes"></nav>
-        </aside>
-        <div id="notes-document"></div>
-      </div>
-    </section>
     <section id="research-tools" class="research-sheet main-page" aria-labelledby="research-tools-title" hidden>
       <div class="sheet-head"><h2 id="research-tools-title">Research tools</h2></div>
       <nav id="research-tabs" aria-label="Research tools"></nav>
@@ -498,7 +367,7 @@
           <div class="row chat-threads"><button type="button" id="agent-delete" hidden>Delete this conversation</button></div>
           <details class="agent-guidance"><summary>About Ask</summary>
             <p class="hint">Ask about papers and claims in this workspace, or ask Claude or Codex to add, remove, or replace paper labels based on their content. Your Doxograph notes stay private.
-              Conversations and attachments are saved in this workspace. Attached files are sent to the agent; you can save any answer as a research note. Check answers against the papers.</p>
+              Conversations and attachments are saved in this workspace. Attached files are sent to the agent. Check answers against the papers.</p>
             <p class="hint" id="agent-input-format"></p>
             <p class="hint" id="agent-codex-guidance" hidden>Codex also receives the global instructions from your Codex home directory.</p>
           </details>
@@ -549,9 +418,9 @@
     <h2 id="command-palette-title">Jump to…</h2>
     <button type="button" class="icon-button" id="btn-close-command-palette" aria-label="Close command palette">×</button>
   </div>
-  <input id="command-query" role="combobox" aria-label="Search papers, topics, boards, and actions"
+  <input id="command-query" role="combobox" aria-label="Search papers, topics, and actions"
     aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" autocomplete="off"
-    placeholder="Search papers, topics, boards, or actions…">
+    placeholder="Search papers, topics, or actions…">
   <p id="command-status" class="hint" role="status"></p>
   <ul id="command-results" role="listbox" aria-label="Destinations and actions"></ul>
   <p class="hint command-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> to move · <kbd>Enter</kbd> to open</span><span><kbd>Esc</kbd> to close</span></p>
@@ -563,7 +432,7 @@
     <button type="button" class="icon-button" id="btn-close-help" aria-label="Close shortcuts">×</button>
   </div>
   <dl class="keys">
-    <dt><kbd>⌘K</kbd> / <kbd>Ctrl K</kbd></dt><dd>jump to a paper, topic, board, or action</dd>
+    <dt><kbd>⌘K</kbd> / <kbd>Ctrl K</kbd></dt><dd>jump to a paper, topic, or action</dd>
     <dt><kbd>⌘Z</kbd> / <kbd>Ctrl Z</kbd></dt><dd>undo the last edit; add Shift to redo</dd>
     <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>move down and up the claims</dd>
     <dt><kbd>r</kbd></dt><dd>mark the claim reviewed and move to the next one</dd>
@@ -623,13 +492,10 @@
 <script src="/poller.js"></script>
 <script src="/autosave.js"></script>
 <script src="/note-writing.js"></script>
-<script src="/workspace-notes.js"></script>
-<script src="/research-notes.js"></script>
 <script src="/datasets.js"></script>
 <script src="/people.js"></script>
 <script src="/research-tools.js"></script>
 <script src="/appearance.js"></script>
-<script src="/paper-map.js"></script>
 <script src="/focused-review.js"></script>
 <script src="/chat-retry.js"></script>
 <script src="/chat-threads.js"></script>

@@ -2,7 +2,6 @@
 
 // Shared Ask panel: direct paper input or scoped retrieval and paper labeling.
 // Conversations and their evidence stay in their originating workspace.
-// Answers can be kept as workspace-local research notes.
 // Loaded after app.js, which owns `$`, `api`, `esc`, and `S`, and papers.js, which owns `paragraphs` and `sendOnEnter`.
 const agentChats = ChatThreads.create({
   prefix: 'agent',
@@ -19,11 +18,7 @@ function renderAgentChat(chat) {
     const message = document.createElement('div');
     message.className = `agent-message ${assistant ? 'agent-answer' : 'agent-question'}`;
     message.innerHTML = `<div class="agent-message-head"><span class="who">${assistant ? esc(m.assistant || 'Assistant') : 'You'}</span>
-      ${assistant ? `<div class="agent-answer-actions">
-        <button type="button" data-agent-action="${m.saved_note ? 'open' : 'save'}" data-message="${index}" ${m.saving || chat.archiving ? 'disabled' : ''}>${m.saved_note ? 'Open saved note' : m.saving ? 'Saving…' : 'Save as research note'}</button>
-        <span class="hint" role="status">${m.saved_note ? 'Saved in Research notes' : ''}</span>
-      </div>` : ''}</div>
-      ${m.saveError ? `<p class="warn" role="alert">${esc(m.saveError)}</p>` : ''}
+</div>
       <div class="agent-content ${assistant ? 'note-prose' : ''}"></div>
       ${(m.activity || []).length ? `<details class="activity"><summary>Library activity (${m.activity.length})</summary><ul>${m.activity.map(a => `<li>${esc(a)}</li>`).join('')}</ul></details>` : ''}`;
     const content = message.querySelector('.agent-content');
@@ -53,90 +48,6 @@ function renderAgentChat(chat) {
   syncAgentChatControls();
   syncAskContext();
 }
-
-function boundedNoteText(text, limit, label) {
-  return text.length <= limit ? text : `${text.slice(0, limit)}\n\n${label} shortened for note storage. Complete scope, answer, and evidence remain in the saved conversation.`;
-}
-function libraryAnswerNote(chat, index, workspace) {
-  const message = chat.messages[index];
-  const question = chat.messages[index - 1]?.content || chat.messages[index - 1]?.attachments?.[0]?.name || 'Library synthesis';
-  const title = Array.from(question.replace(/\s+/g, ' ').trim()).slice(0, 160).join('');
-  const lookups = (message.activity || []).length
-    ? `\n\n## Library activity\n\n${message.activity.map(a => `- ${a}`).join('\n')}` : '';
-  const evidence = (message.evidence || []).map(e => `- ${e.title || e.paper} · ${e.kind}${e.page ? ` · PDF page ${e.page}` : ''}${e.carried ? ` · from turn ${e.turn}` : ''}${e.stale ? ' · stale analysis' : ''}${e.status ? ` · ${e.status}` : ''}\n\n${e.text || e.quote || ''}`).join('\n\n');
-  const scope = message.scope || chat.messages[index - 1]?.scope;
-  const members = scope ? `\n\nAvailable papers at submission (${scope.papers.length} total):\n${scope.papers.slice(0, 200).map(key => {
-    const title = message.evidence?.find(e => e.paper === key)?.title;
-    return `- ${title && title !== key ? `${title.slice(0, 200)} (${key})` : key}`;
-  }).join('\n')}${scope.papers.length > 200 ? `\n\n${scope.papers.length - 200} additional papers omitted from this note; complete membership remains in the saved conversation.` : ''}` : '';
-  const provenance = `\n\n## Sources\n\n${scope ? scopeLabel(scope, workspace) : 'Evidence details unavailable for this older answer'}${members}\n\n${evidence}\n\nModel: ${message.model || 'Not recorded'}`;
-  let answer = answerMarkdown(message);
-  for (const c of message.citations || []) {
-    const e = (message.evidence || []).find(e => e.ref === c.ref);
-    const url = c.valid ? citationUrl(c, workspace) : '';
-    answer = answer.replaceAll(c.token, c.valid ? `[${e?.title || c.paper}${c.page ? `, PDF page ${c.page}` : ''}](${url})` : `${c.token} (unverified reference)`);
-  }
-  return {title, body: boundedNoteText(`## Question\n\n${question}\n\n## Answer\n\n${answer}\n\n---\n\nSaved from Ask the library · ${message.assistant || 'Assistant'} · ${message.created || new Date().toISOString()}${lookups}${provenance}`, 1_900_000, 'Note')};
-}
-
-$('agent-messages').addEventListener('click', async (event) => {
-  const button = event.target.closest('button[data-agent-action]');
-  const chat = activeAgentChat(), workspace = agentChats.workspace;
-  if (!button || !chat || chat.archiving) return;
-  const index = Number(button.dataset.message);
-  const message = chat.messages[index];
-  if (message?.role !== 'assistant' || message.saving) return;
-  if (button.dataset.agentAction === 'open') {
-    message.saving = true;
-    message.saveError = '';
-    agentChats.sync();
-    try {
-      const {notes} = await api('/api/research-notes', {headers: {'X-Doxograph-Workspace': workspace}});
-      if (!notes.some(note => note.id === message.saved_note)) {
-        message.saved_note = null;
-        message.note_operation = null;
-        message.saveError = 'The saved note was deleted. You can save this answer again.';
-        await agentChats.save(chat);
-        return;
-      }
-      // A saved answer always belongs to the workspace it was generated in.
-      if (workspaceClient.workspaceId !== workspace) {
-        await switchWorkspace(workspace);
-        if (workspaceClient.workspaceId !== workspace) return;
-      }
-      // The note opens in the main pane; the conversation stays beside it.
-      await ResearchNotes.open(message.saved_note);
-    } catch (error) { message.saveError = `Could not open this note: ${error.message}`; }
-    finally {
-      message.saving = false;
-      agentChats.sync();
-    }
-    return;
-  }
-  if (message.saved_note) return;
-  message.saving = true;
-  message.saveError = '';
-  agentChats.sync();
-  try {
-    // Reuse the operation even when the server committed but its response was lost. Post only once
-    // the conversation holding it is on disk, so a retry after a reload also returns the committed note.
-    message.note_operation ||= Array.from(crypto.getRandomValues(new Uint8Array(16)),
-      byte => byte.toString(16).padStart(2, '0')).join('');
-    const noteBody = libraryAnswerNote(chat, index, workspace);
-    if (!await agentChats.save(chat)) throw new Error('the conversation could not be saved first. Try again.');
-    const note = await api('/api/research-notes', {
-      method: 'POST', headers: {'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace,
-        'Idempotency-Key': message.note_operation},
-      body: JSON.stringify(noteBody),
-    });
-    message.saved_note = note.id;
-    await agentChats.save(chat);
-  } catch (error) { message.saveError = `Could not save this answer: ${error.message}`; }
-  finally {
-    message.saving = false;
-    agentChats.sync();
-  }
-});
 
 function syncAgentChatControls() {
   const chat = activeAgentChat();

@@ -157,14 +157,6 @@ def test_reading_panes_toggle_without_losing_the_document_or_drafts(engine, widt
                 await page.locator('#btn-reader-library').click()
                 await expect(page.locator('#side')).to_be_visible()
 
-                # Asking for workspace notes brings the hidden column back.
-                await page.locator('#btn-reader-claims').click()
-                await page.locator('[data-sidebar-focus="write"]').click()
-                await page.locator('.research-tools-nav [data-tool="notes"]').click()
-                await expect(page.locator('#claim-column')).to_be_visible()
-                await expect(page.locator('#workspace-notes')).to_be_focused()
-                await expect(page.locator('#btn-reader-claims')).to_have_attribute('aria-expanded', 'true')
-
                 await page.locator('#btn-reader-claims').click()
                 # Adding a claim opens the drawer it is written in.
                 await page.locator('#claims-drawer-bar [data-act="toggle-claims"]').click()
@@ -346,45 +338,6 @@ def test_reading_layout_and_library_return(engine, width):
                 await expect(page.locator('textarea[data-note="paper"]')).to_have_count(0)
                 await expect(page.locator('#content .paper-overview .note')).to_contain_text('Saved from the reader.')
                 assert store.load_paper('paper')['notes'] == 'Saved from the reader.'
-                assert not errors
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('width', [1440, 390])
-def test_workspace_notes_keep_open_in_reading_layout(engine, width):
-    config.set_ai_enabled(False)
-    store.save_paper(store.new_paper('paper', title='Reading with workspace notes'))
-    store.pdf_path('paper').write_bytes(minimal_pdf(['The first page.', 'The second page.']))
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
-            errors = []
-            page.on('pageerror', lambda error: errors.append(str(error)))
-            with _server() as url:
-                await page.goto(url)
-                editor = page.locator('#workspace-notes')
-                await editor.fill('A question to keep beside the paper.')
-                await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
-                await page.locator('#workspace-notes-keep').check()
-                await page.set_viewport_size({'width': width, 'height': 1000})
-                await page.locator('#papers li[data-paper="paper"]').click()
-                await page.locator('#reader .pdf-page[data-page="1"]:not(.pending)').wait_for()
-                panel = page.locator('#workspace-notes-reading #workspace-notes-panel')
-                await expect(panel).to_be_visible()
-                assert await page.locator('#workspace-notes').count() == 1
-                await editor.scroll_into_view_if_needed()
-                await expect(editor).to_be_in_viewport()
-                assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-                assert await panel.evaluate('(node) => node.scrollWidth <= node.clientWidth')
-                await editor.fill('A revised question, saved while reading.')
-                await expect(page.locator('#workspace-notes-status')).to_have_text('Saved')
-                await page.reload()
-                await expect(panel).to_be_visible()
-                await expect(page.locator('#workspace-notes-keep')).to_be_checked()
-                await expect(editor).to_have_value('A revised question, saved while reading.')
                 assert not errors
     run_browser(scenario())
 
@@ -761,7 +714,10 @@ def test_resuming_a_paper_from_the_reading_queue_leaves_the_drawer_closed(engine
                 notebook['reading'] = [{'paper': 'paper', 'status': 'queued', 'page': 1, 'bookmarks': []}]
                 assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
                 await page.goto(url)
-                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.wait_for_function('libraryInitialized')
+                await page.locator('#btn-command-palette').click()
+                await page.locator('#command-query').fill('Open reading queue')
+                await page.locator('#command-results').get_by_text('Open reading queue', exact=True).click()
                 await ready(page)
                 # The queue asks for the paper, not one of its claims: the
                 # first claim is selected, but the drawer stays as it was left.

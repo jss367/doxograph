@@ -35,7 +35,7 @@ function layoutPanes(reading) {
   }
   fitClaimsWidth();
   const filtersOpen = document.body.classList.contains('reading-filters-open');
-  const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.facet || V.ledger || V.unreviewed || V.unverified);
+  const filtered = Boolean(V.q || V.kind || V.tag || V.label || V.ledger || V.unreviewed || V.unverified);
   $('btn-reader-filters').textContent = filtered ? 'Claim filters · active' : 'Claim filters';
   $('btn-reader-filters').setAttribute('aria-expanded', String(filtersOpen));
   ResearchTools.mountReader(reading);

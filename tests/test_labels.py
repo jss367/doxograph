@@ -647,6 +647,8 @@ def test_paper_menu_keyboard_focus_survives_dismissal_and_label_saves(engine):
                 await expect(menu).to_be_hidden()
                 await expect(trigger).to_be_focused()
 
+                # A window short enough for the sidebar to scroll.
+                await page.set_viewport_size({"width": 1120, "height": 320})
                 await page.keyboard.press("Enter")
                 await expect(menu.get_by_role("button", name="Open the PDF")).to_be_focused()
                 await page.locator("#side").evaluate("side => { side.scrollTop += 64; }")
@@ -794,12 +796,6 @@ def test_labels_spelled_in_different_cases_are_one_label_in_the_page():
                 await page.locator('#papers [data-paper="none2026"]').wait_for(state="detached")
                 await page.locator('#papers [data-paper="lower2026"]').wait_for()
 
-                # The map greys only the paper without it, whatever the case.
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.wait_for_function("window.doxographGraph().nodes.length === 4")
-                dimmed = await page.evaluate(
-                    "Object.fromEntries(window.doxographGraph().nodes.map(n => [n.key, n.dimmed]))")
-                assert dimmed == {"upper2026": False, "third2026": False, "lower2026": False, "none2026": True}
                 await page.goto(f"{url}#view=claims&label=RLHF")
                 await page.reload()
                 await page.locator('#labels [data-label="RLHF"].active').wait_for()

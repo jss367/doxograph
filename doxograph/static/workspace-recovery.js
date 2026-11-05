@@ -38,14 +38,12 @@
     button.disabled = true;
     toast('Preparing the workspace archive…');
     try {
-      if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
       const result = await api('/api/workspace/archive', {method:'POST', headers:{'X-Doxograph-Workspace':workspace}});
       download(result.download, workspace);
     } catch (error) { toast(`Could not prepare the archive: ${error.message}`, {tone:'warn'}); }
     finally { button.disabled = false; }
   });
   $('btn-workspace-backups').addEventListener('click', async () => {
-    if (!await WorkspaceNotes.flush()) { WorkspaceNotes.reveal(); return; }
     owner = workspaceClient.workspaceId;
     $('backup-versions').replaceChildren();
     $('backups-status').textContent = 'Loading previous versions…';

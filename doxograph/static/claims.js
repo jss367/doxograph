@@ -128,8 +128,7 @@ function claimCard(row, shown, group = '') {
   const cite = `${(row.paper_authors || [])[0] ? row.paper_authors[0].split(' ').pop() : row.paper}`
     + ` ${row.paper_year || ''}`;
   const tags = (row.tags || []).map((t) => `<span class="tag" data-tag="${esc(t)}">#${esc(t)}</span>`).join(' ');
-  const facetChips = claimFacetValues(row).map(([name, value]) => `<span class="facet-value"
-    data-facet="${esc(name)}" data-facet-value="${esc(value)}" title="Filter by ${esc(name)}: ${esc(value)}"><span class="facet-name">${esc(name)}</span> ${esc(value)}</span>`).join(' ');
+  const facetChips = claimFacetValues(row).map(([name, value]) => `<span class="facet-value"><span class="facet-name">${esc(name)}</span> ${esc(value)}</span>`).join(' ');
   const links = (row.ledger_links || []).map((l) => {
     const own = S.ledger.find((c) => c.id === l.claim);
     return `<div class="link"><span class="rel">${esc(l.relation)}</span>

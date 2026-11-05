@@ -8,7 +8,7 @@ from browser_support import browser_session, run_browser
 from doxograph import config, store
 from test_ask_browser import _server
 from test_browser import _answer
-from test_tools_action_history_browser import inert_tools as inert_tools
+from browser_support import inert_tools as inert_tools
 
 
 def seed():
@@ -39,7 +39,7 @@ async def editor(page, kind, claims, second=False):
         await page.locator(f'#papers li[data-paper="{identity}"]').click()
         await page.locator(f'[data-act="edit-note"][data-paper="{identity}"]').click()
         return page.locator(f'textarea[data-note="{identity}"]'), identity
-    await page.locator('#research-nav [data-view="research"]').click()
+    await page.locator('#btn-workspace').click()
     return page.locator('#research-context'), 'context'
 
 

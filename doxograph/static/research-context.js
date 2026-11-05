@@ -2,17 +2,6 @@
 
 // The research context and the reader's own claims, edited in one form.
 
-function renderResearchNav() {
-  const n = (S.ledger || []).length;
-  const bits = [];
-  bits.push(S.context ? 'context written' : 'no context yet');
-  bits.push(n ? `${n} claims of my own` : 'no claims of my own');
-  if (V.view !== 'research' && researchFormDirty()) bits.push('unsaved edits');
-  $('research-nav').innerHTML = `<li class="${V.view === 'research' ? 'active' : ''}" data-view="research">
-    <span class="pt">What I am studying</span>
-    <span class="pm">${esc(bits.join(' · '))}</span></li>`;
-}
-
 // --- research: the context and the ledger, edited in place -----------------
 //
 // context.md and ledger.yaml are the two inputs that most shape what
@@ -37,6 +26,7 @@ function ledgerRow(claim, i) {
 // the form into `V.researchDraft` before any of that, and draw from the draft
 // when there is one, so navigating away and back finds the text as it was.
 function captureResearchDraft() {
+  if ($('new-tag')) V.topicDraft = $('new-tag').value;
   if (!$('research-form')) return;
   const current = readResearchForm();
   // A form nobody has typed into is not a draft. It is judged against what
@@ -115,11 +105,28 @@ function renderResearch() {
 // use that the vocabulary does not list is marked, as in the sidebar. A click
 // opens the library on the topic.
 function workspaceTopics() {
+  return `<h2>Topics</h2><div id="workspace-topic-list">${workspaceTopicList()}</div>
+    <div class="row topic-add"><input id="new-tag" value="${esc(V.topicDraft || '')}" placeholder="new topic" aria-label="New topic">
+    <button type="button" id="btn-tag">Add topic</button></div>`;
+}
+
+function topicNameDraft() {
+  return $('new-tag')?.value ?? V.topicDraft ?? '';
+}
+
+// Refresh confirmed vocabulary without replacing the research form, its
+// focus or a topic name being typed while an earlier request finishes.
+function syncWorkspaceTopics() {
+  const list = $('workspace-topic-list');
+  if (list) list.innerHTML = workspaceTopicList();
+}
+
+function workspaceTopicList() {
   const counts = S.tag_counts || {};
   const declared = (S.tags || []).map((t) => t.name);
   const names = [...declared, ...Object.keys(counts).filter((name) => !declared.includes(name)).sort()];
-  if (!names.length) return '<h2>Topics</h2><p class="hint">No topics yet. The vocabulary is written as papers are read.</p>';
-  return `<h2>Topics</h2><ul class="topic-list">${names.map((name) => {
+  if (!names.length) return '<p class="hint">No topics yet. The vocabulary is written as papers are read.</p>';
+  return `<ul class="topic-list">${names.map((name) => {
     const description = (S.tags.find((t) => t.name === name) || {}).description || '';
     return `<li data-open-topic="${esc(name)}" title="${esc(description)}">${esc(name)}${declared.includes(name) ? '' : ' *'}<span class="n">${counts[name] || 0}</span></li>`;
   }).join('')}</ul>`;
@@ -221,12 +228,3 @@ $('panes').addEventListener('submit', async (event) => {
   await saveResearch();
 });
 
-$('research-nav').addEventListener('click', (event) => {
-  if (!event.target.closest('[data-view]')) return;
-  // Clicking the item already shown is not navigation. Redrawing here would
-  // rebuild the form from `S` and throw away whatever has been typed into it.
-  if (V.view === 'research') return;
-  showView('research');
-  syncHash(true);
-  renderAll();
-});

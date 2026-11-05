@@ -82,12 +82,16 @@ $('btn-workspace-add').addEventListener('click', async () => {
   }
 });
 
-$('btn-tag').addEventListener('click', async () => {
-  const name = $('new-tag').value.trim();
+// The box is on the Workspace page, drawn with it, so the click is caught
+// on the document.
+document.addEventListener('click', async (event) => {
+  if (!event.target.closest('#btn-tag')) return;
+  const input = $('new-tag'), value = input.value, name = value.trim();
+  const workspace = workspaceClient.workspaceId;
   if (!name) return;
   try {
     await api('/api/tags', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Doxograph-Workspace': workspace },
       body: JSON.stringify({ name, description: '' }),
     });
   } catch (error) {
@@ -95,8 +99,12 @@ $('btn-tag').addEventListener('click', async () => {
     toast(`Could not add the topic: ${error.message}`, { tone: 'warn' });
     return;
   }
-  $('new-tag').value = '';
+  // Only this submitted field owns the completion; a later visit or newer
+  // unsent name must survive it. The request still belongs to its workspace.
+  if (workspaceClient.workspaceId !== workspace) return;
+  if (input.isConnected && input.value === value) input.value = '';
   await refresh();
+  if (workspaceClient.workspaceId === workspace) syncWorkspaceTopics();
 });
 
 $('btn-retag').addEventListener('click', async () => {
