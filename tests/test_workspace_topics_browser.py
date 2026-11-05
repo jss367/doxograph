@@ -47,6 +47,9 @@ def test_add_topic_completion_preserves_current_writing(move):
             with _server() as url:
                 other = httpx.post(url + '/api/workspaces', json={'name': 'Other'}).json()['workspace']['id']
                 await page.goto(url)
+                # Startup still applies navigation state after the page loads.
+                # Exercise topic completion only once that initial load is done.
+                await expect(page.locator('#btn-refresh-library')).to_be_enabled()
                 await page.locator('#btn-workspace').click()
                 context = page.locator('#research-context')
                 await context.fill('Preserve my context draft')
