@@ -52,8 +52,9 @@ _VERBS = {"search_papers": "Searched papers", "search_claims": "Searched claims"
           "list_topics": "Listed topics", "read_evidence": "Read", "read_passage": "Read passage",
           "list_notes": "Searched notes", "read_note": "Read note", "list_datasets": "Searched datasets",
           "list_people": "Searched people", "update_paper_labels": "Requested label update",
-          "update_paper": "Updated paper", "save_claim": "Saved claim", "save_dataset": "Saved dataset",
-          "save_person": "Saved person", "save_note": "Saved note"}
+          "update_paper": "Requested paper update", "save_claim": "Requested claim save",
+          "save_dataset": "Requested dataset save", "save_person": "Requested person save",
+          "save_note": "Requested note save"}
 
 
 def instructions(workspace: str, focus: str | None) -> str:

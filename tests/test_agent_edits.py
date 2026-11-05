@@ -54,7 +54,7 @@ def test_people_and_notes_are_readable_and_writable():
 
 def test_paper_and_claim_edits_stay_inside_selected_sources():
     claim = seed("inside")["claims"][0]
-    seed("outside")
+    outside_claim = seed("outside")["claims"][0]
     conn = connection(papers=["inside"])
     assert call(conn, "update_paper", key="inside", venue="ICML", year=2026)["venue"] == "ICML"
     assert store.load_paper("inside")["notes"] == "Mine"
@@ -62,7 +62,32 @@ def test_paper_and_claim_edits_stay_inside_selected_sources():
     added = call(conn, "save_claim", paper="inside", text="A second claim.", quote="second")
     assert len(store.load_paper("inside")["claims"]) == 2 and added["text"] == "A second claim."
     for tool, arguments in (("update_paper", {"key": "outside", "venue": "X"}),
-                            ("save_claim", {"paper": "outside", "text": "Escaped"})):
+                            ("save_claim", {"paper": "outside", "text": "Escaped"}),
+                            ("save_claim", {"paper": "outside", "claim_id": outside_claim["id"], "text": "Escaped"})):
         with pytest.raises(ToolError, match="outside the selected sources"):
             call(conn, tool, **arguments)
     assert not store.load_paper("outside").get("venue") and len(store.load_paper("outside")["claims"]) == 1
+    assert store.load_paper("outside")["claims"][0]["text"] == outside_claim["text"]
+
+
+def test_a_claim_id_cannot_route_an_edit_to_another_paper():
+    seed("inside")
+    outside = seed("outside")["claims"][0]
+    with pytest.raises(ToolError):
+        call(connection(papers=["inside"]), "save_claim", paper="inside",
+             claim_id=f"../../outside/claims/{outside['id']}", text="Escaped")
+    assert store.load_paper("outside")["claims"][0]["text"] == outside["text"]
+
+
+def test_dataset_search_matches_custom_field_text_only():
+    conn = connection()
+    call(conn, "save_dataset", name="A", custom_fields=[{"name": "Tasks", "value": "17"}])
+    assert call(conn, "list_datasets", q="tasks 17")["total"] == 1
+    assert call(conn, "list_datasets", q="value")["total"] == 0
+
+
+def test_a_blank_note_title_is_refused_not_ignored():
+    conn = connection()
+    note = call(conn, "save_note", title="Kept", body="x")
+    with pytest.raises(ToolError):
+        call(conn, "save_note", note_id=note["id"], title="")

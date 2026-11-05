@@ -33,6 +33,8 @@ LABEL_WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True,
 RECORD_WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True,
                                idempotent_hint=False, open_world_hint=False)
 RecordId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
+# One path segment, so an ID cannot route a request to another paper.
+ClaimId = Annotated[str, Field(min_length=1, max_length=300, pattern=r"^[A-Za-z0-9_.:-]+$")]
 Label = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^,]+$")]
 SCOPED_SEARCHES = ("/api/query/papers", "/api/query/claims", "/api/query/evidence", "/api/search")
 # Workspace records that belong to no one paper, so a source selection does not bound them.
@@ -117,7 +119,8 @@ def _instructions(workspace: str | None, *, allow_labels: bool, allow_edits: boo
         "claim IDs, quotes, and locators. Check reviewed, quote_verified, stale, status, "
         "and storage_issues before treating a result as established evidence. "
         "Follow next_offset for additional results. No tool imports or calls a model. "
-        + ("Edit tools create and update papers, claims, datasets, people, and notes; none deletes anything. "
+        + ("Edit tools update papers and create or update claims, datasets, people, and notes; "
+           "none deletes anything. "
            if allow_edits else "Only update_paper_labels can edit the library. " if allow_labels
            else "No tool edits the library. ")
         + (" Personal notes are not available." if without_notes else "")
@@ -372,9 +375,15 @@ def _add_note_tools(server: MCPServer, api: _LocalApi) -> None:
 
 def _matching(rows: list[dict[str, Any]], q: str, limit: int, offset: int, *fields: str) -> dict[str, Any]:
     """One page of the records whose fields contain every query word, ignoring case."""
+    def text(value: Any) -> str:
+        if isinstance(value, dict):
+            return " ".join(text(v) for v in value.values())
+        if isinstance(value, list):
+            return " ".join(text(v) for v in value)
+        return str(value or "")
+
     terms = q.lower().split()
-    rows = [row for row in rows if all(term in json.dumps([row.get(f) for f in fields], ensure_ascii=False).lower()
-                                       for term in terms)]
+    rows = [row for row in rows if all(term in text([row.get(f) for f in fields]).lower() for term in terms)]
     end = offset + limit
     return {"items": rows[offset:end], "total": len(rows), "offset": offset,
             "next_offset": end if end < len(rows) else None}
@@ -493,7 +502,7 @@ def _add_edit_tools(server: MCPServer, api: _LocalApi) -> None:
 
     @server.tool(annotations=RECORD_WRITE)
     async def save_claim(
-            workspace: Workspace, paper: PaperKey, claim_id: str | None = None, text: str | None = None,
+            workspace: Workspace, paper: PaperKey, claim_id: ClaimId | None = None, text: str | None = None,
             kind: str | None = None, strength: str | None = None, tags: list[str] | None = None,
             facets: dict[str, list[str]] | None = None, evidence: str | None = None, quote: str | None = None,
             locator: str | None = None, note: str | None = None, reviewed: bool | None = None,
@@ -546,7 +555,7 @@ def _add_edit_tools(server: MCPServer, api: _LocalApi) -> None:
         if saved_note is None:
             raise ToolError(f"No note has ID {note_id!r}. Use list_notes to find it.")
         return await api.get(f"/api/research-notes/{note_id}", workspace, method="PUT",
-                             body={"title": title or saved_note["title"],
+                             body={"title": saved_note["title"] if title is None else title,
                                    "body": saved_note["body"] if body is None else body,
                                    "revision": saved_note["revision"]})
 

@@ -470,7 +470,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace", help="restrict all tools to this workspace ID")
     p.add_argument("--allow-labels", action="store_true", help="allow paper label edits (requires --workspace)")
     p.add_argument("--allow-edits", action="store_true",
-                   help="allow creating and updating papers, claims, datasets, people, and notes (requires --workspace)")
+                   help="allow updating papers and creating or updating claims, datasets, people, and notes "
+                        "(requires --workspace)")
     source_scope = p.add_mutually_exclusive_group()
     source_scope.add_argument("--papers", nargs="+", help="restrict tools to these paper keys (requires --workspace)")
     source_scope.add_argument("--papers-file", help=argparse.SUPPRESS)
