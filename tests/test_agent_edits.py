@@ -57,6 +57,8 @@ def test_paper_and_claim_edits_stay_inside_selected_sources():
     outside_claim = seed("outside")["claims"][0]
     conn = connection(papers=["inside"])
     assert call(conn, "update_paper", key="inside", venue="ICML", year=2026)["venue"] == "ICML"
+    assert call(conn, "update_paper", key="inside", clear=["year"])["year"] is None
+    assert store.load_paper("inside")["venue"] == "ICML"
     assert store.load_paper("inside")["notes"] == "Mine"
     assert call(conn, "save_claim", paper="inside", claim_id=claim["id"], limitations="Small sample")["limitations"] == "Small sample"
     added = call(conn, "save_claim", paper="inside", text="A second claim.", quote="second")

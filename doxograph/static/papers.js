@@ -446,7 +446,7 @@ function paperNote(key) {
       <textarea id="paper-note-${esc(key)}" data-note="${esc(key)}" rows="4"
         placeholder="What you make of this paper: what to read it for, what it gets wrong, what to do about it.">${esc(text)}</textarea>
       <div class="smeta">
-        <span class="hint">Yours. Nothing sends it to a model. Saves as you write.</span>
+        <span class="hint">Yours. Only Ask's Claude and Codex assistants can read it. Saves as you write.</span>
         <span class="hint" data-note-status="${esc(key)}">${esc(status)}</span>
         <span class="cact" style="margin-left:auto">
           <button type="button" data-act="done-note" data-paper="${esc(key)}"${V.noteEditing === key ? '' : ' hidden'}>Done</button>

@@ -488,14 +488,21 @@ def _add_edit_tools(server: MCPServer, api: _LocalApi) -> None:
             year: int | None = None, publication_date: str | None = None, venue: str | None = None,
             doi: str | None = None, summary: str | None = None, relevance: str | None = None,
             notes: str | None = None, labels: list[str] | None = None,
-            code: list[str] | None = None) -> dict[str, Any]:
+            code: list[str] | None = None,
+            clear: list[Literal["year", "publication_date", "venue", "doi", "summary", "relevance"]] | None = None
+            ) -> dict[str, Any]:
         """Correct or fill a paper's metadata and the user's note on it. Only the fields given change.
 
         publication_date is YYYY, YYYY-MM, or YYYY-MM-DD. Code is a list of repository URLs.
         Labels replace the saved list; use update_paper_labels to add or remove labels.
+        Clear names fields to empty, such as a wrong year; text fields also clear with "".
         """
         fields = _sent(title=title, authors=authors, year=year, publication_date=publication_date, venue=venue,
                        doi=doi, summary=summary, relevance=relevance, notes=notes, labels=labels, code=code)
+        for name in clear or []:
+            if name in fields:
+                raise ToolError(f"Either set or clear {name}, not both.")
+            fields[name] = None
         if not fields:
             raise ToolError("Give at least one field to change.")
         return await api.get(f"/api/papers/{key}", workspace, method="PATCH", body=fields)
