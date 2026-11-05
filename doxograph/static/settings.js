@@ -240,10 +240,17 @@ $('ai-provider-form').addEventListener('submit', async (event) => {
 // palette and from links, so hiding only removes the button.
 const SIDE_NAV_KEY = 'doxograph-hidden-side-nav';
 let hiddenSideNav = new Set();
-try {
-  const saved = JSON.parse(localStorage.getItem(SIDE_NAV_KEY));
-  if (Array.isArray(saved)) hiddenSideNav = new Set(saved);
-} catch (_) { /* every button shows */ }
+let sideNavMenuTrigger = null;
+
+// Another tab may have changed the choice since this page loaded, so read it
+// again before each change rather than overwrite it with a stale copy.
+function readSideNav() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SIDE_NAV_KEY));
+    if (Array.isArray(saved)) hiddenSideNav = new Set(saved);
+  } catch (_) { /* keep what this page has */ }
+}
+readSideNav();
 
 function syncSideNav() {
   const buttons = [...document.querySelectorAll('[data-side-nav]')];
@@ -253,12 +260,19 @@ function syncSideNav() {
 }
 
 function setSideNavHidden(name, hidden) {
+  readSideNav();
   if (hidden) hiddenSideNav.add(name); else hiddenSideNav.delete(name);
   try { localStorage.setItem(SIDE_NAV_KEY, JSON.stringify([...hiddenSideNav])); } catch (_) { /* preference remains for this page */ }
   syncSideNav();
 }
 
 syncSideNav();
+window.addEventListener('storage', (event) => {
+  if (event.key !== SIDE_NAV_KEY) return;
+  hiddenSideNav = new Set();
+  readSideNav();
+  syncSideNav();
+});
 
 document.querySelector('.research-tools-nav').addEventListener('contextmenu', (event) => {
   const button = event.target.closest('[data-side-nav]');
@@ -272,14 +286,29 @@ document.querySelector('.research-tools-nav').addEventListener('contextmenu', (e
   const y = event.clientY || button.getBoundingClientRect().bottom;
   menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 4))}px`;
   menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 4))}px`;
-  if (!event.clientX && !event.clientY) menu.querySelector('button').focus({ preventScroll: true });
+  // Opened from the keyboard, focus goes into the menu and Escape brings it back.
+  sideNavMenuTrigger = !event.clientX && !event.clientY ? button : null;
+  if (sideNavMenuTrigger) menu.querySelector('button').focus({ preventScroll: true });
+});
+
+$('ctxmenu').addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !sideNavMenuTrigger || !$('ctxmenu').querySelector('[data-act="hide-side-nav"]')) return;
+  const trigger = sideNavMenuTrigger;
+  sideNavMenuTrigger = null;
+  closePaperMenu();
+  trigger.focus({ preventScroll: true });
+  event.preventDefault();
+  event.stopPropagation();   // the menu was ours; no editor behind it should see this Escape
 });
 
 $('ctxmenu').addEventListener('click', (event) => {
   const button = event.target.closest('[data-act="hide-side-nav"]');
   if (!button) return;
+  sideNavMenuTrigger = null;
   closePaperMenu();
   setSideNavHidden(button.dataset.sideNavTarget, true);
+  // The button that held focus is gone; keep keyboard users in the sidebar.
+  (document.querySelector('[data-side-nav]:not([hidden])') || $('papers')).focus({ preventScroll: true });
 });
 
 function syncThemeControls() {

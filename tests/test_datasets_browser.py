@@ -583,6 +583,56 @@ def test_sidebar_buttons_hide_on_right_click_and_return_from_settings(engine):
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
+    config.set_ai_enabled(False)
+    keyboard_menu = "el => el.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))"
+    focused = "() => document.activeElement && document.activeElement.id"
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            context = await browser.new_context(viewport={'width': 1100, 'height': 900})
+            page = await context.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await page.locator('#btn-settings').wait_for()
+                datasets = page.locator('#btn-datasets')
+                menu_item = page.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar')
+
+                # A keyboard-opened menu takes focus, and Escape hands it back.
+                await datasets.evaluate(keyboard_menu)
+                await page.wait_for_function("document.activeElement?.dataset.act === 'hide-side-nav'")
+                await page.keyboard.press('Escape')
+                assert await page.locator('#ctxmenu').is_hidden()
+                assert await page.evaluate(focused) == 'btn-datasets'
+
+                # Hiding the focused button moves focus to the one left.
+                await datasets.evaluate(keyboard_menu)
+                await menu_item.press('Enter')
+                await datasets.wait_for(state='hidden')
+                assert await page.evaluate(focused) == 'btn-people'
+
+                # A tab opened before a change elsewhere follows it, and its own
+                # change keeps the other tab's.
+                other = await context.new_page()
+                await other.goto(url)
+                await other.locator('#btn-settings').wait_for()
+                await page.locator('#btn-settings').click()
+                await page.locator('input[name="side-nav"][value="datasets"]').check()
+                await other.locator('#btn-datasets').wait_for(state='visible')
+                await page.locator('input[name="side-nav"][value="datasets"]').uncheck()
+                await other.locator('#btn-datasets').wait_for(state='hidden')
+                await other.locator('#btn-people').click(button='right')
+                await other.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
+                assert sorted(await other.evaluate("JSON.parse(localStorage.getItem('doxograph-hidden-side-nav'))")) == ['datasets', 'people']
+            assert errors == []
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_datasets_view_keeps_the_library_usable_and_the_draft_across_navigation(engine):
     config.set_ai_enabled(False)
     store.save_paper(store.new_paper('study', title='Evaluation study'))
