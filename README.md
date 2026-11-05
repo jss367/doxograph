@@ -241,20 +241,25 @@ and multiple-paper retrieval require **Claude subscription (Claude Code)** or
 you explicitly choose a supported one; Doxograph never switches billing modes
 for you. All Ask requests require AI analysis to be enabled.
 
-Claude and Codex assistants search through the [MCP server](#query-doxograph-from-agents)
-and can add, remove, or replace paper labels when asked. For example: “Label papers
-about activation steering based on their content.” They read the sources before
-classifying papers and add labels by default, preserving existing ones. The chat's
-**Library activity** lists label-edit requests alongside lookups. Single-paper chat
-keeps its full-paper input and can label that paper; API-based paper chat answers
-questions without editing labels.
+Claude and Codex assistants work through the [MCP server](#query-doxograph-from-agents)
+with `--allow-edits`. They read everything in the workspace, including your notes,
+datasets, and people, and create or update them when asked: paper metadata and
+notes, labels, claims, datasets, people, and research or workspace notes. For
+example: “Add the datasets these papers use that aren't in my datasets yet” or
+“Label papers about activation steering based on their content.” They check
+existing records before creating new ones and add labels by default, preserving
+existing ones. The chat's **Library activity** lists edits alongside lookups.
+Single-paper chat keeps its full-paper input and has the same tools; API-based
+paper chat answers questions without tools.
 
-The agents have no shell, file, or web tools and cannot edit claims or notes. They
+The agents have no shell, file, or web tools, and no tool deletes anything. They
 can retrieve metadata, claims, PDF passages, and existing analyses. A selected-paper
 connection enforces its paper list before ranking, counts, and pagination; it omits library-wide topics
 and syntheses and excludes agreements or tensions with outside dependencies.
 Whole-library requests retain topic and synthesis access within their captured
-paper membership. Label edits obey the same workspace and paper membership.
+paper membership. Paper, claim, and label edits obey the same workspace and paper
+membership. Datasets, people, and notes belong to the workspace, so a paper
+selection does not restrict them.
 Searching the library does not mean reading every paper.
 
 Retrieval captures the workspace and available papers when you send the question.
@@ -745,12 +750,19 @@ This registers `update_paper_labels`, which accepts `papers`, `labels`, and a `m
 of `add` (the default), `remove`, or `replace`. It edits up to 200 papers per call;
 `replace` with an empty label list clears their labels. `--papers <key> ...` further
 restricts both reading and labeling to those papers. Label edits cannot cross the
-bound workspace. In-app Claude and Codex chats enable labeling automatically.
+bound workspace.
+
+`--allow-edits --workspace <id>` adds label editing plus `list_datasets`,
+`list_people`, `update_paper`, `save_claim`, `save_dataset`, `save_person`, and
+`save_note`. The save tools create a record when given no ID and otherwise change
+only the fields passed. None deletes anything. With `--papers`, paper and claim
+edits stay within those papers, while datasets, people, and notes remain
+reachable. In-app Claude and Codex chats run the server this way.
 
 Add `--without-notes` to leave out the note tools and the personal fields of the
 other tools: paper notes, claim notes, and links from claims to your own claims.
-Searches then cannot match text inside them. The in-app **Ask the library** chat
-runs the server this way.
+Searches then cannot match text inside them. It cannot be combined with
+`--allow-edits`.
 
 | Tool | What it reads |
 | --- | --- |

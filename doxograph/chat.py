@@ -1,4 +1,4 @@
-"""Paper-scoped questions; personal notes and claims are never sent."""
+"""Paper-scoped questions. With a subscription the library agent's tools come along."""
 
 import json
 from collections.abc import Callable

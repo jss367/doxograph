@@ -1,4 +1,4 @@
-"""The library agent reads the corpus through Doxograph's MCP server, without personal notes."""
+"""The library agent reads and edits the workspace through Doxograph's MCP server."""
 
 import asyncio
 import json
@@ -58,8 +58,16 @@ def test_without_notes_no_notes_tools_are_registered():
     names = lambda without: {t.name for t in asyncio.run(mcp_server.create_server(without_notes=without).list_tools())}
     assert {"list_notes", "read_note"} <= names(False)
     assert not {"list_notes", "read_note"} & names(True)
-    assert set(agent.TOOLS) - {"update_paper_labels"} <= names(True)
     assert "update_paper_labels" not in names(True)
+
+
+def test_the_agent_server_registers_exactly_the_agent_tools():
+    tools = asyncio.run(mcp_server.create_server(workspace="default", allow_edits=True).list_tools())
+    assert {t.name for t in tools} == set(agent.TOOLS)
+    with pytest.raises(ValueError, match="requires --workspace"):
+        mcp_server.create_server(allow_edits=True)
+    with pytest.raises(ValueError, match="without-notes"):
+        mcp_server.create_server(workspace="default", allow_edits=True, without_notes=True)
 
 
 def test_command_allows_only_library_tools_and_runs_this_codes_server():
@@ -67,13 +75,12 @@ def test_command_allows_only_library_tools_and_runs_this_codes_server():
     assert args[args.index("--tools") + 1] == ""
     allowed = args[args.index("--allowedTools") + 1].split(",")
     assert allowed == [f"mcp__doxograph__{name}" for name in agent.TOOLS]
-    assert not any("note" in name for name in allowed)
     assert "--strict-mcp-config" in args and "--no-session-persistence" in args
     system = args[args.index("--system-prompt") + 1]
     assert "doe2026" in system and "workspace='default'" in system
     entry = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["doxograph"]
     assert entry["command"] == sys.executable
-    assert entry["args"][-5:] == ["--url", "http://127.0.0.1:9", "--without-notes", "--workspace", "default"]
+    assert entry["args"][-4:] == ["--url", "http://127.0.0.1:9", "--workspace", "default"]
     assert Path(entry["env"]["PYTHONPATH"], "doxograph", "agent.py").is_file()
 
 
@@ -153,8 +160,8 @@ def test_codex_library_uses_selected_model_and_only_the_notes_free_library_tools
     overrides = tomllib.loads("\n".join(args[i + 1] for i, arg in enumerate(args) if arg == "-c"))
     entry = overrides["mcp_servers"]["doxograph"]
     assert entry["command"] == sys.executable
-    assert entry["args"] == ["-m", "doxograph", "mcp", "--allow-labels", "--url", "http://127.0.0.1:9000",
-                             "--without-notes", "--workspace", other["id"]]
+    assert entry["args"] == ["-m", "doxograph", "mcp", "--allow-edits", "--url", "http://127.0.0.1:9000",
+                             "--workspace", other["id"]]
     assert entry["enabled_tools"] == list(agent.TOOLS) and entry["required"]
     assert Path(entry["env"]["PYTHONPATH"], "doxograph", "agent.py").is_file()
     assert "--ignore-user-config" in args and "--ephemeral" in args

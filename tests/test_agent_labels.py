@@ -155,8 +155,8 @@ def test_ask_enables_label_tool_for_both_agents_in_every_scope(provider, mode, m
         overrides = tomllib.loads("\n".join(args[i + 1] for i, arg in enumerate(args) if arg == "-c"))
         entry = overrides["mcp_servers"]["doxograph"]
         assert "update_paper_labels" in entry["enabled_tools"]
-    assert "--allow-labels" in entry["args"] and "--workspace" in entry["args"]
-    assert "--without-notes" in entry["args"]
+    assert "--allow-edits" in entry["args"] and "--workspace" in entry["args"]
+    assert "--without-notes" not in entry["args"]
     if mode == "legacy":
         assert entry["args"][-2:] == ["--papers", "a"]
     else:

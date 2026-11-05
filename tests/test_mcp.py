@@ -223,11 +223,11 @@ def test_mcp_command_does_not_initialize_or_recover_a_local_corpus(monkeypatch):
     monkeypatch.setattr(config, "ensure_dirs", lambda: pytest.fail("adapter initialized local corpus"))
     monkeypatch.setattr(store, "recover_storage", lambda: pytest.fail("adapter recovered local corpus"))
     assert __main__.main(["mcp", "--url", "http://localhost:8766"]) == 0
-    assert urls == [("http://localhost:8766", {"without_notes": False, "workspace": None, "papers": None, "papers_file": None, "evidence_log": None, "library_snapshot": False, "evidence_limit": 500, "allow_labels": False})]
+    assert urls == [("http://localhost:8766", {"without_notes": False, "workspace": None, "papers": None, "papers_file": None, "evidence_log": None, "library_snapshot": False, "evidence_limit": 500, "allow_labels": False, "allow_edits": False})]
     assert __main__.main(["mcp", "--without-notes"]) == 0
-    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": None, "papers": None, "papers_file": None, "evidence_log": None, "library_snapshot": False, "evidence_limit": 500, "allow_labels": False})
+    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": None, "papers": None, "papers_file": None, "evidence_log": None, "library_snapshot": False, "evidence_limit": 500, "allow_labels": False, "allow_edits": False})
     assert __main__.main(["mcp", "--without-notes", "--workspace", "selected"]) == 0
-    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": "selected", "papers": None, "papers_file": None, "evidence_log": None, "library_snapshot": False, "evidence_limit": 500, "allow_labels": False})
+    assert urls[-1] == ("http://127.0.0.1:8765", {"without_notes": True, "workspace": "selected", "papers": None, "papers_file": None, "evidence_log": None, "library_snapshot": False, "evidence_limit": 500, "allow_labels": False, "allow_edits": False})
 
 
 @pytest.mark.parametrize("workspace", [None, "default"])
