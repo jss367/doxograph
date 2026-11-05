@@ -241,6 +241,8 @@ $('ai-provider-form').addEventListener('submit', async (event) => {
 const SIDE_NAV_KEY = 'doxograph-hidden-side-nav';
 let hiddenSideNav = new Set();
 let sideNavMenuTrigger = null;
+let sideNavPointer = false;
+let sideNavUnsaved = false;   // a failed save leaves this page's choice newer than the stored one
 
 // Another tab may have changed the choice since this page loaded, so read it
 // again before each change rather than overwrite it with a stale copy.
@@ -263,9 +265,12 @@ function syncSideNav() {
 }
 
 function setSideNavHidden(name, hidden) {
-  readSideNav();
+  if (!sideNavUnsaved) readSideNav();
   if (hidden) hiddenSideNav.add(name); else hiddenSideNav.delete(name);
-  try { localStorage.setItem(SIDE_NAV_KEY, JSON.stringify([...hiddenSideNav])); } catch (_) { /* preference remains for this page */ }
+  try {
+    localStorage.setItem(SIDE_NAV_KEY, JSON.stringify([...hiddenSideNav]));
+    sideNavUnsaved = false;
+  } catch (_) { sideNavUnsaved = true; /* preference remains for this page */ }
   syncSideNav();
 }
 
@@ -277,7 +282,13 @@ window.addEventListener('storage', (event) => {
   syncSideNav();
 });
 
+// A menu opened by the pointer follows a pointerdown; one opened with Shift+F10
+// or the Menu key does not. Coordinates can't tell them apart: browsers differ
+// on what they report for a keyboard-opened menu.
+document.querySelector('.research-tools-nav').addEventListener('pointerdown', () => { sideNavPointer = true; });
 document.querySelector('.research-tools-nav').addEventListener('contextmenu', (event) => {
+  const byPointer = sideNavPointer;
+  sideNavPointer = false;
   const button = event.target.closest('[data-side-nav]');
   if (!button) return;
   event.preventDefault();
@@ -285,12 +296,12 @@ document.querySelector('.research-tools-nav').addEventListener('contextmenu', (e
   menu.innerHTML = `<li><button type="button" data-act="hide-side-nav" data-side-nav-target="${esc(button.dataset.sideNav)}">Hide from sidebar</button></li>`;
   menu.hidden = false;
   const { width, height } = menu.getBoundingClientRect();
-  const x = event.clientX || button.getBoundingClientRect().left;
-  const y = event.clientY || button.getBoundingClientRect().bottom;
+  const x = byPointer ? event.clientX : button.getBoundingClientRect().left;
+  const y = byPointer ? event.clientY : button.getBoundingClientRect().bottom;
   menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 4))}px`;
   menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 4))}px`;
   // Opened from the keyboard, focus goes into the menu and Escape brings it back.
-  sideNavMenuTrigger = !event.clientX && !event.clientY ? button : null;
+  sideNavMenuTrigger = byPointer ? null : button;
   if (sideNavMenuTrigger) menu.querySelector('button').focus({ preventScroll: true });
 });
 

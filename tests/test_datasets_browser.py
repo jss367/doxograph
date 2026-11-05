@@ -585,7 +585,10 @@ def test_sidebar_buttons_hide_on_right_click_and_return_from_settings(engine):
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
     config.set_ai_enabled(False)
-    keyboard_menu = "el => el.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))"
+    # A keyboard-opened menu has no pointerdown before it, and some browsers
+    # give it the focused element's coordinates rather than zeros.
+    keyboard_menu = ("el => { const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('contextmenu', "
+                     "{bubbles: true, cancelable: true, clientX: r.left + 5, clientY: r.top + 5})); }")
     focused = "() => document.activeElement && document.activeElement.id"
 
     async def scenario():
@@ -628,6 +631,19 @@ def test_sidebar_hide_menu_keeps_keyboard_focus_and_other_tabs_choices(engine):
                 await other.locator('#btn-people').click(button='right')
                 await other.locator('#ctxmenu').get_by_role('button', name='Hide from sidebar').click()
                 assert sorted(await other.evaluate("JSON.parse(localStorage.getItem('doxograph-hidden-side-nav'))")) == ['datasets', 'people']
+
+                # When saving fails, a second choice keeps the first rather than
+                # falling back to the older stored list.
+                await page.reload()
+                await page.locator('#btn-settings').wait_for()
+                await page.evaluate("localStorage.setItem('doxograph-hidden-side-nav', '[]')")
+                await page.reload()
+                await page.locator('#btn-settings').wait_for()
+                await page.evaluate("() => { Storage.prototype.setItem = () => { throw new Error('full'); }; }")
+                for name in ('Datasets', 'People'):
+                    await page.locator('#side').get_by_role('button', name=name, exact=True).click(button='right')
+                    await menu_item.click()
+                await page.locator('.research-tools-nav').wait_for(state='hidden')
             assert errors == []
 
     run_browser(scenario())
