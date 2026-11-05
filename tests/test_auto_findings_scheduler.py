@@ -186,6 +186,52 @@ def test_cancelled_callback_cannot_remove_replacement_or_fire_early(inert_schedu
     assert len(inert_scheduler.calls) == 1
 
 
+def test_surviving_process_rearms_superseding_pending_intent(inert_scheduler):
+    corpus()
+    job_queue.schedule_findings()
+    first = ManualTimer.created[-1]
+    # Another server replaces the shared record, then exits before its timer
+    # fires. Only this process's older timer remains alive.
+    token = 'b' * 32
+    with store.document_lock('automatic-findings'):
+        store.write_json(job_queue._auto_findings_path(), {'version': 1, 'token': token, 'pending': True})
+    first.fire()
+    replacement = job_queue._auto_findings_timers['default']
+    assert replacement is not first and replacement.started
+    assert replacement.delay == job_queue.AUTO_FINDINGS_DELAY
+    assert not inert_scheduler.calls
+    first.fire()  # The old callback still cannot remove the adopted timer.
+    assert job_queue._auto_findings_timers['default'] is replacement
+    replacement.fire()
+    assert len(inert_scheduler.calls) == 1
+    assert inert_scheduler.calls[0][1][0]['automatic_token'] == token
+
+
+@pytest.mark.parametrize('setting', ['set_ai_enabled', 'set_auto_findings'])
+def test_superseding_intent_waits_while_disabled_then_resumes(setting, inert_scheduler):
+    corpus()
+    job_queue.schedule_findings()
+    token = 'b' * 32
+    store.write_json(job_queue._auto_findings_path(), {'version': 1, 'token': token, 'pending': True})
+    getattr(config, setting)(False)
+    ManualTimer.created[-1].fire()
+    assert not job_queue._auto_findings_timers and not inert_scheduler.calls
+    assert job_queue._read_auto_findings()['token'] == token
+    getattr(config, setting)(True)
+    job_queue.resume_auto_findings()
+    ManualTimer.created[-1].fire()
+    assert len(inert_scheduler.calls) == 1
+    assert inert_scheduler.calls[0][1][0]['automatic_token'] == token
+
+
+def test_superseding_started_intent_is_never_adopted(inert_scheduler):
+    corpus()
+    job_queue.schedule_findings()
+    store.write_json(job_queue._auto_findings_path(), {'version': 1, 'token': 'b' * 32, 'pending': False})
+    ManualTimer.created[-1].fire()
+    assert not job_queue._auto_findings_timers and not inert_scheduler.calls
+
+
 def test_concurrent_automatic_admissions_have_one_owner(inert_scheduler):
     corpus()
     gate = Barrier(2)

@@ -373,10 +373,16 @@ def _auto_findings_due(workspace: str, token: str, timer: threading.Timer) -> No
             with config.use_workspace(workspace), activity._using_workspace(workspace):
                 with store.document_lock("automatic-findings"):
                     pending = _read_auto_findings()
-                if not pending or pending["token"] != token or not pending["pending"]:
+                if not pending or not pending["pending"]:
                     return
                 if not (config.ai_enabled() and config.auto_findings()):
                     return  # Keep the unstarted intent; re-enabling can re-arm it.
+                if pending["token"] != token:
+                    # Another server replaced the shared intent. Its timer may
+                    # no longer be alive, so keep this process watching the
+                    # current unstarted generation for a full quiet period.
+                    _arm_auto_findings(workspace, pending["token"])
+                    return
                 topics = store.tension_topics()
                 if not topics:
                     _clear_auto_findings(token)
