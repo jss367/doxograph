@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/research-tools.css">
 <link rel="stylesheet" href="/vendor/katex.min.css">
-<link rel="stylesheet" href="/datasets.css">
+<link rel="stylesheet" href="/catalog.css">
 <link rel="stylesheet" href="/people.css">
 </head>
 <body>
@@ -192,11 +192,12 @@
         </fieldset>
         <fieldset>
           <legend>Sidebar</legend>
-          <div class="choice-row two">
+          <div class="choice-row three">
             <label><input type="checkbox" name="side-nav" value="datasets"> Datasets</label>
+            <label><input type="checkbox" name="side-nav" value="benchmarks"> Benchmarks</label>
             <label><input type="checkbox" name="side-nav" value="people"> People</label>
           </div>
-          <p class="hint">Right-click either one in the sidebar to hide it.</p>
+          <p class="hint">Right-click any of them in the sidebar to hide it.</p>
         </fieldset>
         <div class="settings-foot">
           <span class="hint">Appearance saved in this browser</span>
@@ -243,6 +244,7 @@
       </div>
     <div class="sec research-tools-nav">
       <button type="button" id="btn-datasets" data-side-nav="datasets" title="Datasets used or produced by this project"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5 M4 12c0 4 16 4 16 0"/></svg>Datasets</button>
+      <button type="button" id="btn-benchmarks" data-side-nav="benchmarks" title="Benchmarks your papers measure results on"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16 M6 20V13 M10 20V8 M14 20V11 M18 20V5"/></svg>Benchmarks</button>
       <button type="button" id="btn-people" data-side-nav="people" title="The authors of your papers, and your notes on them"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-4 3-6.5 6.5-6.5s6.5 2.5 6.5 6.5 M16 4.8a3.5 3.5 0 0 1 0 6.4 M18 13.8c2.2.7 3.5 2.8 3.5 6.2"/></svg>People</button>
     </div>
     <div class="sec" id="labels-sec" hidden>
@@ -313,28 +315,54 @@
         <div id="content"></div>
       </div>
     </div>
-    <section id="datasets-sheet" class="datasets-sheet main-page" aria-labelledby="datasets-heading" hidden>
+    <section id="datasets-sheet" class="catalog-sheet main-page" aria-labelledby="datasets-heading" hidden>
       <div class="sheet-head">
         <div><h2 id="datasets-heading">Datasets</h2><span class="hint">Data used or produced by this project, connected to your research.</span></div>
-        <div class="dataset-views" role="group" aria-label="Datasets layout">
-          <button type="button" data-dataset-action="view" data-view="list" aria-pressed="true">List</button>
-          <button type="button" data-dataset-action="view" data-view="table" aria-pressed="false">Table</button>
+        <div class="catalog-views" role="group" aria-label="Datasets layout">
+          <button type="button" data-catalog-action="view" data-view="list" aria-pressed="true">List</button>
+          <button type="button" data-catalog-action="view" data-view="table" aria-pressed="false">Table</button>
         </div>
       </div>
-      <p id="datasets-status" class="hint" role="status" aria-live="polite"></p>
-      <div class="datasets-layout">
-        <aside class="datasets-library">
-          <button type="button" id="dataset-new" data-dataset-action="new" class="primary">Add dataset</button>
+      <p id="datasets-status" class="catalog-status hint" role="status" aria-live="polite"></p>
+      <div class="catalog-layout">
+        <aside class="catalog-library">
+          <button type="button" id="dataset-new" data-catalog-action="new" class="primary">Add dataset</button>
           <label for="datasets-search" class="sr-only">Search datasets</label>
-          <input type="search" id="datasets-search" placeholder="Search datasets…">
-          <p id="datasets-count" class="hint"></p>
-          <nav id="datasets-list" aria-label="Datasets"></nav>
+          <input type="search" id="datasets-search" class="catalog-search" placeholder="Search datasets…">
+          <p id="datasets-count" class="catalog-count hint"></p>
+          <button type="button" id="dataset-from-facets" data-catalog-action="from-facets" hidden></button>
+          <nav id="datasets-list" class="catalog-list" aria-label="Datasets"></nav>
         </aside>
-        <div id="datasets-table-view">
-          <details class="dataset-columns"><summary>Columns</summary><div id="dataset-column-options"></div></details>
-          <div id="datasets-table"></div>
+        <div id="datasets-table-view" class="catalog-table-view">
+          <details class="catalog-columns"><summary>Columns</summary><div id="dataset-column-options" class="catalog-column-options"></div></details>
+          <div id="datasets-table" class="catalog-table"></div>
         </div>
-        <div id="dataset-document"></div>
+        <div id="dataset-document" class="catalog-document"></div>
+      </div>
+    </section>
+    <section id="benchmarks-sheet" class="catalog-sheet main-page" aria-labelledby="benchmarks-heading" hidden>
+      <div class="sheet-head">
+        <div><h2 id="benchmarks-heading">Benchmarks</h2><span class="hint">The evaluations your papers report results on, connected to the claims measured on them.</span></div>
+        <div class="catalog-views" role="group" aria-label="Benchmarks layout">
+          <button type="button" data-catalog-action="view" data-view="list" aria-pressed="true">List</button>
+          <button type="button" data-catalog-action="view" data-view="table" aria-pressed="false">Table</button>
+        </div>
+      </div>
+      <p id="benchmarks-status" class="catalog-status hint" role="status" aria-live="polite"></p>
+      <div class="catalog-layout">
+        <aside class="catalog-library">
+          <button type="button" id="benchmark-new" data-catalog-action="new" class="primary">Add benchmark</button>
+          <label for="benchmarks-search" class="sr-only">Search benchmarks</label>
+          <input type="search" id="benchmarks-search" class="catalog-search" placeholder="Search benchmarks…">
+          <p id="benchmarks-count" class="catalog-count hint"></p>
+          <button type="button" id="benchmark-from-facets" data-catalog-action="from-facets" hidden></button>
+          <nav id="benchmarks-list" class="catalog-list" aria-label="Benchmarks"></nav>
+        </aside>
+        <div id="benchmarks-table-view" class="catalog-table-view">
+          <details class="catalog-columns"><summary>Columns</summary><div id="benchmark-column-options" class="catalog-column-options"></div></details>
+          <div id="benchmarks-table" class="catalog-table"></div>
+        </div>
+        <div id="benchmark-document" class="catalog-document"></div>
       </div>
     </section>
     <section id="people-sheet" class="people-sheet main-page" aria-labelledby="people-heading" hidden>
@@ -503,7 +531,7 @@
 <script src="/poller.js"></script>
 <script src="/autosave.js"></script>
 <script src="/note-writing.js"></script>
-<script src="/datasets.js"></script>
+<script src="/catalog.js"></script>
 <script src="/people.js"></script>
 <script src="/research-tools.js"></script>
 <script src="/appearance.js"></script>

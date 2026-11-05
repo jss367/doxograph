@@ -235,7 +235,7 @@ $('ai-provider-form').addEventListener('submit', async (event) => {
 });
 
 // --- sidebar buttons ------------------------------------------------------
-// Datasets and People can each be hidden from the sidebar by right-clicking
+// Datasets, Benchmarks and People can each be hidden from the sidebar by right-clicking
 // them, and brought back from Settings. The pages stay reachable from the
 // palette and from links, so hiding only removes the button.
 const SIDE_NAV_KEY = 'doxograph-hidden-side-nav';

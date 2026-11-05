@@ -1,7 +1,10 @@
-/* Workspace dataset inventory, including links to the evidence that uses it.
-   A view in the main pane. Edits save themselves shortly after typing stops,
-   and leaving the view saves at once; a draft that cannot save stays put. */
-const Datasets = (() => {
+/* A workspace catalog, such as the datasets or the benchmarks, including links
+   to the evidence that uses each record. A view in the main pane. Edits save
+   themselves shortly after typing stops, and leaving the view saves at once; a
+   draft that cannot save stays put. `kind` names the catalog and what differs
+   between catalogs; Datasets and Benchmarks below are the two there are. */
+function createCatalog(kind) {
+  const {one, many, One, Many} = kind;
   let client, navigate, select, workspace, items = [], draft = null, saved = null, busy = false, loaded = false, focusName = false, shown = false;
   // A paper panel's current read and its observer of confirmed cache changes.
   let reading = null, afterChange = null, cacheVisit = {}, notifiedItems = items, cacheOrder = 0, appliedRead = 0;
@@ -14,7 +17,7 @@ const Datasets = (() => {
   // retire older successful ones; acknowledged mutations retire every prior read.
   async function readItems(current = () => true) {
     const visit = cacheVisit, order = ++cacheOrder;
-    const latest = (await request()).datasets;
+    const latest = (await request())[many];
     if (visit !== cacheVisit || workspace !== client.workspaceId || !current()) return false;
     if (order >= appliedRead) { items = latest; loaded = true; appliedRead = order; }
     return true;
@@ -32,15 +35,16 @@ const Datasets = (() => {
   let posted = null;
   // A draft whose record another window changed before this one heard back.
   let conflicted = null;
-  const conflict = 'This dataset changed in another window. Your edits are still here. Reload the saved version before saving.';
+  const conflict = `This ${one} changed in another window. Your edits are still here. Reload the saved version before saving.`;
   // The draft the reader agreed to discard when a workspace switch began.
   let discarding = null;
   const writing = () => draft && (dirty() || autosave.unconfirmed || autosave.saving)
     ? JSON.stringify([draft?.id, body(draft), autosave.generation, autosave.unconfirmed]) : null;
   const el = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
-  const roles = {training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'};
-  const fields = ['name','description','source','version','license','access_notes','roles','labels','facet_values','papers','claims','custom_fields'];
+  // The roles a record can play in the project, for a catalog that records them.
+  const roles = kind.roles || {};
+  const fields = ['name','description','source','version','license','access_notes',...(kind.roles ? ['roles'] : []),'labels','facet_values','papers','claims','custom_fields'];
   // A custom field row left entirely blank is not part of the record yet.
   const body = item => ({...Object.fromEntries(fields.map(key => [key, item[key]])),
     custom_fields:item.custom_fields.filter(field => field.name || field.value)});
@@ -65,12 +69,12 @@ const Datasets = (() => {
     facet_values:unique(item.facet_values.map(strip))});
   const key = value => facetValueKey(value);
   // The table's optional columns. The name column is always shown.
-  const columns = {version:'Version', license:'License', source:'Source', roles:'Roles', labels:'Labels',
-    description:'Description', access_notes:'Access notes', facet_values:'Other dataset names',
+  const columns = {version:'Version', license:'License', source:'Source', ...(kind.roles ? {roles:'Roles'} : {}), labels:'Labels',
+    description:'Description', access_notes:'Access notes', facet_values:`Other ${one} names`,
     papers:'Linked papers', claims:'Linked claims', created:'Added', updated:'Last updated'};
   // The layout, columns, and sort are kept between visits.
-  const TABLE_KEY = 'doxograph-dataset-table';
-  let table = {view:'list', columns:['version','license','roles','labels'], sort:'name', descending:false};
+  const TABLE_KEY = `doxograph-${one}-table`;
+  let table = {view:'list', columns:kind.columns, sort:'name', descending:false};
   try {
     const kept = JSON.parse(localStorage.getItem(TABLE_KEY)) || {};
     if (['list','table'].includes(kept.view)) table.view = kept.view;
@@ -79,13 +83,13 @@ const Datasets = (() => {
     if (['name', ...table.columns].includes(kept.sort)) Object.assign(table, {sort:kept.sort, descending:kept.descending === true});
   } catch (_) { /* optional */ }
   const remember = () => { try { localStorage.setItem(TABLE_KEY, JSON.stringify(table)); } catch (_) { /* preference remains for this page */ } };
-  const button = (action, text, attrs = '') => `<button type="button" data-dataset-action="${action}" ${attrs}>${text}</button>`;
+  const button = (action, text, attrs = '') => `<button type="button" data-catalog-action="${action}" ${attrs}>${text}</button>`;
   function status(message, error = false) {
-    el('datasets-status').textContent = message;
-    el('datasets-status').className = error ? 'warn' : 'hint';
+    el(many + '-status').textContent = message;
+    el(many + '-status').className = error ? 'warn' : 'hint';
   }
   const autosave = createAutosave({current: () => draft, dirty,
-    blocked: () => conflicted === draft ? conflict : !draft.name.trim() ? 'Give your dataset a name.' : customProblem(),
+    blocked: () => conflicted === draft ? conflict : !draft.name.trim() ? `Give your ${one} a name.` : customProblem(),
     async write(target) {
       const visit = cacheVisit;
       const sent = body(target), first = !saved;
@@ -117,7 +121,7 @@ const Datasets = (() => {
       // writer has typed past it; the fields keep showing what was typed.
       if (JSON.stringify(body(target)) === JSON.stringify(sent)) {
         Object.assign(target, structuredClone(body(item)));
-        const labels = el('dataset-labels');
+        const labels = el(one + '-labels');
         if (labels && document.activeElement !== labels) labels.value = target.labels.join(', ');
       }
       if (!mutateItems(rows => [...rows.filter(row => row.id !== item.id), item], visit)) return;
@@ -136,16 +140,16 @@ const Datasets = (() => {
     if (draft) status(autosave.describe(), Boolean(autosave.failure));
   }
   async function request(path = '', method = 'GET', data) {
-    return client.request('/api/datasets' + path, {method,
+    return client.request(`/api/${many}` + path, {method,
       headers:{'Content-Type':'application/json', 'X-Doxograph-Workspace':workspace,
-        ...(method === 'POST' ? {'Idempotency-Key':draft.id} : {})},
+        ...(method === 'POST' && path === '' ? {'Idempotency-Key':draft.id} : {})},
       ...(data === undefined ? {} : {body:JSON.stringify(data)})});
   }
   function setBusy(value) {
     busy = value;
-    el('datasets-sheet').setAttribute('aria-busy', String(value));
-    el('datasets-sheet').querySelectorAll('button, input, textarea').forEach(field => field.disabled = value);
-    el('dataset-new').disabled = value || !loaded;
+    el(many + '-sheet').setAttribute('aria-busy', String(value));
+    el(many + '-sheet').querySelectorAll('button, input, textarea').forEach(field => field.disabled = value);
+    el(one + '-new').disabled = value || !loaded;
   }
   async function run(task) {
     if (busy) return;
@@ -161,24 +165,47 @@ const Datasets = (() => {
       // Actions can confirm a delete, discard, reload or replacement even when
       // the reader has moved to a paper. Publish only this visit's cache facts.
       notifyCache(visit);
-      if (focusName) { el('dataset-name')?.focus(); focusName = false; }
+      if (focusName) { el(one + '-name')?.focus(); focusName = false; }
       // Hash navigation can arrive during a load, save, or discard prompt.
       // Drain the latest target once that work releases the editor.
       if (shown && loaded && requested !== revealed) void run(revealRequested);
     }
   }
   function renderList() {
-    const query = el('datasets-search').value.toLowerCase().trim();
+    const query = el(many + '-search').value.toLowerCase().trim();
     const filtered = items.filter(item => fields.filter(f => !['papers','claims'].includes(f))
       .map(f => f === 'custom_fields' ? item[f].map(field => field.name + ' ' + field.value).join('\n') : item[f]).join('\n').toLowerCase().includes(query)).sort((a,b) => a.name.localeCompare(b.name));
-    const empty = `<p class="hint">${query ? 'No datasets match your search.' : 'Catalog the datasets your project uses or produces.'}</p>`;
-    el('datasets-list').innerHTML = filtered.map(item => button('open', `<strong>${esc(item.name)}</strong><small>${esc([item.version, ...item.roles.map(r => roles[r])].filter(Boolean).join(' · ') || 'Dataset')}</small>${labelChips(item)}`,
+    const empty = `<p class="hint">${query ? `No ${many} match your search.` : kind.text.listEmpty}</p>`;
+    el(many + '-list').innerHTML = filtered.map(item => button('open', `<strong>${esc(item.name)}</strong><small>${esc([item.version, ...(item.roles || []).map(r => roles[r])].filter(Boolean).join(' · ') || One)}</small>${labelChips(item)}`,
       `data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="page"' : ''}`)).join('') || empty;
     // Only the visible layout holds the records, so each name appears once on the page.
-    el('datasets-table').innerHTML = table.view === 'table' ? renderTable(filtered) || empty : '';
-    el('datasets-count').textContent = `${items.length} ${items.length === 1 ? 'dataset' : 'datasets'}`;
+    el(many + '-table').innerHTML = table.view === 'table' ? renderTable(filtered) || empty : '';
+    el(many + '-count').textContent = `${items.length} ${items.length === 1 ? one : many}`;
+    renderFromFacets();
   }
-  const labelChips = item => item.labels.length ? `<span class="dataset-labels">${item.labels.map(label => `<span class="dataset-label">${esc(label)}</span>`).join('')}</span>` : '';
+  // Claims can name new ones while the page is open, so every redraw of the
+  // app updates this button, not only a redraw of the list.
+  function renderFromFacets() {
+    const named = loaded && client ? unnamed() : [];
+    el(one + '-from-facets').hidden = !named.length;
+    el(one + '-from-facets').textContent = `Add ${named.length === 1 ? kind.a : `${named.length} ${many}`} named in claims`;
+  }
+  // The names claims give in this catalog's facets that no record covers yet,
+  // the most used first, each spelled as most claims spell it.
+  function unnamed() {
+    const covered = new Set(items.flatMap(item => [item.name, ...item.facet_values]).map(key));
+    const found = new Map();
+    for (const facet of kind.facets) {
+      for (const [value, count] of Object.entries(facetEntry(client.state.facet_counts, facet) || {})) {
+        const name = key(value);
+        if (!name || covered.has(name)) continue;
+        const seen = found.get(name);
+        found.set(name, {value:seen?.value ?? value, count:(seen?.count ?? 0) + count});
+      }
+    }
+    return [...found.values()].sort((a, b) => b.count - a.count || a.value.localeCompare(b.value)).map(entry => entry.value);
+  }
+  const labelChips = item => item.labels.length ? `<span class="catalog-labels">${item.labels.map(label => `<span class="catalog-label">${esc(label)}</span>`).join('')}</span>` : '';
   function cell(item, column) {
     const value = item[column];
     // Counts match the editor's Linked research, which is costly to gather,
@@ -209,16 +236,16 @@ const Datasets = (() => {
         `${column === 'name' ? 'Name' : columns[column]}<span aria-hidden="true">${sorted ? (table.descending ? ' ↓' : ' ↑') : ''}</span>`, `data-column="${column}"`)}</th>`;
     };
     return `<table><thead><tr>${['name', ...table.columns].map(header).join('')}</tr></thead><tbody>${[...rows].sort(compare).map(item =>
-      `<tr data-dataset-action="open" data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="true"' : ''}><th scope="row">${button('open', esc(item.name), `data-id="${item.id}"`)}</th>${table.columns.map(column =>
-        `<td class="dataset-cell-${column}">${column === 'labels' ? labelChips(item) : ['description','access_notes'].includes(column) ? `<span class="dataset-clamp">${esc(cell(item, column))}</span>` : esc(cell(item, column))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+      `<tr data-catalog-action="open" data-id="${item.id}" ${draft?.id === item.id ? 'aria-current="true"' : ''}><th scope="row">${button('open', esc(item.name), `data-id="${item.id}"`)}</th>${table.columns.map(column =>
+        `<td class="catalog-cell-${column}">${column === 'labels' ? labelChips(item) : ['description','access_notes'].includes(column) ? `<span class="catalog-clamp">${esc(cell(item, column))}</span>` : esc(cell(item, column))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
   }
   function showView(view) {
     table.view = view;
-    el('datasets-sheet').classList.toggle('table-view', view === 'table');
-    el('datasets-sheet').querySelectorAll('[data-view]').forEach(choice => choice.setAttribute('aria-pressed', String(choice.dataset.view === view)));
+    el(many + '-sheet').classList.toggle('table-view', view === 'table');
+    el(many + '-sheet').querySelectorAll('[data-view]').forEach(choice => choice.setAttribute('aria-pressed', String(choice.dataset.view === view)));
     // Like the rows, the column choices exist only while the table shows, so
     // their names never collide with the editor's fields.
-    el('dataset-column-options').innerHTML = view === 'table' ? Object.entries(columns).map(([column, label]) =>
+    el(one + '-column-options').innerHTML = view === 'table' ? Object.entries(columns).map(([column, label]) =>
       `<label><input type="checkbox" data-table-column="${column}" ${table.columns.includes(column) ? 'checked' : ''}> ${label}</label>`).join('') : '';
   }
   function setView(view) {
@@ -230,18 +257,18 @@ const Datasets = (() => {
     table.descending = table.sort === column && !table.descending;
     table.sort = column;
     remember(); renderList();
-    el('datasets-table').querySelector(`[data-column="${column}"]`)?.focus();
+    el(many + '-table').querySelector(`[data-column="${column}"]`)?.focus();
   }
   function input(field, label, multiline = false, hint = '', max = 300) {
     const value = field === 'facet_values' ? draft[field].join('\n') : field === 'labels' ? draft[field].join(', ') : draft[field];
-    const help = hint ? `aria-describedby="dataset-${field}-help"` : '';
-    return `<div class="dataset-field"><label for="dataset-${field}">${label}</label>${multiline
-      ? `<textarea id="dataset-${field}" data-field="${field}" rows="${field === 'description' || field === 'access_notes' ? 3 : 2}" maxlength="${max}" ${help}>${esc(value)}</textarea>`
-      : `<input id="dataset-${field}" data-field="${field}" maxlength="${max}" value="${esc(value)}" ${field === 'name' ? 'required' : ''} ${help}>`}
-      ${hint ? `<small id="dataset-${field}-help" class="hint">${hint}</small>` : ''}${field === 'source' ? '<span id="dataset-source-link"></span>' : ''}</div>`;
+    const help = hint ? `aria-describedby="${one}-${field}-help"` : '';
+    return `<div class="catalog-field"><label for="${one}-${field}">${label}</label>${multiline
+      ? `<textarea id="${one}-${field}" data-field="${field}" rows="${field === 'description' || field === 'access_notes' ? 3 : 2}" maxlength="${max}" ${help}>${esc(value)}</textarea>`
+      : `<input id="${one}-${field}" data-field="${field}" maxlength="${max}" value="${esc(value)}" ${field === 'name' ? 'required' : ''} ${help}>`}
+      ${hint ? `<small id="${one}-${field}-help" class="hint">${hint}</small>` : ''}${field === 'source' ? `<span id="${one}-source-link" class="catalog-source-link"></span>` : ''}</div>`;
   }
   function customRow(field = {name:'', value:''}) {
-    return `<div class="dataset-custom-field"><input data-custom="name" aria-label="Field name" placeholder="Field name, such as Model" maxlength="100" list="dataset-field-names" value="${esc(field.name)}">
+    return `<div class="catalog-custom-field"><input data-custom="name" aria-label="Field name" placeholder="Field name, such as Model" maxlength="100" list="${one}-field-names" value="${esc(field.name)}">
       <input data-custom="value" aria-label="${esc(field.name || 'Field value')}" maxlength="4000" value="${esc(field.value)}">
       <button type="button" data-custom-action="remove" aria-label="Remove ${esc(field.name || 'field')}">Remove</button></div>`;
   }
@@ -251,36 +278,36 @@ const Datasets = (() => {
     return names.sort(byCodePoint).map(name => `<option value="${esc(name)}"></option>`).join('');
   }
   function readCustomFields() {
-    draft.custom_fields = [...el('dataset-custom-list').children].map(row => ({
+    draft.custom_fields = [...el(one + '-custom-list').children].map(row => ({
       name:strip(row.querySelector('[data-custom="name"]').value), value:row.querySelector('[data-custom="value"]').value}));
   }
   function renderDocument() {
     if (!draft) {
-      el('dataset-document').innerHTML = '<div class="datasets-empty"><h3>Your project’s data, in one place</h3><p>Record where each dataset lives, its version and access requirements, and the research it supports.</p><p>Add a dataset to get started.</p></div>';
+      el(one + '-document').innerHTML = `<div class="catalog-empty">${kind.text.welcome}<p>Add ${kind.a} to get started.</p></div>`;
       return;
     }
-    el('dataset-document').innerHTML = `<form id="dataset-form">
-      <div class="dataset-actions"></div>
-      <div class="dataset-fields">${input('name','Dataset name')}${input('version','Version')}
+    el(one + '-document').innerHTML = `<form id="${one}-form">
+      <div class="catalog-actions"></div>
+      <div class="catalog-fields">${input('name',`${One} name`)}${input('version','Version')}
       ${input('description','Description',true,'',20000)}
-      ${input('source','Source URL or local path',false,'Use a local conversation JSON/JSONL file, survey export, Gloom directory, or Hugging Face dataset URL to inspect it in Loupe.',4000)}
+      ${input('source','Source URL or local path',false,kind.text.source,4000)}
       ${input('license','License',false,'',1000)}
       ${input('access_notes','Access notes',true,'Permissions, download instructions, or other requirements.',20000)}</div>
-      <fieldset class="dataset-custom-fields"><legend>Custom fields</legend>
-        <p class="hint">Record other details, such as the model that generated the data.</p>
-        <div id="dataset-custom-list">${draft.custom_fields.map(customRow).join('')}</div>
+      <fieldset class="catalog-custom-fields"><legend>Custom fields</legend>
+        <p class="hint">${kind.text.custom}</p>
+        <div id="${one}-custom-list">${draft.custom_fields.map(customRow).join('')}</div>
         <button type="button" data-custom-action="add">Add field</button>
-        <datalist id="dataset-field-names">${customNames()}</datalist>
+        <datalist id="${one}-field-names">${customNames()}</datalist>
       </fieldset>
       ${input('labels','Labels',false,'Separate labels with commas. Labels can contain spaces, such as open source or needs review.',60398)}
-      <fieldset class="dataset-roles"><legend>Role in this project</legend>${Object.entries(roles).map(([value,label]) => `<label><input type="checkbox" data-role="${value}" ${draft.roles.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</fieldset>
-      ${input('facet_values','Other dataset names in findings',true,'One per line. The dataset name and these spellings match existing dataset or datasets facet values.',60200)}
-      <details class="dataset-link-picker"><summary>Link papers and claims</summary>
-        <label for="dataset-link-search">Search your library</label><input type="search" id="dataset-link-search" placeholder="Find a paper or claim…">
-        <div id="dataset-link-options"></div>
+      ${kind.roles ? `<fieldset class="catalog-roles"><legend>Role in this project</legend>${Object.entries(roles).map(([value,label]) => `<label><input type="checkbox" data-role="${value}" ${draft.roles.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</fieldset>` : ''}
+      ${input('facet_values',`Other ${one} names in findings`,true,`One per line. The ${one} name and these spellings match existing ${kind.facets.join(' or ')} facet values.`,60200)}
+      <details class="catalog-link-picker"><summary>Link papers and claims</summary>
+        <label for="${one}-link-search">Search your library</label><input type="search" id="${one}-link-search" class="catalog-link-search" placeholder="Find a paper or claim…">
+        <div id="${one}-link-options" class="catalog-link-options"></div>
       </details>
-      <section aria-label="Linked research"><h3>Linked research</h3><p class="hint">Includes your links and claims whose dataset facets match this record.</p><div id="dataset-research"></div></section>
-      <div id="dataset-saved-version" hidden></div>
+      <section aria-label="Linked research"><h3>Linked research</h3><p class="hint">Includes your links and claims whose ${one} facets match this record.</p><div id="${one}-research"></div></section>
+      <div id="${one}-saved-version" class="catalog-saved-version" hidden></div>
     </form>`;
     renderActions(); renderPicker(); renderResearch(); renderSource();
     if (busy) setBusy(true);
@@ -288,19 +315,19 @@ const Datasets = (() => {
   // A new record's first save swaps Cancel for the saved record's actions
   // without rebuilding the fields under the cursor.
   function renderActions() {
-    const actions = el('dataset-form')?.querySelector('.dataset-actions');
+    const actions = el(one + '-form')?.querySelector('.catalog-actions');
     if (!actions) return;
-    actions.innerHTML = saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel','Discard new dataset');
+    actions.innerHTML = saved ? button('reload','Reload saved version') + button('delete','Delete record') : button('cancel',`Discard new ${one}`);
     if (busy) actions.querySelectorAll('button').forEach(field => field.disabled = true);
   }
   function renderSource() {
-    const container = el('dataset-source-link');
+    const container = el(one + '-source-link');
     container.replaceChildren();
-    if (/^(\/|~\/|file:)/.test(draft.source.trim())) {
+    if (kind.loupe && /^(\/|~\/|file:)/.test(draft.source.trim())) {
       container.innerHTML = button('loupe', 'Open in Loupe');
       return;
     }
-    if (huggingFace(draft.source)) container.innerHTML = button('loupe', 'Open in Loupe');
+    if (kind.loupe && huggingFace(draft.source)) container.innerHTML = button('loupe', 'Open in Loupe');
     try {
       const url = new URL(draft.source);
       if (!['http:','https:'].includes(url.protocol)) return;
@@ -328,7 +355,7 @@ const Datasets = (() => {
         status('Loupe is ready. ');
         const link = document.createElement('a');
         link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open viewer';
-        el('datasets-status').append(link);
+        el(many + '-status').append(link);
       } catch (error) {
         if (viewer && !viewer.closed) viewer.close();
         throw error;
@@ -336,9 +363,9 @@ const Datasets = (() => {
     });
   }
   function renderSavedVersion(item) {
-    if (!item) return '<p>This dataset record has been deleted.</p>';
-    const labels = {name:'Dataset name',description:'Description',source:'Source',version:'Version',license:'License',access_notes:'Access notes',
-      roles:'Roles',labels:'Labels',facet_values:'Other dataset names',papers:'Linked papers',claims:'Linked claims',custom_fields:'Custom fields'};
+    if (!item) return `<p>This ${one} record has been deleted.</p>`;
+    const labels = {name:`${One} name`,description:'Description',source:'Source',version:'Version',license:'License',access_notes:'Access notes',
+      roles:'Roles',labels:'Labels',facet_values:`Other ${one} names`,papers:'Linked papers',claims:'Linked claims',custom_fields:'Custom fields'};
     return '<dl>' + fields.map(field => {
       let value = item[field];
       if (field === 'roles') value = value.map(role => roles[role]).join(', ');
@@ -351,15 +378,15 @@ const Datasets = (() => {
   }
   function showSavedComparison(version) {
     inspectedRevision = version?.revision ?? null;
-    const comparison = el('dataset-saved-version');
+    const comparison = el(one + '-saved-version');
     comparison.hidden = false;
     comparison.innerHTML = '<h3>Saved version</h3>' + renderSavedVersion(version) + button('replace','Replace draft with saved version');
   }
   // A record's research as the editor lists it: its own links, the papers of
-  // linked claims, claims whose dataset facets match it, and removed sources.
+  // linked claims, claims whose facets name it, and removed sources.
   function facetMatch(item) {
     const names = new Set([item.name, ...item.facet_values].map(key).filter(Boolean));
-    return claim => Object.entries(claim.facets || {}).some(([facet, values]) => ['dataset','datasets'].includes(facet)
+    return claim => Object.entries(claim.facets || {}).some(([facet, values]) => kind.facets.includes(facet)
       && values.some(value => names.has(key(value))));
   }
   function research(item) {
@@ -377,15 +404,15 @@ const Datasets = (() => {
       const source = client.state.papers.find(p => p.key === paper);
       const linked = claims.filter(c => c.paper === paper);
       const removed = missing.filter(ref => ref.paper === paper);
-      return `<div class="dataset-source">${source ? button('follow',esc(source.title || paper),`data-paper="${esc(paper)}"`)
+      return `<div class="catalog-source">${source ? button('follow',esc(source.title || paper),`data-paper="${esc(paper)}"`)
         : `<p class="hint">Missing paper: ${esc(paper)}</p>`}
-        ${linked.map(claim => button('follow',esc(claim.text),`class="dataset-claim-link" data-paper="${esc(paper)}" data-claim="${esc(claim.id)}"`)).join('')}
+        ${linked.map(claim => button('follow',esc(claim.text),`class="catalog-claim-link" data-paper="${esc(paper)}" data-claim="${esc(claim.id)}"`)).join('')}
         ${removed.map(ref => `<p class="hint">Missing claim: ${esc(ref.claim)}</p>`).join('')}</div>`;
     });
-    el('dataset-research').innerHTML = rows.join('') || '<p class="hint">No linked research yet. Link sources above or use a dataset facet on your claims.</p>';
+    el(one + '-research').innerHTML = rows.join('') || `<p class="hint">No linked research yet. Link sources above or use ${kind.a_facet} on your claims.</p>`;
   }
   function renderPicker() {
-    const query = el('dataset-link-search').value.toLowerCase().trim();
+    const query = el(one + '-link-search').value.toLowerCase().trim();
     const choices = [
       ...client.state.papers.map(p => ({paper:p.key, title:p.title || p.key, kind:'Paper', selected:draft.papers.includes(p.key)})),
       ...client.state.claims.map(c => ({paper:c.paper, claim:c.id, title:c.text, kind:'Claim', selected:draft.claims.some(ref => ref.paper === c.paper && ref.claim === c.id)})),
@@ -394,13 +421,13 @@ const Datasets = (() => {
     ];
     const selected = choices.filter(choice => choice.selected);
     const available = choices.filter(choice => !choice.selected && (choice.title + ' ' + choice.paper).toLowerCase().includes(query));
-    el('dataset-link-options').innerHTML = [...selected,...available.slice(0,100)].map(choice => `<label><input type="checkbox" data-link-paper="${esc(choice.paper)}" ${choice.claim ? `data-link-claim="${esc(choice.claim)}"` : ''} ${choice.selected ? 'checked' : ''}><span><small>${choice.kind}</small> ${esc(choice.title)}</span></label>`).join('')
+    el(one + '-link-options').innerHTML = [...selected,...available.slice(0,100)].map(choice => `<label><input type="checkbox" data-link-paper="${esc(choice.paper)}" ${choice.claim ? `data-link-claim="${esc(choice.claim)}"` : ''} ${choice.selected ? 'checked' : ''}><span><small>${choice.kind}</small> ${esc(choice.title)}</span></label>`).join('')
       + (available.length > 100 ? '<p class="hint">Search to narrow the remaining results.</p>' : '')
       || '<p class="hint">No matching papers or claims.</p>';
   }
   async function discard() {
     if (await autosave.flush()) return true;
-    return confirmDialog(`This dataset couldn’t be saved. ${autosave.failure} Discard your changes?`, {ok:'Discard changes'});
+    return confirmDialog(`This ${one} couldn’t be saved. ${autosave.failure} Discard your changes?`, {ok:'Discard changes'});
   }
   // The record a new draft's create stored, and whether it still holds only
   // what this draft wrote. A record another window changed since is theirs.
@@ -421,7 +448,7 @@ const Datasets = (() => {
     workspace = client.workspaceId; items = []; draft = saved = null; loaded = false; inspectedRevision = undefined;
     reading = afterChange = null;
     cacheVisit = {}; notifiedItems = items; appliedRead = ++cacheOrder;
-    el('datasets-search').value = '';
+    el(many + '-search').value = '';
   }
   // The record a URL names, or else the one last open, or else the first.
   async function reveal(id, current) {
@@ -439,7 +466,7 @@ const Datasets = (() => {
     if (item) choose(item);
     else {
       draft = saved = null; select(null); renderList(); renderDocument();
-      status(id ? 'This dataset record no longer exists.' : 'Add a dataset to this workspace.');
+      status(id ? `This ${one} record no longer exists.` : `Add ${kind.a} to this workspace.`);
     }
   }
   async function revealRequested() {
@@ -449,6 +476,7 @@ const Datasets = (() => {
     finally { revealed = target; }
   }
   async function show(id) {
+    renderFromFacets();
     // A link to a record is a request to read it, whatever layout was last used.
     if (id && table.view === 'table') { showView('list'); remember(); renderList(); }
     // The URL catching up with a record picked here is not a new destination,
@@ -461,10 +489,10 @@ const Datasets = (() => {
       return;
     }
     shown = true;
-    el('datasets-sheet').hidden = false;
+    el(many + '-sheet').hidden = false;
     if (workspace !== client.workspaceId) reset();
     renderList(); renderDocument();
-    if (dirty()) progress(); else status('Loading datasets…');
+    if (dirty()) progress(); else status(`Loading ${many}…`);
     await run(async () => {
       if (await readItems()) await revealRequested();
     });
@@ -472,7 +500,7 @@ const Datasets = (() => {
   function hide() {
     const wasShown = shown;
     shown = false;
-    el('datasets-sheet').hidden = true;
+    el(many + '-sheet').hidden = true;
     if (wasShown) void autosave.flush();
   }
   async function action(name, target) {
@@ -484,14 +512,14 @@ const Datasets = (() => {
       saved = null;
       inspectedRevision = undefined;
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
-      draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',roles:[],labels:[],facet_values:[],papers:[],claims:[],custom_fields:[]};
-      select(null); renderList(); renderDocument(); status('New dataset. It saves once it has a name.');
+      draft = {id,name:'',description:'',source:'',version:'',license:'',access_notes:'',...(kind.roles ? {roles:[]} : {}),labels:[],facet_values:[],papers:[],claims:[],custom_fields:[]};
+      select(null); renderList(); renderDocument(); status(`New ${one}. It saves once it has a name.`);
       focusName = true;
     } else if (name === 'open') {
       if (draft?.id === target.dataset.id || !await discard()) return;
       choose(items.find(item => item.id === target.dataset.id));
     } else if (name === 'cancel') {
-      if (!await confirmDialog('Discard this new dataset?', {ok:'Discard dataset'})) return;
+      if (!await confirmDialog(`Discard this new ${one}?`, {ok:`Discard ${one}`})) return;
       // Its create can land while the prompt waits, or land with its answer
       // lost. Discarding the draft also deletes the record it made.
       await autosave.settle();
@@ -500,7 +528,7 @@ const Datasets = (() => {
       if (item && !ours) {
         // Another window changed the record, so it is theirs to keep.
         choose(item);
-        status('Another window changed this dataset, so it was kept. This is its saved version.');
+        status(`Another window changed this ${one}, so it was kept. This is its saved version.`);
         return;
       }
       if (item) {
@@ -525,54 +553,68 @@ const Datasets = (() => {
         return;
       }
       // Replacing is the point here, so the draft is not saved first.
-      if (dirty() && !await confirmDialog('Discard unsaved changes to this dataset?', {ok:'Discard changes'})) return;
+      if (dirty() && !await confirmDialog(`Discard unsaved changes to this ${one}?`, {ok:'Discard changes'})) return;
       if (version) choose(version);
-      else { draft = saved = null; select(null); renderList(); renderDocument(); status('This dataset record has been deleted.'); }
+      else { draft = saved = null; select(null); renderList(); renderDocument(); status(`This ${one} record has been deleted.`); }
     } else if (name === 'delete') {
-      if (!await confirmDialog(`Delete the dataset record “${saved.name}”? Its source files and research stay in place.`,{ok:'Delete record'})) return;
+      if (!await confirmDialog(`Delete the ${one} record “${saved.name}”? ${kind.text.deleteKeeps}`,{ok:'Delete record'})) return;
       const id = saved.id;
       await request('/' + id + '?' + new URLSearchParams({revision:saved.revision}),'DELETE');
       if (!mutateItems(rows => rows.filter(item => item.id !== id), visit)) return;
       draft = saved = null;
-      select(null); renderList(); renderDocument(); status('Dataset record deleted.');
+      select(null); renderList(); renderDocument(); status(`${One} record deleted.`);
+    } else if (name === 'from-facets') {
+      const names = unnamed();
+      if (!names.length) return;
+      if (!await confirmDialog(`Add a record for each ${one} your claims name?`,
+                               {note:names.join(', '), ok:`Add ${names.length === 1 ? kind.a : `${names.length} ${many}`}`})) return;
+      const added = (await request('/from-facets', 'POST', {names}))[many];
+      // The answer lists only the records this request made. Another window,
+      // or an earlier try whose answer was lost, may have made the rest, so
+      // read the whole catalog again.
+      if (!await readItems(() => visit === cacheVisit)) return;
+      renderList();
+      const made = items.filter(item => added.some(row => row.id === item.id)).sort((a, b) => a.name.localeCompare(b.name));
+      if (!draft && made.length) choose(made[0]);
+      status(added.length ? `Added ${added.length} ${added.length === 1 ? one : many}.` : `Every ${one} your claims name already has a record.`);
     } else if (name === 'follow') {
       const {paper,claim} = target.dataset;
       navigate(paper,claim);
     }
   }
-  el('datasets-sheet').addEventListener('click', event => {
+  el(many + '-sheet').addEventListener('click', event => {
     const custom = event.target.closest('[data-custom-action]');
     if (custom && draft && !busy) {
       if (custom.dataset.customAction === 'add') {
-        el('dataset-custom-list').insertAdjacentHTML('beforeend', customRow());
-        el('dataset-custom-list').lastElementChild.querySelector('input').focus();
+        el(one + '-custom-list').insertAdjacentHTML('beforeend', customRow());
+        el(one + '-custom-list').lastElementChild.querySelector('input').focus();
       } else {
-        custom.closest('.dataset-custom-field').remove();
-        el('dataset-form').querySelector('[data-custom-action="add"]').focus();
+        custom.closest('.catalog-custom-field').remove();
+        el(one + '-form').querySelector('[data-custom-action="add"]').focus();
       }
       readCustomFields();
       autosave.schedule();
       return;
     }
-    const target = event.target.closest('[data-dataset-action]');
+    const target = event.target.closest('[data-catalog-action]');
     if (!target) return;
     // Selecting text in a table row is not a request to open it.
     if (target.tagName === 'TR' && !getSelection().isCollapsed) return;
     event.preventDefault();
-    const name = target.dataset.datasetAction;
+    const name = target.dataset.catalogAction;
     if (name === 'loupe') { openInLoupe(); return; }
     if (name === 'view') { setView(target.dataset.view); return; }
     if (name === 'sort') { sortBy(target.dataset.column); return; }
     run(() => action(name,target));
   });
-  el('datasets-sheet').addEventListener('submit', event => { event.preventDefault(); if (!busy) void autosave.flush(); });
-  el('datasets-search').addEventListener('input', renderList);
-  el('datasets-sheet').addEventListener('input', event => {
-    if (event.target.id === 'dataset-link-search') return renderPicker();
+  el(many + '-sheet').addEventListener('submit', event => { event.preventDefault(); if (!busy) void autosave.flush(); });
+  el(many + '-search').addEventListener('input', renderList);
+  el(many + '-sheet').addEventListener('input', event => {
+    if (event.target.id === one + '-link-search') return renderPicker();
     if (draft && event.target.dataset.custom) {
       readCustomFields();
       if (event.target.dataset.custom === 'name') {
-        const row = event.target.closest('.dataset-custom-field'), name = strip(event.target.value);
+        const row = event.target.closest('.catalog-custom-field'), name = strip(event.target.value);
         row.querySelector('[data-custom="value"]').setAttribute('aria-label', name || 'Field value');
         row.querySelector('[data-custom-action]').setAttribute('aria-label', `Remove ${name || 'field'}`);
       }
@@ -586,7 +628,7 @@ const Datasets = (() => {
     if (['name','facet_values'].includes(field)) renderResearch();
     if (field === 'source') renderSource();
   });
-  el('datasets-sheet').addEventListener('change', event => {
+  el(many + '-sheet').addEventListener('change', event => {
     const target = event.target;
     if (target.dataset.tableColumn) {
       const column = target.dataset.tableColumn;
@@ -597,7 +639,7 @@ const Datasets = (() => {
       return;
     }
     if (!draft) return;
-    if (target.dataset.role) draft.roles = [...el('datasets-sheet').querySelectorAll('[data-role]:checked')].map(field => field.dataset.role);
+    if (target.dataset.role) draft.roles = [...el(many + '-sheet').querySelectorAll('[data-role]:checked')].map(field => field.dataset.role);
     else if (target.dataset.linkPaper) {
       const paper = target.dataset.linkPaper, claim = target.dataset.linkClaim;
       if (claim) {
@@ -611,7 +653,7 @@ const Datasets = (() => {
     } else return;
     autosave.schedule();
   });
-  el('datasets-sheet').addEventListener('keydown', event => {
+  el(many + '-sheet').addEventListener('keydown', event => {
     // Saving is automatic. The shortcut saves now, or retries a failed save.
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!busy) void autosave.flush(); }
   });
@@ -626,7 +668,7 @@ const Datasets = (() => {
       select = id => selected(table.view === 'table' ? null : id);
     }, show, hide, flush: () => autosave.flush(),
     // The records a paper's panel lists: those whose Linked research names the
-    // paper, through their own links, linked claims, or matching dataset facets.
+    // paper, through their own links, linked claims, or matching facets.
     forPaper(key) {
       if (!loaded || workspace !== client?.workspaceId) return [];
       const claims = client.state.claims.filter(claim => claim.paper === key);
@@ -645,7 +687,7 @@ const Datasets = (() => {
       const visit = cacheVisit, task = reading = {workspace};
       readItems(() => reading === task).then(current => {
         if (current) notifyCache(visit);
-      }, () => { /* the panel lists no datasets until the next look */ })
+      }, () => { /* the panel lists none until the next look */ })
         .finally(() => { if (reading === task) reading = null; });
     },
     // Reset first: a draft the writer chose to discard must not save on hide.
@@ -668,4 +710,22 @@ const Datasets = (() => {
     // No asynchronous gap remains between this check and committed selection.
     writingSnapshot: writing,
     canWorkspaceSelect: () => !busy && !autosave.saving && (writing() === null || writing() === discarding)};
-})();
+}
+
+const Datasets = createCatalog({one:'dataset', many:'datasets', One:'Dataset', Many:'Datasets', a:'a dataset',
+  a_facet:'a dataset facet', facets:['dataset', 'datasets'], loupe:true, columns:['version', 'license', 'roles', 'labels'],
+  roles:{training:'Training', evaluation:'Evaluation', reference:'Reference', 'project-output':'Project output'},
+  text:{listEmpty:'Catalog the datasets your project uses or produces.',
+    welcome:'<h3>Your project’s data, in one place</h3><p>Record where each dataset lives, its version and access requirements, and the research it supports.</p>',
+    source:'Use a local conversation JSON/JSONL file, survey export, Gloom directory, or Hugging Face dataset URL to inspect it in Loupe.',
+    custom:'Record other details, such as the model that generated the data.',
+    deleteKeeps:'Its source files and research stay in place.'}});
+
+const Benchmarks = createCatalog({one:'benchmark', many:'benchmarks', One:'Benchmark', Many:'Benchmarks', a:'a benchmark',
+  a_facet:'a benchmark facet', facets:['benchmark', 'benchmarks'], loupe:false, roles:null,
+  columns:['version', 'labels', 'papers', 'claims'],
+  text:{listEmpty:'Catalog the benchmarks your papers measure results on.',
+    welcome:'<h3>The benchmarks your research measures on</h3><p>Record what each benchmark tests, where it lives, its version, and the results reported on it.</p>',
+    source:'A web page, repository, or local path for the benchmark.',
+    custom:'Record other details, such as the metric it reports or the number of tasks.',
+    deleteKeeps:'The research that uses it stays in place.'}});

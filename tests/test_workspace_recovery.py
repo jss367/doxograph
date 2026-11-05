@@ -132,7 +132,7 @@ def test_archive_renders_claims_highlights_boards_and_dataset_links_readably():
             [board] = [name for name in archive.namelist() if name.startswith('boards/')]
             assert read(board).endswith('\n\n## Local sources\n\n- [Monitoring study](../papers/study.md)')
             assert read('index.md') == '\n'.join([
-                '# Default workspace', '', '[Project datasets](datasets.md) · [People](people.md)', '',
+                '# Default workspace', '', '[Project datasets](datasets.md) · [Benchmarks](benchmarks.md) · [People](people.md)', '',
                 '- [bare](papers/bare.md)', '- [Monitoring study](papers/study.md)', '',
                 '## Research notes', '', f'- [My argument](notes/my-argument-{note_id}.md)'])
     finally:

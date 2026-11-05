@@ -95,7 +95,7 @@ def test_an_old_inspection_read_cannot_undo_an_acknowledged_save(engine):
                 await expect(page.locator("#dataset-name")).to_have_value(
                     "Old artifact"
                 )
-                await page.locator('[data-dataset-action="reload"]').click()
+                await page.locator('[data-catalog-action="reload"]').click()
                 await expect(page.locator("#dataset-saved-version")).to_be_visible()
                 await page.wait_for_function(
                     "document.querySelector('#datasets-sheet').getAttribute('aria-busy')==='false'"
@@ -107,7 +107,7 @@ def test_an_old_inspection_read_cannot_undo_an_acknowledged_save(engine):
                     const field = document.querySelector('#dataset-name');
                     field.value = 'New saved artifact';
                     field.dispatchEvent(new Event('input', {bubbles:true}));
-                    document.querySelector('[data-dataset-action="replace"]').click();
+                    document.querySelector('[data-catalog-action="replace"]').click();
                 }""")
                 await started.wait()
                 await page.locator('#papers li[data-paper="a"]').click()

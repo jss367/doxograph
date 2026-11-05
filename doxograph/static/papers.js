@@ -394,23 +394,29 @@ function webLinks(links) {
   return (links || []).filter((link) => /^https?:\/\//i.test(link));
 }
 
-// What the paper introduces or uses: the dataset records linking it, as
-// their Linked research lists it, and its code. A dataset opens its record.
-// The records are read once per workspace, and the panel redraws when they arrive.
+// What the paper introduces or uses: the dataset and benchmark records
+// linking it, as their Linked research lists it, and its code. A record opens
+// in its catalog. The records are read once per workspace, and the panel
+// redraws when they arrive.
 const DATASET_ROLES = {training: 'training', evaluation: 'evaluation', reference: 'reference', 'project-output': 'project output'};
 function paperArtifacts(paper) {
-  const datasets = Datasets.forPaper(paper.key);
-  const artifacts = rows => JSON.stringify(rows.map(({id, name, roles}) => [id, name, roles]));
-  const shown = artifacts(datasets), workspace = workspaceClient.workspaceId;
-  Datasets.ensureLoaded(() => {
+  const records = () => [Datasets.forPaper(paper.key), Benchmarks.forPaper(paper.key)];
+  const [datasets, benchmarks] = records();
+  const artifacts = rows => JSON.stringify(rows.map(list => list.map(({id, name, roles}) => [id, name, roles])));
+  const shown = artifacts([datasets, benchmarks]), workspace = workspaceClient.workspaceId;
+  const redraw = () => {
     if (workspace === workspaceClient.workspaceId && V.view === 'claims' && V.paper === paper.key && !editorHolds()
-        && artifacts(Datasets.forPaper(paper.key)) !== shown) renderContent();
-  });
+        && artifacts(records()) !== shown) renderContent();
+  };
+  Datasets.ensureLoaded(redraw);
+  Benchmarks.ensureLoaded(redraw);
   const links = webLinks(paper.code);
-  if (!datasets.length && !links.length) return '';
+  if (!datasets.length && !benchmarks.length && !links.length) return '';
   return `<div class="paper-artifacts paper-code"><h4>Artifacts</h4><ul>${datasets.map((d) => `
     <li><button type="button" class="link" data-act="open-dataset" data-dataset-id="${esc(d.id)}">${esc(d.name)}</button>
-      <span class="hint">dataset${d.roles.length ? ` · ${esc(d.roles.map((r) => DATASET_ROLES[r] || r).join(', '))}` : ''}</span></li>`).join('')}${links.map((link) => `
+      <span class="hint">dataset${d.roles.length ? ` · ${esc(d.roles.map((r) => DATASET_ROLES[r] || r).join(', '))}` : ''}</span></li>`).join('')}${benchmarks.map((b) => `
+    <li><button type="button" class="link" data-act="open-benchmark" data-benchmark-id="${esc(b.id)}">${esc(b.name)}</button>
+      <span class="hint">benchmark</span></li>`).join('')}${links.map((link) => `
     <li><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\/(www\.)?/i, ''))}</a> <span class="hint">code</span></li>`).join('')}</ul></div>`;
 }
 

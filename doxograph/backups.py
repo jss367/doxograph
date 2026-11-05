@@ -13,12 +13,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import config, datasets, notebook, people, records, research_notes, store
+from . import benchmarks, config, datasets, notebook, people, records, research_notes, store
 
 router = APIRouter(prefix='/api/workspace/backups')
 KEEP_VERSIONS = 20
-DOCUMENTS = {'notebook.json', 'research-notes.json', 'datasets.json', 'people.json', 'tags.yaml', 'facets.yaml', 'ledger.yaml',
+DOCUMENTS = {'notebook.json', 'research-notes.json', 'datasets.json', 'benchmarks.json', 'people.json', 'tags.yaml', 'facets.yaml', 'ledger.yaml',
              'context.md', 'agreements.json', 'tensions.json', 'syntheses.json', 'retired-keys.json'}
+CATALOGS = {catalog.filename: catalog for catalog in (datasets.catalog, benchmarks.catalog)}
 
 
 def local(path: Path) -> bool:
@@ -94,7 +95,7 @@ def locate(identifier: str) -> Path:
 
 
 def restorable(relative: str) -> bool:
-    return relative in ('notebook.json', 'research-notes.json', 'datasets.json', 'people.json', 'context.md') or relative.startswith('papers/')
+    return relative in ('notebook.json', 'research-notes.json', 'datasets.json', 'benchmarks.json', 'people.json', 'context.md') or relative.startswith('papers/')
 
 
 @router.get('')
@@ -170,11 +171,8 @@ def restore(identifier: str, body: Restore) -> dict[str, Any]:
                 restored = notebook.Notebook.model_validate_json(text).model_dump()
                 restored['revision'] = notebook.load()['revision'] + 1
                 text = json.dumps(restored, ensure_ascii=False)
-            elif relative == 'datasets.json':
-                restored = datasets.SavedDatasets.model_validate_json(text).model_dump()
-                for dataset in restored:
-                    dataset.update(revision=uuid.uuid4().hex, updated=store.now())
-                text = json.dumps(restored, ensure_ascii=False)
+            elif relative in CATALOGS:
+                text = json.dumps(CATALOGS[relative].restore(text), ensure_ascii=False)
             elif relative == 'people.json':
                 restored = people.SavedPeople.model_validate_json(text).model_dump()
                 for person in restored:

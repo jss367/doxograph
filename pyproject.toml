@@ -80,7 +80,7 @@ files = [
     "doxograph/server.py", "doxograph/origins.py", "doxograph/activity.py",
     "doxograph/job_queue.py", "doxograph/papers_api.py", "doxograph/chat_api.py",
     "doxograph/chat_attachments.py",
-    "doxograph/datasets.py", "doxograph/people.py",
+    "doxograph/catalogs.py", "doxograph/datasets.py", "doxograph/benchmarks.py", "doxograph/people.py",
     "doxograph/loupe.py",
     "doxograph/analysis_api.py",
     "doxograph/agent.py", "doxograph/backups.py", "doxograph/bib.py", "doxograph/code_links.py",
