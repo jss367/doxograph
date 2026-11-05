@@ -192,6 +192,9 @@ def test_unsent_topic_survives_workspace_redraw_and_is_part_of_quit_consent(rese
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(url)
+                # Boot redraws the Workspace form once the corpus arrives. Typing
+                # before then can land in the form that redraw replaces.
+                await page.wait_for_function('libraryInitialized')
                 await page.locator('#btn-workspace').click()
                 context = page.locator('#research-context')
                 before = await context.input_value()

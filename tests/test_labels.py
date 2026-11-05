@@ -647,8 +647,12 @@ def test_paper_menu_keyboard_focus_survives_dismissal_and_label_saves(engine):
                 await expect(menu).to_be_hidden()
                 await expect(trigger).to_be_focused()
 
-                # A window short enough for the sidebar to scroll.
+                # A window short enough for the sidebar to scroll. The resize
+                # event lands after set_viewport_size returns; let it pass
+                # first, or it dismisses the menu Enter is about to open.
+                await page.evaluate("window.resized = false; addEventListener('resize', () => { window.resized = true; }, {once: true})")
                 await page.set_viewport_size({"width": 1120, "height": 320})
+                await page.wait_for_function("window.resized")
                 await page.keyboard.press("Enter")
                 await expect(menu.get_by_role("button", name="Open the PDF")).to_be_focused()
                 await page.locator("#side").evaluate("side => { side.scrollTop += 64; }")
