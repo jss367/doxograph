@@ -6,6 +6,7 @@
 // --- settings ------------------------------------------------------------
 
 let savingAnalysisSetting = false;
+let savingAutoFindings = false;
 let savingProviderSetting = false;
 let savingCodexModel = false;
 let loadingCodexModels = false;
@@ -36,6 +37,8 @@ function syncAnalysisControls() {
   $('codex-model-refresh').disabled = loadingCodexModels;
   $('codex-current-model').textContent = `Current model: ${S.codex_model || 'Codex default (automatic)'}`;
   $('ai-action-status').hidden = enabled;
+  $('auto-findings').disabled = savingAutoFindings || !enabled || typeof S.auto_findings !== 'boolean';
+  if (!savingAutoFindings) $('auto-findings').checked = enabled && S.auto_findings === true;
   $('auto-extract').disabled = !enabled;
   $('auto-extract').checked = enabled && readOnArrival;
   $('import-analysis-status').hidden = S.ai_enabled !== false;
@@ -44,6 +47,27 @@ function syncAnalysisControls() {
   });
   if (typeof syncAgentChatControls === 'function') syncAgentChatControls();
 }
+
+$('auto-findings').addEventListener('change', async () => {
+  const enabled = $('auto-findings').checked;
+  savingAutoFindings = true;
+  syncAnalysisControls();
+  $('ai-settings-status').textContent = 'Saving…';
+  try {
+    const settings = await api('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto_findings: enabled }),
+    });
+    S.auto_findings = settings.auto_findings;
+    workspaceClient.invalidateState();
+    $('ai-settings-status').textContent = settings.auto_findings ? 'Findings update after reading.' : 'Findings update only when asked.';
+  } catch (error) {
+    $('ai-settings-status').textContent = `Could not save: ${error.message}`;
+  } finally {
+    savingAutoFindings = false;
+    syncAnalysisControls();
+  }
+});
 
 $('ai-enabled').addEventListener('change', async () => {
   const enabled = $('ai-enabled').checked;

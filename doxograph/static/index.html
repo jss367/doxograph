@@ -58,6 +58,8 @@
           <legend>AI analysis</legend>
           <label><input type="checkbox" id="ai-enabled" disabled aria-describedby="ai-help"> Enable AI analysis</label>
           <p class="hint" id="ai-help">Allow the selected model to read papers, analyze claims, and answer paper questions. When off, you can still import, browse, edit, and export. Requests already sent may finish.</p>
+          <label><input type="checkbox" id="auto-findings" disabled aria-describedby="auto-findings-help"> Update findings after reading papers</label>
+          <p class="hint" id="auto-findings-help">A little after the last paper of a batch is read or retagged, find tensions and agreements and rewrite the syntheses for the topics that changed. Off, the Findings page keeps its Update button.</p>
 
           <label for="ai-access">Model access</label>
           <select id="ai-access" disabled>

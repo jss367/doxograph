@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from playwright.async_api import expect
+
 from browser_support import browser_session, run_browser
 from doxograph import store
 from test_browser import _paper, _server
@@ -157,5 +159,31 @@ def test_no_synthesis_status_names_existing_findings(engine, cited):
                     await expect(section.locator(".frow.is-stale")).to_have_count(0)
                 else:
                     await expect(section.locator(".frow.is-stale")).to_have_count(1)
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+def test_the_findings_switch_in_settings_saves_and_follows_the_analysis_switch():
+    from doxograph import config
+    config.set_ai_enabled(True)
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page()
+            with _server() as url:
+                await page.goto(f"{url}/#view=library")
+                await page.get_by_role("button", name="Settings", exact=True).click()
+                box = page.get_by_label("Update findings after reading papers")
+                await expect(box).to_be_enabled()
+                await expect(box).to_be_checked()
+                await box.uncheck()
+                await expect(page.locator("#ai-settings-status")).to_have_text("Findings update only when asked.")
+                await page.wait_for_function("S.auto_findings === false")
+                assert config.auto_findings() is False
+                # Off with analysis: the switch has nothing to run and says so.
+                await page.get_by_label("Enable AI analysis").uncheck()
+                await expect(page.locator("#ai-settings-status")).to_have_text("AI analysis disabled.")
+                await expect(box).to_be_disabled()
 
     run_browser(scenario())

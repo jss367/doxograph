@@ -40,4 +40,6 @@ Three pages in the header and one pane:
    sidebar, compare and organize, evidence boards, research questions, claim
    connections, marks and saved searches. The data files and their APIs stay.
    *Done.*
-5. Run analysis automatically after extraction through the job queue.
+5. Run analysis automatically after extraction through the job queue. *Done:*
+   *the findings pass queues itself a little after the last paper of a batch*
+   *is read or retagged, with a switch in Settings.*

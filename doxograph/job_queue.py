@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import contextlib
 import json
 import functools
 import os
@@ -10,7 +11,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Concatenate
@@ -258,6 +259,221 @@ def _workspace_job[**P](
 
 # --- background work ------------------------------------------------------
 
+# --- findings after reading ----------------------------------------------
+#
+# A paper read, re-read or retagged changes what its topics hold, and the
+# findings page says so with a stale mark until the passes are run. Rather
+# than leave that to the reader, the passes are queued on their own a little
+# after the last reading finishes: one job per workspace, started once no
+# paper is still being read, so a batch of imports is answered once rather
+# than once per paper. The passes skip topics nothing changed in, so the job
+# costs only what changed.
+
+AUTO_FINDINGS_DELAY = 20.0
+_auto_findings_timers: dict[str, threading.Timer] = {}
+# Admission and timer ownership share this lock. Manual jobs keep their exact
+# topics/force, and the workspace's pass lock serializes their execution.
+_auto_findings_lock = threading.RLock()
+_auto_findings_stopping = False
+
+
+def _workspace_jobs_active(workspace: str, kind: str | None = None) -> bool:
+    with _jobs_lock:
+        return any(job.get("workspace") == workspace and job["state"] not in ("done", "error")
+                   and (job.get("kind") == kind if kind else job.get("kind") != "findings")
+                   for job in _jobs.values())
+
+
+def _auto_findings_path() -> Path:
+    return config.data_dir() / ".auto-findings.json"
+
+
+def _read_auto_findings() -> dict[str, Any] | None:
+    path = _auto_findings_path()
+    if path.is_symlink():
+        raise OSError("Automatic findings intent must not be a symbolic link")
+    try:
+        pending = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    if (not isinstance(pending, dict) or pending.get("version") != 1
+            or type(pending.get("pending")) is not bool
+            or not isinstance(pending.get("token"), str)
+            or len(pending["token"]) != 32
+            or any(c not in "0123456789abcdef" for c in pending["token"])):
+        raise ValueError("Invalid automatic findings intent; it was left for repair")
+    return pending
+
+
+def _clear_auto_findings(token: str) -> None:
+    # Called with the admission lock and the originating workspace selected.
+    with store.document_lock("automatic-findings"):
+        pending = _read_auto_findings()
+        if pending and pending["token"] == token:
+            _auto_findings_path().unlink(missing_ok=True)
+
+
+def _arm_auto_findings(workspace: str, token: str) -> None:
+    pending = _auto_findings_timers.pop(workspace, None)
+    if pending is not None:
+        pending.cancel()
+    if _auto_findings_stopping:
+        return
+    timer = threading.Timer(AUTO_FINDINGS_DELAY, lambda: _auto_findings_due(workspace, token, timer))
+    timer.daemon = True
+    _auto_findings_timers[workspace] = timer
+    timer.start()
+
+
+def schedule_findings(workspace: str | None = None) -> None:
+    """Persist an unstarted follow-on, restarting this workspace's quiet period."""
+    if not (config.ai_enabled() and config.auto_findings()):
+        return
+    workspace = workspace or config.workspace_id()
+    with _auto_findings_lock, config.use_workspace(workspace), activity._using_workspace(workspace):
+        token = uuid.uuid4().hex
+        with store.document_lock("automatic-findings"):
+            # Validate an existing record before replacing it or following a link.
+            _read_auto_findings()
+            store.write_json(_auto_findings_path(), {"version": 1, "token": token, "pending": True})
+        _arm_auto_findings(workspace, token)
+
+
+def queue_findings(topics: list[str], force: bool = False, *, automatic_token: str | None = None) -> bool:
+    """Atomically admit findings work; manual requests retain topics and force.
+
+    Automatic work waits for other workspace jobs. Manual requests are accepted
+    as before and run serially, so a forced or differently scoped request is not
+    silently discarded when it arrives during an automatic pass.
+    """
+    with _auto_findings_lock:
+        workspace = config.workspace_id()
+        if automatic_token is not None and (
+                _auto_findings_stopping or not (config.ai_enabled() and config.auto_findings())
+                or _workspace_jobs_active(workspace) or _workspace_jobs_active(workspace, "findings")):
+            return False
+        try:
+            fields = {"automatic": True, "automatic_token": automatic_token} if automatic_token else {}
+            job = _new_job(f"findings in {len(topics)} topics", kind="findings", **fields)
+            _submit_job(_run_findings, job, list(topics), force)
+        except Exception:
+            # Failed admission is reported as before, not automatically retried.
+            if automatic_token:
+                _clear_auto_findings(automatic_token)
+            raise
+        return True
+
+
+def _auto_findings_due(workspace: str, token: str, timer: threading.Timer) -> None:
+    with _auto_findings_lock:
+        if _auto_findings_stopping or _auto_findings_timers.get(workspace) is not timer:
+            return
+        _auto_findings_timers.pop(workspace)
+        try:
+            with config.use_workspace(workspace), activity._using_workspace(workspace):
+                with store.document_lock("automatic-findings"):
+                    pending = _read_auto_findings()
+                if not pending or not pending["pending"]:
+                    return
+                if not (config.ai_enabled() and config.auto_findings()):
+                    return  # Keep the unstarted intent; re-enabling can re-arm it.
+                if pending["token"] != token:
+                    # Another server replaced the shared intent. Its timer may
+                    # no longer be alive, so keep this process watching the
+                    # current unstarted generation for a full quiet period.
+                    _arm_auto_findings(workspace, pending["token"])
+                    return
+                topics = store.tension_topics()
+                if not topics:
+                    _clear_auto_findings(token)
+                elif not queue_findings(topics, automatic_token=token):
+                    _arm_auto_findings(workspace, token)
+        except HTTPException:
+            pass  # A deleted workspace has nothing left to update.
+        except Exception:
+            traceback.print_exc()
+
+
+def resume_auto_findings(*, startup: bool = False) -> None:
+    """Re-arm only persisted, unstarted intents, never interrupted provider calls."""
+    global _auto_findings_stopping
+    with _auto_findings_lock:
+        if startup:
+            _auto_findings_stopping = False
+        enabled = config.ai_enabled() and config.auto_findings()
+        if _auto_findings_stopping or not enabled:
+            for timer in _auto_findings_timers.values():
+                timer.cancel()
+            _auto_findings_timers.clear()
+            return
+        try:
+            workspaces = config.list_workspaces()
+        except ValueError:
+            workspaces = [{"id": config.DEFAULT_WORKSPACE_ID}]
+        for workspace in workspaces:
+            try:
+                with config.use_workspace(workspace["id"]), activity._using_workspace(workspace["id"]):
+                    with store.document_lock("automatic-findings"):
+                        pending = _read_auto_findings()
+                        if pending and not pending["pending"]:
+                            _auto_findings_path().unlink(missing_ok=True)
+                    if pending and pending["pending"] and workspace["id"] not in _auto_findings_timers:
+                        # A queued job in this live process already owns the intent.
+                        with _jobs_lock:
+                            owned = any(job.get("automatic_token") == pending["token"]
+                                        and job["state"] not in ("done", "error") for job in _jobs.values())
+                        if not owned:
+                            _arm_auto_findings(workspace["id"], pending["token"])
+            except HTTPException:
+                continue
+            except Exception:
+                traceback.print_exc()
+
+
+def stop_auto_findings() -> None:
+    """Cancel session timers while leaving unstarted intents recoverable."""
+    global _auto_findings_stopping
+    with _auto_findings_lock:
+        _auto_findings_stopping = True
+        for timer in _auto_findings_timers.values():
+            timer.cancel()
+        _auto_findings_timers.clear()
+
+
+def pending_auto_findings() -> int:
+    with _auto_findings_lock:
+        return len(_auto_findings_timers)
+
+
+@contextlib.contextmanager
+def _findings_execution(job: dict[str, Any]) -> Iterator[str | None]:
+    # The document lock also serializes separate serving processes. It is not
+    # held during admission, so queued manual work cannot deadlock the timer.
+    with store.document_lock("findings-pass"):
+        token = job.get("automatic_token")
+        deferred = None
+        if token:
+            with _auto_findings_lock, store.document_lock("automatic-findings"):
+                pending = _read_auto_findings()
+                if not pending or pending["token"] != token or not pending["pending"]:
+                    deferred = "Superseded automatic findings update"
+                elif not (config.ai_enabled() and config.auto_findings()):
+                    deferred = "Automatic findings paused while disabled"
+                else:
+                    # Checkpoint before any provider call: crashes after this
+                    # point must not automatically repeat an uncertain request.
+                    store.write_json(_auto_findings_path(), {**pending, "pending": False})
+        if deferred is not None:
+            yield deferred
+            return  # Retain unstarted intent when a switch was disabled.
+        try:
+            yield None
+        finally:
+            if token:
+                with _auto_findings_lock:
+                    _clear_auto_findings(token)
+
+
 @_workspace_job
 def _run_ingest(job: dict[str, Any], ref: ingest.Ref, do_extract: bool) -> None:
     try:
@@ -271,6 +487,7 @@ def _run_ingest(job: dict[str, Any], ref: ingest.Ref, do_extract: bool) -> None:
         if do_extract and config.ai_enabled() and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
+            schedule_findings(job.get("workspace"))
         _finish(job, key)
     except Exception as exc:
         _import_failed(job, exc)
@@ -294,6 +511,7 @@ def _run_upload(job: dict[str, Any], staged: Path, filename: str, do_extract: bo
         if do_extract and config.ai_enabled() and store.needs_extraction(key):
             _set(job, state="reading")
             extract.extract_paper(key)
+            schedule_findings(job.get("workspace"))
         _finish(job, key)
     except Exception as exc:
         _import_failed(job, exc)
@@ -310,6 +528,7 @@ def _run_extract(job: dict[str, Any], key: str, keep_reviewed: bool) -> None:
         _set(job, state="reading", key=key)
         extract.extract_paper(key, keep_reviewed=keep_reviewed)
         _set(job, state="done")
+        schedule_findings(job.get("workspace"))
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
@@ -384,6 +603,21 @@ def _run_agreements(job: dict[str, Any], topics: list[str], force: bool = False)
 
 @_workspace_job
 def _run_findings(job: dict[str, Any], topics: list[str], force: bool = False) -> None:
+    try:
+        with _findings_execution(job) as deferred:
+            if deferred is None:
+                _findings_body(job, topics, force)
+            else:
+                _set(job, state="done", detail=deferred)
+                # A re-enable can race this terminal notification. Recheck
+                # after the job no longer reserves admission, preserving intent.
+                resume_auto_findings()
+    except Exception as exc:
+        _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+
+
+def _findings_body(job: dict[str, Any], topics: list[str], force: bool = False) -> None:
     """Tensions, then agreements, then syntheses, over the same topics.
 
     One job rather than three on the queue at once: the synthesis prompt reads
@@ -484,6 +718,7 @@ def _run_retag(job: dict[str, Any], keys: list[str]) -> None:
                  detail=f"{failed} of {len(keys)} papers failed; {last_failure}")
         else:
             _set(job, state="done", detail=f"{len(keys)} papers")
+        schedule_findings(job.get("workspace"))
     except Exception as exc:
         _set(job, state="error", detail=f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
