@@ -9,7 +9,7 @@ from doxograph import config, store
 from pdfs import minimal_pdf
 from test_ask_browser import _server
 from test_browser import _answer
-from test_tools_action_history_browser import inert_tools as inert_tools
+from browser_support import inert_tools as inert_tools
 
 
 @pytest.mark.browser
@@ -55,7 +55,7 @@ def test_held_delete_discard_consent_includes_record_identity(engine, editor, de
                 await page.locator(f'.claim[data-claim="{claim}"] [data-act="del"]').click()
                 await page.locator('#toasts .toast', has_text='Deleted the claim.').wait_for()
                 if editor == 'dataset':
-                    await page.get_by_role('button', name='Datasets', exact=True).click()
+                    await page.evaluate("openPageView('datasets')")
                     await page.locator(f'#datasets-list [data-id="{first["id"]}"]').click()
                     field = page.locator('#dataset-name')
                     await field.fill('Identical replacement draft')

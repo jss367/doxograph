@@ -2,30 +2,6 @@
 
 // Cross-paper analysis: tensions, agreements, and topic syntheses.
 
-function renderTensionsNav() {
-  const all = S.tensions || [];
-  const count = (status) => all.filter((t) => t.status === status).length;
-  const parts = [];
-  if (count('open')) parts.push(`${count('open')} open`);
-  if (count('confirmed')) parts.push(`${count('confirmed')} confirmed`);
-  if (count('dismissed')) parts.push(`${count('dismissed')} dismissed`);
-  $('tensions-nav').innerHTML = `<li class="${V.view === 'tensions' ? 'active' : ''}" data-view="tensions">
-    <span class="pt">Where papers disagree</span>
-    <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
-}
-
-function renderAgreementsNav() {
-  const all = S.agreements || [];
-  const count = (status) => all.filter((a) => a.status === status).length;
-  const parts = [];
-  if (count('open')) parts.push(`${count('open')} open`);
-  if (count('confirmed')) parts.push(`${count('confirmed')} confirmed`);
-  if (count('dismissed')) parts.push(`${count('dismissed')} dismissed`);
-  $('agreements-nav').innerHTML = `<li class="${V.view === 'agreements' ? 'active' : ''}" data-view="agreements">
-    <span class="pt">Where papers agree</span>
-    <span class="pm">${all.length ? esc(parts.join(' · ')) : 'none found yet'}</span></li>`;
-}
-
 // Agreements a claim is part of, for the marker on its card.
 function agreementsFor(claimId) {
   return (S.agreements || []).filter((a) => a.status !== 'dismissed'
@@ -366,27 +342,6 @@ function cancelSynthEdit() {
   renderContent();
 }
 
-$('tensions-nav').addEventListener('click', (event) => {
-  if (!event.target.closest('[data-view]')) return;
-  showView('tensions');
-  syncHash(true);
-  renderAll();
-});
-
-$('agreements-nav').addEventListener('click', (event) => {
-  if (!event.target.closest('[data-view]')) return;
-  showView('agreements');
-  syncHash(true);
-  renderAll();
-});
-
-$('btn-agreements').addEventListener('click', async () => {
-  showView('agreements');
-  syncHash(true);
-  renderAll();
-  await findAgreements();
-});
-
 async function findTensions() {
   V.error = null;
   const workspace = await settleDeletes();
@@ -404,18 +359,3 @@ async function findTensions() {
   await refreshShowingError();
 }
 
-$('btn-tensions').addEventListener('click', async () => {
-  showView('tensions');
-  syncHash(true);
-  renderAll();
-  await findTensions();
-});
-
-$('btn-synth').addEventListener('click', async () => {
-  showView('claims');
-  V.group = true;
-  $('group-by-tag').checked = true;
-  syncHash(true);
-  renderAll();
-  await synthesize(null);
-});

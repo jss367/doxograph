@@ -76,3 +76,20 @@ async def close_ask_conversations(page):
     """Put the Ask conversation list away, as a click elsewhere would, so it no longer covers the transcript."""
     if await page.locator('#agent-history').evaluate('details => details.open'):
         await page.locator('#agent-history > summary').click()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def inert_tools(monkeypatch):
+    """No model is reached from browser tests that only drive the page."""
+    from doxograph import agent, chat, claude_code, codex_cli, config, extract
+    config.set_ai_enabled(False)
+
+    def blocked(*args, **kwargs):
+        pytest.fail('Unexpected provider in tools history controls')
+
+    for module, name in ((agent, 'answer'), (chat, 'answer'), (claude_code, '_run'),
+                         (codex_cli, '_run'), (extract, 'client')):
+        monkeypatch.setattr(module, name, blocked)

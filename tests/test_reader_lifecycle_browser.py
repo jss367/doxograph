@@ -88,7 +88,7 @@ def test_resume_cannot_override_navigation_away_and_back(engine):
                 assert httpx.put(url + '/api/notebook', json=notebook).status_code == 200
                 await page.goto(url)
                 await page.locator('#papers li[data-paper="second"]').click()
-                await page.get_by_role('button', name='Reading queue', exact=True).click()
+                await page.evaluate("openPageView('tools', {tool: 'reading'})")
                 await ready(page)
                 held, release = asyncio.Event(), asyncio.Event()
                 async def hold_get(route):

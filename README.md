@@ -187,9 +187,8 @@ scope. Removing sources starts a new conversation, carrying the draft but leavin
 prior answers and evidence behind. Each submitted question keeps its own scope,
 including when the selection changes while an answer is running.
 
-Every answer can be saved as a research note. **Evidence used** distinguishes
-retrieved claims and passages, supplied documents, and evidence carried forward
-from previous turns. Structured citations open preserved evidence and a link to
+**Evidence used** distinguishes retrieved claims and passages, supplied
+documents, and evidence carried forward from previous turns. Structured citations open preserved evidence and a link to
 the current claim or PDF page. Unknown references and invalid page references
 are marked as unverified. A valid citation establishes traceability, not that the
 paper supports the answer. Older conversations without evidence records are
@@ -199,7 +198,7 @@ Conversations keep their provider choice and can run side by side. A conflict
 with another window preserves the local answer as a separate conversation.
 Failed requests keep the draft for an explicit retry. Removing a paper preserves
 its conversations and saved evidence; repair unavailable sources before another
-question. Saved notes remain independent of their conversations.
+question.
 
 Use the **+** button in the question field, drop files into the chat, or paste
 an image into the question field in either chat. PNG, JPEG, GIF, WebP, PDF, and UTF-8 text files
@@ -383,11 +382,10 @@ The header's **More workspace actions** menu also holds **Export BibTeX**,
 **Retag all**, and **Keyboard shortcuts**. Beside claim search,
 **Filters** opens the claim kind, review, quote verification, and grouping controls.
 Active filters remain visible as removable chips after the controls close.
-Select claims or papers to reveal **Compare & organize** and **Clear selection**.
+Select claims or papers to reveal **Ask about selection** and **Clear selection**.
 
-The sidebar groups tools under **Library**, **Review**, and **Write**. The buttons
-at its top focus one group, or expand and collapse individual groups to suit
-your task; the browser remembers your choices.
+The sidebar holds **Add papers**, the paper list, **People**, and the labels
+in use; everything else is on the three pages in the header.
 The paper list scrolls within the library so a large collection does not push
 the other tools out of reach. **Add papers** starts collapsed when the workspace
 already has papers; open it or use **Jump to… → Add papers** to import more.
@@ -401,7 +399,7 @@ under their paper. Matching titles and author names are highlighted, and those
 papers appear before matches elsewhere. The sidebar's sort order also controls
 the cards, including the order within each search group.
 Choose **Extracted claims** to browse and review claims across papers, or
-**Papers** to return to the library. Saved searches remember this choice.
+**Papers** to return to the library.
 
 If startup fails, the app distinguishes a connection failure from an interface
 failure and offers **Reload library**, with technical details available separately.
@@ -429,37 +427,12 @@ Export HTML writes the file and then offers to open it or to copy its path. A
 reference that nothing identifies stays in the box and is named underneath it,
 so it is clear which line of a pasted list is the problem.
 
-The Tensions entry in the sidebar shows where papers disagree; `Escape`
-returns to the library. The Map entry draws the papers as a graph: each
-paper is a circle sized by its claims and colored by its most frequent
-topic, papers whose claims share a topic are joined, a paper that cites
-another is joined to it by a blue arrow, disagreements are drawn
-with bold red lines and labels, and your own claims appear as squares joined to the
-papers that support, contradict, refine, or supply a method for them; a
-link marked independent is not drawn. A slider hides topic
-links below a chosen number of shared claims; it starts at the median so
-a corpus on one subject is not a hairball. Drag nodes, scroll to zoom,
-and click a paper to read it. The map fills the window; drag its bottom edge
-to make it shorter or taller (hold the edge at the bottom of the window to keep
-growing it), and double-click the edge to fill the window again. Turn on **my notes** to include each paper’s saved
-personal note as a document node connected to that paper. Hover to preview a
-note and click it to open the paper’s note. Empty notes are omitted, and notes
-share their paper’s publication date in the timeline. Clicking a topic filters to it.
-
-In the map, choose **X axis → Publication date** to place papers on a timeline.
-The dates spread across the map's full width, however many papers share a date.
-Imports retain the publication day when arXiv, DOI metadata, or a forum supplies
-it. Dates with only a month or year are centered in that period and labeled
-as such in the tooltip; papers without a date appear in **Undated**. Older
-papers that only have a year continue to use that year. The date axis adjusts
-its labels from years to months and days as you zoom in.
-
 Press `⌘K` (`Ctrl+K` on Windows or Linux), or click **Jump to…**, to search
-papers by title, author, year, or key; topics; evidence boards; and actions in
-the current workspace. Use the arrow keys and Enter to open a result, or
-Escape to close the palette. Jumping to a paper or topic clears other filters
-so the destination is visible. Common actions include opening the map or reading
-queue, adding papers, exporting, and changing settings.
+papers by title, author, year, or key; topics; and actions in the current
+workspace. Use the arrow keys and Enter to open a result, or Escape to close
+the palette. Jumping to a paper or topic clears other filters so the
+destination is visible. Common actions include opening the findings, updating
+them, adding papers, exporting, and changing settings.
 
 Review runs from the keyboard. `j` and `k` move between claims, `e` edits the
 selected one, `r` marks it reviewed and moves to the next, and `n` jumps to the
@@ -472,8 +445,7 @@ follows offers to take it back, and takes back only what that click changed.
 
 `Command-Z` or `Ctrl-Z` undoes saved document titles, labels, code links and
 notes, claim edits and review decisions, PDF highlights and their colors, and
-saved changes to boards, bookmarks, connections, and searches. Add Shift to
-redo. Each workspace keeps its own history for the current session; reloading
+saved changes to bookmarks. Add Shift to redo. Each workspace keeps its own history for the current session; reloading
 starts a new history. While typing, the shortcut edits the text. A new
 highlight's automatically opened note leaves Undo with the highlight until you
 type. Pending deletions can also be undone until their notice expires. Imports,
@@ -567,39 +539,21 @@ by Accept; Discard just clears the proposal.
 
 ## Research without AI
 
-All of these tools work with **Enable AI analysis** turned off. Your workspace
-notes, boards, connections, reading progress, marks, and saved searches
-belong to the selected workspace and are stored in `notebook.json`. They are
-excluded from Doxograph's built-in model requests.
-Long-form research notes are also private to the workspace, stored separately
-in `research-notes.json`, and excluded from built-in model requests. The
-[agent connection](#query-doxograph-from-agents) can read note text on request.
-Images embedded in either
-writing space are stored locally in `note-images/`.
+All of these work with **Enable AI analysis** turned off. Reading progress and
+marks belong to the selected workspace and are stored in `notebook.json`; they
+are excluded from Doxograph's built-in model requests.
 
-- **Workspace notes** appears above the claims in the main workspace view.
-  Keep your questions, working conclusions, and next steps here; use
-  **Research notes** for longer documents such as arguments, reviews, and plans.
-  Write in Markdown with equations, tables, links, and local images; choose
-  Write, Split, or Preview and use the formatting toolbar. Upload, drop, or paste
-  images to store them locally. Edit in place or collapse to a two-line preview. **Keep open while reading**
-  places the same editor in the paper's notes column, beside its PDF when
-  available. The sidebar's **Workspace notes** button brings the editor into
-  view. Expansion and reading preferences are remembered for each workspace
-  in this browser. Changes save automatically, with a visible saving or saved
-  status. Notes also save when you collapse the editor or switch tools or workspaces.
-  If saving fails, your text stays in the editor so you can retry. If another
-  window changes the notes, copy your text before reloading the saved version.
 - **Reading a paper.** Selecting a paper that has a PDF opens the paper itself
-  in a dedicated reading view, with a rail on the right for your note,
-  highlights, and claims. The PDF and the rail scroll independently. **Hide
+  in a dedicated reading view, with a panel on the right for its summary, your
+  note, your highlights, and its claims. The PDF and the panel scroll
+  independently. **Hide
   library** makes more room for the paper; **All papers** returns to the library.
   **Claim filters** reveals filters and selection tools, with an indicator when
-  a filter is active. **Paper overview** brings the summary, relevance, notes,
-  labels, code links, and reading progress together in the rail. **Read**, **Ask about this
+  a filter is active. The panel brings the summary, why the paper is here, your note, labels,
+  code links, and reading progress together; the claims sit under it. **Read**, **Ask about this
   paper**, and the reading queue are available in the header; less frequent
-  commands live under **Paper actions**. In narrow windows, the overview and
-  notes appear below the PDF. The reader is offline; the PDF is drawn in the
+  commands live under **Paper actions**. In narrow windows, the panel appears
+  below the PDF. The reader is offline; the PDF is drawn in the
   browser and never sent anywhere. Zoom defaults to the width of the column.
   **Paper actions → Hide PDF** lists the claims full width instead, and the
   choice is kept in this browser. A claim's **PDF p.N** link scrolls the open
@@ -630,46 +584,14 @@ writing space are stored locally in `note-images/`.
   but cannot become a claim. Ticking **Open question** on any mark turns its
   note into a question to come back to. Marks are stored in the workspace's
   `notebook.json`; the PDF is not changed.
-- **Marks and questions**, in the sidebar, lists every mark in the workspace by
-  paper, or only the open questions. **Open page** returns to the mark in the
-  paper, and **Mark answered** clears the question but keeps the note.
-- **Export annotated PDF**, in the rail's Marks heading or the Marks list,
+- **Export annotated PDF**, in the rail's Marks heading,
   downloads a copy of the paper with its marks written in as standard PDF
   highlight and rectangle annotations, carrying your notes and questions, so
   other PDF readers show them. The stored PDF is never changed.
-- The research tools that follow open in the main pane beside the sidebar.
-  Each tab and board has its own link, **Back** retraces them, and unsaved
-  board edits are still there when you return from a paper.
-- **Compare & organize** uses the checkboxes on claim cards and beside paper
-  titles. Selections stay pinned across filters and navigation, and survive a
-  reload in the same browser tab. Compare sources, quotes, evidence, and notes
-  side by side. Clear or unpin items when finished.
-- **Claim connections** lets you connect two selected claims as agreeing,
-  contradicting, or qualifying one another and write your explanation. A
-  qualification runs from the first claim to the second. These manual judgments
-  are separate from model-generated agreements and tensions.
-- **Evidence boards** collect selected claims in an order you choose. Add
-  headings and commentary, move entries with the arrow buttons, and save the
-  board. Source claims remain linked to their papers; if a source is removed,
-  the board marks it as missing and keeps your commentary.
-- **Research questions**, under Write, turn a board into an investigation with
-  a working conclusion and open questions. Add selected claims and assign their
-  bearing as supporting, opposing, qualifying, or background evidence. The
-  overview groups them by your judgment and links each one to its source.
-  Markdown exports include the question, conclusion, next steps, and judgments.
-  These are your assessments and work with AI disabled.
-  Claim editors also offer **Your evidence assessment** for conditions,
-  limitations, evidence origins, and replication judgments. Quote matching,
-  human review, and replication are labeled separately. Question overviews
-  count your named origins and flag unassessed independence; a paper count is
-  not a count of independent replications. These annotations stay out of
-  built-in model requests and survive re-extraction even when reviews are replaced.
-- **Saved searches** remember the current query, paper, topic, label, claim kind,
-  review and quote-verification filters, and grouping. Opening one runs those
-  filters against the current corpus, so new matching claims appear naturally.
-- **Datasets**, under Library, catalogs the data your project uses or produces.
-  The catalog opens in the main pane with the sidebar still beside it, so you
-  can follow a linked paper or claim and come back with **Back**. Edits save
+- **Datasets** catalogs the data your project uses or produces. A record
+  opens from **Artifacts** on a paper it links, from **Jump to…**, or from its
+  own address, in the main pane with the sidebar still beside it, so you can
+  follow a linked paper or claim and come back with **Back**. Edits save
   as you type, and leaving the catalog saves at once; a new record saves once
   it has a name. Each record has its own link. Add a record with a name, description, source URL or local path, version,
   license, access notes, and roles (training, evaluation, reference, or project
@@ -729,7 +651,7 @@ writing space are stored locally in `note-images/`.
   available across restarts. Keep using the same browser and source path and
   export reviews before moving files. An occupied port reports an error; it
   never opens an unrelated server. Dataset files stay unchanged.
-- **People**, under Library, gives every author in the workspace a page with
+- **People**, in the sidebar, gives every author in the workspace a page with
   their papers, the claims extracted from them, and their coauthors. Click an
   author's name on a paper card or in a paper's header to open it. Names match
   regardless of case, accents, and punctuation, so `Schölkopf, B.` and
@@ -744,47 +666,12 @@ writing space are stored locally in `note-images/`.
   selected workspace in `people.json`, work with AI disabled, and have automatic
   backups with conflict protection. Workspace archives include the original
   records and a readable `people.md`.
-- **Research notes** are a separate writing space for arguments, literature
-  reviews, derivations, and experiment plans. Open **Research notes** in the
-  sidebar to create, search, rename, and write notes in Markdown with a live
-  preview. Notes open in the main pane beside the sidebar; follow a paper and
-  come back with **Back**, and your writing is still there. Choose Write, Split, or Preview to suit the task. Headings, lists,
-  blockquotes, code, and tables render alongside inline LaTeX (`$...$`) and
-  display equations (`$$...$$`). The toolbar inserts common formatting,
-  equations, tables, and images. Upload, drop, or paste PNG, JPEG, GIF, or WebP
-  images up to 10 MB; images and equation fonts are stored locally, so writing
-  and rendering work offline. Remote image links appear as placeholders until
-  you upload the image.
-  **Link note or paper** searches your notes and library and inserts a link
-  at the cursor. Follow it in the preview, or use **Linked research** below
-  the editor. **Backlinks** lists other saved notes that refer to the current
-  note; removed destinations are marked as missing. Note links can be bookmarked
-  and reopen the right note and workspace. Ordinary Markdown web links open
-  in another tab.
-  Notes save as you write, a moment after you stop typing; leaving the note,
-  switching workspaces, or quitting the Mac app saves at once, and
-  Command/Ctrl+S saves without waiting. A save that fails says why above the
-  note and keeps your draft, and leaving it asks before discarding it. When
-  another window changed the note first, **Reload saved version** lets you
-  inspect the saved text before explicitly replacing your draft.
-  **Export Markdown** downloads your current writing, including an unsaved
-  draft. Image and library links use absolute URLs back to this Doxograph
-  installation; this is an export, not two-way Markdown synchronization.
 - **Reading queue** keeps an ordered list of papers with queued, reading, and
   finished states, independently of claim review. **Bookmark this page** in the
   reader puts the paper on the queue at that page; for a paper on the queue the
   reader saves your page position as you scroll, and the queue's buttons open
-  the paper where you left it or at a bookmark.
-  that paper, then the remaining corpus, even when current filters hide it.
-  The last paper and review position are remembered per workspace in this browser.
-- **Bulk organization**, under Compare & organize, adds, removes, or replaces
-  topics on selected claims and labels on their papers. Explicitly selected
-  papers can have topics changed across all their claims. New topics must first
-  be added to the vocabulary. Replacing values asks before removing existing ones.
-- **Export Markdown** and **Export CSV** download the selected claims or papers,
-  or a whole evidence board, with citations, quotes, locations, evidence, and
-  notes. Board exports retain entry order, headings, and commentary. HTML and
-  BibTeX export remain in the main toolbar.
+  the paper where you left it or at a bookmark. **View reading queue** in a
+  queued paper's header opens the queue.
 - **Edit history**, on a paper, and **history**, on a claim, show earlier claim
   wording and paper notes alongside their current versions. Restore an earlier
   version without changing other claims. History starts with edits made in this
@@ -793,11 +680,6 @@ writing space are stored locally in `note-images/`.
   reports which ones were omitted; existing claims keep their current review decision.
   Restoring a deleted claim also keeps its deletion in history, so the restoration
   can itself be undone.
-
-Open research-tool forms keep unsaved writing until you save or explicitly
-choose to discard it. If another window changes the same workspace's research
-tools, a save reports the conflict and keeps your form. **Reload saved version**
-loads that window's changes after asking about your unsaved work.
 
 ## The Mac app
 
@@ -1044,35 +926,27 @@ under `labels`.
 A facet is a question you ask of every claim whose answer is a short list of
 names: which models a result was measured on, which datasets, which
 intervention. Facets are yours to define, and a workspace has none until you
-add one. **New facet** under **Facets** in the sidebar asks for a short name
-and one line saying what to record. That line goes into the extraction
-prompt, so every paper read afterwards comes back with values for it on each
-claim.
+add one: `doxograph facet <name> "<what to record>"` defines one, or changes
+what it asks, and the facets API does the same for agents. That line goes
+into the extraction prompt, so every paper read afterwards comes back with
+values for it on each claim. The values show on the claim card and can be
+changed in the claim editor; values you set by hand are yours, and neither a
+fill nor a re-read replaces them.
 
 Papers read before a facet existed, or before its description last changed,
-are counted under the facet as not yet filled in. So is a paper with a claim
-a pass left alone: one a re-read kept, or one edited while the model was
-answering. **Fill in** sends the claims still missing values, with their
-evidence and quotes, to the model, one call per paper, without the PDFs. `doxograph fill-facets` does the same from the shell. Values you set by
-hand in a claim's editor are yours: neither the fill nor a re-read replaces
-them, and a re-read keeps the claim.
-
-Each value in the sidebar filters the claims and papers to those carrying it,
-and the map dims the papers without it. **Color by** above the map colors each
-paper by the value most of its claims carry, with a legend for the values on
-screen.
+are counted under the facet as not yet filled in. `doxograph fill-facets`
+sends the claims still missing values, with their evidence and quotes, to the
+model, one call per paper, without the PDFs.
 
 Values are open, so a new model name needs no approval. Spellings that differ
 only in case or spacing are one value, written as most claims write it. Commas
 separate values in the claim editor, so a value cannot contain one; a comma in
-a value read from a paper is kept as a space.
-**Rename or merge values** rewrites the values you pick on every claim, and
-remembers the old spellings, so a later read that writes `gpt-4-0613` records
-it as the `GPT-4` you merged it into. Leaving the new name empty removes the
-values and keeps later reads from writing them. Changing a facet's description
-marks its values on every paper as needing to be filled in again. Deleting a
-facet removes its values from every claim. Facets live in `facets.yaml`, and
-values on each claim in `papers/<key>.json` under `facets`.
+a value read from a paper is kept as a space. The facets API can rename or
+merge values on every claim, remembering the old spellings so a later read
+that writes `gpt-4-0613` records it as the `GPT-4` you merged it into, and
+`doxograph facet <name> --remove` deletes a facet and its values from every
+claim. Facets live in `facets.yaml`, and values on each claim in
+`papers/<key>.json` under `facets`.
 
 ### ledger.yaml
 
@@ -1090,7 +964,7 @@ naming the claim they were made for. **Add a claim** skips retired ids.
 These are your own claims. Extraction links a paper's claims to them, which is
 what turns the corpus into an answer to "what external evidence do I have for
 this" rather than a pile of notes. The file can be edited by hand or from the
-web app, under *What I am studying* in the sidebar, which edits the research
+web app, under *What I am studying* on the Workspace page, which edits the research
 context in the same form.
 
 ### context.md
@@ -1100,16 +974,6 @@ into the extraction prompt and is the main lever on the quality of the
 `relevance` line and the ledger links.
 
 ## Which papers cite which
-
-The map draws a citation as a blue curve with a large arrowhead pointing to
-the paper cited. Reciprocal citations curve apart so both directions remain
-visible. Hover over a connection to read the two titles and their relationship;
-hover over a paper to see separate **Cites** and **Cited by** lists for the
-visible citation layer. Shared-topic links stay faint gray, while disagreements
-use bold red lines labeled **contradicts** or **disagrees with**. A paper that
-contradicts one of your own claims gets a red dotted line labeled **contradicts**.
-Arrowheads, line widths, and relationship labels stay the same screen size
-as you zoom.
 
 Citations come from the reference lists in the PDFs: the text after the first
 "References" heading — a paper with a supplement has two, and the article's own
@@ -1121,10 +985,7 @@ be looked for, since a short one turns up in prose that is not a citation of
 it. Nothing is fetched from arXiv or Crossref, and a paper no model has read
 is linked like any other.
 
-A citation is a stronger link than a shared tag, so the topic line between two
-papers gives way to the arrow between them. Turn the layer off with
-**citations** above the map. `doxograph cites` lists the same thing in the
-shell.
+`doxograph cites` lists them in the shell.
 
 A numbered list is read one entry at a time, and an entry names one work: the
 longest title in it wins, so a paper whose title contains another's is cited
@@ -1169,13 +1030,8 @@ A claim is the machine's sentence about the paper. A note is yours, and it is
 excluded from Doxograph's built-in model requests. An external agent connected
 through MCP can read notes when requested, as described above.
 
-For questions and thoughts about the whole workspace, edit **Workspace notes**
-in the main view. You get one document per workspace, saved automatically.
-It supports Markdown, equations, tables, and local images, with Write, Split,
-and Preview views. For multiple named documents, use **Research notes**.
-
-A paper's note sits under the summary in its header, or at the top of the rail
-beside the paper when its PDF is open. An empty note is ready to type into,
+A paper's note sits under the summary in its header, or in the panel beside
+the paper when its PDF is open. An empty note is ready to type into,
 and it saves as you write; **Done** or `Escape` closes the editor, and the note
 is there the next time you open the paper.
 Write what the paper is for, what to read it for, what is wrong with it, what
@@ -1233,7 +1089,14 @@ tensions, then agreements, then a synthesis per topic, since the synthesis
 reads the tensions on file. The same job runs on its own a little after the
 last paper of a batch is read or retagged, so the page stays current without
 being asked; **Update findings after reading papers** in Settings turns that
-off, and the passes skip topics nothing changed in either way. `doxograph tensions`, `doxograph agreements` and
+off, and the passes skip topics nothing changed in either way. Pending automatic
+updates survive quitting and resume after relaunch when analysis and automatic
+updates are enabled. Queued automatic work also pauses if either switch is
+turned off before execution, and resumes when both are enabled again. A pass
+that already started is not automatically retried.
+Manual updates keep their requested topics and force setting and run one at a
+time per workspace, including alongside automatic updates.
+`doxograph tensions`, `doxograph agreements` and
 `doxograph synthesize` do the same from the command line, one at a time.
 
 ## Where papers disagree

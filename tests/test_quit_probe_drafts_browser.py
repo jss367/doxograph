@@ -10,12 +10,11 @@ from browser_support import browser_session, run_browser
 from doxograph import config
 from test_ask_browser import _server
 from test_paper_note_revert_browser import no_models as no_models, open_note, seed
-from test_workspace_notes_browser import open_notes
 
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('editor', ['paper', 'workspace', 'research-note', 'dataset'])
+@pytest.mark.parametrize('editor', ['paper', 'dataset'])
 @pytest.mark.parametrize('finish', ['original-one-flush', 'final-save', 'failed-final-save'])
 def test_typing_during_quit_probe_needs_a_final_flush(engine, editor, finish):
     config.set_ai_enabled(False)
@@ -48,10 +47,6 @@ def test_typing_during_quit_probe_needs_a_final_flush(engine, editor, finish):
                 if editor == 'paper':
                     await open_note(page, url)
                     field, path, key = 'textarea[data-note="paper"]', '/api/papers/paper', 'notes'
-                elif editor == 'workspace':
-                    await page.goto(url)
-                    await open_notes(page)
-                    field, path, key = '#workspace-notes', '/api/notebook', 'notes'
                 elif editor == 'dataset':
                     item = httpx.post(url + '/api/datasets', json={'name': 'Synthetic quit control'}).json()
                     await page.goto(url + '/?dataset=' + item['id'])
@@ -93,7 +88,7 @@ def test_typing_during_quit_probe_needs_a_final_flush(engine, editor, finish):
                         finish_write.set()
                     await page.wait_for_function('window.quitProbeReply !== null')
                     assert await page.evaluate('window.quitProbeReply') is (finish != 'failed-final-save')
-                    if editor in ('dataset', 'research-note'):
+                    if editor in ('dataset'):
                         collection = '/api/datasets' if editor == 'dataset' else '/api/research-notes'
                         records = httpx.get(url + collection).json()['datasets' if editor == 'dataset' else 'notes']
                         stored = next(r for r in records if r['id'] == item['id'])[key]

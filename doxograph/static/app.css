@@ -55,6 +55,9 @@ header nav.pages button[aria-current="page"] { background: var(--sel); color: va
 .workspace-page .topic-list li:hover { border-color: var(--accent); color: var(--accent); }
 .workspace-page .topic-list .n { color: var(--muted); margin-left: .3rem; }
 .workspace-page .actions-row { display: flex; flex-wrap: wrap; gap: .4rem; }
+.workspace-page .topic-add { margin-top: .6rem; }
+.workspace-page .topic-add input { flex: 0 1 16rem; }
+.sidebar-nav { margin-top: 1rem; }
 header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-left: auto;
   justify-content: flex-end; gap: .5rem; font-size: .82rem; }
 #btn-command-palette { display: flex; align-items: center; gap: 1.5rem; color: var(--muted);
@@ -136,9 +139,6 @@ header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-le
 .theme-preview.rose i:nth-child(1) { background: #faf1f4; }
 .theme-preview.rose i:nth-child(2) { background: #a34a63; }
 .theme-preview.rose i:nth-child(3) { background: #2a1a1f; }
-.theme-preview.graphite i:nth-child(1) { background: #f4f4f5; }
-.theme-preview.graphite i:nth-child(2) { background: #9a5f10; }
-.theme-preview.graphite i:nth-child(3) { background: #1c1c1e; }
 .theme-preview.amber i:nth-child(1) { background: #f8efd9; }
 .theme-preview.amber i:nth-child(2) { background: #945800; }
 .theme-preview.amber i:nth-child(3) { background: #302414; }
@@ -176,27 +176,13 @@ header .actions { display: flex; align-items: center; flex-wrap: wrap; margin-le
   flex-wrap: wrap; padding: .8rem 0; border-bottom: 1px solid var(--line); }
 .backup-version p { margin: .3rem 0 0; }
 .backup-version .row { flex-wrap: wrap; }
-.sidebar-focus { display: flex; gap: .25rem; position: sticky; top: -1.2rem; z-index: 2;
-  background: var(--panel); margin: -1.2rem -1rem .9rem; padding: .75rem 1rem;
-  border-bottom: 1px solid var(--line); }
-.sidebar-focus button { flex: 1; min-width: 0; padding: .4rem .25rem; font-size: .8rem;
-  background: transparent; border-color: transparent; color: var(--muted); }
-.sidebar-focus button:hover, .sidebar-focus button[aria-pressed=true] {
-  background: var(--sel); color: var(--accent); }
-.sidebar-group { padding-bottom: 1rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
-.sidebar-group > summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
-.sidebar-description { display: block; margin: .2rem 0 .8rem; font-size: .72rem;
-  font-weight: 400; color: var(--muted); }
-.sidebar-group > .sec { margin-top: 1rem; }
-.sidebar-group #paper-import { margin-top: .75rem; padding-bottom: .75rem; }
-.sidebar-group .research-tools-nav { margin-top: .5rem; }
 .paper-library .plist { max-height: 30dvh; overflow-y: auto; overscroll-behavior: contain; }
 .library-heading { margin-bottom: 1.75rem; }
 .eyebrow { margin: 0 0 .35rem; color: var(--accent); font-size: .7rem;
   font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .library-heading h2 { margin: 0; font-size: 1.7rem; font-weight: 600; letter-spacing: -.035em; }
 .library-heading .stats { margin: .4rem 0 0; font-size: .8rem; color: var(--muted); }
-#main > :is(.library-heading, #workspace-notes-home, #continue-reading, #panes),
+#main > :is(.library-heading, #continue-reading, #panes),
 #reading-claim-tools > :is(.filters, .selection-tools) { max-width: 80rem; margin-inline: auto; }
 
 .continue-reading { background: var(--panel); border: 1px solid var(--line);
@@ -475,22 +461,9 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 .tcard .stale { color: var(--warn); font-size: .82rem; margin: .4rem 0 0; }
 @media (max-width: 70rem) { .tcard .tpair { grid-template-columns: 1fr; } }
 .tag { color: var(--accent); font-size: .8rem; cursor: pointer; }
-.facet-value { font-size: .78rem; cursor: pointer; padding: 0 .35rem; border: 1px solid var(--line);
+.facet-value { font-size: .78rem; padding: 0 .35rem; border: 1px solid var(--line);
   border-radius: 999px; white-space: nowrap; }
-.facet-value:hover { background: var(--panel); }
 .facet-value .facet-name { color: var(--muted); }
-.facet { margin: .1rem 0 .3rem; }
-.facet > summary { display: flex; align-items: center; gap: .3rem; cursor: pointer; font-size: .85rem; padding: .18rem .3rem; }
-.facet > summary { list-style: none; }
-.facet > summary::-webkit-details-marker { display: none; }
-.facet > summary::before { content: '▸'; color: var(--muted); width: .8rem; }
-.facet[open] > summary::before { content: '▾'; }
-.facet > summary .n { color: var(--muted); font-size: .78rem; margin-left: auto; }
-.facet > .hint { margin: .1rem .3rem .3rem; font-size: .78rem; }
-.facet-actions { flex-wrap: wrap; gap: .3rem; margin: .3rem .3rem .5rem; }
-.facet-actions button { font-size: .74rem; }
-.graph-legend.graph-colors[hidden] { display: none; }
-.graph-legend.graph-colors i { width: .65rem; height: .65rem; border: 0; border-radius: 50%; vertical-align: middle; margin-right: .3rem; }
 .link { font-size: .8rem; color: var(--muted); }
 .link .rel { text-transform: uppercase; font-size: .72rem; letter-spacing: .03em;
   color: var(--accent); margin-right: .3rem; }
@@ -608,13 +581,12 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 /* The findings page: a section per topic, the synthesis as one line until
    opened, and each agreement or tension as a row whose claims are a click
    away. The claims inside reuse the tension card's drawing. */
-.findings-view #main > :is(.library-heading, #workspace-notes-home, #continue-reading, #reading-navigation, #reading-claim-tools),
-.findings-view #workspace-notes-reading { display: none; }
+.findings-view #main > :is(.library-heading, #continue-reading, #reading-navigation, #reading-claim-tools) { display: none; }
 /* The Workspace page keeps the continue card and the active-filter chips: both
    are ways back to the claims, and clearing a filter from here must leave the
    research form alone. The search box and the selection tools go. */
-.workspace-view #main > :is(.library-heading, #workspace-notes-home, #reading-navigation),
-.workspace-view #workspace-notes-reading, .workspace-view #library-view-switch,
+.workspace-view #main > :is(.library-heading, #reading-navigation),
+.workspace-view #library-view-switch,
 .workspace-view #reading-claim-tools .filters > :not(#active-filters), .workspace-view #selection-tools { display: none; }
 .findings-head .row { align-items: flex-start; gap: .6rem; margin-top: .6rem; }
 .findings-head .row > .primary { white-space: nowrap; }
@@ -661,51 +633,8 @@ form[data-form].saving, #research-form.saving { opacity: .6; }
 .frow .cact { margin-top: .5rem; display: flex; gap: .4rem; }
 @media (max-width: 800px) { .frow .tpair { grid-template-columns: 1fr; } .frow .fwho { display: none; } }
 
-/* The map: papers as nodes on a canvas. The wrapper is sized from JS to fill
-   what is left of #main below the header, so the whole graph is on screen. */
-#main:has(.graph-wrap) { padding: 1.25rem; }
-#main:has(.graph-wrap) > .library-heading { display: none; }
-/* A page view (datasets, research notes, research tools) takes the main pane to itself. */
+/* A page view (datasets, people, research tools) takes the main pane to itself. */
 .page-view #main > :not(.main-page, .storage-warning) { display: none; }
-:root { --map-cite: #2563b8; --map-conflict: #c52b3d; --map-other: #7951b0; }
-:root[style*="color-scheme: dark"] {
-  --map-cite: #80b7ff; --map-conflict: #ff8793; --map-other: #c3a2f0;
-}
-.graph-wrap { position: relative; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--panel); overflow: hidden; min-height: 10rem; }
-.graph-wrap canvas { display: block; width: 100%; height: 100%; cursor: grab; }
-.graph-wrap canvas.hover { cursor: pointer; }
-.graph-wrap canvas.drag { cursor: grabbing; }
-/* The map's bottom edge: 8px of grab area that shows a line under the pointer. */
-.graph-resize { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; z-index: 4;
-  cursor: ns-resize; touch-action: none; }
-.graph-resize:hover, body.resizing-graph .graph-resize { border-bottom: 2px solid var(--accent); }
-body.resizing-graph { cursor: ns-resize; user-select: none; }
-.graph-tip { position: absolute; pointer-events: none; max-width: 22rem; z-index: 3;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
-  padding: .35rem .5rem; font-size: .82rem; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
-.graph-tip .pm { color: var(--muted); font-size: .76rem; margin-top: .15rem; }
-.graph-tip-relation { margin: .3rem 0; font-weight: 700; }
-.graph-tip-relation.cite { color: var(--map-cite); }
-.graph-tip-relation.paper-note { color: var(--map-other); }
-.graph-tip-relation.conflict, .graph-conflict { color: var(--map-conflict); }
-.graph-tip-citations { margin-top: .4rem; }
-.graph-note-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: hidden; margin-top: .4rem; }
-.graph-controls { flex-wrap: wrap; font-size: .84rem; color: var(--muted); }
-.graph-controls label { display: flex; align-items: center; gap: .25rem; }
-.graph-controls input[type=range] { width: 6rem; }
-.graph-legend { display: flex; gap: .9rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted);
-  margin: .3rem 0 .5rem; }
-.graph-legend i { position: relative; display: inline-block; width: 1.8rem; height: 0; border-top: 1px solid var(--muted);
-  vertical-align: middle; margin-right: .3rem; }
-.graph-legend i.tension { border-top: 3px dashed var(--map-conflict); }
-.graph-legend i.cite { border-top: 2px solid var(--map-cite); }
-.graph-legend i.cite::after { content: ''; position: absolute; right: -1px; top: -6px;
-  border-left: 9px solid var(--map-cite); border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
-.graph-legend i.supports { border-top: 2px solid var(--ok); }
-.graph-legend i.contradicts { border-top: 3px dotted var(--map-conflict); }
-.graph-legend i.other { border-top: 2px dashed var(--map-other); }
-.graph-legend i.paper-note { border-top: 2px dotted var(--map-other); }
 
 /* The research form: context and the ledger of my own claims. */
 .edit.research .linkrow input[name="ledger-id"] { flex: 0 0 5rem; font-family: ui-monospace, Menlo, monospace; }

@@ -33,11 +33,9 @@ const NEW_CLAIM_ID = '__new__';
 // list. Without it a re-render redraws from the unchanged server row and
 // silently discards the edit. A map rather than one slot, so opening a second
 // claim's editor does not throw away the first one's draft.
-// view is 'library', 'claims', 'tensions', 'agreements', 'research', or 'graph'. Only
+// view is 'library', 'claims', 'tensions', 'agreements', or 'research'. Only
 // claims has a claim editor, so switching away closes any open one (keeping
-// its draft) and lets the background poll run. graph holds the map's display
-// choices, reset with the rest when the workspace changes; the layout itself
-// is in GRAPH below.
+// its draft) and lets the background poll run.
 // tensionFocus narrows the tensions view to those involving one claim; it is set
 // by the marker on a claim card and cleared by "show all".
 // similar is the one claim whose lookalikes from other papers are open, in the
@@ -62,13 +60,13 @@ const NEW_CLAIM_ID = '__new__';
 // judgment but the reader's, so unlike a synthesis it is saved without
 // flushing the held deletes: no claim is read to write one.
 const PDF_HIDDEN_KEY = 'doxograph-pdf-hidden';   // before `V`, which reads it at startup
-const V = { paper: null, tag: null, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+const V = { paper: null, tag: null, label: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
             editing: null, selectedId: null, newClaim: null, parkedNewClaims: {},
             drafts: {}, error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
             synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
-            noteEditing: null, noteDrafts: {},
-            graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false }, paperSort: null,
+            noteEditing: null, noteDrafts: {}, topicDraft: '',
+            paperSort: null,
             quoteContext: null, textSearch: null, similar: null, pdfHidden: readPdfHidden() };
 
 // Whether the paper's PDF is kept out of the claims view. A preference of this
@@ -107,36 +105,6 @@ function refuseWhileRemoving(paper, what) {
 
 const $ = (id) => document.getElementById(id);
 
-function revealSidebar(target) {
-  const group = target?.closest('[data-sidebar-group]');
-  if (group) group.open = true;
-}
-
-function syncSidebarFocus() {
-  const open = [...document.querySelectorAll('[data-sidebar-group]')].filter(group => group.open);
-  document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
-    button.setAttribute('aria-pressed', String(open.length === 1 && open[0].dataset.sidebarGroup === button.dataset.sidebarFocus));
-  });
-}
-
-document.querySelectorAll('[data-sidebar-group]').forEach(group => {
-  const key = `doxograph-sidebar:${group.dataset.sidebarGroup}`;
-  try { group.open = localStorage.getItem(key) !== 'closed'; } catch (_) { /* optional */ }
-  group.addEventListener('toggle', () => {
-    try { localStorage.setItem(key, group.open ? 'open' : 'closed'); } catch (_) { /* optional */ }
-    syncSidebarFocus();
-  });
-});
-document.querySelectorAll('[data-sidebar-focus]').forEach(button => {
-  button.addEventListener('click', () => {
-    document.querySelectorAll('[data-sidebar-group]').forEach(group => {
-      group.open = group.dataset.sidebarGroup === button.dataset.sidebarFocus;
-    });
-    syncSidebarFocus();
-    $('side').scrollTop = 0;
-  });
-});
-syncSidebarFocus();
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -146,7 +114,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // and there is no way to hand someone a link to one topic. Navigation pushes a
 // history entry; a filter or a selection replaces one, so Back does not have to
 // walk through every keystroke.
-const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'graph', 'datasets', 'people', 'notes', 'tools'];
+const HASH_VIEWS = ['library', 'claims', 'findings', 'tensions', 'agreements', 'research', 'datasets', 'people', 'tools'];
 
 function hashParams() {
   return new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -159,7 +127,6 @@ function currentHash() {
   if (V.paper) params.set('paper', V.paper);
   if (V.tag) params.set('tag', V.tag);
   if (V.label) params.set('label', V.label);
-  if (V.facet) params.set('facet', V.facet);
   if (V.ledger) params.set('ledger', V.ledger);
   if (V.q.trim()) params.set('q', V.q);
   if (V.kind) params.set('kind', V.kind);
@@ -170,7 +137,6 @@ function currentHash() {
   if (V.view === 'datasets' && V.dataset) params.set('dataset', V.dataset);
   if (V.view === 'people' && V.person) params.set('person', V.person);
   else if (V.view === 'people' && V.author) params.set('author', V.author);
-  if (V.view === 'notes' && V.note) params.set('note', V.note);
   if (V.view === 'tools') {
     params.set('tool', V.tool || 'compare');
     if (V.board) params.set('board', V.board);
@@ -196,7 +162,7 @@ let restoringHistory = false;
 let navigationSeq = 0, navigationRoute = null;
 function navigationRouteNow() {
   const record = {notes: V.note, datasets: V.dataset, people: [V.person, V.author], tools: [V.tool, V.board]}[V.view] ?? null;
-  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.facet, V.ledger,
+  return JSON.stringify([workspaceClient.workspaceId, V.view, V.paper, V.tag, V.label, V.ledger,
     V.q, V.kind, V.unreviewed, V.unverified, V.pdfHidden, record]);
 }
 function navigationVersion() {
@@ -256,14 +222,6 @@ function dropMissingFilters() {
   // leave a filter on with nothing on screen to turn it off.
   // The filter follows the label to the spelling the sidebar shows now.
   if (V.label) V.label = findLabel(Object.keys(S.label_counts || {}), V.label) || null;
-  // A facet value the corpus no longer holds is dropped the same way, and
-  // follows a value to the spelling the sidebar shows.
-  if (V.facet) {
-    const filter = facetFilter();
-    const values = filter ? Object.keys(facetEntry(S.facet_counts, filter.name) || {}) : [];
-    const value = filter && values.find((v) => facetValueKey(v) === facetValueKey(filter.value));
-    V.facet = value ? `${filter.name}:${value}` : null;
-  }
   // One of the reader's own claims, named by a link from outside the app, can
   // be removed or renumbered from the research form.
   if (V.ledger && !(S.ledger || []).some((own) => own.id === V.ledger)) V.ledger = null;
@@ -277,7 +235,6 @@ function dropMissingFilters() {
   // and from a hand-written address naming both. The paper wins, as it does on
   // every other path that opens one.
   keepLabelFor(V.paper);
-  keepFacetFor(V.paper);
   keepLedgerFor(V.paper);
 }
 
@@ -295,7 +252,6 @@ function applyHash() {
   V.paper = V.view === 'library' ? null : params.get('paper') || null;
   V.tag = params.get('tag') || null;
   V.label = params.get('label') || null;
-  V.facet = params.get('facet') || null;
   V.ledger = params.get('ledger') || null;
   V.q = params.get('q') || '';
   V.kind = params.get('kind') || '';
@@ -444,9 +400,6 @@ function corpusChanged() {
   window.FocusedReview?.sync();
   rerunTextSearch();     // a paper imported since holds the query's words too
   closeSimilar();        // and the claims it was compared against have moved
-  // A PDF that arrived while the map is open cites what it cites; the papers
-  // are redrawn from state but the arrows are fetched on their own.
-  if (V.view === 'graph') loadCitations();
 }
 
 async function refresh() {
@@ -535,19 +488,16 @@ function resetWorkspaceView() {
   document.querySelectorAll('.research-tools-nav button[aria-current]').forEach(button => button.removeAttribute('aria-current'));
   document.body.classList.remove('page-view');
   Object.assign(V, {
-    paper: null, tag: null, label: null, facet: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
+    paper: null, tag: null, label: null, ledger: null, q: '', kind: '', unreviewed: false, unverified: false, group: true,
     editing: null, selectedId: null, newClaim: null, parkedNewClaims: {}, drafts: {},
     error: null, view: 'library', dataset: null, person: null, author: null, note: null, tool: null, board: null, tensionStatus: '', tensionFocus: null, agreementStatus: '', agreementFocus: null,
     synthEditing: null, synthDrafts: {}, synthSaving: null, researchSaving: false, researchDraft: null, researchBase: null,
     quitClaimBases: {}, quitSynthBases: {}, unconfirmedClaims: {}, unconfirmedSyntheses: {},
-    noteEditing: null, noteDrafts: {},
-    graph: { xAxis: 'connections', color: '', topics: true, minShared: null, tensions: true, ledger: true, cites: true, notes: false },
+    noteEditing: null, noteDrafts: {}, topicDraft: '',
     quoteContext: null, textSearch: null, similar: null,
   });
   savingClaims.clear();
   dropTextSearch();
-  CITATIONS = [];
-  graphReset();
   $('q').value = '';
   $('kind').value = '';
   $('only-unreviewed').checked = false;
@@ -561,7 +511,7 @@ function hasWorkspaceDrafts() {
   return Boolean(V.editing || V.synthEditing || V.newClaim
     || Object.keys(V.parkedNewClaims).length || Object.keys(V.drafts).length
     || Object.keys(V.synthDrafts).length || Object.keys(V.noteDrafts).length
-    || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
+    || topicNameDraft().trim() || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
 }
 
 let manualQuitWriteSequence = 0;
@@ -618,7 +568,8 @@ function hasQuitWriting() {
     !Object.hasOwn(V.quitSynthBases, topic) || text !== V.quitSynthBases[topic].text);
   return Boolean(changedClaims || changedSyntheses || V.newClaim || Object.keys(V.parkedNewClaims).length
     || Object.keys(V.unconfirmedClaims).length || Object.keys(V.unconfirmedSyntheses).length
-    || Object.keys(V.noteDrafts).length || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
+    || Object.keys(V.noteDrafts).length || topicNameDraft().trim()
+    || (V.view === 'research' ? researchFormDirty() : V.researchDraft));
 }
 
 // Core editors keep some writing only in their visible form. Snapshot it
@@ -640,7 +591,7 @@ function workspaceWritingSnapshot() {
     return [key, saver.generation, saver.unconfirmed];
   });
   return JSON.stringify([workspaceClient.workspaceId, V.editing, V.drafts, V.newClaim, V.parkedNewClaims,
-    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft,
+    V.synthEditing, V.synthDrafts, V.noteEditing, V.noteDrafts, noteWrites, V.researchDraft, V.topicDraft,
     V.unconfirmedClaims, V.unconfirmedSyntheses]);
 }
 let discardedWorkspaceWriting = null;
@@ -658,14 +609,14 @@ function canLeaveWorkspace() {
 function canRestoreSavedVersion() {
   return !hasWorkspaceDrafts() && !workspaceClient.pendingMutations && !savingClaims.size
     && !V.synthSaving && !paperNotesSaving() && !V.researchSaving && !trash.size
-    && !WorkspaceNotes.hasUnsavedChanges() && !ResearchNotes.hasUnsavedChanges() && !Datasets.hasUnsavedChanges() && !People.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
+    && !Datasets.hasUnsavedChanges() && !People.hasUnsavedChanges() && !ResearchTools.hasUnsavedChanges();
 }
 
 // The native app calls this before quitting. Writing saves itself a moment
 // after typing stops, and the words typed in that moment are saved here.
 window.doxographSaveDrafts = async () => {
   workspaceWritingSnapshot();
-  const saved = (await Promise.all([WorkspaceNotes.flush(), ResearchNotes.flush(), Datasets.flush(), People.flush(), flushPaperNotes(),
+  const saved = (await Promise.all([Datasets.flush(), People.flush(), flushPaperNotes(),
     typeof pageImports === 'undefined' ? true : pageImports.settle()])).every(Boolean);
   // Manual editors keep Save/Cancel semantics. Capture DOM-only and parked
   // writing after the waits too, and warn rather than silently saving a judgment.
@@ -676,7 +627,7 @@ window.doxographSaveDrafts = async () => {
 // Consent to lose writing belongs to its content and identity, not a quit
 // attempt alone. Native compares this only while input remains frozen.
 window.doxographQuitWritingSnapshot = () => JSON.stringify([
-  workspaceWritingSnapshot(), ResearchNotes.writingSnapshot(), Datasets.writingSnapshot(), People.writingSnapshot(),
+  workspaceWritingSnapshot(), Datasets.writingSnapshot(), People.writingSnapshot(),
   ResearchTools.writingSnapshot(), [...document.querySelectorAll('input:not([type="password"]):not([type="file"]),textarea,select,[contenteditable="true"]')]
     .map(field => [field.id, field.name, field.value ?? field.textContent, field.checked]),
 ]);
@@ -685,8 +636,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   async prepare() {
     // A paper note that cannot save is a draft, which confirmLeave asks about.
     await flushPaperNotes();
-    return await WorkspaceNotes.beforeWorkspaceSwitch()
-      && await ResearchNotes.beforeWorkspaceSwitch() && await Datasets.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
+    return await Datasets.beforeWorkspaceSwitch() && await People.beforeWorkspaceSwitch() && await ResearchTools.beforeWorkspaceSwitch();
   },
   showCurrent: renderWorkspacePicker,
   canLeave: canLeaveWorkspace,
@@ -700,8 +650,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   },
   beforeLeave: flushTrash,
   async beforeSelect() {
-    if (!await WorkspaceNotes.beforeWorkspaceSwitch()) return false;
-    if (!await ResearchNotes.beforeWorkspaceSelect() || !await Datasets.beforeWorkspaceSelect() || !await People.beforeWorkspaceSelect()
+    if (!await Datasets.beforeWorkspaceSelect() || !await People.beforeWorkspaceSelect()
         || !await ResearchTools.beforeWorkspaceSelect()) return false;
     // All earlier waits leave core editors interactive. Consent applies only
     // to the snapshot shown when asking, not later writing or pending saves.
@@ -720,7 +669,7 @@ const workspaceController = createWorkspaceController(workspaceClient, {
     // This synchronous last check runs after beforeSelect's Promise and
     // immediately before selection, so a late save/draft cannot slip through.
     if (!canLeaveWorkspace()) return false;
-    if (!ResearchNotes.canWorkspaceSelect() || !Datasets.canWorkspaceSelect() || !People.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
+    if (!Datasets.canWorkspaceSelect() || !People.canWorkspaceSelect() || !ResearchTools.canWorkspaceSelect()) return false;
     if (hasWorkspaceDrafts() && workspaceWritingSnapshot() !== discardedWorkspaceWriting) {
       toast('Your writing changed. Switch workspaces again to review it.', { tone: 'warn' });
       return false;
@@ -729,9 +678,6 @@ const workspaceController = createWorkspaceController(workspaceClient, {
   },
   async enter() {
     resetWorkspaceView();
-    // Selection cleared the client snapshot. Retire the previous workspace's
-    // editor before the destination read can pause or fail.
-    WorkspaceNotes.sync({view:V.view, paper:V.paper});
     renderWorkspacePicker();
     syncHash(true);
     await refresh();
@@ -754,21 +700,13 @@ async function loadWorkspaces() {
 function render() {
   renderStats();
   renderPapers();
-  renderFindingsNav();
-  renderTensionsNav();
-  renderAgreementsNav();
-  renderResearchNav();
-  renderGraphNav();
-  renderTags();
   renderLabels();
-  renderFacets();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   renderJobs();
   syncAnalysisControls();
   People.sync();
   ResearchTools.sync();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   if (typeof syncAskContext === 'function') syncAskContext();
 }
@@ -793,20 +731,12 @@ function renderAll() {
   else captureOpenEditor();
   renderStats();
   renderPapers();
-  renderFindingsNav();
-  renderTensionsNav();
-  renderAgreementsNav();
-  renderResearchNav();
-  renderGraphNav();
-  renderTags();
   renderLabels();
-  renderFacets();
   renderContent();
   renderJobs();
   syncAnalysisControls();
   People.sync();
   ResearchTools.sync();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   if (typeof syncAskContext === 'function') syncAskContext();
   syncHash();
@@ -856,10 +786,6 @@ function renderStorageWarnings() {
 }
 
 function showView(view) {
-  const destination = {library: 'papers', claims: 'papers', graph: 'graph-nav', research: 'research-nav',
-    findings: 'findings-nav', tensions: 'tensions-nav', agreements: 'agreements-nav', datasets: 'btn-datasets', people: 'btn-people', notes: 'btn-research-notes'}[view];
-  if (destination) revealSidebar($(destination));
-  if (view === 'tools') revealSidebar(toolButton());
   if (view === V.view) return;
   if (V.view === 'research') captureResearchDraft();
   // Neither the tensions view nor the map has an editor. Park any open one
@@ -901,7 +827,6 @@ function renderContent() {
   restoreNoteCursor(cursor);
   restorePaperActionCursor(actionFocus);
   renderContinuation();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   syncHash();
 }
 
@@ -952,9 +877,8 @@ function restoreNoteCursor(cursor) {
 // their own page in the main pane, and their drafts while the reader is away.
 // Showing one that is already up is a no-op, so every redraw can come through here.
 function pageViews() {
-  return {datasets: [Datasets, [V.dataset], $('btn-datasets')],
+  return {datasets: [Datasets, [V.dataset], null],
     people: [People, [V.person, V.author], $('btn-people')],
-    notes: [ResearchNotes, [V.note], $('btn-research-notes')],
     tools: [ResearchTools, [V.tool, V.board], toolButton()]};
 }
 
@@ -1017,7 +941,7 @@ function openPerson(name) {
 // Following a source out of a page view, the way the paper list opens one.
 function followToPaper(paper, claim = null, tag = null) {
   captureOpenEditor(); parkNewClaimForNavigation(paper);
-  V.paper = paper; V.view = 'claims'; V.tag = tag; V.label = null; V.facet = null; V.ledger = null; V.q = ''; V.kind = '';
+  V.paper = paper; V.view = 'claims'; V.tag = tag; V.label = null; V.ledger = null; V.q = ''; V.kind = '';
   V.unreviewed = false; V.unverified = false; V.selectedId = claim || null;
   $('q').value = ''; $('kind').value = ''; $('only-unreviewed').checked = false; $('only-unverified').checked = false;
   scheduleTextSearch(); syncHash(true); renderAll();
@@ -1039,8 +963,6 @@ function drawContent() {
   $('q').placeholder = library ? 'Search papers…' : 'Search claims, quotes, and papers…';
   if (V.view !== 'claims') $('paperhead').innerHTML = '';
   const page = drawPageViews();
-  if (V.view === 'graph') { renderGraph(); return; }
-  graphStop();   // leaving the map, or never on it: no animation loop off screen
   if (page) { $('content').innerHTML = ''; return; }
   if (library) { renderLibrary(); return; }
   if (V.view === 'findings') { renderFindings(); return; }
@@ -1487,7 +1409,6 @@ $('panes').addEventListener('click', async (event) => {
       if (row && !visibleClaims().some((c) => c.id === claim)) {
         if (V.paper && row.paper !== V.paper) V.paper = null;
         if (V.tag && !(row.tags || []).includes(V.tag)) V.tag = null;
-        if (!hasFacetFilter(row)) V.facet = null;
         if (!hasLedgerFilter(row)) V.ledger = null;
         keepLabelFor(row.paper);
         if (V.kind && row.kind !== V.kind) { V.kind = ''; $('kind').value = ''; }
@@ -1660,11 +1581,6 @@ $('panes').addEventListener('click', async (event) => {
     chooseLabel(labelEl.dataset.label);
     return;
   }
-  const facetEl = event.target.closest('.facet-value[data-facet]');
-  if (facetEl) {
-    chooseFacet(facetEl.dataset.facet, facetEl.dataset.facetValue);
-    return;
-  }
   const card = event.target.closest('.claim[data-claim]');
   if (card && card.dataset.claim !== V.selectedId) {
     // Selecting another claim redraws the list, which would rebuild an open
@@ -1689,31 +1605,9 @@ $('panes').addEventListener('input', (e) => {
 
 // Each filter keeps whatever is typed in an open editor before redrawing.
 $('panes').addEventListener('change', (e) => {
-  if (e.target.matches('[data-graph-opt]')) { graphOption(e.target); return; }
   if (e.target.id === 'tension-status') { V.tensionStatus = e.target.value; renderContent(); }
   if (e.target.id === 'agreement-status') { V.agreementStatus = e.target.value; renderContent(); }
 });
-$('panes').addEventListener('input', (e) => {
-  if (e.target.matches('[data-graph-opt="minShared"]')) graphOption(e.target);
-});
-
-function graphOption(field) {
-  const name = field.dataset.graphOpt;
-  if (name === 'xAxis') {
-    V.graph.xAxis = field.value;
-    GRAPH.autofit = true;
-  } else if (name === 'color') {
-    V.graph.color = field.value;
-  } else if (name === 'minShared') {
-    V.graph.minShared = Math.max(1, parseInt(field.value, 10) || 1);
-    const label = $('content').querySelector('[data-graph-min]');
-    if (label) label.textContent = String(V.graph.minShared);
-  } else {
-    V.graph[name] = field.checked;
-  }
-  if (V.view === 'graph') renderGraph();
-  if (V.view === 'graph' && name === 'xAxis') graphFit();
-}
 
 // --- boot -----------------------------------------------------------------
 
@@ -1734,56 +1628,41 @@ async function updateFromPoll() {
   // People records live outside the corpus, so a corpus that has not moved
   // says nothing about them. The page reads them itself, throttled.
   void People.refresh();
-  if (!changed) {
-    if (citationsFailed && V.view === 'graph') loadCitations();
-    return;
-  }
+  if (!changed) return;
   corpusChanged();
-  // An asking that failed is asked again while the map is open, whether or
-  // not anything in the corpus has moved.
-  if (citationsFailed && V.view === 'graph') loadCitations();
   renderStats();
-  renderPapers(); renderFindingsNav(); renderTensionsNav(); renderAgreementsNav(); renderResearchNav(); renderGraphNav(); renderTags(); renderLabels(); renderFacets();
+  renderPapers(); renderLabels();
   renderActiveFilters();
   if (!editorHolds()) renderContent();
   syncHash();
   syncAnalysisControls();
   People.sync();
   ResearchTools.sync();
-  WorkspaceNotes.sync({view:V.view, paper:V.paper});
   CommandPalette.sync();
   if (typeof syncAskContext === 'function') syncAskContext();
 }
 
 async function boot() {
-  WorkspaceNotes.connect(workspaceClient);
-  ResearchNotes.connect(workspaceClient, {open: (id) => openPageView('notes', {note: id || undefined}), follow: followToPaper,
-    selected: (id) => { V.note = id; syncHash(); }});
   Datasets.connect(workspaceClient, followToPaper, (id) => { V.dataset = id; syncHash(); });
-  $('btn-datasets').addEventListener('click', () => openPageView('datasets'));
   People.connect(workspaceClient, followToPaper, (id, author) => { V.person = id; V.author = author; syncHash(); });
   $('btn-people').addEventListener('click', () => openPageView('people'));
-  $('btn-research-notes').addEventListener('click', () => openPageView('notes'));
   ResearchTools.connect(workspaceClient, {open: (tool, board, replace) => openPageView('tools', {tool, board}, replace),
     selected: followTools});
   window.FocusedReview.connect(workspaceClient);
-  connectPaperMap(workspaceClient);
   AppStartup.phase('connection');
   await loadWorkspaces();
   applyHash();
   // A link to a claim from outside asks for its drawer to open; a reload of
   // the same address names the claim too, and leaves the drawer as it was.
   const claimLinked = hashParams().get('show') === 'claim';
-  // Older links name a note or a dataset in the query string, from when each
-  // opened in a sheet. Links between notes are still written that way.
+  // Older links name a dataset in the query string, from when it opened in a sheet.
   const query = new URLSearchParams(location.search);
-  const noteId = query.get('note'), datasetId = query.get('dataset');
-  if (noteId || datasetId) {
+  const datasetId = query.get('dataset');
+  if (datasetId) {
     const url = new URL(location.href);
-    url.searchParams.delete('note'); url.searchParams.delete('dataset');
+    url.searchParams.delete('dataset');
     history.replaceState(null, '', url);
-    if (noteId) Object.assign(V, {view: 'notes', paper: null, note: noteId});
-    else Object.assign(V, {view: 'datasets', paper: null, dataset: datasetId});
+    Object.assign(V, {view: 'datasets', paper: null, dataset: datasetId});
   }
   const changed = await pull();
   AppStartup.phase('interface');

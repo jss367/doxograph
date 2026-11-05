@@ -5,7 +5,6 @@
 
 function focusPaperImport() {
   if (readingPaper()) setReadingLibrary(false);
-  revealSidebar($('paper-import'));
   $('paper-import').open = true;
   $('refs').focus();
 }

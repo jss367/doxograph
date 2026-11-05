@@ -31,7 +31,7 @@ async def drop_pdf(page):
 
 async def initialize(page, url):
     await page.goto(url)
-    await expect(page.locator('#workspace-notes')).to_be_visible()
+    await expect(page.locator('#papers')).to_be_visible()
     save, resume, first_freezes = native_contract()
     await page.evaluate('() => { window.quitMockJobs = 0; window.quitHealth = null; '
                         'window.nativeQuitSave = async freezeEditing => { const report = await (async () => {' + save + '})(); return report.saved; }; }')

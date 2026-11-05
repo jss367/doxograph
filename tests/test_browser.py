@@ -119,6 +119,17 @@ async def _poll(page) -> None:
     await asyncio.wait_for(page.evaluate("pollOnce()"), timeout=30)
 
 
+async def _toggle_topic(page, tag: str) -> None:
+    """Filter to a topic, or off it again, as a click on the old sidebar link did.
+
+    That click waited for the link to be drawn, which is after the first read of
+    the corpus. A bare evaluate right after `goto` can land before it and be
+    undone by the boot that follows.
+    """
+    await page.wait_for_function("libraryInitialized")
+    await page.evaluate(f"V.tag = V.tag === '{tag}' ? null : '{tag}'; syncHash(true); renderAll()")
+
+
 def _paper(key: str, title: str, *tags: str, year: int | None = None) -> None:
     paper = store.new_paper(key, title=title, year=year)
     paper["claims"] = [
@@ -254,12 +265,6 @@ def test_workspace_delete_confirmation_and_return_to_default(engine):
                 assert config.get_workspace(workspace["id"]) == workspace
                 assert await draft.input_value() == "My unsaved draft"
 
-                # A failed autosave leaves a native unload guard. The explicit
-                # deletion confirmation also covers discarding these notes.
-                await page.route("**/api/notebook/notes", lambda route: route.fulfill(
-                    status=503, content_type="application/json", json={"detail": "Autosave unavailable"}))
-                await page.locator("#workspace-notes").fill("Unsaved workspace notes")
-                await page.evaluate("WorkspaceNotes.flush()")
                 await page.locator("#workspace-actions > summary").click()
                 await page.locator("#btn-workspace-delete").click()
                 await _answer(page, "Delete workspace")
@@ -822,7 +827,7 @@ def test_a_stale_confirmed_tension_can_be_confirmed_again_without_reopening():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 card = page.locator(f'.tcard[data-tension="{tid}"]')
                 stale = card.locator(".stale")
                 await stale.wait_for(state="visible")
@@ -1061,250 +1066,6 @@ def test_escape_cancels_only_the_editor_holding_the_cursor_and_a_claim_save_redr
 
 
 @pytest.mark.browser
-def test_the_map_joins_papers_by_topic_tension_and_ledger_and_a_click_opens_the_paper():
-    _paper("paper-a", "Paper A", "recovery")
-    _paper("paper-b", "Paper B", "recovery")
-    _paper("paper-c", "Paper C", "gait")
-    store.save_ledger([{"id": "L1", "text": "My own claim about recovery."}])
-    store.update_claim("paper-a", "paper-a-c1", {
-        "ledger_links": [{"claim": "L1", "relation": "supports", "note": ""}],
-    })
-    shown = {r["id"]: r for r in store.claim_rows()}
-    store.record_tensions("recovery", [
-        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "tension", "note": "n"},
-    ], shown)
-
-    async def scenario():
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page(viewport={"width": 1200, "height": 800})
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-                # Let the layout settle before reading positions.
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-
-                kinds = {(e["type"], e["a"], e["b"]) for e in graph["edges"]}
-                # The tension stands in for the topic edge between the same pair.
-                assert ("tension", "p:paper-a", "p:paper-b") in kinds
-                assert ("topic", "p:paper-a", "p:paper-b") not in kinds
-                assert ("ledger", "p:paper-a", "l:L1") in kinds
-                assert await page.locator("[data-graph-count]").text_content() == "3 papers · 2 links"
-
-                # Without the tension layer the shared topic is drawn instead.
-                await page.locator('[data-graph-opt="tensions"]').uncheck()
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-                kinds = {(e["type"], e["a"], e["b"]) for e in graph["edges"]}
-                assert ("topic", "p:paper-a", "p:paper-b") in kinds
-                assert ("tension", "p:paper-a", "p:paper-b") not in kinds
-                await page.locator('[data-graph-opt="tensions"]').check()
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-                assert not any(e["type"] == "topic" and "p:paper-c" in (e["a"], e["b"]) for e in graph["edges"])
-                assert {n["id"] for n in graph["nodes"]} == {"p:paper-a", "p:paper-b", "p:paper-c", "l:L1"}
-
-                # Unticking a layer takes its edges off the map without redrawing it.
-                await page.locator('[data-graph-opt="ledger"]').uncheck()
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-                assert not any(e["type"] == "ledger" for e in graph["edges"])
-                assert "l:L1" not in {n["id"] for n in graph["nodes"]}
-
-                # Clicking a paper's node opens that paper's claims.
-                node = next(n for n in graph["nodes"] if n["id"] == "p:paper-c")
-                await page.locator(".graph-wrap canvas").scroll_into_view_if_needed()
-                box = await page.locator(".graph-wrap canvas").bounding_box()
-                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
-                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
-                await page.mouse.move(sx, sy)
-                await page.locator(".graph-tip", has_text="Paper C").wait_for(state="visible")
-                await page.mouse.click(sx, sy)
-                await page.locator(".paperhead h2", has_text="Paper C").wait_for()
-                assert await page.locator('#papers [data-paper="paper-c"].active').count() == 1
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_map_timeline_uses_publication_year_and_keeps_it_when_dragging_or_polling(engine):
-    _paper("early", "Early paper", "recovery", year=2000)
-    _paper("middle", "Middle paper", "recovery", year=2010)
-    _paper("same-year", "Another middle paper", "recovery", year=2010)
-    _paper("late", "Late paper", "recovery", year=2020)
-    _paper("undated", "Undated paper", "recovery")
-    store.save_ledger([{"id": "L1", "text": "My own claim."}])
-    store.update_claim("early", "early-c1", {
-        "ledger_links": [{"claim": "L1", "relation": "supports", "note": ""}],
-    })
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={"width": 1200, "height": 900})
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                axis = page.get_by_label("X axis", exact=True)
-                assert await axis.input_value() == "connections"
-                await axis.select_option("year")
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-                nodes = {n["id"]: n for n in graph["nodes"]}
-                x = {key: n["x"] for key, n in nodes.items()}
-                assert x["p:early"] < x["p:middle"] < x["p:late"] < x["p:undated"]
-                assert x["p:middle"] == x["p:same-year"]
-                assert x["p:middle"] - x["p:early"] == pytest.approx(x["p:late"] - x["p:middle"])
-                assert x["l:L1"] == x["p:undated"]
-                assert abs(nodes["p:middle"]["y"] - nodes["p:same-year"]["y"]) > 20
-                await page.locator("[data-graph-timeline-hint]").wait_for(state="visible")
-                assert any(e["type"] == "topic" for e in graph["edges"])
-                assert any(e["type"] == "ledger" for e in graph["edges"])
-
-                # Dragging cannot move a paper to a different publication year.
-                box = await page.locator(".graph-wrap canvas").bounding_box()
-                node = nodes["p:middle"]
-                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
-                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
-                await page.mouse.move(sx, sy)
-                await page.mouse.down()
-                await page.mouse.move(sx + 60, sy + 30, steps=5)
-                dragged = await page.evaluate("window.doxographGraph()")
-                assert next(n for n in dragged["nodes"] if n["id"] == "p:middle")["x"] == x["p:middle"]
-                await page.mouse.up()
-
-                # Metadata arriving through the normal poll moves an undated
-                # paper onto the axis, even though nodes and links are unchanged.
-                paper = store.load_paper("undated")
-                paper["year"] = 2015
-                store.save_paper(paper)
-                await _poll(page)
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-                updated = {n["id"]: n for n in graph["nodes"]}
-                assert updated["p:middle"]["x"] < updated["p:undated"]["x"] < updated["p:late"]["x"]
-                assert await axis.input_value() == "year"
-
-                # Navigation retains the choice; returning to the force layout
-                # removes the timeline constraint and its explanation.
-                node = updated["p:early"]
-                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
-                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
-                await page.mouse.click(sx, sy)
-                await page.locator(".paperhead h2", has_text="Early paper").wait_for()
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                assert await axis.input_value() == "year"
-                await axis.select_option("connections")
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                assert (await page.evaluate("window.doxographGraph()"))["timeline"] is None
-                await page.locator("[data-graph-timeline-hint]").wait_for(state="hidden")
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_map_plots_exact_dates_within_a_year_and_updates_when_the_date_changes(engine):
-    for key, value in [("first", "2026-01-02"), ("next", "2026-01-03"), ("last", "2026-01-10"),
-                       ("month", "2026-02"), ("year", None), ("unknown", None)]:
-        store.save_paper(store.new_paper(key, title=f"Paper {key}",
-                                        year=None if key == "unknown" else 2026,
-                                        publication_date=value))
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(timezone_id="America/Los_Angeles")
-            with _server() as url:
-                await page.goto(f"{url}/#view=graph")
-                await page.get_by_label("X axis", exact=True).select_option(label="Publication date")
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-                nodes = {n["key"]: n for n in graph["nodes"]}
-                x = {key: n["x"] for key, n in nodes.items()}
-                assert x["first"] < x["next"] < x["last"] < x["month"] < x["year"] < x["unknown"]
-                assert x["last"] - x["first"] == pytest.approx(8 * (x["next"] - x["first"]))
-                assert nodes["first"]["date"] == "2026-01-02"
-                for key, label in [("first", "Jan 2, 2026"), ("month", "Feb 2026 (month only)"),
-                                   ("year", "2026 (year only)"), ("unknown", "Publication date unknown")]:
-                    await page.evaluate("key => graphTip(GRAPH.nodes.get(`p:${key}`), 10, 10)", key)
-                    assert label in await page.locator('.graph-tip').inner_text()
-                # Updating only the day still invalidates the graph signature.
-                response = await page.request.patch(f"{url}/api/papers/next", data={"publication_date": "2026-01-09"})
-                assert response.status == 200
-                await _poll(page)
-                updated = {n["key"]: n for n in (await page.evaluate("window.doxographGraph()"))["nodes"]}
-                assert updated["next"]["x"] - updated["first"]["x"] == pytest.approx(7 * (x["next"] - x["first"]))
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize("years", [[], [None, None], [2020], [2020, 2020]])
-def test_map_timeline_handles_empty_undated_and_single_year_corpora(years):
-    for i, year in enumerate(years):
-        _paper(f"paper-{i}", f"Paper {i}", year=year)
-
-    async def scenario():
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page()
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.get_by_label("X axis", exact=True).select_option("year")
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                assert await page.evaluate("""window.doxographGraph().nodes.every(n =>
-                    Number.isFinite(n.x) && Number.isFinite(n.y) && n.x === 0)""")
-                assert len((await page.evaluate("window.doxographGraph()"))["nodes"]) == len(years)
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-def test_the_map_repaints_on_a_theme_change_omits_independent_links_and_clamps_the_threshold():
-    _paper("paper-a", "Paper A", "recovery")
-    _paper("paper-b", "Paper B", "recovery")
-    store.save_ledger([{"id": "L1", "text": "Mine."}, {"id": "L2", "text": "Unrelated."}])
-    store.update_claim("paper-a", "paper-a-c1", {"ledger_links": [
-        {"claim": "L1", "relation": "supports", "note": ""},
-        {"claim": "L2", "relation": "independent", "note": ""},
-    ]})
-
-    async def scenario():
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page(viewport={"width": 1200, "height": 800})
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                await page.wait_for_timeout(200)
-                before = await page.evaluate("document.querySelector('.graph-wrap canvas').toDataURL()")
-                # Switch to dark with the graph settled; the canvas must repaint by itself.
-                await page.locator("#btn-settings").click()
-                await page.locator('#settings-menu input[name="appearance"][value="dark"]').check()
-                await page.wait_for_timeout(200)
-                after = await page.evaluate("document.querySelector('.graph-wrap canvas').toDataURL()")
-                assert after != before, "canvas kept the old theme"
-                # ...and what it painted is what a fresh draw paints.
-                forced = await page.evaluate("graphDraw(); document.querySelector('.graph-wrap canvas').toDataURL()")
-                assert forced == after
-
-                graph = await page.evaluate("window.doxographGraph()")
-                ids = {n["id"] for n in graph["nodes"]}
-                assert "l:L1" in ids and "l:L2" not in ids, ids
-                assert not any(e.get("relation") == "independent" for e in graph["edges"])
-                # A threshold above what the corpus can reach is clamped, not honoured.
-                await page.evaluate("V.graph.minShared = 99; renderGraph();")
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-                assert any(e["type"] == "topic" for e in graph["edges"]), graph["edges"]
-                label = await page.locator("[data-graph-min]").text_content()
-                assert label == "1", label
-
-    run_browser(scenario())
-
-@pytest.mark.browser
 def test_the_research_context_and_ledger_are_edited_in_the_app():
     _paper("paper-a", "Paper A", "recovery")
     store.save_ledger([{"id": "L1", "text": "Recovery is path-dependent."}])
@@ -1314,8 +1075,8 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                nav = page.locator('#research-nav [data-view="research"]')
-                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+                nav = page.locator('#btn-workspace')
+                await page.wait_for_function("S.ledger.length === 1")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1328,7 +1089,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 store.save_context("Written from the shell meanwhile.")
                 await page.wait_for_function(   # a poll picks it up
                     "S.context === 'Written from the shell meanwhile.'")
-                assert "unsaved edits" not in (await nav.text_content())
+                assert not await page.evaluate("researchFormDirty()")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1340,7 +1101,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                     "S.context === 'Changed again while the form was open.'")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                assert "unsaved edits" not in (await nav.text_content())
+                assert not await page.evaluate("researchFormDirty()")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1362,7 +1123,7 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
                 # kept, and the sidebar says so meanwhile.
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                await nav.get_by_text("unsaved edits", exact=False).wait_for()
+                await page.wait_for_function("researchFormDirty()")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1373,8 +1134,8 @@ def test_the_research_context_and_ledger_are_edited_in_the_app():
 
                 # Back on the claims, and the sidebar counts the new state.
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                await nav.get_by_text("context written · 2 claims of my own").wait_for()
-                assert "unsaved edits" not in (await nav.text_content())   # the saved form left no draft
+                await page.wait_for_function("S.context && S.ledger.length === 2")
+                assert not await page.evaluate("researchFormDirty()")   # the saved form left no draft
                 # The editor offers the new ledger claim as a link target.
                 await page.locator('.claim[data-claim="paper-a-c1"] button[data-act="edit"]').click()
                 options = page.locator('form[data-form] select[name="link-claim"] option')
@@ -1399,8 +1160,8 @@ def test_a_refused_research_save_keeps_what_was_typed_and_writes_nothing():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                nav = page.locator('#research-nav [data-view="research"]')
-                await nav.get_by_text("2 claims of my own", exact=False).wait_for()
+                nav = page.locator('#btn-workspace')
+                await page.wait_for_function("S.ledger.length === 2")
                 await nav.click()
                 form = page.locator("#research-form")
                 await form.wait_for(state="visible")
@@ -1454,7 +1215,6 @@ def test_agreements_show_with_a_paper_count_and_can_be_confirmed():
                 assert await card.locator(".tnote").text_content() == "All three report it."
                 await card.get_by_role("button", name="Confirm").click()
                 await page.locator('.tcard.confirmed[data-agreement="a1"]').wait_for(state="visible")
-                await page.locator('#agreements-nav', has_text="1 confirmed").wait_for()
 
     run_browser(scenario())
     assert store.agreement_rows()[0]["status"] == "confirmed"
@@ -1471,7 +1231,7 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                nav = page.locator('#research-nav [data-view="research"]')
+                nav = page.locator('#btn-workspace')
                 await nav.wait_for(state="visible")
                 await nav.click()
                 form = page.locator("#research-form")
@@ -1484,7 +1244,7 @@ def test_saving_the_research_form_writes_only_the_fields_that_were_edited():
                 await form.locator('[name="ledger-text"]').fill("Recovery is path-dependent, at every scale.")
                 await form.get_by_role("button", name="Save").click()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for(state="visible")
-                await nav.get_by_text("1 claims of my own", exact=False).wait_for()
+                await page.wait_for_function("S.ledger.length === 1")
 
     run_browser(scenario())
     assert store.load_context() == "Changed from the shell while the form was open."
@@ -1558,8 +1318,7 @@ def test_analysis_setting_survives_reload_and_disables_actions():
                 await expect(toggle).to_be_checked()
                 await toggle.uncheck()
                 await expect(page.locator('#ai-settings-status')).to_have_text("AI analysis disabled.")
-                for selector in ['#btn-retag', '#btn-tensions', '#btn-agreements', '#btn-synth',
-                                 '#auto-extract', '[data-act="reextract"]', '[data-act="retag-one"]']:
+                for selector in ['#btn-retag', '#auto-extract', '[data-act="reextract"]', '[data-act="retag-one"]']:
                     await expect(page.locator(selector)).to_be_disabled()
                 await expect(page.locator('#auto-extract')).not_to_be_checked()
                 await expect(page.locator('[data-act="add-claim"]')).to_be_enabled()
@@ -1572,7 +1331,7 @@ def test_analysis_setting_survives_reload_and_disables_actions():
                 await expect(toggle).not_to_be_checked()
                 await page.get_by_role("button", name="Close settings").click()
                 for view in ["tensions", "agreements"]:
-                    await page.locator(f'#{view}-nav [data-view="{view}"]').click()
+                    await page.evaluate(f"openPage('{view}')")
                     await expect(page.locator(f'[data-act="find-{view}"]')).to_be_disabled()
                 await page.locator('#workspace').select_option(label="Other")
                 await expect(page.locator('#btn-retag')).to_be_disabled()
@@ -1598,7 +1357,7 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
             other_page = await context.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator(f'#{view}-nav [data-view="{view}"]').click()
+                await page.evaluate(f"openPage('{view}')")
                 await page.get_by_role("button", name="Settings", exact=True).click()
                 toggle = page.get_by_label("Enable AI analysis")
                 await expect(toggle).to_be_checked()
@@ -1615,8 +1374,7 @@ def test_analysis_controls_follow_settings_changed_in_another_tab(view):
                     # Leave the first tab untouched: only its normal state poll
                     # can update the open menu and the rendered action buttons.
                     await expect(toggle).to_be_checked(checked=enabled, timeout=10000)
-                    for selector in ['#btn-retag', '#btn-tensions', '#btn-agreements',
-                                     '#btn-synth', '#auto-extract', f'[data-act="find-{view}"]']:
+                    for selector in ['#btn-retag', '#auto-extract', f'[data-act="find-{view}"]']:
                         await expect(page.locator(selector)).to_be_enabled(enabled=enabled)
                     await expect(page.locator('#auto-extract')).to_be_checked(checked=enabled)
 
@@ -1647,7 +1405,7 @@ def test_analysis_settings_poll_preserves_an_open_editor(editor):
                 else:
                     await page.locator('.synth[data-topic="recovery"] [data-act="edit-synth"]').click()
                     field = page.locator('textarea[data-synth="recovery"]')
-                    action = page.locator('#btn-synth')
+                    action = page.locator('#btn-retag')
                 await field.fill("Unsaved draft that polling must preserve.")
                 await field.evaluate("el => el.setSelectionRange(8, 13)")
                 original_field = await field.element_handle()
@@ -1936,12 +1694,12 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
                 await page.locator(".paperhead h2", has_text="A study").wait_for()
                 assert "paper=doe2026study" in page.url
 
-                await page.locator('#tags [data-tag="locomotion"]').click()
+                await _toggle_topic(page, "locomotion")
                 assert "tag=locomotion" in page.url
 
                 # A reload lands where the URL says, filters and all.
                 await page.reload()
-                await page.locator('#tags [data-tag="locomotion"].active').wait_for()
+                await page.wait_for_function("V.tag === 'locomotion'")
                 assert await page.locator('#papers [data-paper="doe2026study"].active').count() == 1
 
                 # Typing replaces the entry rather than adding one per letter,
@@ -1951,7 +1709,7 @@ def test_the_url_carries_the_view_through_a_reload_and_the_back_button():
                 await page.go_back()
                 await page.wait_for_function("() => !location.hash.includes('q=gait')")
                 assert await page.input_value("#q") == ""
-                assert await page.locator('#tags [data-tag="locomotion"].active').count() == 0
+                assert await page.evaluate("V.tag !== 'locomotion'")
                 assert "paper=doe2026study" in page.url
 
                 await page.go_back()
@@ -1985,8 +1743,8 @@ def test_slash_reaches_the_search_box_and_question_mark_shows_the_shortcuts():
                 await page.locator('#papers [data-paper="doe2026study"]').wait_for()
 
                 # From another view it returns to library search.
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
+                await page.locator('#btn-findings').click()
+                await page.locator(".findings-head").wait_for()
                 await page.keyboard.press("/")
                 await page.locator("#content .library-paper").first.wait_for()
                 assert await page.evaluate("document.activeElement.id") == "q"
@@ -2801,7 +2559,7 @@ def test_the_status_filter_is_part_of_the_view_the_url_carries():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 await page.locator("#tension-status").select_option("dismissed")
                 await page.locator(".tcard.dismissed").wait_for()
                 assert "tstatus=dismissed" in page.url
@@ -3014,7 +2772,7 @@ def test_a_model_pass_runs_in_the_workspace_it_was_asked_in():
                 await page.goto(f"{url}/#view=claims")
                 await page.locator('.claim[data-claim="paper-a-c1"] [data-act="del"]').click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
-                await page.locator("#btn-tensions").click()
+                await page.evaluate("findTensions()")
                 for _ in range(100):
                     if sent_to:
                         break
@@ -3073,78 +2831,6 @@ def test_undoing_a_bulk_review_waits_for_a_save_already_on_its_way():
 
 
 @pytest.mark.browser
-def test_back_from_a_paper_opened_on_the_map_returns_to_the_map():
-    _paper("paper-a", "Paper A", "recovery")
-    _paper("paper-b", "Paper B", "recovery")
-
-    async def scenario():
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page(viewport={"width": 1200, "height": 800})
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                graph = await page.evaluate("window.doxographGraph()")
-
-                node = next(n for n in graph["nodes"] if n["id"] == "p:paper-b")
-                # Linux fonts make the header taller, leaving this node below
-                # the viewport. Raw mouse coordinates do not scroll to it.
-                await page.locator(".graph-wrap canvas").scroll_into_view_if_needed()
-                box = await page.locator(".graph-wrap canvas").bounding_box()
-                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
-                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
-                await page.mouse.click(sx, sy)
-                await page.locator(".paperhead h2", has_text="Paper B").wait_for()
-
-                await page.go_back()
-                await page.locator(".graph-wrap canvas").wait_for()
-                assert "view=graph" in page.url
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-@pytest.mark.parametrize("x_axis", ["connections", "year"])
-def test_map_stays_in_view_after_the_header_wraps_and_the_window_resizes(engine, x_axis):
-    _paper("paper-a", "Paper A", "recovery")
-    _paper("paper-b", "Paper B", "recovery")
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={"width": 1200, "height": 900})
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                await page.get_by_label("X axis", exact=True).select_option(x_axis)
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                # Reproduce a wrapped header regardless of the platform's system font.
-                await page.add_style_tag(content="header { min-height: 180px; }")
-                await page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
-                canvas = page.locator(".graph-wrap canvas")
-                box = await canvas.bounding_box()
-                assert box["y"] + box["height"] <= 900
-                await page.set_viewport_size({"width": 1200, "height": 850})
-                await page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
-                graph = await page.evaluate("window.doxographGraph()")
-                box = await canvas.bounding_box()
-                assert box["y"] + box["height"] <= 850
-                node = next(n for n in graph["nodes"] if n["id"] == "p:paper-b")
-                sx = box["x"] + box["width"] / 2 + graph["tx"] + node["x"] * graph["zoom"]
-                sy = box["y"] + box["height"] / 2 + graph["ty"] + node["y"] * graph["zoom"]
-                assert await page.evaluate("([x,y]) => document.elementFromPoint(x,y)?.matches('.graph-wrap canvas')", [sx, sy])
-                await page.mouse.click(sx, sy)
-                await page.locator(".paperhead h2", has_text="Paper B").wait_for()
-                await page.go_back()
-                await canvas.wait_for()
-                assert "view=graph" in page.url
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
 def test_no_undo_is_offered_for_a_delete_that_has_already_been_sent():
     """The entry stays in the trash while its request is in flight, which is
     what keeps the row off the screen — so the trash alone cannot say whether
@@ -3184,9 +2870,9 @@ def test_back_from_the_analysis_views_returns_to_the_claims():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                for button, view in [("#btn-tensions", "tensions"), ("#btn-agreements", "agreements")]:
-                    await page.locator(button).click()
-                    await page.locator(f'#{view}-nav [data-view="{view}"].active').wait_for()
+                for view in ["tensions", "agreements"]:
+                    await page.evaluate(f"openPage('{view}')")
+                    await page.wait_for_function(f"V.view === '{view}'")
                     assert f"view={view}" in page.url
                     await page.go_back()
                     await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
@@ -3269,7 +2955,7 @@ def test_back_returns_to_the_research_form_after_leaving_it():
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
                 for leave in ["Cancel", "Save"]:
-                    await page.locator('#research-nav [data-view="research"]').click()
+                    await page.locator('#btn-workspace').click()
                     await page.locator("#research-form").wait_for()
                     assert "view=research" in page.url
                     await page.locator("#research-form").get_by_role(
@@ -3281,7 +2967,7 @@ def test_back_returns_to_the_research_form_after_leaving_it():
                     # nothing, which is what replacing its entry looked like.
                     await page.go_back()
                     await page.locator("#research-form").wait_for()
-                    await page.locator('#research-nav [data-view="research"].active').wait_for()
+                    await page.locator('#btn-workspace[aria-current="page"]').wait_for()
                     await page.go_forward()
                     await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
 
@@ -3303,12 +2989,12 @@ def test_a_url_naming_a_topic_that_is_gone_falls_back_to_the_corpus():
                 assert "tag=gait" not in page.url
 
                 # And a topic that goes while an entry naming it is in history.
-                await page.locator('#tags [data-tag="recovery"]').click()
-                await page.locator('#tags [data-tag="recovery"].active').wait_for()
+                await _toggle_topic(page, "recovery")
+                await page.wait_for_function("V.tag === 'recovery'")
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 store.rename_tag("recovery", "recovery-rate")
                 # A poll picks the rename up.
-                await page.locator('#tags [data-tag="recovery-rate"]').wait_for()
+                await page.wait_for_function("'recovery-rate' in S.tag_counts")
                 await page.go_back()
                 await page.locator('.claim[data-claim="paper-a-c1"]').wait_for()
                 assert "tag=recovery&" not in page.url and not page.url.endswith("tag=recovery")
@@ -3480,155 +3166,6 @@ def test_alike_shows_claims_from_other_papers_worded_the_same_way():
 
 
 @pytest.mark.browser
-def test_the_map_draws_a_citation_from_one_paper_to_another():
-    from pdfs import minimal_pdf
-
-    _paper("vas2017attention", "Attention is all you need", "architecture")
-    store.pdf_path("vas2017attention").write_bytes(
-        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
-    _paper("roe2026steering", "Steering and recovery in language models", "architecture")
-    store.pdf_path("roe2026steering").write_bytes(minimal_pdf([
-        "Steering and recovery in language models",
-        "References\n[1] A Vaswani et al. Attention is all you need. 2017.",
-    ]))
-
-    async def scenario():
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page()
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-                await page.wait_for_function(
-                    "window.doxographGraph && window.doxographGraph().edges.some((e) => e.type === 'cite')")
-                edges = await page.evaluate("window.doxographGraph().edges")
-                cite = [e for e in edges if e["type"] == "cite"]
-                assert cite == [{"type": "cite", "a": "p:roe2026steering", "b": "p:vas2017attention",
-                                 "w": None, "n": None, "relation": None}]
-                # The topic link between the same two papers gives way to it.
-                assert not [e for e in edges if e["type"] == "topic"]
-
-                # Turning the layer off takes the arrow with it.
-                await page.locator('[data-graph-opt="cites"]').uncheck()
-                await page.wait_for_function(
-                    "window.doxographGraph().edges.every((e) => e.type !== 'cite')")
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-@pytest.mark.parametrize("x_axis", ["connections", "year"])
-def test_map_hover_explains_reciprocal_citations_and_overlapping_conflicts(engine, x_axis):
-    from pdfs import minimal_pdf
-
-    titles = {"paper-a": "A study of model behavior and recovery",
-              "paper-b": "Evaluating the persistence of safeguards"}
-    for key, title in titles.items():
-        _paper(key, title, "recovery", year=2000 if key == "paper-a" else 2020)
-        other = "paper-b" if key == "paper-a" else "paper-a"
-        store.pdf_path(key).write_bytes(minimal_pdf([
-            title, f"References\n[1] {titles[other]}.",
-        ]))
-    store.save_ledger([{"id": "L1", "text": "Safeguards persist after further training."}])
-    store.update_claim("paper-a", "paper-a-c1", {
-        "ledger_links": [{"claim": "L1", "relation": relation, "note": ""}
-                         for relation in ["supports", "contradicts", "method-for", "refines"]],
-    })
-    store.record_tensions("recovery", [
-        {"claims": ["paper-a-c1", "paper-b-c1"], "kind": "contradiction", "note": "Opposing findings."},
-    ], {r["id"]: r for r in store.claim_rows()})
-
-    async def scenario():
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport={"width": 1280, "height": 900})
-            errors = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.wait_for_function("""window.doxographGraph().edges.filter(e => e.type === 'cite').length === 2
-                    && window.doxographGraph().alpha === 0""")
-                await page.get_by_label("X axis", exact=True).select_option(x_axis)
-                await page.wait_for_function("window.doxographGraph().alpha === 0")
-                # Keep the same readable arrangement while exercising real pointer events.
-                await page.evaluate("""() => {
-                    GRAPH.autofit = false; GRAPH.zoom = GRAPH.timeline ? 0.85 : 1.2; GRAPH.tx = GRAPH.ty = 0;
-                    const positions = {'p:paper-a': [-160, -80], 'p:paper-b': [160, -80], 'l:L1': [-160, 110]};
-                    for (const [id, [x, y]] of Object.entries(positions)) {
-                        const n = GRAPH.nodes.get(id);
-                        Object.assign(n, {x: GRAPH.timeline ? n.timelineX : x, y, fixed: true});
-                    }
-                    graphDraw();
-                }""")
-                points = await page.evaluate("""() => {
-                    const rect = GRAPH.canvas.getBoundingClientRect();
-                    const screen = (p) => ({x: rect.x + rect.width / 2 + p.x * GRAPH.zoom,
-                                           y: rect.y + rect.height / 2 + p.y * GRAPH.zoom});
-                    return {nodes: [...GRAPH.nodes.values()].map(n => ({id: n.id, ...screen(n)})),
-                        edges: GRAPH.edgePaths.map(p => ({type: p.edge.type, a: p.edge.a, b: p.edge.b,
-                            relation: p.edge.relation, ...screen(graphPathPoint(p, 0.5))}))};
-                }""")
-                if x_axis == "year":
-                    graph = await page.evaluate("window.doxographGraph()")
-                    nodes = {n["id"]: n for n in graph["nodes"]}
-                    assert nodes["p:paper-a"]["x"] < nodes["p:paper-b"]["x"] < nodes["l:L1"]["x"]
-                    await page.locator('[data-graph-timeline-hint]').wait_for(state="visible")
-                    # Verify both the year labels and conflict labels actually reach the canvas.
-                    labels = await page.evaluate("""() => {
-                        const labels = [];
-                        const original = GRAPH.ctx.fillText;
-                        GRAPH.ctx.fillText = function(text, ...args) {
-                            labels.push(text); return original.call(this, text, ...args);
-                        };
-                        try { graphDraw(); } finally { GRAPH.ctx.fillText = original; }
-                        return labels;
-                    }""")
-                    assert {"2000", "2020", "Undated", "Publication date →", "contradicts"} <= set(labels)
-                tip = page.locator('.graph-tip')
-                for node in points["nodes"]:
-                    if node["id"] != "p:paper-a":
-                        continue
-                    await page.mouse.move(node["x"], node["y"])
-                    await tip.wait_for(state="visible")
-                    assert "Cites (1): paper-b 2020" in await tip.inner_text()
-                    assert "Cited by (1): paper-b 2020" in await tip.inner_text()
-
-                citations = [e for e in points["edges"] if e["type"] == "cite"]
-                assert abs(citations[0]["y"] - citations[1]["y"]) >= 20
-                for edge in points["edges"]:
-                    await page.mouse.move(edge["x"], edge["y"])
-                    await tip.wait_for(state="visible")
-                    source = titles[edge["a"][2:]]
-                    target = titles.get(edge["b"][2:], "My claim L1: Safeguards persist after further training.")
-                    assert await tip.locator(':scope > strong').all_text_contents() == [source, target]
-                    relation = "cites →" if edge["type"] == "cite" else edge.get("relation") or "contradicts"
-                    if relation == "method-for":
-                        relation = "supplies a method for"
-                    assert await tip.locator('.graph-tip-relation').inner_text() == relation
-                    # A background refresh preserves the hovered connection.
-                    await page.evaluate("renderGraph()")
-                    assert await tip.is_visible()
-
-                if x_axis == "year":
-                    # Panning a connection behind the reserved year strip must
-                    # not make an invisible edge intercept its labels.
-                    box = await page.locator('.graph-wrap canvas').bounding_box()
-                    axis_y = box["y"] + box["height"] - 20
-                    await page.evaluate("delta => { GRAPH.ty += delta; graphDraw(); }",
-                                        axis_y - citations[0]["y"])
-                    await page.mouse.move(citations[0]["x"], axis_y)
-                    await tip.wait_for(state="hidden")
-
-                # Removing the hovered layer clears its explanation as well.
-                await page.locator('[data-graph-opt="ledger"]').uncheck()
-                await tip.wait_for(state="hidden")
-                assert not errors
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
 def test_editing_a_quote_closes_the_passage_worked_out_from_the_old_one():
     from pdfs import minimal_pdf
 
@@ -3692,59 +3229,6 @@ def test_rewrite_asks_again_even_when_nothing_has_changed():
                 # what the fetch carried, so the wait is for the route.
                 await asyncio.wait_for(asked.wait(), timeout=10)
                 assert posted == [{"topics": ["recovery-rate"], "force": True}]
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-def test_citations_do_not_cross_between_workspaces():
-    """A citation request left in flight when the workspace changes answers
-    with the other corpus's edges, and the paper keys can be the same."""
-    from doxograph import config
-    from pdfs import minimal_pdf
-
-    def corpus(reference: str) -> None:
-        store.save_paper(store.new_paper("cited", title="Attention is all you need", year=2026))
-        store.pdf_path("cited").write_bytes(minimal_pdf(["Attention is all you need", "A paper."]))
-        store.save_paper(store.new_paper("citing", title="The citing paper", year=2026))
-        store.pdf_path("citing").write_bytes(minimal_pdf([
-            "The citing paper", f"References\n[1] Somebody. {reference}. 2026."]))
-
-    corpus("Attention is all you need")          # the default workspace cites
-    other = config.create_workspace("Animal locomotion")
-    with config.use_workspace(other["id"]):
-        corpus("Something else entirely, by someone else")   # this one does not
-
-    async def scenario():
-        held = asyncio.Event()
-        first = []
-        answers = []
-
-        async def hold(route):
-            if not first:
-                first.append(True)
-                await held.wait()
-            await route.continue_()
-
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page()
-            page.on("response", lambda r: answers.append(r.url) if "/api/citations" in r.url else None)
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.route("**/api/citations", hold)
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-
-                await page.locator("#workspace").select_option(label="Animal locomotion")
-                await page.wait_for_function("window.doxographWorkspaceId !== 'default'")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                held.set()                      # the default workspace's answer, late
-                while len(answers) < 2:
-                    await page.wait_for_timeout(50)
-                await page.wait_for_timeout(200)
-
-                edges = await page.evaluate("window.doxographGraph().edges")
-                assert [e for e in edges if e["type"] == "cite"] == []
 
     run_browser(scenario())
 
@@ -3890,37 +3374,6 @@ def test_the_alike_panel_goes_when_the_claims_it_compared_have_moved():
 
 
 @pytest.mark.browser
-def test_the_map_picks_up_a_paper_that_arrives_while_it_is_open():
-    from pdfs import minimal_pdf
-
-    _paper("cited", "Attention is all you need", "architecture")
-    store.pdf_path("cited").write_bytes(
-        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
-
-    async def scenario():
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page()
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-                assert await page.evaluate(
-                    "window.doxographGraph().edges.filter((e) => e.type === 'cite').length") == 0
-
-                # Imported with the map on screen: the poll redraws the papers,
-                # and the arrows are fetched on their own, so they have to be
-                # fetched again too.
-                store.save_paper(store.new_paper("citing", title="The citing paper", year=2026))
-                store.pdf_path("citing").write_bytes(minimal_pdf([
-                    "The citing paper",
-                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."]))
-                await page.wait_for_function(
-                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=15000)
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
 def test_the_paper_s_wording_is_not_written_over_an_edit_made_elsewhere():
     """While an editor is open the poll leaves the content alone, so a passage
     can outlive the claim it describes without being redrawn."""
@@ -3990,39 +3443,6 @@ def test_a_passage_opens_under_one_copy_of_a_claim_with_several_topics():
                 assert await page.locator(".qctx").count() == 1
                 second = page.locator(".claim").nth(1)
                 assert await second.locator(".qctx").count() == 1
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-def test_a_dropped_pdf_brings_its_arrows_while_the_map_is_open():
-    """A drop refreshes through its own handler, which consumes the change
-    and commits its ETag, so the next poll is told nothing happened."""
-    import httpx as _httpx
-
-    from pdfs import minimal_pdf
-
-    _paper("cited", "Attention is all you need", "architecture")
-    store.pdf_path("cited").write_bytes(
-        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
-
-    async def scenario():
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page()
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-
-                dropped = minimal_pdf([
-                    "The citing paper",
-                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."])
-                response = _httpx.post(f"{url}/api/upload?extract_now=false",
-                                       files={"files": ("citing.pdf", dropped, "application/pdf")},
-                                       timeout=30)
-                assert response.status_code == 200
-                await page.wait_for_function(
-                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
 
     run_browser(scenario())
 
@@ -4137,57 +3557,6 @@ def test_the_alike_panel_opens_beside_the_copy_that_was_clicked():
                 await cards.nth(1).get_by_role("button", name="alike", exact=True).click()
                 await cards.nth(1).locator(".alike .alikerow").wait_for()
                 assert await page.locator(".alike").count() == 1
-
-    run_browser(scenario())
-
-
-@pytest.mark.browser
-def test_a_corpus_change_during_a_citation_scan_is_asked_again():
-    """The scan in flight took its snapshot before the change, so its answer
-    describes papers that have moved since."""
-    import httpx as _httpx
-
-    from pdfs import minimal_pdf
-
-    _paper("cited", "Attention is all you need", "architecture")
-    store.pdf_path("cited").write_bytes(
-        minimal_pdf(["Attention is all you need", "We propose the Transformer."]))
-
-    async def scenario():
-        release = asyncio.Event()
-        asked = []
-
-        async def hold(route):
-            asked.append(route.request.url)
-            if len(asked) == 1:
-                await release.wait()
-            await route.continue_()
-
-        async with browser_session("chromium") as browser:
-            page = await browser.new_page()
-            with _server() as url:
-                await page.goto(f"{url}/#view=claims")
-                await page.route("**/api/citations", hold)
-                await page.locator('#graph-nav [data-view="graph"]').click()
-                await page.locator(".graph-wrap canvas").wait_for()
-
-                # Imported while the first scan is held open.
-                dropped = minimal_pdf([
-                    "The citing paper",
-                    "References\n[1] A Vaswani et al. Attention is all you need. 2017."])
-                assert _httpx.post(f"{url}/api/upload?extract_now=false",
-                                   files={"files": ("citing.pdf", dropped, "application/pdf")},
-                                   timeout=30).status_code == 200
-                # Polls see the import and one more runs after it, all of them
-                # suppressed: the scan already open is the only one asked for.
-                await page.wait_for_function("S.papers.length === 2", timeout=30000)
-                await _poll(page)
-                assert len(asked) == 1
-                release.set()
-
-                # The queued reading runs once the first is out of the way.
-                await page.wait_for_function(
-                    "window.doxographGraph().edges.some((e) => e.type === 'cite')", timeout=20000)
 
     run_browser(scenario())
 
@@ -4429,7 +3798,7 @@ def test_a_url_naming_the_research_view_draws_it_at_boot():
             with _server() as url:
                 await page.goto(f"{url}/#view=research")
                 await page.locator("#research-form").wait_for(timeout=5000)
-                await page.locator('#research-nav [data-view="research"].active').wait_for()
+                await page.locator('#btn-workspace[aria-current="page"]').wait_for()
 
                 # A reload of the same address redraws it too.
                 await page.reload()
@@ -4468,12 +3837,12 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
                 await notice.wait_for()
 
                 # The tension needs both its claims, so it is not shown at all.
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 await page.locator(".paperhead h2", has_text="Where papers disagree").wait_for()
                 assert await page.locator(f'.tcard[data-tension="{tid}"]').count() == 0
 
                 # The agreement keeps the members that are left, and says so.
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 group = page.locator('.tcard[data-agreement="a1"]')
                 await group.wait_for()
                 assert await group.locator(".kind.agreement").text_content() == "2 papers"
@@ -4484,7 +3853,7 @@ def test_a_held_claim_leaves_the_analysis_views_until_its_delete_is_undone():
                 await notice.get_by_role("button", name="Undo").click()
                 await group.locator('[data-tclaim="paper-a-c1"]').wait_for()
                 assert await group.locator(".kind.agreement").text_content() == "3 papers"
-                await page.locator('#tensions-nav [data-view="tensions"]').click()
+                await page.evaluate("openPage('tensions')")
                 await page.locator(f'.tcard[data-tension="{tid}"]').wait_for()
 
     run_browser(scenario())
@@ -4505,8 +3874,8 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="solo"]').wait_for()
-                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
+                await page.wait_for_function("'solo' in S.tag_counts")
+                assert await page.evaluate("String(S.tag_counts['shared'] || 0)") == "2"
 
                 await page.locator('#papers [data-paper="paper-a"]').click()
                 card = page.locator('.claim[data-claim="paper-a-c1"]')
@@ -4518,13 +3887,12 @@ def test_a_held_claim_stops_being_counted_in_the_topic_sidebar():
                 # The topic that claim held on its own is gone, not left at one.
                 # Well inside the undo window, so this is the sidebar keeping up
                 # with the hold rather than the delete having gone out.
-                await page.locator('#tags [data-tag="solo"]').wait_for(
-                    state="detached", timeout=3000)
-                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "1"
+                await page.wait_for_function("!('solo' in S.tag_counts)", timeout=3000)
+                assert await page.evaluate("String(S.tag_counts['shared'] || 0)") == "1"
 
                 await notice.get_by_role("button", name="Undo").click()
-                await page.locator('#tags [data-tag="solo"]').wait_for()
-                assert await page.locator('#tags [data-tag="shared"] .n').text_content() == "2"
+                await page.wait_for_function("'solo' in S.tag_counts")
+                assert await page.evaluate("String(S.tag_counts['shared'] || 0)") == "2"
 
     run_browser(scenario())
     assert len(store.load_paper("paper-a")["claims"]) == 1
@@ -4546,8 +3914,8 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="solo"]').click()
-                await page.locator('#tags [data-tag="solo"].active').wait_for()
+                await _toggle_topic(page, "solo")
+                await page.wait_for_function("V.tag === 'solo'")
                 assert "tag=solo" in page.url
 
                 card = page.locator('.claim[data-claim="paper-a-c1"]')
@@ -4558,15 +3926,15 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
                 await card.wait_for(state="detached")
 
                 # Still on the topic, and still able to leave it by hand.
-                await page.locator('#tags [data-tag="solo"].active').wait_for(timeout=3000)
-                assert await page.locator('#tags [data-tag="solo"] .n').text_content() == "0"
+                await page.wait_for_function("V.tag === 'solo'", timeout=3000)
+                assert await page.evaluate("String(S.tag_counts['solo'] || 0)") == "0"
                 assert "tag=solo" in page.url
                 assert await page.locator('.claim[data-claim="paper-b-c1"]').count() == 0
 
                 # Undo puts the reader back where they were, not on the corpus.
                 await notice.get_by_role("button", name="Undo").click()
                 await card.wait_for()
-                assert await page.locator('#tags [data-tag="solo"] .n').text_content() == "1"
+                assert await page.evaluate("String(S.tag_counts['solo'] || 0)") == "1"
                 assert "tag=solo" in page.url
                 assert await page.locator('.claim[data-claim="paper-b-c1"]').count() == 0
 
@@ -4575,7 +3943,7 @@ def test_the_topic_being_read_outlives_its_last_claims_undo_window_and_not_the_d
                 await card.get_by_role("button", name="delete").click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
                 await page.evaluate("flushTrash()")
-                await page.locator('#tags [data-tag="solo"]').wait_for(state="detached")
+                await page.wait_for_function("!('solo' in S.tag_counts)")
                 await page.locator('.claim[data-claim="paper-b-c1"]').wait_for()
                 assert "tag=solo" not in page.url
 
@@ -4742,7 +4110,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
                 # The topic whose only claim is held: the server would stop
                 # showing that synthesis, so the card goes rather than standing
                 # over a topic with nothing left under it.
-                await page.locator('#tags [data-tag="solo"]').click()
+                await _toggle_topic(page, "solo")
                 solo = page.locator('.synth[data-topic="solo"]')
                 await solo.wait_for()
                 await page.locator('.claim[data-claim="paper-d-c1"]').get_by_role(
@@ -4755,7 +4123,7 @@ def test_a_held_claim_is_out_of_the_synthesis_counts_until_its_delete_is_undone(
 
                 # A topic with claims left recounts, and reads stale: the text on
                 # file was written about a set of claims that is not this one.
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await _toggle_topic(page, "recovery")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.wait_for()
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
@@ -4870,7 +4238,7 @@ def test_a_held_claim_can_take_the_stale_mark_off_a_synthesis():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await _toggle_topic(page, "recovery")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.locator(".stale").wait_for()
                 assert "3 claims in 3 papers" in await card.locator(".smeta").text_content()
@@ -4929,7 +4297,7 @@ def test_a_held_claim_leaves_the_agreements_in_the_order_the_server_would_send()
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
                 await notice.wait_for()
 
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 await page.locator(".paperhead h2", has_text="Where papers agree").wait_for()
                 await page.wait_for_function(order % "a1,a2", timeout=5000)
 
@@ -4977,9 +4345,9 @@ def test_a_held_claim_gives_an_agreement_back_the_topic_it_had_lost():
                 notice = page.locator("#toasts .toast", has_text="Deleted the claim.")
                 await notice.wait_for()
 
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 await page.locator(".paperhead h2", has_text="Where papers agree").wait_for()
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await _toggle_topic(page, "recovery")
                 # A and B both carry the topic, so the pair the wait leaves
                 # behind is in #recovery until the delete settles.
                 await page.wait_for_function(shows % "a1", timeout=5000)
@@ -5012,7 +4380,7 @@ def test_a_synthesis_saved_by_hand_settles_a_held_claim_delete_first():
             page = await browser.new_page()
             with _server() as url:
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="recovery"]').click()
+                await _toggle_topic(page, "recovery")
                 card = page.locator('.synth[data-topic="recovery"]')
                 await card.wait_for()
                 await card.get_by_role("button", name="edit").click()
@@ -5068,7 +4436,7 @@ def test_deciding_an_agreement_settles_a_held_claim_delete_first():
                 await claim.get_by_role("button", name="delete").click()
                 await page.locator("#toasts .toast", has_text="Deleted the claim.").wait_for()
 
-                await page.locator('#agreements-nav [data-view="agreements"]').click()
+                await page.evaluate("openPage('agreements')")
                 card = page.locator('.tcard[data-agreement="a1"]')
                 await card.wait_for()
                 # A and B are left, so the card is still here — and stale, since
@@ -5211,6 +4579,7 @@ def test_the_picker_keeps_naming_the_workspace_the_page_is_still_writing_to():
                 assert await page.evaluate("window.doxographWorkspaceId") == "default"
 
                 # And a write made in that window lands where the picker says.
+                await page.locator("#btn-workspace").click()
                 await page.locator("#new-tag").fill("midswitch")
                 await page.locator("#btn-tag").click()
                 for _ in range(100):
@@ -5776,7 +5145,7 @@ def test_a_claim_save_landing_late_leaves_the_research_form_alone():
                 await form.get_by_role("button", name="Save").click()
                 await asyncio.wait_for(in_flight.wait(), 10)
 
-                await page.locator('#research-nav [data-view="research"]').click()
+                await page.locator('#btn-workspace').click()
                 context = page.locator("#research-context")
                 await context.fill("What I am studying, typed while the claim saved.")
                 await context.focus()
@@ -6132,7 +5501,7 @@ def test_a_topic_that_could_not_be_added_says_so_and_keeps_its_name():
 
             await page.route("**/api/tags", refuse)
             with _server() as url:
-                await page.goto(f"{url}/#view=claims")
+                await page.goto(f"{url}/#view=research")
                 await page.locator("#new-tag").fill("interpretability")
                 await page.locator("#btn-tag").click()
                 await page.locator("#toasts .toast.warn",
@@ -6175,12 +5544,13 @@ def test_a_poll_answered_after_a_later_refresh_does_not_put_the_old_corpus_back(
             with _server() as url:
                 await page.route("**/api/state", hold_one)
                 await page.goto(f"{url}/#view=claims")
-                await page.locator('#tags [data-tag="recovery"]').wait_for()
+                await page.wait_for_function("'recovery' in S.tag_counts")
                 armed = True
                 httpx.post(f"{url}/api/tags", json={"name": "alignment", "description": ""})
                 await asyncio.wait_for(held.wait(), timeout=10)
 
                 polls = await page.evaluate("poller.completed")
+                await page.locator("#btn-workspace").click()
                 await page.locator("#new-tag").fill("interpretability")
                 await page.locator("#btn-tag").click()
                 await page.wait_for_function("S.tags.some((t) => t.name === 'interpretability')")
@@ -6323,10 +5693,10 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                 await page.goto(f"{url}/#view=claims")
                 field = None
                 if action == "tension":
-                    await page.locator('#tensions-nav [data-view="tensions"]').click()
+                    await page.evaluate("openPage('tensions')")
                     await page.locator(".tcard").get_by_role("button", name="Confirm").click()
                 elif action == "agreement":
-                    await page.locator('#agreements-nav [data-view="agreements"]').click()
+                    await page.evaluate("openPage('agreements')")
                     await page.locator('.tcard[data-agreement="a1"]').get_by_role(
                         "button", name="Confirm").click()
                 elif action == "verify":
@@ -6334,9 +5704,9 @@ def test_every_action_refused_while_the_reads_are_refused_too_still_says_so(acti
                     await page.locator('.paper-actions > summary').click()
                     await page.locator('[data-act="verify"]').click()
                 elif action == "find-tensions":
-                    await page.locator("#btn-tensions").click()
+                    await page.evaluate("findTensions()")
                 elif action == "find-agreements":
-                    await page.locator("#btn-agreements").click()
+                    await page.evaluate("findAgreements()")
                 elif action == "synthesize":
                     await page.locator('.synth[data-topic="recovery"] [data-act="synthesize"]').click()
                 elif action == "save-synth":
@@ -6413,9 +5783,9 @@ def test_escape_outside_the_claim_form_leaves_its_draft_alone():
                 await page.locator('[data-act="edit"][data-claim="paper-a-c1"]').click()
                 await claim_field.fill("Draft that Escape elsewhere must keep.")
 
-                # Escape in the sidebar's new-topic box and in the add-papers
-                # textarea leaves those fields; the editor and its draft stay.
-                for selector in ("#new-tag", "#refs"):
+                # Escape in the add-papers textarea leaves the field; the editor
+                # and its draft stay.
+                for selector in ("#refs",):
                     if selector == "#refs":
                         await page.locator("#btn-command-palette").click()
                         await page.locator("#command-query").fill("Add papers")

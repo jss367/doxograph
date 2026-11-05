@@ -1,5 +1,6 @@
 """Previous versions, portable downloads, and interrupted imports are usable in WebKit."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -35,11 +36,11 @@ def test_restore_previous_version_and_download_archive(engine):
                 await page.locator('[data-backup-restore]').first.click()
                 await _answer(page, 'Restore version')
                 await expect(page.locator('#backups-status')).to_contain_text('Restored.')
+                assert json.loads(path.read_text(encoding='utf-8'))['notes'] == 'Original conclusion'
                 if engine == 'chromium':
                     Path('.context').mkdir(exist_ok=True)
                     await page.screenshot(path='.context/previous-document-versions.png')
                 await page.get_by_role('button', name='Close previous versions').click()
-                await expect(page.locator('#workspace-notes')).to_have_value('Original conclusion')
                 await page.locator('#workspace-actions > summary').click()
                 async with page.expect_download() as download:
                     await page.locator('#btn-workspace-archive').click()
@@ -105,7 +106,7 @@ def test_restore_refuses_unsaved_editor_without_losing_the_draft(engine, editor)
                     await page.locator('[data-act="edit"]').first.click()
                     field = page.locator('form[data-form] [name="text"]')
                 else:
-                    await page.locator('#research-nav [data-view="research"]').click()
+                    await page.locator('#btn-workspace').click()
                     field = page.locator('#research-context')
                 await field.fill('An unsaved synthetic draft')
                 await page.locator('#workspace-actions > summary').click()

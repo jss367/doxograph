@@ -53,9 +53,11 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     """
     fingerprint.snapshot()
     job_queue._recover_jobs()
+    job_queue.resume_auto_findings(startup=True)
     try:
         yield
     finally:
+        job_queue.stop_auto_findings()
         loupe.close()
         job_queue._close_import_session()
 
@@ -255,7 +257,9 @@ def health() -> dict[str, Any]:
 
     The two are reported apart because they are lost by different events:
     `jobs` dies with the server, `arriving` with the client sending it. `busy`
-    is their sum. A request in `arriving` is counted twice for the sliver
+    also includes `pending_findings`: debounced work persisted for recovery.
+    Read it before jobs so admission cannot fall between the two counts.
+    A request in `arriving` is counted twice for the sliver
     between job creation and response, which errs towards busy.
 
     `instance` says which process is answering. The launcher reads this and
@@ -273,6 +277,7 @@ def health() -> dict[str, Any]:
     """
     with activity._arrivals_lock:
         arriving = activity._requests_arriving
+    pending_findings = job_queue.pending_auto_findings()
     with job_queue._jobs_lock:
         jobs = sum(1 for job in job_queue._jobs.values() if job["state"] in job_queue.ACTIVE_JOB_STATES)
     with activity._work_lock:
@@ -281,7 +286,8 @@ def health() -> dict[str, Any]:
         "app": "doxograph",
         "version": __version__,
         "instance": fingerprint.INSTANCE,
-        "busy": jobs + arriving,
+        "busy": jobs + arriving + pending_findings,
+        "pending_findings": pending_findings,
         "jobs": jobs,
         "arriving": arriving,
         "taken": taken,
@@ -486,6 +492,8 @@ def update_settings(body: SettingsBody) -> dict[str, Any]:
         config.set_ai_enabled(body.ai_enabled)
     if body.auto_findings is not None:
         config.set_auto_findings(body.auto_findings)
+    if body.ai_enabled is not None or body.auto_findings is not None:
+        job_queue.resume_auto_findings()
     if changing_provider:
         return {"ai_enabled": config.ai_enabled(), **config.analysis_settings()}
     if body.codex_model is not None:

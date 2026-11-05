@@ -42,7 +42,7 @@ def test_clean_open_paper_note_does_not_prompt_on_workspace_switch(engine, saved
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('editor', ['dataset', 'research-note'])
+@pytest.mark.parametrize('editor', ['dataset'])
 def test_inactive_redraw_does_not_retry_failed_editor_save(engine, editor):
     config.set_ai_enabled(False)
 

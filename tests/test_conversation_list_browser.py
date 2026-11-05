@@ -1,12 +1,11 @@
 """Conversation rows switch independently; archiving preserves saved evidence."""
-import asyncio
 from pathlib import Path
 
 import httpx
 import pytest
 from playwright.async_api import expect
 
-from browser_support import browser_session, close_ask_conversations, open_ask_conversations, run_browser
+from browser_support import browser_session, open_ask_conversations, run_browser
 from doxograph import config
 from test_browser import _server
 
@@ -233,102 +232,6 @@ def test_lost_active_archive_response_selects_a_usable_conversation(engine, othe
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('action', ['save', 'missing-note'])
-def test_note_actions_wait_for_archive_and_restore_responses(engine, action):
-    async def scenario(url, original):
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport=VIEWPORT)
-            errors, writes, note_reads = [], [], []
-            page.on('pageerror', lambda error: errors.append(str(error)))
-            page.on('request', lambda request: writes.append(request.url)
-                    if request.method in ('POST', 'PUT') and '/api/' in request.url else None)
-            page.on('request', lambda request: note_reads.append(request.url)
-                    if request.method == 'GET' and '/api/research-notes' in request.url else None)
-            await page.goto(url)
-            await page.locator('#btn-agent:enabled').click()
-            await open_ask_conversations(page)
-            await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
-            await page.locator('#agent-question').fill('Keep this draft with its conversation')
-            button = page.locator('[data-agent-action]')
-            expected_action = 'open' if action == 'missing-note' else 'save'
-            for archived in (True, False):
-                held, release = asyncio.Event(), asyncio.Event()
-
-                async def hold_response(route, _request, held=held, release=release):
-                    if route.request.method != 'PATCH':
-                        await route.continue_()
-                        return
-                    response = await route.fetch()
-                    held.set()
-                    await release.wait()
-                    await route.fulfill(response=response)
-
-                await page.route('**/api/chats/*', hold_response)
-                await open_ask_conversations(page)
-                await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
-                await asyncio.wait_for(held.wait(), timeout=10)
-                try:
-                    await expect(button).to_have_attribute('data-agent-action', expected_action)
-                    await expect(button).to_be_disabled()
-                    writes.clear()
-                    note_reads.clear()
-                    # Exercise the delegated handler even if a stale/synthetic click
-                    # bypasses the disabled button while the PATCH reply is delayed.
-                    await button.dispatch_event('click')
-                    await page.evaluate('Promise.resolve()')
-                    assert not await page.evaluate('Boolean(activeAgentChat().messages[1].saving)')
-                    assert writes == [] and note_reads == []
-                    saved = httpx.get(url + '/api/chats').json()['chats']
-                    assert len(saved) == 3
-                    first = next(chat for chat in saved if chat['id'] == 'a' * 32)
-                    assert first['archived'] is archived
-                    assert first['messages'] == original['messages']
-                finally:
-                    release.set()
-                await page.wait_for_function('!activeAgentChat().archiving')
-                await page.unroute('**/api/chats/*', hold_response)
-                if archived:
-                    await open_ask_conversations(page)
-                    await page.locator('#agent-archive summary').click()
-                    await open_ask_conversations(page)
-                    await page.locator(f'#agent-archived [data-thread-open="{"a" * 32}"]').click()
-                await expect(button).to_be_enabled()
-                await expect(page.locator('#agent-question')).to_have_value('Keep this draft with its conversation')
-            await expect(page.locator('#agent-thread [aria-current="true"]')).to_have_attribute('data-thread-open', 'a' * 32)
-            # Both actions work again after the archive transition finishes.
-            await close_ask_conversations(page)
-            await button.click()
-            if action == 'missing-note':
-                await expect(page.locator('#agent-messages')).to_contain_text('The saved note was deleted')
-                await expect(button).to_have_attribute('data-agent-action', 'save')
-                await button.click()
-            await expect(button).to_have_attribute('data-agent-action', 'open')
-            notes = httpx.get(url + '/api/research-notes').json()['notes']
-            assert len(notes) == 1
-            assert 'Stored evidence' in notes[0]['body'] and 'Recovery improved.' in notes[0]['body']
-            saved = httpx.get(url + '/api/chats').json()['chats']
-            assert len(saved) == 3
-            first = next(chat for chat in saved if chat['id'] == 'a' * 32)
-            assert first['messages'][1]['evidence'] == original['messages'][1]['evidence']
-            assert not errors
-
-    with _server() as url:
-        seed_conversations(url)
-        original = next(chat for chat in httpx.get(url + '/api/chats').json()['chats'] if chat['id'] == 'a' * 32)
-        original['messages'][1]['evidence'] = [{'ref': 'f' * 20, 'kind': 'passage', 'paper': 'study',
-                                               'title': 'Stored evidence', 'text': 'Recovery improved.', 'page': 1}]
-        if action == 'missing-note':
-            original['messages'][1].update(saved_note='d' * 32, note_operation='e' * 32)
-        response = httpx.put(f'{url}/api/chats/{"a" * 32}', json={
-            'agent': original['agent'], 'messages': original['messages'],
-            'revision': original['revision'], 'operation': 'f' * 32,
-        })
-        assert response.status_code == 200
-        run_browser(scenario(url, response.json()))
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('other_active', [True, False], ids=['other-active', 'last-active'])
 def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive_views(engine, other_active):
     async def scenario(url):
@@ -380,58 +283,6 @@ def test_reopening_reconciles_another_windows_archive_and_keeps_explicit_archive
             await expect(reader.locator('#agent-question')).to_have_value('Keep this draft after another window archives it')
             assert len(httpx.get(url + '/api/chats').json()['chats']) == 3
             assert not errors
-
-    with _server() as url:
-        seed_conversations(url)
-        run_browser(scenario(url))
-
-
-@pytest.mark.browser
-@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-def test_lost_archive_reconciliation_keeps_note_actions_blocked_when_reopened(engine):
-    async def scenario(url):
-        async with browser_session(engine) as browser:
-            page = await browser.new_page(viewport=VIEWPORT)
-            await page.goto(url)
-            await page.locator('#btn-agent:enabled').click()
-            await open_ask_conversations(page)
-            await page.locator(f'#agent-thread [data-thread-open="{"a" * 32}"]').click()
-            held, release = asyncio.Event(), asyncio.Event()
-            writes = []
-            page.on('request', lambda request: writes.append(request.url)
-                    if request.method in ('POST', 'PUT') and '/api/' in request.url else None)
-
-            async def lose_patch(route):
-                if route.request.method == 'PATCH':
-                    await route.fetch()
-                    await route.abort()
-                else:
-                    await route.continue_()
-
-            async def hold_lists(route):
-                held.set()
-                await release.wait()
-                await route.continue_()
-
-            await page.route('**/api/chats/*', lose_patch)
-            await page.route('**/api/chats?all_scopes=true', hold_lists)
-            await open_ask_conversations(page)
-            await page.locator(f'[data-thread-archive="{"a" * 32}"]').click()
-            await asyncio.wait_for(held.wait(), timeout=10)
-            try:
-                # Reopening redraws controls while recovery is still waiting on its list.
-                await page.locator('#agent-close').click()
-                await page.locator('#btn-agent').click()
-                button = page.locator('[data-agent-action]')
-                await expect(button).to_be_disabled()
-                await button.dispatch_event('click')
-                assert writes == []
-                assert await page.evaluate('Boolean(activeAgentChat().archiving)')
-            finally:
-                release.set()
-            await expect(page.locator('#agent-thread [aria-current="true"]')).not_to_have_attribute('data-thread-open', 'a' * 32)
-            await expect(page.locator('#agent-question')).to_be_enabled()
-            assert len(httpx.get(url + '/api/chats').json()['chats']) == 3
 
     with _server() as url:
         seed_conversations(url)

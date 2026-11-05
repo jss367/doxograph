@@ -10,12 +10,12 @@ from doxograph import store
 from test_ask_browser import _server
 from test_browser import _answer
 from test_core_workspace_boundary_browser import remove_and_wait, seed
-from test_tools_action_history_browser import inert_tools as inert_tools
+from browser_support import inert_tools as inert_tools
 
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('kind', ['dataset', 'research-note', 'paper-note'])
+@pytest.mark.parametrize('kind', ['dataset', 'paper-note'])
 @pytest.mark.parametrize('mode', ['lost-cancel', 'lost-discard', 'held'])
 def test_reverted_write_during_held_delete_cannot_silently_reset(engine, kind, mode):
     removed, _, destination = seed()
@@ -112,7 +112,7 @@ def test_reverted_write_during_held_delete_cannot_silently_reset(engine, kind, m
 
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
-@pytest.mark.parametrize('kind', ['dataset', 'research-note'])
+@pytest.mark.parametrize('kind', ['dataset'])
 def test_later_async_guard_cannot_invalidate_an_earlier_editor_check(engine, kind):
     _, _, destination = seed()
 

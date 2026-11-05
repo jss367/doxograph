@@ -104,7 +104,6 @@ def test_a_topic_reads_stale_once_a_claim_under_it_changes():
                 assert await recovery.locator(".pill").text_content() == "stale"
                 assert await page.locator('.ftoc .chip[data-topic="recovery"]').get_attribute("class") == "chip is-stale"
                 assert await page.locator(f'.frow[data-finding="{tid}"]').get_attribute("class") == "frow tension open is-stale"
-                assert "stale" in (await page.locator("#findings-nav .pm").text_content())
 
     run_browser(scenario())
 

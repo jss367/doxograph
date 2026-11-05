@@ -11,7 +11,7 @@ from test_core_workspace_boundary_browser import editor, seed
 from test_browser import _answer
 from doxograph import config
 from test_quit_manual_editors_browser import cancel, frozen_report, resume, save, stored
-from test_tools_action_history_browser import inert_tools as inert_tools
+from browser_support import inert_tools as inert_tools
 
 
 @pytest.mark.browser

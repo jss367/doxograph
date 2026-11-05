@@ -1,5 +1,8 @@
 """Findings: tensions, agreements and syntheses as one pass and one page."""
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -7,8 +10,38 @@ from doxograph import extract, job_queue, server, store
 
 
 @pytest.fixture(autouse=True)
-def quiet_queue():
+def quiet_queue(monkeypatch):
     """Jobs and timers left by another test must not hold the pass back."""
+    now, timers = [0.0], []
+
+    class Timer:
+        def __init__(self, delay, function, args=()):
+            self.at, self.function, self.args = now[0] + delay, function, args
+            self.cancelled = self.fired = False
+            self.daemon = False
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            self.cancelled = True
+
+    def wait(predicate, timeout=5.0):
+        until = now[0] + timeout
+        while not predicate():
+            timer = min((t for t in timers if not t.cancelled and not t.fired),
+                        key=lambda t: t.at, default=None)
+            if timer is None or timer.at > until:
+                now[0] = until
+                return predicate()
+            now[0] = timer.at
+            timer.fired = True
+            timer.function(*timer.args)
+        return True
+
+    monkeypatch.setattr(job_queue, 'threading', SimpleNamespace(Timer=Timer))
+    monkeypatch.setattr(job_queue, '_auto_findings_stopping', False)
+    monkeypatch.setattr(sys.modules[__name__], '_wait', wait)
     def clear():
         with job_queue._auto_findings_lock:
             for timer in job_queue._auto_findings_timers.values():
@@ -143,13 +176,7 @@ def _findings_jobs():
 
 
 def _wait(predicate, timeout=5.0):
-    import time
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.02)
-    return predicate()
+    raise AssertionError('The inert clock fixture must replace this helper')
 
 
 def test_reading_papers_queues_one_findings_pass_once_the_last_one_is_read(monkeypatch):
