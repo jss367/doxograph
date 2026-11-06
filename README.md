@@ -1198,8 +1198,10 @@ that.
 
 ## Model
 
-The Claude subscription uses `claude-opus-5` by default; set `DOXOGRAPH_MODEL`
-to change it. The ChatGPT option uses Codex's default model; set `DOXOGRAPH_CODEX_MODEL`
+The Claude subscription uses `claude-opus-5-5` by default. Choose another model
+in **Settings → AI analysis → Claude model** (Opus 5.5, Sonnet 5.5, Fable 5.1,
+Opus 5, Haiku 4.5, or a custom ID); a saved choice takes precedence over
+`DOXOGRAPH_MODEL`, which sets the default. The ChatGPT option uses Codex's default model; set `DOXOGRAPH_CODEX_MODEL`
 to choose another. Extraction requests high effort and a JSON schema, so the
 response is validated structurally before it reaches the store. Switching
 providers affects new work; queued and running operations keep the provider
@@ -1212,7 +1214,7 @@ apply to new operations; running operations finish with their original provider.
 
 | Provider | Setup | Paper input |
 | --- | --- | --- |
-| Anthropic (default) | `ANTHROPIC_API_KEY`; defaults to `claude-opus-5` | Native PDF upload and prompt caching |
+| Anthropic (default) | `ANTHROPIC_API_KEY`; defaults to `claude-opus-5-5`; the model field suggests the current Claude models | Native PDF upload and prompt caching |
 | OpenAI | `OPENAI_API_KEY`; enter a model supporting JSON Schema output | Page-numbered text extracted locally |
 | Ollama (local) | Start Ollama, download a model, enter its name; defaults to `http://localhost:11434` | Page-numbered text extracted locally |
 | OpenAI-compatible | Start a server such as LM Studio; enter model and API base URL, typically `http://localhost:1234/v1`; optional `DOXOGRAPH_API_KEY` | Page-numbered text extracted locally |

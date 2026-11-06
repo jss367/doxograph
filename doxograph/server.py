@@ -182,6 +182,7 @@ class SettingsBody(BaseModel):
     model: str | None = None
     base_url: str | None = None
     codex_model: str | None = Field(default=None, max_length=200)
+    claude_model: str | None = Field(default=None, max_length=200)
 
 
 class ProviderBody(BaseModel):
@@ -410,7 +411,8 @@ def _build_state() -> dict[str, Any]:
         "model": config.model(),
         "ai_provider": config.ai_provider(),
         "codex_model": config.codex_model(),
-        "claude_code_model": config.MODEL,
+        "claude_code_model": config.claude_model(),
+        "claude_models": config.CLAUDE_MODELS,
         "ai_enabled": config.ai_enabled(),
         "auto_findings": config.auto_findings(),
     }
@@ -438,7 +440,7 @@ def state(request: Request) -> Response:
     # changes to either must reach every workspace on the next poll.
     ai_enabled = config.ai_enabled()
     settings_signature = hashlib.sha256(json.dumps(
-        {**config.analysis_settings(), "codex_model": config.codex_model(), "auto_findings": config.auto_findings()},
+        {**config.analysis_settings(), "codex_model": config.codex_model(), "claude_code_model": config.claude_model(), "auto_findings": config.auto_findings()},
         sort_keys=True).encode()).hexdigest()
     workspace_record = config.get_workspace()
     # SelectWorkspace has already refused a request for an unknown workspace.
@@ -471,6 +473,11 @@ def state(request: Request) -> Response:
 
 @app.put("/api/settings")
 def update_settings(body: SettingsBody) -> dict[str, Any]:
+    if body.claude_model is not None:
+        try:
+            config.save_claude_model(body.claude_model)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     if body.codex_model is not None:
         try:
             config.save_codex_model(body.codex_model)
@@ -497,6 +504,8 @@ def update_settings(body: SettingsBody) -> dict[str, Any]:
         job_queue.resume_auto_findings()
     if changing_provider:
         return {"ai_enabled": config.ai_enabled(), **config.analysis_settings()}
+    if body.claude_model is not None:
+        return {"ai_enabled": config.ai_enabled(), "claude_code_model": config.claude_model(), "model": config.model()}
     if body.codex_model is not None:
         return {"ai_enabled": config.ai_enabled(), "codex_model": config.codex_model(), "model": config.model()}
     return {"ai_enabled": config.ai_enabled(), "auto_findings": config.auto_findings()}

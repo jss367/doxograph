@@ -9,6 +9,7 @@ let savingAnalysisSetting = false;
 let savingAutoFindings = false;
 let savingProviderSetting = false;
 let savingCodexModel = false;
+let savingClaudeModel = false;
 let loadingCodexModels = false;
 let codexModelsLoaded = false;
 let codexModels = [];
@@ -30,6 +31,10 @@ function syncAnalysisControls() {
   };
   $('ai-access-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
+  $('claude-model-form').hidden = S.ai_provider !== 'claude_code';
+  $('claude-model').disabled = savingClaudeModel;
+  $('claude-custom-model').disabled = savingClaudeModel;
+  $('claude-model-save').disabled = savingClaudeModel || savingProviderSetting;
   $('codex-model-form').hidden = S.ai_provider !== 'codex';
   $('codex-model').disabled = savingCodexModel;
   $('codex-custom-model').disabled = savingCodexModel;
@@ -116,6 +121,49 @@ $('ai-access').addEventListener('change', async () => {
   }
 });
 
+function selectedClaudeModel() {
+  return $('claude-model').value === 'custom' ? $('claude-custom-model').value : $('claude-model').value;
+}
+
+function showClaudeModelFields(model = S.claude_code_model || '') {
+  const models = S.claude_models || [];
+  const custom = Boolean(model && !models.some((item) => item.id === model));
+  $('claude-model').innerHTML = models.map((item) => `<option value="${esc(item.id)}">${esc(item.name)} (${esc(item.id)})</option>`).join('')
+    + '<option value="custom">Custom model…</option>';
+  $('claude-model').value = custom ? 'custom' : model;
+  $('claude-custom-model').value = custom ? model : '';
+  syncClaudeCustomField();
+}
+
+function syncClaudeCustomField() {
+  const custom = $('claude-model').value === 'custom';
+  $('claude-custom-model-row').hidden = !custom;
+  $('claude-custom-model').required = custom;
+}
+
+$('claude-model').addEventListener('change', syncClaudeCustomField);
+$('claude-model-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  savingClaudeModel = true;
+  syncAnalysisControls();
+  $('ai-settings-status').textContent = 'Saving…';
+  try {
+    const settings = await api('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ claude_model: selectedClaudeModel().trim() }),
+    });
+    Object.assign(S, settings);
+    workspaceClient.invalidateState();
+    $('ai-settings-status').textContent = 'Model saved. New analysis uses this selection.';
+    renderStats();
+  } catch (error) {
+    $('ai-settings-status').textContent = `Could not save: ${error.message}`;
+  } finally {
+    savingClaudeModel = false;
+    syncAnalysisControls();
+  }
+});
+
 function selectedCodexModel() {
   return $('codex-model').value === 'custom' ? $('codex-custom-model').value : $('codex-model').value;
 }
@@ -193,6 +241,8 @@ function showProviderFields() {
   const provider = $('ai-provider').value;
   const profile = providerDrafts[provider] || S.providers?.[provider] || {};
   $('ai-model').value = profile.model || '';
+  $('ai-model-suggestions').innerHTML = provider === 'anthropic'
+    ? (S.claude_models || []).map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('') : '';
   $('ai-base-url').value = profile.base_url || '';
   $('ai-endpoint-row').hidden = ['anthropic', 'openai'].includes(provider);
   $('ai-base-url').required = !['anthropic', 'openai'].includes(provider);
@@ -349,6 +399,7 @@ function openSettings() {
   editingProvider = S.provider || 'anthropic';
   $('ai-provider').value = editingProvider;
   showProviderFields();
+  showClaudeModelFields();
   codexModelEdited = false;
   showCodexModelFields();
   if (S.ai_provider === 'codex' && !codexModelsLoaded) loadCodexModels();

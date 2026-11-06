@@ -49,6 +49,7 @@ _windows_activity_leases: dict[Path, _WindowsLease] = {}
 _settings_lock = threading.RLock()
 _analysis_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar("analysis_provider", default=None)
 _codex_model: contextvars.ContextVar[str | None] = contextvars.ContextVar("codex_model", default=None)
+_claude_model: contextvars.ContextVar[str | None] = contextvars.ContextVar("claude_model", default=None)
 
 try:
     import fcntl
@@ -59,10 +60,19 @@ try:
 except ImportError:
     msvcrt = None  # type: ignore[assignment]
 
-MODEL = os.environ.get("DOXOGRAPH_MODEL", "claude-opus-5")
+MODEL = os.environ.get("DOXOGRAPH_MODEL", "claude-opus-5-5")
+
+# Claude models offered in Settings. Any other model ID can still be entered.
+CLAUDE_MODELS = [
+    {"id": "claude-opus-5-5", "name": "Claude Opus 5.5"},
+    {"id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5"},
+    {"id": "claude-fable-5-1", "name": "Claude Fable 5.1"},
+    {"id": "claude-opus-5", "name": "Claude Opus 5"},
+    {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5"},
+]
 
 PROVIDERS = {
-    "anthropic": {"label": "Anthropic", "model": "claude-opus-5", "base_url": ""},
+    "anthropic": {"label": "Anthropic", "model": MODEL, "base_url": ""},
     "openai": {"label": "OpenAI", "model": "", "base_url": "https://api.openai.com/v1"},
     "ollama": {"label": "Ollama (local)", "model": "", "base_url": "http://localhost:11434"},
     "openai-compatible": {"label": "OpenAI-compatible", "model": "", "base_url": "http://localhost:1234/v1"},
@@ -265,7 +275,22 @@ def ai_provider() -> str:
 def model() -> str:
     if ai_provider() == "codex":
         return codex_model() or "Codex default"
-    return MODEL if ai_provider() == "claude_code" else analysis_config().model
+    return claude_model() if ai_provider() == "claude_code" else analysis_config().model
+
+
+def claude_model(settings: dict[str, Any] | None = None) -> str:
+    if (bound := _claude_model.get()) is not None:
+        return bound
+    settings = _settings() if settings is None else settings
+    saved = settings.get("claude_model")
+    return saved if isinstance(saved, str) and saved else MODEL
+
+
+def save_claude_model(model: str) -> None:
+    model = model.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model):
+        raise ValueError("Enter a model ID of at most 200 characters without spaces.")
+    _update_settings(claude_model=model)
 
 
 def codex_model(settings: dict[str, Any] | None = None) -> str:
@@ -304,12 +329,15 @@ def use_model_access() -> Iterator[None]:
         access = saved if saved in ("claude_code", "codex") else "api"
     selected = analysis_config(settings)
     selected_codex_model = codex_model(settings)
+    selected_claude_model = claude_model(settings)
     access_token = _analysis_provider.set(access)
     analysis_token = _analysis.set(selected)
     codex_token = _codex_model.set(selected_codex_model)
+    claude_token = _claude_model.set(selected_claude_model)
     try:
         yield
     finally:
+        _claude_model.reset(claude_token)
         _codex_model.reset(codex_token)
         _analysis.reset(analysis_token)
         _analysis_provider.reset(access_token)

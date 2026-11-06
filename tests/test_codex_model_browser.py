@@ -181,3 +181,42 @@ def test_unsaved_model_draft_survives_access_switches_and_delayed_discovery(engi
                 assert not errors
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+def test_claude_model_picker_offers_models_and_saves_choices(engine):
+    config.set_ai_provider('claude_code')
+
+    async def scenario():
+        async with browser_session(engine) as browser:
+            page = await browser.new_page(viewport={'width': 1440, 'height': 1100})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            with _server() as url:
+                await page.goto(url)
+                await expect(page.locator('#ai-enabled')).to_be_enabled()
+                await page.get_by_role('button', name='Settings', exact=True).click()
+                picker = page.get_by_label('Claude model', exact=True)
+                await expect(picker).to_have_value('claude-opus-5-5')
+                await expect(picker.locator('option')).to_have_count(len(config.CLAUDE_MODELS) + 1)
+                await picker.select_option('claude-sonnet-5-5')
+                await page.get_by_role('button', name='Save model', exact=True).click()
+                await expect(page.locator('#ai-settings-status')).to_contain_text('Model saved.')
+                assert config.model() == 'claude-sonnet-5-5'
+                await page.reload()
+                await expect(page.locator('#ai-enabled')).to_be_enabled()
+                await page.get_by_role('button', name='Settings', exact=True).click()
+                await expect(picker).to_have_value('claude-sonnet-5-5')
+                await picker.select_option('custom')
+                await page.get_by_label('Custom Claude model ID').fill('claude-future-9')
+                await page.get_by_role('button', name='Save model', exact=True).click()
+                await expect(page.locator('#ai-settings-status')).to_contain_text('Model saved.')
+                await page.reload()
+                await expect(page.locator('#ai-enabled')).to_be_enabled()
+                await page.get_by_role('button', name='Settings', exact=True).click()
+                await expect(page.get_by_label('Custom Claude model ID')).to_have_value('claude-future-9')
+                assert config.model() == 'claude-future-9'
+                assert not errors
+
+    run_browser(scenario())
