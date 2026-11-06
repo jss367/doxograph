@@ -33,7 +33,8 @@ function syncAnalysisControls() {
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
   $('claude-model-form').hidden = S.ai_provider !== 'claude_code';
   // Settings can open before the first state arrives; fill the picker then, keeping any draft.
-  if ($('claude-model').options.length <= 1 && S.claude_models?.length) {
+  // Only while open: the quit snapshot reads every select, so a closed panel must not change.
+  if (!$('settings-menu').hidden && $('claude-model').options.length <= 1 && S.claude_models?.length) {
     showClaudeModelFields(selectedClaudeModel() || S.claude_code_model);
   }
   $('claude-model').disabled = savingClaudeModel;
