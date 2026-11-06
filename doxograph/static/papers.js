@@ -673,9 +673,9 @@ function proposedPanel(key) {
   if (!proposed.length) return '';
   return `<div class="proposed">
     <div><strong>Proposed topics</strong> — accept the ones worth keeping in the vocabulary.</div>
-    ${proposed.map((t) => `<div class="row">
+    ${proposed.map((t) => `<div class="proposal">
       <span class="pn">${esc(t.name)}</span>
-      <span class="hint" style="flex:1">${esc(t.description)}</span>
+      <span class="hint">${esc(t.description)}</span>
       <button type="button" data-act="accept-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Accept</button>
       <button type="button" data-act="reject-tag" data-paper="${esc(key)}" data-tag="${esc(t.name)}">Discard</button>
     </div>`).join('')}

@@ -485,7 +485,12 @@ body.dragging .drop { border-color: var(--accent); color: var(--accent); }
 
 .proposed { background: var(--panel); border-radius: 5px; padding: .5rem .6rem;
   margin: .5rem 0; font-size: .86rem; }
-.proposed .pn { font-family: ui-monospace, Menlo, monospace; }
+.proposed .pn { font-family: ui-monospace, Menlo, monospace; min-width: 0; overflow-wrap: anywhere; }
+/* Name and buttons share the first line; the description gets its own line,
+   so a narrow pane cannot squeeze it to one character wide. */
+.proposed .proposal { display: grid; grid-template-columns: 1fr auto auto; gap: .2rem .4rem;
+  align-items: center; margin: .5rem 0; }
+.proposed .proposal .hint { grid-column: 1 / -1; grid-row: 2; }
 
 .jobs { position: fixed; right: 1rem; bottom: 1rem; width: min(22rem, calc(100vw - 2rem)); display: grid;
   gap: .3rem; z-index: 20; max-height: calc(100vh - 2rem); overflow-y: auto; }

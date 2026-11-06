@@ -467,6 +467,30 @@ def test_proposed_topic_cache_is_isolated_between_workspaces():
 
 
 @pytest.mark.browser
+def test_proposed_topic_description_keeps_a_readable_width_in_a_narrow_window():
+    paper = store.new_paper("narrow", title="Narrow paper")
+    paper["proposed_tags"] = [{
+        "name": "agentic-benchmark",
+        "description": "Benchmarks in which models act as agents over many steps.",
+    }]
+    store.write_json(store.paper_path("narrow"), paper)
+
+    async def scenario():
+        async with browser_session("chromium") as browser:
+            page = await browser.new_page(viewport={"width": 400, "height": 900})
+            with _server() as url:
+                await page.goto(f"{url}/#view=claims")
+                await page.locator('#papers [data-paper="narrow"]').click()
+                hint = page.locator(".proposed .hint", has_text="Benchmarks in which")
+                await hint.wait_for()
+                panel = await page.locator(".proposed").bounding_box()
+                box = await hint.bounding_box()
+                assert box["width"] > panel["width"] * 0.6
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
 def test_workspace_switch_waits_for_a_pending_paper_removal():
     _paper("shared", "Default paper")
     from doxograph import config
