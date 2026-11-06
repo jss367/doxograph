@@ -473,16 +473,12 @@ def state(request: Request) -> Response:
 
 @app.put("/api/settings")
 def update_settings(body: SettingsBody) -> dict[str, Any]:
-    if body.claude_model is not None:
-        try:
-            config.save_claude_model(body.claude_model)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-    if body.codex_model is not None:
-        try:
-            config.save_codex_model(body.codex_model)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
+    # Check every model ID before writing anything, so a 422 leaves all settings unchanged.
+    try:
+        claude_model = None if body.claude_model is None else config.checked_claude_model(body.claude_model)
+        codex_model = None if body.codex_model is None else config.checked_codex_model(body.codex_model)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     changing_provider = any(value is not None for value in (body.provider, body.model, body.base_url))
     if changing_provider:
         current = config.analysis_config()
@@ -496,6 +492,10 @@ def update_settings(body: SettingsBody) -> dict[str, Any]:
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+    if claude_model is not None:
+        config.save_claude_model(claude_model)
+    if codex_model is not None:
+        config.save_codex_model(codex_model)
     if body.ai_enabled is not None:
         config.set_ai_enabled(body.ai_enabled)
     if body.auto_findings is not None:

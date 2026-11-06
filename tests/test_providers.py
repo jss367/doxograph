@@ -548,3 +548,13 @@ def test_running_work_keeps_the_claude_model_it_started_with():
         config.save_claude_model('claude-haiku-4-5-20251001')
         assert config.model() == 'claude-sonnet-5-5'
     assert config.model() == 'claude-haiku-4-5-20251001'
+
+
+def test_rejected_settings_request_saves_no_model():
+    config.save_claude_model('claude-sonnet-5-5')
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.put('/api/settings', json={
+            'claude_model': 'claude-haiku-4-5-20251001', 'provider': 'ollama', 'model': 'm', 'base_url': 'ftp://bad'})
+        assert response.status_code == 422
+    config.set_ai_provider('claude_code')
+    assert config.model() == 'claude-sonnet-5-5'

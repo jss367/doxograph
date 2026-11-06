@@ -32,6 +32,10 @@ function syncAnalysisControls() {
   $('ai-access-help').textContent = providerHelp[S.ai_provider] || providerHelp.api;
   $('ai-provider-form').hidden = S.ai_provider !== 'api';
   $('claude-model-form').hidden = S.ai_provider !== 'claude_code';
+  // Settings can open before the first state arrives; fill the picker then, keeping any draft.
+  if ($('claude-model').options.length <= 1 && S.claude_models?.length) {
+    showClaudeModelFields(selectedClaudeModel() || S.claude_code_model);
+  }
   $('claude-model').disabled = savingClaudeModel;
   $('claude-custom-model').disabled = savingClaudeModel;
   $('claude-model-save').disabled = savingClaudeModel || savingProviderSetting;

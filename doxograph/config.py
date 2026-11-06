@@ -286,11 +286,15 @@ def claude_model(settings: dict[str, Any] | None = None) -> str:
     return saved if isinstance(saved, str) and saved else MODEL
 
 
-def save_claude_model(model: str) -> None:
+def checked_claude_model(model: str) -> str:
     model = model.strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model):
         raise ValueError("Enter a model ID of at most 200 characters without spaces.")
-    _update_settings(claude_model=model)
+    return model
+
+
+def save_claude_model(model: str) -> None:
+    _update_settings(claude_model=checked_claude_model(model))
 
 
 def codex_model(settings: dict[str, Any] | None = None) -> str:
@@ -303,11 +307,15 @@ def codex_model(settings: dict[str, Any] | None = None) -> str:
     return saved if isinstance(saved, str) else os.environ.get("DOXOGRAPH_CODEX_MODEL", "")
 
 
-def save_codex_model(model: str) -> None:
+def checked_codex_model(model: str) -> str:
     model = model.strip()
     if model and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model):
         raise ValueError("Enter a model ID of at most 200 characters without spaces, or choose Codex default.")
-    _update_settings(codex_model=model)
+    return model
+
+
+def save_codex_model(model: str) -> None:
+    _update_settings(codex_model=checked_codex_model(model))
 
 
 def bind_model_access[**P, R](work: Callable[P, R]) -> Callable[P, R]:
