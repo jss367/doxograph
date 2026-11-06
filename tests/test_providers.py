@@ -522,3 +522,39 @@ def test_outer_queue_keeps_settings_from_job_acceptance(monkeypatch, route, oper
                 create.assert_not_called()
         finally:
             release.set()
+
+
+def test_claude_subscription_model_defaults_to_opus_5_5_and_saves_a_choice():
+    config.set_ai_provider('claude_code')
+    assert config.model() == 'claude-opus-5-5'
+    assert 'claude-opus-5-5' in {item['id'] for item in config.CLAUDE_MODELS}
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        initial = client.get('/api/state')
+        assert initial.json()['claude_code_model'] == 'claude-opus-5-5'
+        assert client.get('/api/state').json()['claude_models'] == config.CLAUDE_MODELS
+        response = client.put('/api/settings', json={'claude_model': ' claude-sonnet-5-5 '})
+        assert response.status_code == 200 and response.json()['model'] == 'claude-sonnet-5-5'
+        changed = client.get('/api/state', headers={'If-None-Match': initial.headers['etag']})
+        assert changed.status_code == 200 and changed.json()['claude_code_model'] == 'claude-sonnet-5-5'
+        for bad in ('', 'bad model', '--model', 'x' * 201):
+            assert client.put('/api/settings', json={'claude_model': bad}).status_code == 422
+    assert config.model() == 'claude-sonnet-5-5'
+
+
+def test_running_work_keeps_the_claude_model_it_started_with():
+    config.set_ai_provider('claude_code')
+    config.save_claude_model('claude-sonnet-5-5')
+    with config.use_model_access():
+        config.save_claude_model('claude-haiku-4-5-20251001')
+        assert config.model() == 'claude-sonnet-5-5'
+    assert config.model() == 'claude-haiku-4-5-20251001'
+
+
+def test_rejected_settings_request_saves_no_model():
+    config.save_claude_model('claude-sonnet-5-5')
+    with TestClient(server.app, base_url='http://127.0.0.1:8765') as client:
+        response = client.put('/api/settings', json={
+            'claude_model': 'claude-haiku-4-5-20251001', 'provider': 'ollama', 'model': 'm', 'base_url': 'ftp://bad'})
+        assert response.status_code == 422
+    config.set_ai_provider('claude_code')
+    assert config.model() == 'claude-sonnet-5-5'

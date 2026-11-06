@@ -68,6 +68,18 @@
             <option value="codex">ChatGPT subscription (Codex)</option>
           </select>
           <p class="hint" id="ai-access-help">Uses the API or local provider configured below.</p>
+          <form id="claude-model-form" hidden>
+            <label for="claude-model">Claude model</label>
+            <select id="claude-model" aria-describedby="claude-model-help"></select>
+            <div id="claude-custom-model-row" hidden>
+              <label for="claude-custom-model">Custom Claude model ID</label>
+              <input id="claude-custom-model" type="text" maxlength="200" placeholder="Exact model ID">
+            </div>
+            <p class="hint" id="claude-model-help">Select a model to use for new analysis, paper chat, and Ask the library. Model availability depends on your Claude plan.</p>
+            <div class="row">
+              <button type="submit" id="claude-model-save">Save model</button>
+            </div>
+          </form>
           <form id="codex-model-form" hidden>
             <label for="codex-model">ChatGPT model</label>
             <select id="codex-model" aria-describedby="codex-model-help">
@@ -95,7 +107,8 @@
               <option value="openai-compatible">OpenAI-compatible</option>
             </select>
             <label for="ai-model">Model</label>
-            <input id="ai-model" type="text" required maxlength="200" placeholder="Exact model name">
+            <input id="ai-model" type="text" required maxlength="200" placeholder="Exact model name" list="ai-model-suggestions">
+            <datalist id="ai-model-suggestions"></datalist>
             <div id="ai-endpoint-row">
               <label for="ai-base-url">Base URL</label>
               <input id="ai-base-url" type="url" placeholder="http://localhost:11434">
