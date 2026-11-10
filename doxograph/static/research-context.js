@@ -48,6 +48,7 @@ function differs(a, b) {
     || JSON.stringify(a.claims) !== JSON.stringify(b.claims);
 }
 
+/** Draw the research editor from its parked draft or latest saved workspace. */
 function renderResearch() {
   captureResearchDraft();
   const main = $('main');
@@ -239,11 +240,13 @@ $('panes').addEventListener('submit', async (event) => {
 
 // Keep the source as Markdown in context.md, using the same immutable local
 // images as notes. Existing text consumers continue to read ordinary text.
+/** Render sanitized Markdown with images restricted to the active workspace. */
 function renderResearchPreview() {
   const preview = $('research-context-preview');
   if (preview) preview.replaceChildren(NoteWriting.render($('research-context').value, workspaceClient.workspaceId));
 }
 
+/** Upload one local image, then insert it without replacing newer research edits. */
 async function addResearchImage(file) {
   const field = $('research-context');
   if (!field || V.researchSaving) return;

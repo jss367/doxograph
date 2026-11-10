@@ -13,12 +13,14 @@ from test_ask_browser import _server
 
 
 def image_data():
+    """Encode a small valid image for browser clipboard events."""
     output = io.BytesIO()
     Image.new('RGB', (12, 8), 'blue').save(output, format='PNG')
     return base64.b64encode(output.getvalue()).decode()
 
 
 async def paste_image(page):
+    """Dispatch an image paste at the research editor's current selection."""
     await page.locator('#research-context').evaluate('''(field, data) => {
         const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
         const clipboard = new DataTransfer();
@@ -30,9 +32,11 @@ async def paste_image(page):
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 def test_context_image_paste_save_reload_and_remove(engine):
+    """Images round-trip with context while unsafe preview content is excluded."""
     config.set_ai_enabled(False)
 
     async def scenario():
+        """Exercise insertion, persistence, removal, and preview sanitization."""
         async with browser_session(engine) as browser:
             page = await browser.new_page()
             errors = []
@@ -73,16 +77,19 @@ def test_context_image_paste_save_reload_and_remove(engine):
 @pytest.mark.browser
 @pytest.mark.parametrize('return_before_upload', [False, True])
 def test_context_image_upload_keeps_newer_context_and_claims(return_before_upload):
+    """Completing an upload after navigation cannot replace newer server edits."""
     config.set_ai_enabled(False)
     store.save_context('Original context')
     store.save_ledger([{'id': 'L1', 'text': 'Original claim'}])
 
     async def scenario():
+        """Hold the upload while another writer changes both research fields."""
         async with browser_session() as browser:
             page = await browser.new_page()
             started, release = asyncio.Event(), asyncio.Event()
 
             async def upload(route):
+                """Release the real upload only after the navigation race is set up."""
                 started.set()
                 await release.wait()
                 await route.fulfill(response=await route.fetch())
@@ -121,14 +128,17 @@ def test_context_image_upload_keeps_newer_context_and_claims(return_before_uploa
 @pytest.mark.browser
 @pytest.mark.parametrize('fail', [False, True])
 def test_context_image_upload_navigation_and_failure(fail):
+    """Navigation preserves text and restores saving after success or failure."""
     config.set_ai_enabled(False)
 
     async def scenario():
+        """Navigate away during a controlled successful or rejected upload."""
         async with browser_session() as browser:
             page = await browser.new_page()
             started, release = asyncio.Event(), asyncio.Event()
 
             async def upload(route):
+                """Delay the upload response until the editor has been left."""
                 started.set()
                 await release.wait()
                 if fail:
