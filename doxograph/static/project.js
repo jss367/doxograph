@@ -48,7 +48,7 @@
     for (const [key, title] of [['x','Left'],['y','Top'],['width','Width'],['height','Height']]) {
       const label = document.createElement('label'); label.textContent = title + ' (%)';
       const input = document.createElement('input'); input.type = 'number'; input.min = '0'; input.max = '100'; input.step = '.1'; input.value = (s[key]*100).toFixed(1);
-      input.onchange = () => { const value = Number(input.value)/100; const next = {...s, [key]:value};
+      input.onchange = () => { const s = current.project.sections[index]; const value = Number(input.value)/100; const next = {...s, [key]:value};
         if (!Number.isFinite(value) || value < 0 || next.width <= 0 || next.height <= 0 || next.x+next.width > 1.000001 || next.y+next.height > 1.000001) { input.value = (s[key]*100).toFixed(1); status('Keep the section inside the image.', true); return; }
         s[key] = value; changed(); paint(); };
       label.append(input); $('bounds').append(label);

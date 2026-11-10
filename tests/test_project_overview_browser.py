@@ -31,8 +31,15 @@ def test_diagram_notes_survive_reload(engine):
                 assert await page.locator('#preview img').count(), (await page.locator('#status').inner_text(), await page.locator('#notes').input_value(), await page.locator('#preview').inner_html())
                 await page.locator('#save').click()
                 await page.get_by_text('All changes saved.',exact=True).wait_for()
+                # Saving replaces the project object, but the still-open
+                # section editor must keep editing its current boundaries.
+                await page.get_by_label('Left (%)', exact=True).fill('20')
+                await page.get_by_label('Left (%)', exact=True).press('Tab')
+                await page.locator('#save').click()
+                await page.get_by_text('All changes saved.',exact=True).wait_for()
                 await page.reload()
                 await page.locator('.region').click()
+                assert await page.get_by_label('Left (%)', exact=True).input_value() == '20.0'
                 assert await page.locator('#section-title').input_value() == 'Attack prompt'
                 assert 'My **attack prompt** notes' in await page.locator('#notes').input_value()
                 await page.locator('#preview img').wait_for()
