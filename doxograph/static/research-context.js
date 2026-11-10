@@ -248,7 +248,7 @@ async function addResearchImage(file) {
   const field = $('research-context');
   if (!field || V.researchSaving) return;
   const workspace = workspaceClient.workspaceId;
-  const draft = readResearchForm();
+  const originalContext = field.value;
   const start = field.selectionStart, end = field.selectionEnd;
   const form = $('research-form');
   V.researchSaving = true;
@@ -261,12 +261,22 @@ async function addResearchImage(file) {
       headers:{'X-Doxograph-Workspace':workspace}});
     if (workspaceClient.workspaceId !== workspace) return;
     const insertion = `\n\n![Pasted image](${result.url})\n\n`;
-    draft.context = draft.context.slice(0, start) + insertion + draft.context.slice(end);
-    V.researchDraft = draft;
     const current = $('research-context');
+    // Returning to an untouched form can adopt newer context and claims from
+    // another window. Insert into that form (or the parked draft), not the
+    // snapshot from before the upload. With no draft, use the latest server
+    // state and its matching base so unchanged claims are never written back.
+    const draft = current ? readResearchForm() : (V.researchDraft || storedResearch());
+    if (!current && !V.researchDraft) V.researchBase = storedResearch();
+    // A selection in the old text does not identify the same words in a new
+    // version. Append rather than replacing unrelated text in that case.
+    const insertStart = draft.context === originalContext ? start : draft.context.length;
+    const insertEnd = draft.context === originalContext ? end : insertStart;
+    draft.context = draft.context.slice(0, insertStart) + insertion + draft.context.slice(insertEnd);
+    V.researchDraft = draft;
     if (current) {
       current.value = draft.context;
-      current.setSelectionRange(start + insertion.length, start + insertion.length);
+      current.setSelectionRange(insertStart + insertion.length, insertStart + insertion.length);
       renderResearchPreview();
       $('research-image-status').textContent = 'Image added. Click Save to keep your changes.';
     }

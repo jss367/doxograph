@@ -8,7 +8,7 @@ from PIL import Image
 from playwright.async_api import expect
 
 from browser_support import browser_session, run_browser
-from doxograph import config
+from doxograph import config, store
 from test_ask_browser import _server
 
 
@@ -66,6 +66,54 @@ def test_context_image_paste_save_reload_and_remove(engine):
                 await expect(preview).to_have_count(0)
                 await expect(page.locator('#research-context-preview script')).to_have_count(0)
                 assert not errors
+
+    run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('return_before_upload', [False, True])
+def test_context_image_upload_keeps_newer_context_and_claims(return_before_upload):
+    config.set_ai_enabled(False)
+    store.save_context('Original context')
+    store.save_ledger([{'id': 'L1', 'text': 'Original claim'}])
+
+    async def scenario():
+        async with browser_session() as browser:
+            page = await browser.new_page()
+            started, release = asyncio.Event(), asyncio.Event()
+
+            async def upload(route):
+                started.set()
+                await release.wait()
+                await route.fulfill(response=await route.fetch())
+
+            await page.route('**/api/research-notes/images', upload)
+            with _server() as url:
+                await page.goto(url)
+                await expect(page.locator('#btn-refresh-library')).to_be_enabled()
+                await page.locator('#btn-workspace').click()
+                # Select old text: this range must not replace newer words.
+                await page.locator('#research-context').evaluate('field => field.setSelectionRange(0, 8)')
+                await paste_image(page)
+                await asyncio.wait_for(started.wait(), 5)
+                await page.locator('#btn-papers').click()
+                store.save_context('Newer context from another window')
+                latest_claims = [{'id': 'L2', 'text': 'Newer claim'}]
+                store.save_ledger(latest_claims)
+                await page.evaluate('pollOnce()')
+                if return_before_upload:
+                    await page.locator('#btn-workspace').click()
+                    await expect(page.locator('#research-context')).to_have_value('Newer context from another window')
+                release.set()
+                await page.wait_for_function('!V.researchSaving')
+                if not return_before_upload:
+                    await page.locator('#btn-workspace').click()
+                assert (await page.locator('#research-context').input_value()).startswith('Newer context from another window')
+                await expect(page.locator('[name="ledger-id"]')).to_have_value('L2')
+                await page.locator('#research-form button[type=submit]').click()
+                await expect(page.locator('#research-context')).to_have_count(0)
+                assert store.load_context().startswith('Newer context from another window\n\n![Pasted image](')
+                assert store.load_ledger() == latest_claims
 
     run_browser(scenario())
 
