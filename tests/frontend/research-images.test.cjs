@@ -70,3 +70,21 @@ test('image completion keeps a parked edited draft and its original insertion se
   assert.equal(context.V.researchDraft.claims[0].text, 'Edited claim');
   assert.equal(context.V.researchBase.context, 'Original context');
 });
+
+for (const edited of [false, true]) {
+  test(`image completion in a held editor preserves ${edited ? 'local edits' : 'polled context'}`, async () => {
+    const { context, nodes, show, finish } = editor();
+    if (edited) show('Locally edited context');
+    const pending = context.addResearchImage(new Blob(['image']));
+    context.S.context = 'Updated elsewhere';
+    context.S.ledger = [{ id: 'L2', text: 'Updated claim' }];
+    finish();
+    await pending;
+    const expected = edited ? '\n\n![Pasted image](/image.png)\n\nedited context'
+      : 'Updated elsewhere\n\n![Pasted image](/image.png)\n\n';
+    assert.equal(nodes.get('research-context').value, expected);
+    assert.equal(context.V.researchBase.context, edited ? 'Original context' : 'Updated elsewhere');
+    // The held ledger and its base remain paired, so Save cannot write stale claims.
+    assert.equal(JSON.stringify(context.V.researchDraft.claims), JSON.stringify(context.V.researchBase.claims));
+  });
+}

@@ -169,3 +169,49 @@ def test_context_image_upload_navigation_and_failure(fail):
                 await expect(page.locator('#research-form button[type=submit]')).to_be_enabled()
 
     run_browser(scenario())
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('edited', [False, True])
+def test_context_image_upload_keeps_polled_context_in_open_editor(edited):
+    """A held untouched field adopts polled text; actual local edits take priority."""
+    config.set_ai_enabled(False)
+    store.save_context('Original context')
+    store.save_ledger([{'id': 'L1', 'text': 'Original claim'}])
+
+    async def scenario():
+        async with browser_session() as browser:
+            page = await browser.new_page()
+            started, release = asyncio.Event(), asyncio.Event()
+
+            async def upload(route):
+                started.set()
+                await release.wait()
+                await route.fulfill(response=await route.fetch())
+
+            await page.route('**/api/research-notes/images', upload)
+            with _server() as url:
+                await page.goto(url)
+                await expect(page.locator('#btn-refresh-library')).to_be_enabled()
+                await page.locator('#btn-workspace').click()
+                field = page.locator('#research-context')
+                if edited:
+                    await field.fill('My local edits')
+                await field.evaluate('field => field.setSelectionRange(field.value.length, field.value.length)')
+                await paste_image(page)
+                await asyncio.wait_for(started.wait(), 5)
+                store.save_context('Updated elsewhere')
+                claims = [{'id': 'L2', 'text': 'Updated claim'}]
+                store.save_ledger(claims)
+                await page.evaluate('pollOnce()')
+                await expect(field).to_have_value('My local edits' if edited else 'Original context')
+                release.set()
+                await page.wait_for_function('!V.researchSaving')
+                prefix = 'My local edits' if edited else 'Updated elsewhere'
+                assert (await field.input_value()).startswith(prefix + '\n\n![Pasted image](')
+                await page.locator('#research-form button[type=submit]').click()
+                await expect(field).to_have_count(0)
+                assert store.load_context().startswith(prefix + '\n\n![Pasted image](')
+                assert store.load_ledger() == claims
+
+    run_browser(scenario())

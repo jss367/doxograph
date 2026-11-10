@@ -271,6 +271,15 @@ async function addResearchImage(file) {
     // state and its matching base so unchanged claims are never written back.
     const draft = current ? readResearchForm() : (V.researchDraft || storedResearch());
     if (!current && !V.researchDraft) V.researchBase = storedResearch();
+    // Polling updates S while deliberately keeping the open editor untouched.
+    // Adopt its newer context only if this field has no local text edits. Keep
+    // the ledger's base paired with its held values so Save still skips it.
+    const saved = storedResearch();
+    const base = V.researchBase || saved;
+    if (draft.context.trim() === base.context.trim() && saved.context !== base.context) {
+      draft.context = saved.context;
+      V.researchBase = {...base, context: saved.context};
+    }
     // A selection in the old text does not identify the same words in a new
     // version. Append rather than replacing unrelated text in that case.
     const insertStart = draft.context === originalContext ? start : draft.context.length;
