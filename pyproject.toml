@@ -89,7 +89,7 @@ files = [
     "doxograph/fingerprint.py", "doxograph/ingest.py", "doxograph/job_journal.py",
     "doxograph/loupe_runner.py", "doxograph/notebook.py", "doxograph/pairs.py",
     "doxograph/posts.py", "doxograph/query.py", "doxograph/quotes.py",
-    "doxograph/research_notes.py", "doxograph/search.py",
+    "doxograph/research_notes.py", "doxograph/project_overview.py", "doxograph/search.py",
     "doxograph/mcp_server.py", "doxograph/workspace_archive.py",
 ]
 strict = true
