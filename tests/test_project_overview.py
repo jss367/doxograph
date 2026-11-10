@@ -2,6 +2,7 @@ import base64
 import io
 import json
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from doxograph import config, project_overview, research_notes, workspace_archive
 from doxograph.analysis_types import ModelResponse
 from doxograph.server import app
+from doxograph.model_errors import InputTooLargeError, ModelInputError, ModelSetupError, ProviderResponseError
 from test_research_notes import image_bytes
 
 
@@ -119,6 +121,43 @@ def test_detection_rechecks_ai_after_waiting_for_shared_slot(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("Provider must not receive a diagram after AI is disabled")
     monkeypatch.setattr(project_overview.extract.providers, "create", forbidden)
-    with pytest.raises(RuntimeError, match="AI analysis is disabled"):
-        client.post("/api/project-overview/detect", json={"image": url.split("/")[-1].split("?")[0]})
+    response = client.post("/api/project-overview/detect", json={"image": url.split("/")[-1].split("?")[0]})
+    assert response.status_code == 409
+    assert "AI analysis is disabled" in response.json()["detail"]
     assert entered == [True]
+
+
+@pytest.mark.parametrize("failure, status, message", [
+    (InputTooLargeError("Choose a smaller diagram"), 413, "Choose a smaller diagram"),
+    (ModelInputError("Choose a model in Settings"), 400, "Choose a model in Settings"),
+    (ModelSetupError("Sign in to the selected model"), 502, "Sign in to the selected model"),
+    (ProviderResponseError("private provider response"), 502, "invalid sections"),
+    (httpx.ConnectError("private provider response"), 502, "Check provider access"),
+    (ValueError("private provider response"), 400, "model configuration"),
+    (RuntimeError("private provider response"), 502, "Check its login"),
+])
+@pytest.mark.parametrize("stage", ["client", "call"])
+def test_detection_returns_actionable_safe_errors(monkeypatch, failure, status, message, stage):
+    config.set_ai_enabled(True)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
+    url = client.post("/api/research-notes/images", files={"file": ("diagram.png", image_bytes())}).json()["url"]
+    monkeypatch.setattr(project_overview.extract, "client", lambda: object())
+    def fail(*args, **kwargs):
+        raise failure
+    monkeypatch.setattr(project_overview.extract, "client" if stage == "client" else "_create", fail)
+    response = client.post("/api/project-overview/detect", json={"image": url.split("/")[-1].split("?")[0]})
+    assert response.status_code == status
+    assert message in response.json()["detail"]
+    assert "private provider response" not in response.text
+
+
+def test_detection_invalid_sections_returns_retryable_response(monkeypatch):
+    config.set_ai_enabled(True)
+    client = TestClient(app, base_url="http://127.0.0.1:8765")
+    url = client.post("/api/research-notes/images", files={"file": ("diagram.png", image_bytes())}).json()["url"]
+    monkeypatch.setattr(project_overview.extract, "client", lambda: object())
+    monkeypatch.setattr(project_overview.extract, "_create", lambda *args, **kwargs: ModelResponse.from_text('{"sections":[{"private":"response"}]}'))
+    response = client.post("/api/project-overview/detect", json={"image": url.split("/")[-1].split("?")[0]})
+    assert response.status_code == 502
+    assert "invalid sections" in response.json()["detail"]
+    assert "private" not in response.text
