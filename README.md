@@ -1057,6 +1057,15 @@ rerun used to write over it: no prompt wrote it, so a new prompt, model, or
 topic wording does not put it back in the queue either. Only a change to its
 claims or tensions, **Rewrite**, or `--force` replaces it.
 
+## Images in research context
+
+In **Workspace → What I am studying**, paste an image into **Research context**
+or click **Add image**. The image appears in a Markdown preview below the editor;
+click **Save** to keep the context. PNG, JPEG, GIF, and WebP images up to 10 MB
+are stored locally with the workspace and included in its archive. Delete the
+image's Markdown link to remove it from the context. Automated analysis receives
+the context text, not the image pixels.
+
 ## Notes of your own
 
 A claim is the machine's sentence about the paper. A note is yours, and it is

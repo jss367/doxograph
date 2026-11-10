@@ -48,6 +48,7 @@ function differs(a, b) {
     || JSON.stringify(a.claims) !== JSON.stringify(b.claims);
 }
 
+/** Draw the research editor from its parked draft or latest saved workspace. */
 function renderResearch() {
   captureResearchDraft();
   const main = $('main');
@@ -72,7 +73,14 @@ function renderResearch() {
   html += `<form class="edit research" id="research-form">
     <div><label for="research-context">Research context</label>
       <textarea id="research-context" name="context" rows="8"
-        placeholder="What the research is about, and what makes a paper relevant to it.">${esc(context)}</textarea></div>
+        placeholder="What the research is about, and what makes a paper relevant to it."
+        aria-describedby="research-context-help">${esc(context)}</textarea>
+      <p class="hint" id="research-context-help">Paste images here or add an image. Markdown is supported. Click Save to keep your changes.
+        Images are kept in this workspace; automated analysis reads the text only.</p>
+      <button type="button" id="research-add-image">Add image</button>
+      <input type="file" id="research-image-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+      <p class="hint" id="research-image-status" role="status"></p>
+      <div id="research-context-preview" aria-label="Research context preview"></div></div>
     <div><label>My own claims</label>
       <div class="links" id="ledger-rows">${ledger.map(ledgerRow).join('')}</div>
       <div class="row"><button type="button" data-act="add-ledger">Add a claim</button></div></div>
@@ -97,6 +105,7 @@ function renderResearch() {
   </div>
   </div>`;
   $('content').innerHTML = html;
+  renderResearchPreview();
   setResearchSaving($('research-form'), V.researchSaving);
   if (main) main.scrollTop = scrollTop;
 }
@@ -228,3 +237,91 @@ $('panes').addEventListener('submit', async (event) => {
   await saveResearch();
 });
 
+
+// Keep the source as Markdown in context.md, using the same immutable local
+// images as notes. Existing text consumers continue to read ordinary text.
+/** Render sanitized Markdown with images restricted to the active workspace. */
+function renderResearchPreview() {
+  const preview = $('research-context-preview');
+  if (preview) preview.replaceChildren(NoteWriting.render($('research-context').value, workspaceClient.workspaceId));
+}
+
+/** Upload one local image, then insert it without replacing newer research edits. */
+async function addResearchImage(file) {
+  const field = $('research-context');
+  if (!field || V.researchSaving) return;
+  const workspace = workspaceClient.workspaceId;
+  const originalContext = field.value;
+  const start = field.selectionStart, end = field.selectionEnd;
+  const form = $('research-form');
+  V.researchSaving = true;
+  setResearchSaving(form, true);
+  $('research-image-status').textContent = 'Saving image…';
+  try {
+    const body = new FormData();
+    body.append('file', file);
+    const result = await api('/api/research-notes/images', {method:'POST', body,
+      headers:{'X-Doxograph-Workspace':workspace}});
+    if (workspaceClient.workspaceId !== workspace) return;
+    const insertion = `\n\n![Pasted image](${result.url})\n\n`;
+    const current = $('research-context');
+    // Returning to an untouched form can adopt newer context and claims from
+    // another window. Insert into that form (or the parked draft), not the
+    // snapshot from before the upload. With no draft, use the latest server
+    // state and its matching base so unchanged claims are never written back.
+    const draft = current ? readResearchForm() : (V.researchDraft || storedResearch());
+    if (!current && !V.researchDraft) V.researchBase = storedResearch();
+    // Polling updates S while deliberately keeping the open editor untouched.
+    // Adopt its newer context only if this field has no local text edits. Keep
+    // the ledger's base paired with its held values so Save still skips it.
+    const saved = storedResearch();
+    const base = V.researchBase || saved;
+    if (draft.context.trim() === base.context.trim() && saved.context !== base.context) {
+      draft.context = saved.context;
+      V.researchBase = {...base, context: saved.context};
+    }
+    // A selection in the old text does not identify the same words in a new
+    // version. Append rather than replacing unrelated text in that case.
+    const insertStart = draft.context === originalContext ? start : draft.context.length;
+    const insertEnd = draft.context === originalContext ? end : insertStart;
+    draft.context = draft.context.slice(0, insertStart) + insertion + draft.context.slice(insertEnd);
+    V.researchDraft = draft;
+    if (current) {
+      current.value = draft.context;
+      current.setSelectionRange(insertStart + insertion.length, insertStart + insertion.length);
+      renderResearchPreview();
+      $('research-image-status').textContent = 'Image added. Click Save to keep your changes.';
+    }
+  } catch (error) {
+    if (workspaceClient.workspaceId === workspace) {
+      const message = `Could not add image: ${error.message}`;
+      if ($('research-image-status')) $('research-image-status').textContent = message;
+      else toast(message);
+    }
+  } finally {
+    V.researchSaving = false;
+    setResearchSaving(form, false);
+    setResearchSaving($('research-form'), false);
+    if ($('research-context') === field && document.activeElement === document.body) field.focus();
+  }
+}
+
+document.addEventListener('input', event => {
+  if (event.target.id === 'research-context') renderResearchPreview();
+});
+document.addEventListener('paste', event => {
+  if (event.target.id !== 'research-context') return;
+  const image = [...(event.clipboardData?.files || [])].find(file => file.type.startsWith('image/'));
+  if (!image) return;  // Leave normal text pasting to the browser.
+  event.preventDefault();
+  void addResearchImage(image);
+});
+document.addEventListener('click', event => {
+  if (event.target.id === 'research-add-image') $('research-image-file').click();
+});
+document.addEventListener('change', event => {
+  if (event.target.id !== 'research-image-file') return;
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (file) void addResearchImage(file);
+});
