@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 from fastapi import APIRouter, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from . import config, storage, store
 
@@ -24,10 +24,35 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 REVISION_FILE = 'research-note-revisions.json'
 
 
+class ProjectSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=300)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+    body: str = Field(default="", max_length=200000)
+
+    @model_validator(mode="after")
+    def inside_image(self) -> ProjectSection:
+        if self.x + self.width > 1.000001 or self.y + self.height > 1.000001:
+            raise ValueError("Sections must fit inside the image")
+        return self
+
+
+class ProjectImage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image: AssetId
+    sections: list[ProjectSection] = Field(default_factory=list, max_length=100)
+
+
 class NoteBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=300)
     body: str = Field(default="", max_length=2_000_000)
+
+
+    project: ProjectImage | None = None
 
 
 class NoteUpdate(NoteBody):
@@ -123,6 +148,8 @@ def update_note(note_id: NoteId, body: NoteUpdate) -> dict[str, Any]:
         notes = load()
         note = find(notes, note_id)
         check_revision(note, body.revision)
+        if "project" in body.model_fields_set:
+            note["project"] = body.project.model_dump() if body.project else None
         note.update(title=body.title, body=body.body,
                     revision=next_revision(note_id, note['revision']), updated=store.now())
         store.write_json(config.data_dir() / "research-notes.json", notes)
@@ -206,10 +233,20 @@ def markdown_export(title: str, body: str, request: Request) -> Response:
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+def export_body(note: dict[str, Any]) -> str:
+    body: str = note["body"]
+    project = note.get("project")
+    if project:
+        body += f"\n\n![Project diagram](/api/research-notes/images/{project['image']}?workspace={config.workspace_id()})\n"
+        for section in project["sections"]:
+            body += "\n## " + section["title"].replace("\n", " ") + "\n\n" + section["body"] + "\n"
+    return body
+
+
 @router.get("/{note_id}/export")
 def export_note(note_id: NoteId, request: Request) -> Response:
     note = find(load(), note_id)
-    return markdown_export(note["title"], note["body"], request)
+    return markdown_export(note["title"], export_body(note), request)
 
 
 @router.post("/export")

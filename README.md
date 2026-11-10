@@ -133,6 +133,25 @@ previously uploaded Anthropic copies. With another API or local provider
 selected, deletion stays local; any earlier
 Anthropic uploads must be removed from your Anthropic account separately.
 
+## Project overview
+
+Open **Project overview** in the sidebar and upload a diagram (PNG, JPEG,
+WebP, or GIF). Choose **Detect sections with AI** to suggest clickable areas
+using your selected model connection. Only the diagram is sent; section notes
+are kept local. Detection requires AI analysis to be enabled and a model that
+supports images. Review the suggested labels and boundaries before saving.
+
+Click a section to write Markdown notes, links, equations, and add pictures.
+Use **Draw a section** to drag out a missing area, or adjust its percentage
+coordinates in the editor. The section buttons below the diagram also work
+with the keyboard. **Save changes** saves the whole overview; concurrent edits
+in another window are rejected without overwriting your unsaved writing.
+
+Each workspace can hold multiple diagrams. Overviews use research-note storage,
+so workspace backups and archives include their images and section notes.
+Markdown exports include the diagram followed by each section's writing.
+Manual section creation and editing work with AI disabled.
+
 ## Paper overview
 
 Open a paper to see its summary, why it matters to your research, your own

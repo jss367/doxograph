@@ -163,7 +163,7 @@ def build() -> Path:
                 _copy_workspace_data(out, keys)
                 saved_papers = _write_papers(out, keys, saved_notebook['highlights'], note_names)
                 for note in notes:
-                    out.write('notes/' + note_names[note['id']], '# ' + notebook.md(note['title']) + '\n\n' + portable_links(note['body'], note_names))
+                    out.write('notes/' + note_names[note['id']], '# ' + notebook.md(note['title']) + '\n\n' + portable_links(research_notes.export_body(note), note_names))
                 out.write('datasets.md', _catalog_markdown(datasets.catalog, '# Project datasets', saved_datasets, saved_papers))
                 out.write('benchmarks.md', _catalog_markdown(benchmarks.catalog, '# Benchmarks', saved_benchmarks, saved_papers))
                 out.write('people.md', _people_markdown(saved_people, saved_papers, note_names))

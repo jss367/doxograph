@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from . import (__version__, activity, analysis_api, backups, benchmarks, bib, chat_api, chats, codex_cli, config, datasets, export,
                fingerprint, job_journal, job_queue, loupe, notebook, origins, papers_api, people, permalinks, query, records,
-               research_notes, storage, store, workspace_archive)
+               research_notes, project_overview, storage, store, workspace_archive)
 from .model_errors import ModelSetupError
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Doxograph", lifespan=_lifespan)
 app.include_router(notebook.router)
 app.include_router(research_notes.router)
+app.include_router(project_overview.router)
 app.include_router(datasets.router)
 app.include_router(benchmarks.router)
 app.include_router(people.router)
@@ -207,6 +208,11 @@ def _frontend_response(name: str, media_type: str) -> FileResponse:
     # loading app.js from the current one.
     return FileResponse(STATIC / name, media_type=media_type,
                         headers={"Cache-Control": "no-store"})
+
+
+@app.get("/project", response_class=HTMLResponse)
+def project_page() -> FileResponse:
+    return _frontend_response("project.html", "text/html")
 
 
 @app.get("/", response_class=HTMLResponse)
