@@ -13,6 +13,17 @@ from test_browser import _poll, _server
 from test_research_tools_browser import ready
 
 
+async def saved_overview_note(page, text):
+    # Queue readiness covers notebook work, not the note's independent PATCH.
+    # Wait for its acknowledgment before testing return to a saved paragraph.
+    await page.wait_for_function("""text => {
+        const saver = noteAutosave('paper');
+        return !saver.saving && !saver.unconfirmed && !saver.failure
+            && V.noteDrafts.paper === undefined && storedNote('paper') === text;
+    }""", arg=text)
+    assert store.load_paper('paper')['notes'] == text
+
+
 @pytest.mark.browser
 @pytest.mark.parametrize('engine', ['chromium', 'webkit'])
 @pytest.mark.parametrize('width', [1440, 390])
@@ -162,6 +173,7 @@ def test_paper_overview_without_analysis_or_pdf_can_be_noted_and_queued(engine):
                 await page.get_by_role('button', name='Add to reading queue', exact=True).click()
                 await expect(page.locator('#research-tools')).to_be_visible()
                 await ready(page)
+                await saved_overview_note(page, 'A question to return to.')
                 await page.go_back()
                 await expect(page.locator('#research-tools')).to_be_hidden()
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('In reading queue')
@@ -180,6 +192,7 @@ def test_paper_overview_without_analysis_or_pdf_can_be_noted_and_queued(engine):
                 await ready(page)
                 await page.locator('[data-reading-status="paper"]').select_option('finished')
                 await ready(page)
+                await saved_overview_note(page, 'A question to return to. Edited after reopening.')
                 await page.go_back()
                 await expect(page.locator('#research-tools')).to_be_hidden()
                 await expect(overview.locator('[data-paper-progress]')).to_have_text('Finished · Page 1')

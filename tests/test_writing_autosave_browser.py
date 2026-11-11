@@ -5,6 +5,7 @@ import httpx
 
 import pytest
 from playwright.async_api import expect
+from doxograph import store
 
 from browser_support import browser_session, run_browser, inert_tools as inert_tools
 from test_ask_browser import _server
@@ -190,6 +191,9 @@ def test_review_completion_resumes_blocked_claim_autosave(engine, review_succeed
     """A review overlapping the debounce cannot strand parked writing."""
     _, claims, _ = seed()
     identity = claims[0]
+    # Handwritten seed claims default to reviewed. This scenario exercises
+    # marking an unreviewed claim, and retaining False when that request fails.
+    store.update_claim('study', identity, {'reviewed': False})
 
     async def scenario():
         async with browser_session(engine) as browser:
@@ -209,6 +213,7 @@ def test_review_completion_resumes_blocked_claim_autosave(engine, review_succeed
                     # Edit history adds optimistic-concurrency metadata to
                     # every claim PATCH, including a review-only mutation.
                     if set(patch) - {'expected_revision'} == {'reviewed'}:
+                        assert patch['reviewed'] is True
                         started.set()
                         await release.wait()
                         if not review_succeeds:
@@ -227,10 +232,14 @@ def test_review_completion_resumes_blocked_claim_autosave(engine, review_succeed
                     await page.evaluate('id => writingAutosave("claim", id).resume()', identity)
                     await expect(page.locator('[data-writing-status="claim"]').first).to_contain_text('Another change is still saving')
                     await page.locator('#btn-library-view').click()
-                    async with page.expect_response(lambda response: response.url.endswith(path) and response.request.method == 'PATCH' and 'text' in response.request.post_data_json):
+                    async with page.expect_response(lambda response: response.url.endswith(path) and response.request.method == 'PATCH' and set(response.request.post_data_json) - {'expected_revision'} == {'reviewed'}) as reviewed_response, page.expect_response(lambda response: response.url.endswith(path) and response.request.method == 'PATCH' and 'text' in response.request.post_data_json) as saved_response:
                         release.set()
-                        await page.evaluate('window.reviewing')
+                        review_result = await page.evaluate('window.reviewing')
+                    assert (await reviewed_response.value).status == (200 if review_succeeds else 503)
+                    assert review_result is review_succeeds
+                    assert (await saved_response.value).status == 200
                     assert len(writes) == 1
+                    assert writes[0]['reviewed'] is review_succeeds
                     row = next(row for row in httpx.get(url + '/api/state').json()['claims'] if row['id'] == identity)
                     assert row['text'] == 'Writing held behind a review'
                     assert row['reviewed'] is review_succeeds
